@@ -1,7 +1,6 @@
-// AWS Signature Version 4 — firma de requests, escrita EN raylang. Cero runtime nuevo: es el capstone
-// del stack de M20, apilando HMAC-SHA256 (`hmac.ray`) + SHA-256 hex (`sha256.ray`) + URL encoding
-// (`url.ray`) + fechas (`time.ray`). Importable:
-//   from sigv4 import credentials, authorization_header;
+// AWS Signature Version 4 — firma Y verificación de peticiones, escrita EN raylang. Cero runtime
+// nuevo: HMAC-SHA256 + SHA-256 hex (`net/crypto`), URL encoding (`std/url`) y fechas (`std/time`).
+//   import net/sigv4;
 //
 // SigV4 firma una petición HTTP en cuatro pasos (docs de AWS):
 //   1. *canonical request*: método, URI, query canónica, cabeceras canónicas, signed-headers, hash del cuerpo.
@@ -9,11 +8,25 @@
 //   3. *signing key*: una cadena de HMAC sobre (AWS4+secreto) → fecha → región → servicio → "aws4_request".
 //   4. *signature* = HMAC(signing_key, string_to_sign), y la cabecera `Authorization`.
 //
+// Lado CLIENTE: `authorization_header` (la firma de siempre) y `presign` (URL prefirmada).
+// Lado SERVIDOR (rayblob #285): `parse_authorization`/`parse_presigned_query` leen lo que el cliente
+// dice haber firmado (`Claim`), `verify` reconstruye la canonical request con la petición tal como
+// llegó y el hash de cuerpo que el cliente DECLARÓ (`x-amz-content-sha256`, `UNSIGNED-PAYLOAD`,
+// `STREAMING-…`) y compara en tiempo constante. Las piezas (`canonical_request`, `signing_key`,
+// `string_to_sign`, `sign`) son públicas para los chunks firmados y para los tests.
+//
 // El nombre de cabecera en el `Map` debe ir ya en MINÚSCULA (la forma canónica de AWS); `keys` los
 // entrega ordenados → cabeceras canónicas y signed-headers deterministas.
 from net/crypto import hmac_sha256_hex, sha256_hex;
 import std/crypto;
-from std/url import url_encode;
+import std/time;
+from std/url import url_encode, percent_decode;
+
+/// The SigV4 algorithm name, as it appears in `Authorization` and `X-Amz-Algorithm`.
+pub const ALGORITHM: string = "AWS4-HMAC-SHA256";
+
+/// The payload hash a client declares when it did not hash the body (S3 accepts it over TLS).
+pub const UNSIGNED_PAYLOAD: string = "UNSIGNED-PAYLOAD";
 
 // Las credenciales + el destino (región/servicio) de la firma.
 /// AWS credentials plus the signing target (region/service) for Signature Version 4.
@@ -34,29 +47,210 @@ pub fn credentials(
     Credentials { access_key: access_key, secret_key: secret_key, region: region, service: service }
 }
 
-// Query string canónica: cada `k=v` con clave y valor url-codificados (RFC 3986) y los pares ORDENADOS.
-fn canonical_query(raw: string) -> string {
-    if (raw.len() == 0) {
+/// What a client claims it signed: parsed from the `Authorization` header
+/// (`parse_authorization`) or from the `X-Amz-*` query of a presigned URL
+/// (`parse_presigned_query`). Feed it to `verify` with the request as it arrived.
+pub struct Claim {
+    access_key: string,
+    /// `YYYYMMDDTHHMMSSZ`, from `x-amz-date` (or `X-Amz-Date` in the query).
+    amz_date: string,
+    /// The credential scope the signature is bound to: date, region and service.
+    scope_date: string,
+    region: string,
+    service: string,
+    /// The header names the client signed, in the order it listed them.
+    signed_headers: [string],
+    /// The hex signature, lowercased.
+    signature: string,
+    /// True for a presigned URL (then `expires_s` bounds its life).
+    presigned: bool,
+    /// Seconds a presigned URL stays valid (0 for a header signature).
+    expires_s: int,
+}
+
+/// Parses an `Authorization` header value: `AWS4-HMAC-SHA256 Credential=AK/20130524/us-east-1/s3/aws4_request,
+/// SignedHeaders=host;range, Signature=hex`. `amz_date` is the request's `x-amz-date` (its first
+/// 8 digits must match the scope date). Err names what is wrong, without echoing the header.
+pub fn parse_authorization(value: string, amz_date: string) -> Result<Claim, string> {
+    let rest = match (value.strip_prefix(ALGORITHM + " ")) {
+        Option.Some(r) => r,
+        Option.None => return Result.Err("unsupported authorization scheme"),
+    };
+    var credential = "";
+    var signed = "";
+    var signature = "";
+    for part in rest.split(",") {
+        let p = part.trim();
+        match (p.index_of("=")) {
+            Option.Some(eq) => {
+                let k = p.substring(0, eq);
+                let v = p.substring(eq + 1, p.len());
+                if (k == "Credential") {
+                    credential = v;
+                } else if (k == "SignedHeaders") {
+                    signed = v;
+                } else if (k == "Signature") {
+                    signature = v;
+                }
+            },
+            Option.None => return Result.Err("malformed authorization header"),
+        }
+    }
+    claim_of(credential, signed, signature, amz_date, false, 0)
+}
+
+/// Parses the `X-Amz-*` parameters of a presigned URL (values already percent-decoded, as a
+/// `Map` of the query). `X-Amz-Expires` must be 1..604800 seconds (seven days), as on AWS.
+pub fn parse_presigned_query(q: Map<string, string>) -> Result<Claim, string> {
+    if (q.get_or("X-Amz-Algorithm", "") != ALGORITHM) {
+        return Result.Err("unsupported X-Amz-Algorithm");
+    }
+    let expires = match (parse_int(q.get_or("X-Amz-Expires", ""))) {
+        Option.Some(n) => n,
+        Option.None => return Result.Err("missing X-Amz-Expires"),
+    };
+    if (expires < 1 || expires > 604800) {
+        return Result.Err("X-Amz-Expires must be between 1 and 604800 seconds");
+    }
+    claim_of(
+        q.get_or("X-Amz-Credential", ""),
+        q.get_or("X-Amz-SignedHeaders", ""),
+        q.get_or("X-Amz-Signature", ""),
+        q.get_or("X-Amz-Date", ""),
+        true,
+        expires
+    )
+}
+
+fn claim_of(
+    credential: string,
+    signed: string,
+    signature: string,
+    amz_date: string,
+    presigned: bool,
+    expires_s: int
+) -> Result<Claim, string> {
+    let c = credential.split("/");
+    if (c.len() != 5 || c[4] != "aws4_request") {
+        return Result.Err("malformed credential scope");
+    }
+    if (signed == "" || signature.len() != 64) {
+        return Result.Err("missing signed headers or signature");
+    }
+    if (amz_date.len() != 16 || amz_date.substring(0, 8) != c[1]) {
+        return Result.Err("the date does not match the credential scope");
+    }
+    Result.Ok(
+        Claim {
+            access_key: c[0],
+            amz_date: amz_date,
+            scope_date: c[1],
+            region: c[2],
+            service: c[3],
+            signed_headers: signed.split(";"),
+            signature: signature.to_lower(),
+            presigned: presigned,
+            expires_s: expires_s
+        }
+    )
+}
+
+// Query string canónica: cada par DECODIFICADO y re-codificado a la manera de AWS (los no reservados de
+// RFC 3986 pasan, el resto `%XX`), ORDENADO por clave y luego por valor. La firma de una URL prefirmada
+// (`X-Amz-Signature`) no forma parte de lo que firma.
+/// The canonical query string of SigV4: every pair percent-decoded and re-encoded the AWS way
+/// (RFC 3986 unreserved characters pass, the rest is `%XX`), sorted by key and then by value;
+/// `X-Amz-Signature` is left out (a presigned URL's signature is not part of what it signs).
+pub fn canonical_query(raw: string) -> string {
+    if (raw == "") {
         return "";
     }
-    let pares: [string] = raw.split("&");
-    var encoded: [string] = [];
-    var i: int = 0;
-    while (i < pares.len()) {
-        let p: string = pares[i];
-        match (index_of(p, "=")) {
-            Option.Some(eq) => {
-                let k: string = url_encode(p.substring(0, eq));
-                let v: string = url_encode(p.substring(eq + 1, p.len()));
-                encoded.push(k + "=" + v);
-            },
-            Option.None => {
-                encoded.push(url_encode(p) + "=");
-            },
+    var pairs: [(string, string)] = [];
+    for p in raw.split("&") {
+        if (p == "") {
+            continue;
         }
-        i = i + 1;
+        let (k, v) = match (p.index_of("=")) {
+            Option.Some(eq) => (p.substring(0, eq), p.substring(eq + 1, p.len())),
+            Option.None => (p, ""),
+        };
+        let dk = url_encode(decode(k));
+        if (dk == "X-Amz-Signature") {
+            continue;
+        }
+        pairs.push((dk, url_encode(decode(v))));
     }
-    join(sort(encoded), "&")
+    let sorted = sort_by(pairs, fn(a: (string, string), b: (string, string)) -> bool {
+        let (ak, av) = a;
+        let (bk, bv) = b;
+        ak < bk || (ak == bk && av < bv)
+    });
+    join(sorted.map(fn(p: (string, string)) -> string {
+        let (k, v) = p;
+        k + "=" + v
+    }), "&")
+}
+
+fn decode(s: string) -> string {
+    percent_decode(s).unwrap_or(s)
+}
+
+// Bloque de cabeceras canónicas en el ORDEN en que el cliente las listó (SigV4 exige que vayan
+// ordenadas; un cliente que no las ordenó obtiene un mismatch, como en AWS).
+fn canonical_headers(headers: Map<string, string>, signed: [string]) -> string {
+    var out = "";
+    for name in signed {
+        out = out + name + ":" + collapse(headers.get_or(name, "")) + "\n";
+    }
+    out
+}
+
+// Recorta y comprime las rachas de espacios a uno, como pide SigV4.
+fn collapse(v: string) -> string {
+    let t = v.trim();
+    if (!t.contains("  ")) {
+        return t;
+    }
+    var out = "";
+    var space = false;
+    for c in t.chars() {
+        if (c == ' ') {
+            if (!space) {
+                out = out + " ";
+            }
+            space = true;
+        } else {
+            out = out + to_string(c);
+            space = false;
+        }
+    }
+    out
+}
+
+/// The canonical request (step 1). `raw_path` is the path exactly as the client sent it (S3 does
+/// not normalize or re-encode it; `webserver.Request.raw_path`); `signed` are the header names in
+/// the order of `SignedHeaders`; `payload_hash` is the hex SHA-256 the client declared
+/// (`x-amz-content-sha256`), or `UNSIGNED_PAYLOAD`.
+pub fn canonical_request(
+    method: string,
+    raw_path: string,
+    raw_query: string,
+    headers: Map<string, string>,
+    signed: [string],
+    payload_hash: string
+) -> string {
+    let path = if (raw_path == "") { "/" } else { raw_path };
+    method
+        + "\n"
+        + path
+        + "\n"
+        + canonical_query(raw_query)
+        + "\n"
+        + canonical_headers(headers, signed)
+        + "\n"
+        + join(signed, ";")
+        + "\n"
+        + payload_hash
 }
 
 // Un HMAC-SHA256 cuyo resultado se reusa como clave del siguiente (la derivación de la *signing key*).
@@ -64,8 +258,148 @@ fn hmac_bytes(key: bytes, msg: string) -> bytes {
     crypto.hmac_sha256(key, msg.to_bytes())
 }
 
+/// The signing key (step 3) for one day, region and service: the HMAC chain from `AWS4<secret>`.
+/// `date` is `YYYYMMDD`. Derive it once per day for signed chunks.
+pub fn signing_key(secret: string, date: string, region: string, service: string) -> bytes {
+    let k_date = hmac_bytes(("AWS4" + secret).to_bytes(), date);
+    let k_region = hmac_bytes(k_date, region);
+    let k_service = hmac_bytes(k_region, service);
+    hmac_bytes(k_service, "aws4_request")
+}
+
+/// The credential scope: `YYYYMMDD/region/service/aws4_request`.
+pub fn scope(date: string, region: string, service: string) -> string {
+    date + "/" + region + "/" + service + "/aws4_request"
+}
+
+/// The string to sign (step 2): algorithm, `amz_date`, scope and the hex SHA-256 of the
+/// canonical request.
+pub fn string_to_sign(amz_date: string, scope: string, canonical: string) -> string {
+    ALGORITHM + "\n" + amz_date + "\n" + scope + "\n" + sha256_hex(canonical.to_bytes())
+}
+
+/// The hex SHA-256 of a payload: what a client declares in `x-amz-content-sha256` and what
+/// `canonical_request` takes as `payload_hash` for a body that was hashed.
+pub fn payload_hash(data: bytes) -> string {
+    sha256_hex(data)
+}
+
+/// HMAC-SHA256 of `msg` with `key`, in hex: the signature of one chunk of a
+/// `STREAMING-AWS4-HMAC-SHA256-PAYLOAD` body (`key` from `signing_key`, `msg` the chunk's
+/// string-to-sign over the previous signature), or any other SigV4 derivative.
+pub fn hmac_hex(key: bytes, msg: string) -> string {
+    hmac_sha256_hex(key, msg.to_bytes())
+}
+
+/// The hex signature of a canonical request (steps 2–4 in one call). `amz_date` is
+/// `YYYYMMDDTHHMMSSZ`; its first 8 digits are the scope date.
+pub fn sign(
+    secret: string,
+    amz_date: string,
+    region: string,
+    service: string,
+    canonical: string
+) -> string {
+    let date = amz_date.substring(0, 8);
+    let key = signing_key(secret, date, region, service);
+    let sts = string_to_sign(amz_date, scope(date, region, service), canonical);
+    hmac_sha256_hex(key, sts.to_bytes())
+}
+
+/// Server side: checks a `Claim` against the request as it arrived. Recomputes the signature with
+/// `secret` (the key of `claim.access_key`), the method, the raw path and query, the headers
+/// (lowercase names) and the payload hash the client declared, and compares in constant time.
+/// A header signature must be within 15 minutes of `now_ms`; a presigned URL must not have
+/// expired (nor be signed more than 15 minutes in the future). Err is one of `"mismatch"`,
+/// `"skewed"`, `"expired"`, `"signed in the future"` or a malformed-date message.
+pub fn verify(
+    claim: Claim,
+    secret: string,
+    method: string,
+    raw_path: string,
+    raw_query: string,
+    headers: Map<string, string>,
+    payload_hash: string,
+    now_ms: int
+) -> Result<int, string> {
+    let signed_at = parse_amz_date(claim.amz_date)?;
+    if (claim.presigned) {
+        if (now_ms > signed_at + claim.expires_s * 1000) {
+            return Result.Err("expired");
+        }
+        if (signed_at > now_ms + 15 * 60 * 1000) {
+            return Result.Err("signed in the future");
+        }
+    } else if (now_ms - signed_at > 15 * 60 * 1000 || signed_at - now_ms > 15 * 60 * 1000) {
+        return Result.Err("skewed");
+    }
+    let canonical = canonical_request(
+        method,
+        raw_path,
+        raw_query,
+        headers,
+        claim.signed_headers,
+        payload_hash
+    );
+    let want = sign(secret, claim.amz_date, claim.region, claim.service, canonical);
+    if (crypto.constant_time_eq(want.to_bytes(), claim.signature.to_bytes())) {
+        Result.Ok(0)
+    } else {
+        Result.Err("mismatch")
+    }
+}
+
+/// `20130524T000000Z` → milliseconds since the epoch (Err on anything but that exact shape).
+pub fn parse_amz_date(s: string) -> Result<int, string> {
+    if (s.len() != 16 || s[8] != 'T' || s[15] != 'Z') {
+        return Result.Err("malformed x-amz-date");
+    }
+    time.parse_iso8601_millis(s)
+}
+
+/// Milliseconds since the epoch → `YYYYMMDDTHHMMSSZ` (the `x-amz-date` form).
+pub fn amz_date(ms: int) -> string {
+    time.to_iso8601_basic(time.from_epoch_millis(ms))
+}
+
+/// Encodes an object key for a URL path the way AWS clients do: every octet but the unreserved
+/// ones and `/` becomes `%XX` (`/test$file.text` → `/test%24file.text`).
+pub fn encode_path(key: string) -> string {
+    join(key.split("/").map(fn(seg: string) -> string { url_encode(seg) }), "/")
+}
+
+/// A presigned URL (path + query) for `method` on `host` + `path` (the path already encoded the
+/// AWS way, see `encode_path`), valid `expires_s` seconds from `now_ms`; only `host` is signed and
+/// the payload is `UNSIGNED_PAYLOAD`, as S3 clients do. Prefix it with the scheme and host.
+pub fn presign(
+    cred: Credentials,
+    method: string,
+    host: string,
+    path: string,
+    now_ms: int,
+    expires_s: int
+) -> string {
+    let date = amz_date(now_ms);
+    let credential = cred.access_key + "/" + scope(date.substring(0, 8), cred.region, cred.service);
+    let query = "X-Amz-Algorithm="
+        + ALGORITHM
+        + "&X-Amz-Credential="
+        + url_encode(credential)
+        + "&X-Amz-Date="
+        + date
+        + "&X-Amz-Expires="
+        + to_string(expires_s)
+        + "&X-Amz-SignedHeaders=host";
+    let headers: Map<string, string> = Map.new();
+    headers.insert("host", host);
+    let canonical = canonical_request(method, path, query, headers, ["host"], UNSIGNED_PAYLOAD);
+    let sig = sign(cred.secret_key, date, cred.region, cred.service, canonical);
+    path + "?" + query + "&X-Amz-Signature=" + sig
+}
+
 // Devuelve el valor de la cabecera `Authorization` para la petición dada. `amz_date` en formato básico
-// `YYYYMMDDTHHMMSSZ` (usa `time::to_iso8601_basic`); el "datestamp" se extrae de sus 8 primeros dígitos.
+// `YYYYMMDDTHHMMSSZ` (usa `time.to_iso8601_basic`); el "datestamp" se extrae de sus 8 primeros dígitos.
+// Firma TODAS las cabeceras del `Map` (ordenadas por `keys`) y hashea el cuerpo entero.
 /// Computes the AWS SigV4 `Authorization` header value for a request (canonical request →
 /// string-to-sign → derived signing key → signature). Pure computation, no network I/O.
 /// Header names in `headers` must already be lowercase; `amz_date` is basic ISO-8601
@@ -79,64 +413,16 @@ pub fn authorization_header(
     payload: bytes,
     amz_date: string
 ) -> string {
-    // --- Cabeceras canónicas + signed-headers (claves ya en minúscula; `keys` las da ordenadas). ---
-    let names: [string] = headers.keys();
-    var canonical_headers: string = "";
-    var signed_headers: string = "";
-    var i: int = 0;
-    while (i < names.len()) {
-        let n: string = names[i];
-        let v: string = match (get(headers, n)) {
-            Option.Some(x) => x.trim(),
-            Option.None => "",
-        };
-        canonical_headers = canonical_headers + n + ":" + v + "\n";
-        if (i > 0) {
-            signed_headers = signed_headers + ";";
-        }
-        signed_headers = signed_headers + n;
-        i = i + 1;
-    }
-
-    // --- 1. Canonical request. ---
-    let cpath: string = if (path.len() == 0) { "/" } else { path };
-    let payload_hash: string = sha256_hex(payload);
-    let canonical_request: string = method
-        + "\n"
-        + cpath
-        + "\n"
-        + canonical_query(query)
-        + "\n"
-        + canonical_headers
-        + "\n"
-        + signed_headers
-        + "\n"
-        + payload_hash;
-
-    // --- 2. String to sign. ---
-    let datestamp: string = amz_date.substring(0, 8);
-    let scope: string = datestamp + "/" + cred.region + "/" + cred.service + "/aws4_request";
-    let string_to_sign: string = "AWS4-HMAC-SHA256\n"
-        + amz_date
-        + "\n"
-        + scope
-        + "\n"
-        + sha256_hex(canonical_request.to_bytes());
-
-    // --- 3. Signing key (cadena de HMAC). ---
-    let k_date: bytes = hmac_bytes(("AWS4" + cred.secret_key).to_bytes(), datestamp);
-    let k_region: bytes = hmac_bytes(k_date, cred.region);
-    let k_service: bytes = hmac_bytes(k_region, cred.service);
-    let k_signing: bytes = hmac_bytes(k_service, "aws4_request");
-
-    // --- 4. Signature + cabecera Authorization. ---
-    let signature: string = hmac_sha256_hex(k_signing, string_to_sign.to_bytes());
-    "AWS4-HMAC-SHA256 Credential="
+    let signed: [string] = headers.keys();
+    let canonical = canonical_request(method, path, query, headers, signed, sha256_hex(payload));
+    let signature = sign(cred.secret_key, amz_date, cred.region, cred.service, canonical);
+    ALGORITHM
+        + " Credential="
         + cred.access_key
         + "/"
-        + scope
+        + scope(amz_date.substring(0, 8), cred.region, cred.service)
         + ", SignedHeaders="
-        + signed_headers
+        + join(signed, ";")
         + ", Signature="
         + signature
 }

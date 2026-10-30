@@ -6,6 +6,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Paquete `net` 0.14.0 — el lado servidor de dos protocolos (M435; rayblob #285, raydns #287),
+  todo aditivo.** `net/sigv4` verifica además de firmar: `parse_authorization`/`parse_presigned_query`
+  → `Claim`, `verify(claim, secret, method, raw_path, raw_query, headers, payload_hash, now_ms)` con
+  el hash que el cliente declaró (`UNSIGNED-PAYLOAD`, streaming), sesgo de 15 min y caducidad de
+  `X-Amz-Expires`, comparación en tiempo constante; `presign(cred, …)`; y las piezas públicas
+  `canonical_request`, `canonical_query`, `signing_key`, `scope`, `string_to_sign`, `sign`, `hmac_hex`,
+  `payload_hash`, `parse_amz_date`/`amz_date`, `encode_path` (chunks firmados). `authorization_header`
+  no cambia de firma y pasa por las mismas piezas (la query canónica ahora decodifica y re-codifica
+  cada par y ordena por clave y valor, como pide AWS). Nuevo `net/dns_message`: `parse_query` →
+  `Query`/`Bad`, `write_response` con compresión, TC y OPT, `udp_limit`, `write_error`,
+  `parse_response` → `Response` (rcode, AA/TC, authority/additional, SOA), `Data`/`Rr`,
+  `parse_ipv4`/`parse_ipv6`, `type_name`. `net/dns` y su `Record` quedan intactos. Los dos vienen del
+  código probado de rayblob (siete ejemplos de la doc de S3) y raydns (contra `net/dns` y `dig`);
+  suites en `tests/fixtures/net_server/`, VM y nativo.
+
 - **`ray doc` y el MCP ven los módulos `std/` anidados fuera de `collections/`.** `ray doc
   md5.md5_init`, `ray doc std/crypto/md5` (y `crypto/md5`, `aes.encrypt_cbc`, `std/crypto/des`…)
   respondían «is not a builtin, a prelude function, nor a public std/* function»: la resolución solo

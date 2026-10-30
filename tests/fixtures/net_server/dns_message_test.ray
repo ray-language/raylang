@@ -52,7 +52,7 @@ fn responses_parse_in_net_dns_and_here() {
             rr("ray.internal", msg.TXT, msg.Data.Txt(["v=spf1 -all", "second"]))
         ]
     );
-    let out = msg.write_response(q, a, 0);
+    let out = msg.write_response(q, a, 0).unwrap();
     let got = dns.format_records(dns.parse_records(out).unwrap());
     assert_eq(got.len(), 7);
     assert(got[0].contains("10.0.0.5"));
@@ -92,7 +92,7 @@ fn nxdomain_with_a_soa_in_authority() {
         authority: [rr("ray.internal", msg.SOA, soa)],
         additional: []
     };
-    let out = msg.write_response(q, a, msg.udp_limit(q));
+    let out = msg.write_response(q, a, msg.udp_limit(q)).unwrap();
     // net/dns treats a non-zero rcode as an error; this module hands it over as data.
     assert(dns.parse_records(out).is_err());
     let r = msg.parse_response(out).unwrap();
@@ -111,9 +111,9 @@ fn truncation_and_edns() {
         rs.push(rr("api.service.ray.internal", msg.A, msg.Data.Addr4([10, 0, i / 256, i % 256])));
     }
     let plain = q_of("api.service.ray.internal", msg.A);
-    let full = msg.write_response(plain, answer(rs), 0);
+    let full = msg.write_response(plain, answer(rs), 0).unwrap();
     assert(full.len() > 512);
-    let cut = msg.write_response(plain, answer(rs), msg.udp_limit(plain));
+    let cut = msg.write_response(plain, answer(rs), msg.udp_limit(plain)).unwrap();
     assert(cut.len() <= 512);
     assert((cut[2] & 0x02) != 0);
     assert(msg.parse_response(cut).unwrap().truncated);
@@ -127,7 +127,7 @@ fn truncation_and_edns() {
     let eq = msg.parse_query(bytes_of(with_opt)).unwrap();
     assert_eq(eq.edns, 4096);
     assert_eq(msg.udp_limit(eq), 1232);
-    let roomy = msg.write_response(eq, answer(rs), msg.udp_limit(eq));
+    let roomy = msg.write_response(eq, answer(rs), msg.udp_limit(eq)).unwrap();
     assert_eq((roomy[2] & 0x02), 0);
     assert_eq(dns.parse_records(roomy).unwrap().len(), 60);
     // The OPT we add is not a data record.
@@ -154,6 +154,21 @@ fn broken_datagrams() {
         },
         Result.Ok(_) => assert(false),
     }
+}
+
+@test
+fn a_label_over_63_octets_is_an_error_not_a_corrupt_message() {
+    let q = q_of("x.ray.internal", msg.A);
+    let long = "a".repeat(64) + ".ray.internal";
+    let bad = answer([rr(long, msg.A, msg.Data.Addr4([10, 0, 0, 1]))]);
+    assert(msg.write_response(q, bad, 0).is_err());
+    let fine = answer([rr("a".repeat(63) + ".ray.internal", msg.A, msg.Data.Addr4([10, 0, 0, 1]))]);
+    assert_eq(dns.parse_records(msg.write_response(q, fine, 0).unwrap()).unwrap().len(), 1);
+    // SERVFAIL for a zone bug still goes out.
+    assert_eq(
+        msg.parse_response(msg.write_response(q, msg.empty(msg.SERVFAIL), 0).unwrap()).unwrap().rcode,
+        msg.SERVFAIL
+    );
 }
 
 @test

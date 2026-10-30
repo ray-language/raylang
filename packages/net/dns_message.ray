@@ -435,32 +435,45 @@ fn put32(o: Out, n: int) {
 
 // Escribe un nombre con compresión: cada sufijo ya visto (sin distinguir mayúsculas) se sustituye por
 // un puntero; los offsets por encima de 0x3FFF no se registran (no caben en 14 bits).
-fn put_name(o: Out, name: string) {
+fn put_name(o: Out, name: string) -> Result<int, string> {
     let labels = if (name == "") { [] } else { name.split(".") };
+    var total: int = 0;
     for i in 0..labels.len() {
+        let raw = labels[i].to_bytes();
+        // RFC 1035 §2.3.4: una etiqueta son 1..63 octetos (64+ pondría los bits 0xC0/0x40 del
+        // puntero/tipo desconocido en el octeto de longitud) y un nombre, 255 como mucho.
+        if (raw.len() == 0 || raw.len() > 63) {
+            return Result.Err(
+                "label '" + labels[i] + "' is empty or longer than 63 octets in '" + name + "'"
+            );
+        }
+        total = total + raw.len() + 1;
+        if (total > 255) {
+            return Result.Err("name longer than 255 octets: '" + name + "'");
+        }
         let suffix = join(labels.slice(i, labels.len()), ".").to_lower();
         match (o.seen.get(suffix)) {
             Option.Some(off) => {
                 put16(o, 0xC000 | off);
-                return;
+                return Result.Ok(0);
             },
             Option.None => { },
         }
         if (o.buf.len() < 0x3FFF) {
             o.seen.insert(suffix, o.buf.len());
         }
-        let raw = labels[i].to_bytes();
         o.buf.push(raw.len());
         for x in raw {
             o.buf.push(x);
         }
     }
     o.buf.push(0);
+    Result.Ok(0)
 }
 
 // El RDATA de un registro, con su longitud delante. Los nombres dentro de NS/CNAME/MX/SOA pueden
 // comprimirse (RFC 3597 §4); el target de SRV no (RFC 2782).
-fn put_data(o: Out, d: Data) {
+fn put_data(o: Out, d: Data) -> Result<int, string> {
     let at = o.buf.len();
     put16(o, 0);
     match (d) {
@@ -474,10 +487,12 @@ fn put_data(o: Out, d: Data) {
                 o.buf.push(x);
             }
         },
-        Data.Name(n) => put_name(o, n),
+        Data.Name(n) => {
+            let _ = put_name(o, n)?;
+        },
         Data.Mx(pref, n) => {
             put16(o, pref);
-            put_name(o, n);
+            let _ = put_name(o, n)?;
         },
         Data.Txt(parts) => {
             for t in parts {
@@ -495,12 +510,13 @@ fn put_data(o: Out, d: Data) {
             put16(o, port);
             let saved = o.seen;
             o.seen = Map.new();
-            put_name(o, target);
+            let written = put_name(o, target);
             o.seen = saved;
+            let _ = written?;
         },
         Data.Soa(mname, rname, serial, refresh, retry, expire, minimum) => {
-            put_name(o, mname);
-            put_name(o, rname);
+            let _ = put_name(o, mname)?;
+            let _ = put_name(o, rname)?;
             put32(o, serial);
             put32(o, refresh);
             put32(o, retry);
@@ -516,23 +532,26 @@ fn put_data(o: Out, d: Data) {
     let len = o.buf.len() - at - 2;
     o.buf[at] = (len >> 8) & 0xFF;
     o.buf[at + 1] = len & 0xFF;
+    Result.Ok(0)
 }
 
-fn put_rr(o: Out, r: Rr) {
-    put_name(o, r.name);
+fn put_rr(o: Out, r: Rr) -> Result<int, string> {
+    let _ = put_name(o, r.name)?;
     put16(o, r.rtype);
     put16(o, IN);
     put32(o, r.ttl);
-    put_data(o, r.data);
+    put_data(o, r.data)
 }
 
 /// Writes the response to `q`. `limit` is the most a UDP reply may carry (`udp_limit(q)`; 0 = no
 /// limit, for TCP); a longer one is cut to the header, question and OPT with TC set, so the
-/// client asks again over TCP.
-pub fn write_response(q: Query, a: Answer, limit: int) -> bytes {
-    let full = render(q, a, false);
+/// client asks again over TCP. `Err` only for a name that cannot be encoded (a label of 64+
+/// octets or empty, a name past 255 octets — RFC 1035 §2.3.4): a bug in the zone, not in the
+/// client, so answer `write_response(q, empty(SERVFAIL), limit)` and log it.
+pub fn write_response(q: Query, a: Answer, limit: int) -> Result<bytes, string> {
+    let full = render(q, a, false)?;
     if (limit == 0 || full.len() <= limit) {
-        return full;
+        return Result.Ok(full);
     }
     render(
         q,
@@ -547,7 +566,7 @@ pub fn write_response(q: Query, a: Answer, limit: int) -> bytes {
     )
 }
 
-fn render(q: Query, a: Answer, truncated: bool) -> bytes {
+fn render(q: Query, a: Answer, truncated: bool) -> Result<bytes, string> {
     let o = Out { buf: [], seen: Map.new() };
     put16(o, q.id);
     var flags = 0x8000 | (q.opcode << 11) | (a.rcode & 0xF);
@@ -565,17 +584,17 @@ fn render(q: Query, a: Answer, truncated: bool) -> bytes {
     put16(o, a.answers.len());
     put16(o, a.authority.len());
     put16(o, a.additional.len() + if (q.edns > 0) { 1 } else { 0 });
-    put_name(o, q.question.name);
+    let _ = put_name(o, q.question.name)?;
     put16(o, q.question.qtype);
     put16(o, q.question.qclass);
     for r in a.answers {
-        put_rr(o, r);
+        let _ = put_rr(o, r)?;
     }
     for r in a.authority {
-        put_rr(o, r);
+        let _ = put_rr(o, r)?;
     }
     for r in a.additional {
-        put_rr(o, r);
+        let _ = put_rr(o, r)?;
     }
     if (q.edns > 0) {
         o.buf.push(0);
@@ -584,7 +603,7 @@ fn render(q: Query, a: Answer, truncated: bool) -> bytes {
         put32(o, 0);
         put16(o, 0);
     }
-    bytes_of(o.buf)
+    Result.Ok(bytes_of(o.buf))
 }
 
 /// A bare error reply for a datagram that did not parse as a query (`Err(Bad)` of

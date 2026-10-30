@@ -4,7 +4,25 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.87 — 2026-10-30
+
+Segunda vuelta de la tanda de apps nuevas (rayblob, raysql, raydns): lo que las apps no podían
+descubrir o les faltaba por el pool, más las tres piezas diferidas de IDEAS §119 (M435/M436).
+
+- **Paquete `net` 0.15.0 — `webserver` con el cuerpo de la petición bajo demanda y el 413 por el
+  handler (M436; rayblob #284).** `options().with_body_stream()` deja el cuerpo en la conexión y el
+  handler tira de él (`next_body_chunk`, `read_body`, `declared_body_length`; `Request.body_stream`)
+  con la contrapresión del socket: un PUT de 64 MiB baja de 281 a 9 MiB de RSS en el nativo y de 352
+  a 42 en la VM. Content-Length y chunked, con plazo ocioso por lectura en vez del plazo total de la
+  petición; los errores a mitad llegan al handler como `Err`; un cuerpo no agotado cierra la
+  conexión (y la respuesta ya anuncia `Connection: close`), uno agotado deja pasar la petición
+  pipelineada. El modo clásico drena el mismo `BodyStream`: una sola implementación del encuadre. Sin la opción
+  nada cambia y el mismo handler sirve en los dos modos. `options().pass_too_large()` entrega al
+  handler, marcada (`body_too_large(req)`), la petición cuyo `Content-Length` supera
+  `max_body_bytes`, para responder el 413 en el formato de la API. `quiet()` deja de anotar en stderr
+  las peticiones rechazadas (errores del cliente). `Request` gana el campo `body_stream`: un
+  `Request` literal construido a mano (el micro-benchmark de raylb) tiene que añadirlo. Suite
+  `tests/webserver_body_stream_cli.rs` (TCP crudo contra el servidor, VM y nativo).
 
 - **Paquete `net` 0.14.0 — el lado servidor de dos protocolos (M435; rayblob #285, raydns #287),
   todo aditivo.** `net/sigv4` verifica además de firmar: `parse_authorization`/`parse_presigned_query`
@@ -16,7 +34,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   no cambia de firma y pasa por las mismas piezas (la query canónica ahora decodifica y re-codifica
   cada par y ordena por clave y valor, como pide AWS). Nuevo `net/dns_message`: `parse_query` →
   `Query`/`Bad`, `write_response` con compresión, TC y OPT, `udp_limit`, `write_error`,
-  `parse_response` → `Response` (rcode, AA/TC, authority/additional, SOA), `Data`/`Rr`,
+  `parse_response` → `Response` (rcode, AA/TC, authority/additional, SOA), `write_response` es
+  `Result` (una etiqueta de 64+ octetos es `Err`, no un mensaje corrupto), `Data`/`Rr`,
   `parse_ipv4`/`parse_ipv6`, `type_name`. `net/dns` y su `Record` quedan intactos. Los dos vienen del
   código probado de rayblob (siete ejemplos de la doc de S3) y raydns (contra `net/dns` y `dig`);
   suites en `tests/fixtures/net_server/`, VM y nativo.

@@ -43,6 +43,45 @@ pub struct Request {
     // M123: la dirección remota del cliente ("ip:puerto"; "" si el SO no la da). Habilita
     // rate-limit por IP, X-Forwarded-For y logs de acceso con origen (hallazgo de raygate, §65.1).
     remote: string,
+    /// M436 (rayblob #284): `Some` when the server was started with `with_body_stream` and the
+    /// request has a body — then `body` is empty and the handler pulls it with `next_body_chunk`
+    /// (or `read_body`). `None` in every other case: the body is in `body`, as always.
+    body_stream: Option<BodyStream>,
+}
+
+// M436 (rayblob #284): el cuerpo de la petición BAJO DEMANDA. Sin fibra ni canal: el handler tira
+// de la conexión cuando quiere el siguiente trozo, así que la contrapresión es la del socket, el
+// cuerpo nunca está entero en memoria (un PUT de 64 MiB costaba ~5× su tamaño en RSS: el búfer de
+// lectura, la copia por `+`, la copia al cruzar el canal del handler) y un error a mitad (el peer
+// cierra, el plazo vence, el chunked viene mal) le llega al handler como `Err`, no como un cierre
+// mudo. Mientras el handler no haya consumido el cuerpo entero, la conexión no se reutiliza.
+/// The state of a request body read on demand (`with_body_stream`): where it comes from, how much
+/// is left and what arrived past the headers. Drive it with `next_body_chunk`/`read_body`; the
+/// fields are for inspection (`received`, `done`).
+pub struct BodyStream {
+    conn: int,
+    /// Bytes still to read for a `Content-Length` body (-1 for a chunked body).
+    remaining: int,
+    chunked: bool,
+    /// Bytes already read from the socket and not yet handed out.
+    buffer: bytes,
+    /// Buffered mode: the absolute deadline of the whole request (0 = none). Streaming mode: 0.
+    deadline: int,
+    /// Streaming mode: the idle timeout of EACH read (`read_timeout_millis`; 0 = none) — an upload
+    /// takes as long as it takes, a client that stops sending is cut after this long.
+    idle_ms: int,
+    /// `max_body_bytes`: a chunked body that grows past it fails with "body too large".
+    limit: int,
+    /// Bytes handed out so far.
+    received: int,
+    /// True once the whole body was handed out (the connection may then serve the next request).
+    done: bool,
+    /// What followed the body in the socket (the start of a pipelined request), once `done`.
+    rest: bytes,
+    /// True when the declared `Content-Length` exceeds `max_body_bytes` and the server was started
+    /// with `pass_too_large`: nothing of the body will be read (`next_body_chunk` is `Err`), the
+    /// handler answers the 413 in its own format and the connection closes after it.
+    rejected: bool,
 }
 
 // M123: la IP remota a secas (sin puerto), consciente de IPv6 ("[::1]:8080" → "::1").
@@ -1421,70 +1460,6 @@ fn tam_chunk(b: bytes, ini: int, fin: int) -> int {
 // raysec #239: tope de la línea `tamaño-hex[;extensiones]` de un chunk.
 const MAX_CHUNK_LINE: int = 4096;
 
-// Decodifica un cuerpo `Transfer-Encoding: chunked`: líneas `tamaño-hex\r\n` + datos + `\r\n`,
-// terminado por el chunk 0 (los trailers, raros, no se soportan: tras el 0 se exige `\r\n`).
-// `initial` son los octetos que llegaron pegados a las cabeceras; el tamaño DECODIFICADO acumulado
-// respeta `max` y toda la lectura el plazo total.
-fn read_body_chunked(conn: int, initial: bytes, deadline: int, max: int) -> Result<bytes, string> {
-    var acc: bytes = initial;
-    var out: bytes = b"";
-    var follow: bool = true;
-    while (follow) {
-        let nl: int = find_crlf(acc, 0);
-        // raysec #239: la línea del tamaño (con sus extensiones `;k=v`) tiene tope: sin él, una
-        // extensión enorme se acumulaba en memoria hasta el plazo de lectura (Puma CVE-2024-21647).
-        if ((nl < 0 && acc.len() > MAX_CHUNK_LINE) || nl > MAX_CHUNK_LINE) {
-            return Result.Err("chunk size line too long");
-        }
-        if (nl < 0) {
-            match (read_with_deadline(conn, deadline)) {
-                Result.Ok(t) => {
-                    if (t.len() == 0) {
-                        return Result.Err("incomplete chunked body (the connection closed)");
-                    }
-                    acc = acc + t;
-                },
-                Result.Err(e) => {
-                    return Result.Err("error reading the chunked body: " + e);
-                },
-            }
-        } else {
-            let n: int = tam_chunk(acc, 0, nl);
-            if (n < 0) {
-                return Result.Err("malformed chunked body (chunk size not hex or too large)");
-            }
-            if (n == 0) {
-                follow = false;
-            } else {
-                if (out.len() + n > max) {
-                    return Result.Err("body too large (chunked > " + to_string(max) + ")");
-                }
-                // Asegurar el chunk completo + su \r\n final.
-                var missing: bool = acc.len() < nl + 2 + n + 2;
-                while (missing) {
-                    match (read_with_deadline(conn, deadline)) {
-                        Result.Ok(t) => {
-                            if (t.len() == 0) {
-                                return Result.Err(
-                                    "incomplete chunked body (the connection closed)"
-                                );
-                            }
-                            acc = acc + t;
-                            missing = acc.len() < nl + 2 + n + 2;
-                        },
-                        Result.Err(e) => {
-                            return Result.Err("error reading the chunked body: " + e);
-                        },
-                    }
-                }
-                out = out + acc.sub_bytes(nl + 2, nl + 2 + n);
-                acc = acc.sub_bytes(nl + 2 + n + 2, acc.len());
-            }
-        }
-    }
-    Result.Ok(out)
-}
-
 // M56.4: una lectura respetando el plazo TOTAL de la petición (`deadline` en el reloj monotónico;
 // 0 = sin plazo). El primitivo del timeout es por-lectura (`net.set_read_timeout`), así que antes
 // de cada lectura se fija a lo que RESTA del plazo — un cliente que gotea octetos no lo renueva.
@@ -1543,6 +1518,21 @@ fn read_request_from(
     carry: bytes,
     remote: string
 ) -> Result<(Request, bytes), string> {
+    match (read_request_mode(conn, limits, carry, remote, false)) {
+        Result.Ok(pair) => Result.Ok(pair),
+        Result.Err(e) => Result.Err(read_error_text(e, limits)),
+    }
+}
+
+// M436: la lectura con el modo: `stream` deja el cuerpo en la conexión (`Request.body_stream`) en
+// vez de leerlo entero; un Content-Length mayor que el tope es `TooLarge` con la petición parseada.
+fn read_request_mode(
+    conn: int,
+    limits: Limits,
+    carry: bytes,
+    remote: string,
+    stream: bool
+) -> Result<(Request, bytes), ReadError> {
     // El plazo total: instante monotónico en que la lectura de ESTA petición vence (0 = sin plazo).
     let deadline: int = if (limits.read_timeout_millis > 0) {
         time.monotonic() + limits.read_timeout_millis
@@ -1563,7 +1553,11 @@ fn read_request_from(
             start = acc.len() - 3;
             if (acc.len() > limits.max_header_bytes) {
                 return Result.Err(
-                    "headers too large (more than " + to_string(limits.max_header_bytes) + " bytes)"
+                    ReadError.Failed(
+                        "headers too large (more than "
+                            + to_string(limits.max_header_bytes)
+                            + " bytes)"
+                    )
                 );
             }
             match (read_with_deadline(conn, deadline)) {
@@ -1579,30 +1573,32 @@ fn read_request_from(
                     // caso normal de una conexión keep-alive que se cierra u ociosa) — error
                     // distinguible para que el servidor cierre en silencio, sin 400 ni ruido.
                     if (acc.len() == 0) {
-                        return Result.Err("connection closed");
+                        return Result.Err(ReadError.Failed("connection closed"));
                     }
-                    return Result.Err("error reading: " + e);
+                    return Result.Err(ReadError.Failed("error reading: " + e));
                 },
             }
         }
     }
     if (sep < 0) {
         if (acc.len() == 0) {
-            return Result.Err("connection closed");
+            return Result.Err(ReadError.Failed("connection closed"));
         }
-        return Result.Err("incomplete request (no end of headers)");
+        return Result.Err(ReadError.Failed("incomplete request (no end of headers)"));
     }
     // El tope también sobre el separador encontrado: sin esto, unas cabeceras que llegan en un
     // solo trozo grande pasarían y el límite dependería del troceo de la red (no determinista).
     if (sep + 4 > limits.max_header_bytes) {
         return Result.Err(
-            "headers too large (more than " + to_string(limits.max_header_bytes) + " bytes)"
+            ReadError.Failed(
+                "headers too large (more than " + to_string(limits.max_header_bytes) + " bytes)"
+            )
         );
     }
 
     var body: bytes = acc.sub_bytes(sep + 4, acc.len());
     match (from_utf8(acc.sub_bytes(0, sep))) {
-        Result.Err(e) => Result.Err("request headers are not UTF-8: " + e),
+        Result.Err(e) => Result.Err(ReadError.Failed("request headers are not UTF-8: " + e)),
         Result.Ok(headers_raw) => {
             let lines: [string] = headers_raw.split("\r\n");
 
@@ -1611,7 +1607,7 @@ fn read_request_from(
             // no una ruta corrupta silenciosa).
             let parts: [string] = lines[0].split(" ");
             if (parts.len() < 2) {
-                return Result.Err("malformed request line: " + lines[0]);
+                return Result.Err(ReadError.Failed("malformed request line: " + lines[0]));
             }
             let method: string = parts[0];
             let target: string = parts[1];
@@ -1631,7 +1627,7 @@ fn read_request_from(
                     path = p;
                 },
                 Result.Err(e) => {
-                    return Result.Err("malformed path (" + e + "): " + path_raw);
+                    return Result.Err(ReadError.Failed("malformed path (" + e + "): " + path_raw));
                 },
             }
 
@@ -1643,20 +1639,20 @@ fn read_request_from(
                 // un plegado obsoleto (obs-fold), y un nombre con espacios (`Content-Length : 5`)
                 // es inválido. Un proxy que los lea al revés dejaría colar una cabecera: 400.
                 if (lines[i].starts_with(" ") || lines[i].starts_with("\t")) {
-                    return Result.Err("obsolete header line folding");
+                    return Result.Err(ReadError.Failed("obsolete header line folding"));
                 }
                 match (index_of(lines[i], ":")) {
                     Option.Some(c) => {
                         let raw_name: string = lines[i].substring(0, c);
                         if (raw_name.len() == 0 || !valid_header_name(raw_name)) {
-                            return Result.Err("invalid header name: " + raw_name);
+                            return Result.Err(ReadError.Failed("invalid header name: " + raw_name));
                         }
                         let name: string = raw_name.to_lower();
                         let value: string = lines[i].substring(c + 1, lines[i].len()).trim();
                         // raysec #240 (RFC 9112 §3.2): un `Host` que no es `nombre[:puerto]` o
                         // `[v6][:puerto]` (`localhost:1@evil.example`) es un 400, para todas las apps.
                         if (name == "host" && !valid_host(value)) {
-                            return Result.Err("invalid Host header: " + value);
+                            return Result.Err(ReadError.Failed("invalid Host header: " + value));
                         }
                         // raysec #230: dos Content-Length distintos son un 400 (RFC 9112 §6.3): cada
                         // salto del camino podría quedarse con uno y partir el flujo de otra manera.
@@ -1664,7 +1660,9 @@ fn read_request_from(
                             match (get(headers, name)) {
                                 Option.Some(prev) => {
                                     if (prev != value) {
-                                        return Result.Err("conflicting Content-Length headers");
+                                        return Result.Err(
+                                            ReadError.Failed("conflicting Content-Length headers")
+                                        );
                                     }
                                 },
                                 Option.None => { },
@@ -1679,8 +1677,8 @@ fn read_request_from(
 
             // M56.8: un cuerpo `Transfer-Encoding: chunked` se decodifica (antes llegaba vacío en
             // silencio). Tiene prioridad sobre Content-Length (RFC 7230 §3.3.3).
-            // M316: lo que sobra tras el cuerpo (el arrastre para la siguiente petición).
-            var rest: bytes = b"";
+            // M316: lo que sobra tras el cuerpo (el arrastre para la siguiente petición) sale de
+            // `BodyStream.rest`.
             var chunked: bool = false;
             match (get(headers, "transfer-encoding")) {
                 Option.Some(te) => {
@@ -1691,97 +1689,355 @@ fn read_request_from(
             // Transfer-Encoding Y Content-Length a la vez es la forma clásica de request smuggling
             // (RFC 9112 §6.1): un proxy delante puede quedarse con el otro. Se rechaza.
             if (chunked && headers.contains_key("content-length")) {
-                return Result.Err("both Transfer-Encoding and Content-Length");
+                return Result.Err(ReadError.Failed("both Transfer-Encoding and Content-Length"));
             }
-            if (chunked) {
-                match (read_body_chunked(conn, body, deadline, limits.max_body_bytes)) {
-                    Result.Ok(b2) => {
-                        body = b2;
-                    },
-                    Result.Err(e) => {
-                        return Result.Err(e);
-                    },
-                }
-            }
-            // Cuerpo: si hay Content-Length (octetos), completar la lectura hasta esa longitud.
-            // M56.1: el tope se comprueba contra lo DECLARADO (antes de leer nada); un peer que
-            // cierra sin completar el cuerpo es error (no un Ok truncado); y el cuerpo se recorta
-            // a n (un trozo puede traer octetos de más).
+            // Content-Length validado ANTES de leer nada (M56.1): solo dígitos (RFC 9112 §8.6),
+            // que quepa en un int, y dentro del tope — un cuerpo mayor es 413 con la petición ya
+            // parseada, para que con `pass_too_large` el handler responda en su formato (#284).
+            var declared: int = 0 - 1;
             if (!chunked) {
                 match (get(headers, "content-length")) {
                     Option.Some(cl) => {
-                        // Solo dígitos (RFC 9112 §8.6): antes `abc` o `-5` no daban cuerpo y lo que
-                        // venía detrás se leía como la SIGUIENTE petición.
                         if (!all_digits(cl)) {
-                            return Result.Err("invalid Content-Length: " + cl);
+                            return Result.Err(ReadError.Failed("invalid Content-Length: " + cl));
                         }
                         match (parse_int(cl)) {
                             Option.Some(n) => {
-                                if (n > limits.max_body_bytes) {
-                                    return Result.Err(
-                                        "body too large (Content-Length "
-                                            + to_string(n)
-                                            + " > "
-                                            + to_string(limits.max_body_bytes)
-                                            + ")"
-                                    );
-                                }
-                                while (body.len() < n) {
-                                    match (read_with_deadline(conn, deadline)) {
-                                        Result.Ok(trozo) => {
-                                            if (trozo.len() == 0) {
-                                                return Result.Err(
-                                                    "incomplete body: the connection closed with "
-                                                        + to_string(body.len())
-                                                        + " of "
-                                                        + to_string(n)
-                                                        + " bytes"
-                                                );
-                                            }
-                                            body = body + trozo;
-                                        },
-                                        Result.Err(e) => {
-                                            return Result.Err("error reading the body: " + e);
-                                        },
-                                    }
-                                }
-                                if (body.len() > n) {
-                                    rest = body.sub_bytes(n, body.len());
-                                    body = body.sub_bytes(0, n);
-                                }
+                                declared = n;
                             },
                             Option.None => {
-                                // Dígitos que no caben en un int.
-                                return Result.Err("invalid Content-Length: " + cl);
+                                return Result.Err(
+                                    ReadError.Failed("invalid Content-Length: " + cl)
+                                );
                             },
                         }
                     },
-                    Option.None => {
-                        // Sin Content-Length ni chunked no hay cuerpo (RFC 7230 §3.3.3): lo que
-                        // vino tras las cabeceras es la SIGUIENTE petición.
-                        rest = body;
-                        body = b"";
-                    },
+                    Option.None => { },
                 }
             }
-
-            // Petición leída: quitar el timeout (el handler puede retener la conexión — SSE — o un
-            // handler crudo leer más; que no herede un plazo casi vencido).
-            if (deadline > 0) {
-                net.set_read_timeout(conn, 0);
-            }
-            let req: Request = Request {
+            let head: Request = Request {
                 method: method,
                 path: path,
                 raw_path: path_raw,
                 query: query,
                 version: version,
                 headers: headers,
-                body: body,
-                remote: remote
+                body: b"",
+                remote: remote,
+                body_stream: Option.None
             };
-            Result.Ok((req, rest))
+            if (declared > limits.max_body_bytes) {
+                return Result.Err(ReadError.TooLarge(head, declared));
+            }
+            // Sin Content-Length ni chunked no hay cuerpo (RFC 7230 §3.3.3): lo que vino tras las
+            // cabeceras es la SIGUIENTE petición. Lo mismo con `Content-Length: 0`.
+            if (!chunked && declared <= 0) {
+                if (deadline > 0) {
+                    net.set_read_timeout(conn, 0);
+                }
+                return Result.Ok((head, body));
+            }
+            // M436: UNA sola vía para el cuerpo, `BodyStream`: en modo streaming se queda en la
+            // conexión y el handler tira de él (plazo ocioso por lectura); en modo clásico el
+            // servidor lo drena aquí mismo (plazo total de la petición) y lo deja en `body`.
+            let st: BodyStream = BodyStream {
+                conn: conn,
+                remaining: if (chunked) { 0 - 1 } else { declared },
+                chunked: chunked,
+                buffer: body,
+                deadline: if (stream) { 0 } else { deadline },
+                idle_ms: if (stream) { limits.read_timeout_millis } else { 0 },
+                limit: limits.max_body_bytes,
+                received: 0,
+                done: false,
+                rest: b"",
+                rejected: false
+            };
+            if (stream) {
+                if (deadline > 0) {
+                    net.set_read_timeout(conn, 0);
+                }
+                head.body_stream = Option.Some(st);
+                return Result.Ok((head, b""));
+            }
+            match (drain_body(st, limits.max_body_bytes)) {
+                Result.Ok(whole) => {
+                    body = whole;
+                },
+                Result.Err(e) => {
+                    return Result.Err(ReadError.Failed(e));
+                },
+            }
+            // Petición leída: quitar el timeout (el handler puede retener la conexión — SSE — o un
+            // handler crudo leer más; que no herede un plazo casi vencido).
+            if (deadline > 0) {
+                net.set_read_timeout(conn, 0);
+            }
+            head.body = body;
+            Result.Ok((head, st.rest))
         },
+    }
+}
+
+// M436: el porqué de una lectura fallida, para el bucle del servidor. `TooLarge` lleva la petición
+// ya parseada (cabeceras) y el Content-Length declarado: con `pass_too_large` el handler responde
+// con ella. Hacia fuera (`read_request_*`) sigue saliendo el texto de siempre.
+enum ReadError {
+    Failed(string),
+    TooLarge(Request, int),
+}
+
+fn read_error_text(e: ReadError, limits: Limits) -> string {
+    match (e) {
+        ReadError.Failed(m) => m,
+        ReadError.TooLarge(_, n) => "body too large (Content-Length "
+            + to_string(n)
+            + " > "
+            + to_string(limits.max_body_bytes)
+            + ")",
+    }
+}
+
+// --- M436: el cuerpo bajo demanda ---
+
+/// The next piece of a request body read on demand (`with_body_stream`): `Ok(Some(bytes))` with
+/// at least one byte, `Ok(None)` once the body is complete, or `Err` if the peer closed early,
+/// the read timeout ran out, a chunked body is malformed or grows past `max_body_bytes`. For a
+/// request whose body is already in `req.body` (no streaming) it yields that body once and then
+/// `None`, so a handler written for streaming works either way.
+pub fn next_body_chunk(req: Request) -> Result<Option<bytes>, string> {
+    match (req.body_stream) {
+        Option.None => {
+            if (req.body.len() == 0) {
+                return Result.Ok(Option.None);
+            }
+            let b: bytes = req.body;
+            req.body = b"";
+            Result.Ok(Option.Some(b))
+        },
+        Option.Some(st) => {
+            if (st.rejected) {
+                return Result.Err(
+                    "body too large (Content-Length "
+                        + to_string(st.remaining)
+                        + " > "
+                        + to_string(st.limit)
+                        + ")"
+                );
+            }
+            if (st.done) {
+                return Result.Ok(Option.None);
+            }
+            if (st.chunked) { next_chunked_piece(st) } else { next_sized_piece(st) }
+        },
+    }
+}
+
+/// True for a request the server handed over because its `Content-Length` exceeds
+/// `max_body_bytes` (`pass_too_large`): answer the 413 in the API's own format — S3's
+/// `EntityTooLarge` XML, a JSON error. The body was not read and cannot be; `declared_body_length`
+/// says how big it was. The connection closes after the response.
+pub fn body_too_large(req: Request) -> bool {
+    match (req.body_stream) {
+        Option.Some(st) => st.rejected,
+        Option.None => false,
+    }
+}
+
+// Una lectura del socket para el cuerpo: con el plazo TOTAL de la petición (modo clásico) o con
+// el plazo OCIOSO por lectura (streaming: el handler puede tardar entre trozos y la subida lo que
+// tarde; lo que se corta es un cliente que deja de enviar).
+fn stream_read(st: BodyStream) -> Result<bytes, string> {
+    if (st.deadline > 0) {
+        return read_with_deadline(st.conn, st.deadline);
+    }
+    if (st.idle_ms > 0) {
+        net.set_read_timeout(st.conn, st.idle_ms);
+    }
+    net.socket_read_bytes(st.conn)
+}
+
+// Drena un `BodyStream` entero a memoria, con tope: la vía del modo clásico y de `read_body`.
+fn drain_body(st: BodyStream, max: int) -> Result<bytes, string> {
+    var parts: [bytes] = [];
+    var total: int = 0;
+    var follow: bool = true;
+    while (follow) {
+        let piece: Option<bytes> = if (st.chunked) {
+            next_chunked_piece(st)?
+        } else {
+            next_sized_piece(st)?
+        };
+        match (piece) {
+            Option.Some(b) => {
+                total = total + b.len();
+                if (total > max) {
+                    return Result.Err("body too large (more than " + to_string(max) + " bytes)");
+                }
+                parts.push(b);
+            },
+            Option.None => {
+                follow = false;
+            },
+        }
+    }
+    Result.Ok(bytes_concat(parts))
+}
+
+// Un trozo de un cuerpo con Content-Length: lo que haya en el búfer o lo que dé una lectura.
+fn next_sized_piece(st: BodyStream) -> Result<Option<bytes>, string> {
+    if (st.remaining <= 0) {
+        st.done = true;
+        st.rest = st.buffer;
+        st.buffer = b"";
+        return Result.Ok(Option.None);
+    }
+    if (st.buffer.len() == 0) {
+        match (stream_read(st)) {
+            Result.Ok(t) => {
+                if (t.len() == 0) {
+                    return Result.Err(
+                        "incomplete body: the connection closed with "
+                            + to_string(st.received)
+                            + " of "
+                            + to_string(st.received + st.remaining)
+                            + " bytes"
+                    );
+                }
+                st.buffer = t;
+            },
+            Result.Err(e) => {
+                return Result.Err("error reading the body: " + e);
+            },
+        }
+    }
+    let take: int = if (st.buffer.len() > st.remaining) { st.remaining } else { st.buffer.len() };
+    let piece: bytes = st.buffer.sub_bytes(0, take);
+    st.buffer = st.buffer.sub_bytes(take, st.buffer.len());
+    st.remaining = st.remaining - take;
+    st.received = st.received + take;
+    if (st.remaining == 0) {
+        st.done = true;
+        st.rest = st.buffer;
+        st.buffer = b"";
+    }
+    Result.Ok(Option.Some(piece))
+}
+
+// Un chunk entero de un cuerpo `chunked` (M56.8/raysec #239): líneas `tamaño-hex[;ext]\r\n` +
+// datos + `\r\n`, de uno en uno; tras el chunk 0 el cuerpo está completo. Los trailers no se
+// soportan. Es la ÚNICA implementación del encuadre: el modo clásico la drena con `drain_body`.
+fn next_chunked_piece(st: BodyStream) -> Result<Option<bytes>, string> {
+    while (true) {
+        let nl: int = find_crlf(st.buffer, 0);
+        if ((nl < 0 && st.buffer.len() > MAX_CHUNK_LINE) || nl > MAX_CHUNK_LINE) {
+            return Result.Err("chunk size line too long");
+        }
+        if (nl < 0) {
+            match (stream_read(st)) {
+                Result.Ok(t) => {
+                    if (t.len() == 0) {
+                        return Result.Err("incomplete chunked body (the connection closed)");
+                    }
+                    st.buffer = st.buffer + t;
+                },
+                Result.Err(e) => {
+                    return Result.Err("error reading the chunked body: " + e);
+                },
+            }
+            continue;
+        }
+        let n: int = tam_chunk(st.buffer, 0, nl);
+        if (n < 0) {
+            return Result.Err("malformed chunked body (chunk size not hex or too large)");
+        }
+        if (n == 0) {
+            // Tras el `0\r\n` va la línea vacía final (puede llegar en el siguiente segmento): se
+            // espera y se comprueba; un trailer en su lugar no se soporta. Lo que siga es la
+            // próxima petición.
+            let end: int = nl + 2;
+            while (st.buffer.len() < end + 2) {
+                match (stream_read(st)) {
+                    Result.Ok(t) => {
+                        if (t.len() == 0) {
+                            return Result.Err("incomplete chunked body (the connection closed)");
+                        }
+                        st.buffer = st.buffer + t;
+                    },
+                    Result.Err(e) => {
+                        return Result.Err("error reading the chunked body: " + e);
+                    },
+                }
+            }
+            if (st.buffer[end] != 13 || st.buffer[end + 1] != 10) {
+                return Result.Err("malformed chunked body (trailers are not supported)");
+            }
+            st.done = true;
+            st.rest = st.buffer.sub_bytes(end + 2, st.buffer.len());
+            st.buffer = b"";
+            return Result.Ok(Option.None);
+        }
+        if (st.received + n > st.limit) {
+            return Result.Err("body too large (chunked > " + to_string(st.limit) + ")");
+        }
+        while (st.buffer.len() < nl + 2 + n + 2) {
+            match (stream_read(st)) {
+                Result.Ok(t) => {
+                    if (t.len() == 0) {
+                        return Result.Err("incomplete chunked body (the connection closed)");
+                    }
+                    st.buffer = st.buffer + t;
+                },
+                Result.Err(e) => {
+                    return Result.Err("error reading the chunked body: " + e);
+                },
+            }
+        }
+        let piece: bytes = st.buffer.sub_bytes(nl + 2, nl + 2 + n);
+        st.buffer = st.buffer.sub_bytes(nl + 2 + n + 2, st.buffer.len());
+        st.received = st.received + n;
+        return Result.Ok(Option.Some(piece));
+    }
+    Result.Ok(Option.None)
+}
+
+/// The whole body of a streamed request, gathered in memory up to `max` bytes (`Err("body too
+/// large …")` past it, with the rest unread): for the handlers of a streaming server that still
+/// want a small body whole (a JSON command next to the big uploads). With no streaming it is
+/// simply `req.body` (also capped by `max`).
+pub fn read_body(req: Request, max: int) -> Result<bytes, string> {
+    match (req.body_stream) {
+        Option.None => {
+            // Sin streaming el cuerpo ya está leído: se devuelve sin tocarlo (si no cabe, el Err no
+            // lo consume — `req.body` sigue ahí para quien quiera registrar su prefijo).
+            if (req.body.len() > max) {
+                return Result.Err("body too large (more than " + to_string(max) + " bytes)");
+            }
+            Result.Ok(req.body)
+        },
+        Option.Some(st) => {
+            if (st.rejected) {
+                return next_body_chunk(req).map(fn(_: Option<bytes>) -> bytes { b"" });
+            }
+            drain_body(st, max)
+        },
+    }
+}
+
+/// The body length the client declared (`Content-Length`), or -1 if there is none (chunked or no
+/// body). What a streaming handler checks against a quota before reading anything.
+pub fn declared_body_length(req: Request) -> int {
+    match (get(req.headers, "content-length")) {
+        Option.Some(cl) => {
+            if (!all_digits(cl)) {
+                return 0 - 1;
+            }
+            match (parse_int(cl)) {
+                Option.Some(n) => n,
+                Option.None => 0 - 1,
+            }
+        },
+        Option.None => 0 - 1,
     }
 }
 
@@ -2281,7 +2537,29 @@ fn rejection(e: string) -> Response {
     }
 }
 
+// M436: lo que `ServeOptions` configura del bucle por conexión más allá de los límites.
+// Solo datos planos: la fibra de cada conexión lo captura, y en el nativo un valor con funciones
+// dentro no puede cruzar a un `spawn` (por eso el 413 propio va por el handler normal y no por un
+// callback aparte: `pass_too_large` + `body_too_large(req)`).
+struct HttpConf {
+    /// El cuerpo se queda en la conexión y el handler tira de él (`with_body_stream`).
+    stream_bodies: bool,
+    /// Un cuerpo mayor que `max_body_bytes` llega al handler marcado (`pass_too_large`) en vez
+    /// del 413 en texto plano del servidor.
+    pass_too_large: bool,
+    /// `quiet`: las peticiones rechazadas (400/408/413/431) no se anotan en stderr.
+    quiet: bool,
+}
+
+fn default_http_conf() -> HttpConf {
+    HttpConf { stream_bodies: false, pass_too_large: false, quiet: false }
+}
+
 fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
+    handle_http_with(conn, handler, limits, default_http_conf());
+}
+
+fn handle_http_with(conn: int, handler: fn(Request) -> Response, limits: Limits, conf: HttpConf) {
     var follow: bool = true;
     // raysec #234: una escritura de la respuesta que no avanza en `write_timeout_millis` (el
     // cliente dejó de leer) falla con "write timeout" y la conexión se cierra, en vez de retener
@@ -2293,7 +2571,7 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
     // M361: lo que se calcula una vez por conexión (dirección remota, `Date`, live-reload).
     let cx: ConnCtx = conn_ctx(conn);
     while (follow) {
-        match (read_request_from(conn, limits, carry, cx.remote)) {
+        match (read_request_mode(conn, limits, carry, cx.remote, conf.stream_bodies)) {
             Result.Ok(pair) => {
                 let req: Request = pair.0;
                 carry = pair.1;
@@ -2328,7 +2606,13 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
                         if (seed_cookie) {
                             resp.set_cookie.push(token_cookie(limits.local_token));
                         }
-                        match (send_response_keep(conn, resp, !close, is_head, cx)) {
+                        // M436: un cuerpo bajo demanda que el handler no agotó sigue en el socket:
+                        // la respuesta anuncia `Connection: close` (y la conexión se cierra abajo).
+                        let unread: bool = match (req.body_stream) {
+                            Option.Some(st) => !st.done,
+                            Option.None => false,
+                        };
+                        match (send_response_keep(conn, resp, !close && !unread, is_head, cx)) {
                             Result.Ok(_) => { },
                             Result.Err(e) => {
                                 eprint("response: " + e);
@@ -2339,6 +2623,19 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
                         // M271: con Content-Length (stream_response_len) la conexión sigue viva.
                         if (resp.stream.len() > 0 && stream_length_of(resp) < 0) {
                             follow = false;
+                        }
+                        // M436: un cuerpo bajo demanda que el handler no agotó sigue en el socket:
+                        // la conexión no se puede reutilizar (se cierra); si lo agotó, lo que venía
+                        // detrás es el arrastre de la siguiente petición.
+                        match (req.body_stream) {
+                            Option.Some(st) => {
+                                if (st.done) {
+                                    carry = st.rest;
+                                } else {
+                                    follow = false;
+                                }
+                            },
+                            Option.None => { },
                         }
                     },
                     Result.Err(e) => {
@@ -2354,9 +2651,68 @@ fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
                     follow = false;
                 }
             },
-            Result.Err(e) => {
+            Result.Err(ReadError.TooLarge(req, n)) => {
+                // M436 (rayblob #284): el 413 con la petición parseada. Con `pass_too_large` la
+                // responde el handler normal (la petición llega marcada: `body_too_large(req)`), en
+                // su formato; sin él, el texto plano de siempre. El cuerpo no se ha leído → cerrar.
+                if (!conf.quiet) {
+                    eprint("request: " + read_error_text(ReadError.TooLarge(req, n), limits));
+                }
+                // M297: la guarda de origen + token local también aquí — el handler no debe ver
+                // una petición que el camino normal habría rechazado con 403.
+                let seed_cookie: bool = match (local_guard(req, limits)) {
+                    Result.Ok(v) => v,
+                    Result.Err(denied) => {
+                        match (send_response(conn, denied)) {
+                            Result.Ok(_) => { },
+                            Result.Err(_) => { },
+                        }
+                        follow = false;
+                        continue;
+                    },
+                };
+                let resp: Response = if (conf.pass_too_large) {
+                    req.body_stream = Option.Some(
+                        BodyStream {
+                            conn: conn,
+                            remaining: n,
+                            chunked: false,
+                            buffer: b"",
+                            deadline: 0,
+                            limit: limits.max_body_bytes,
+                            received: 0,
+                            done: false,
+                            idle_ms: 0,
+                            rest: b"",
+                            rejected: true
+                        }
+                    );
+                    match (try_call(fn() -> Response { handler(req) })) {
+                        Result.Ok(r) => {
+                            if (seed_cookie) {
+                                r.set_cookie.push(token_cookie(limits.local_token));
+                            }
+                            r
+                        },
+                        Result.Err(e) => {
+                            eprint("handler: " + e);
+                            text(500, "Internal Server Error")
+                        },
+                    }
+                } else {
+                    text(413, "Content Too Large")
+                };
+                match (send_response(conn, resp)) {
+                    Result.Ok(_) => { },
+                    Result.Err(_) => { },
+                }
+                follow = false;
+            },
+            Result.Err(ReadError.Failed(e)) => {
                 if (e != "connection closed") {
-                    eprint("request: " + e);
+                    if (!conf.quiet) {
+                        eprint("request: " + e);
+                    }
                     match (send_response(conn, rejection(e))) {
                         Result.Ok(_) => { },
                         Result.Err(_) => { },
@@ -2917,6 +3273,10 @@ pub struct ServeOptions {
     has_stop: bool,
     // El campo no se llama `quiet`: taparía al método `quiet` (campo → método en el UFCS).
     no_stdout: bool,
+    // M436 (rayblob #284): cuerpo bajo demanda y 413 por el handler. Solo datos planos: un
+    // `fn` aquí haría que `opts` no pudiera cruzar a un `spawn` en el nativo.
+    stream_bodies: bool,
+    too_large_to_handler: bool,
 }
 
 /// The defaults: `default_limits()`, no graceful shutdown, plain HTTP, the `listening on port N`
@@ -2929,8 +3289,31 @@ pub fn options() -> ServeOptions {
         tls_key: "",
         stop: Channel.new(),
         has_stop: false,
-        no_stdout: false
+        no_stdout: false,
+        stream_bodies: false,
+        too_large_to_handler: false
     }
+}
+
+/// Hands request bodies to the handler on demand instead of reading them whole (rayblob #284):
+/// `req.body` arrives empty and `req.body_stream` is `Some`; the handler pulls the body with
+/// `next_body_chunk(req)` (or `read_body(req, max)` for the small ones) and the memory per request
+/// is one socket read, not the body several times over. `max_body_bytes` still applies to the
+/// declared `Content-Length` (413) and to a chunked body as it grows (`Err` while reading). A body
+/// the handler did not finish closes the connection after the response. Chainable.
+pub fn with_body_stream(o: ServeOptions) -> ServeOptions {
+    o.stream_bodies = true;
+    o
+}
+
+/// Hands a request whose `Content-Length` exceeds `max_body_bytes` to the handler instead of
+/// answering the server's plain-text `413 Content Too Large`: the handler sees it with
+/// `body_too_large(req)` (headers parsed, body unread and unreadable, `declared_body_length` for
+/// the size) and answers in the API's own format — S3's `EntityTooLarge` XML, a JSON error. The
+/// connection closes after that response. Chainable.
+pub fn pass_too_large(o: ServeOptions) -> ServeOptions {
+    o.too_large_to_handler = true;
+    o
 }
 
 /// Sets the safety limits. Chainable (`options().with_limits(l)`).
@@ -2965,8 +3348,10 @@ pub fn with_stop(o: ServeOptions, stop: Channel<int>) -> ServeOptions {
     o
 }
 
-/// Writes nothing to stdout: no `listening on port N`, no `shutting down: …` (errors still go
-/// to stderr). For a service whose stdout is a log stream. Chainable.
+/// Writes nothing to stdout: no `listening on port N`, no `shutting down: …` (server errors
+/// still go to stderr; since net 0.15.0 the requests the server rejects — 400/408/413/431 — are not
+/// logged either: they are the client's errors, not the service's). For a service whose stdout is
+/// a log stream. Chainable.
 pub fn quiet(o: ServeOptions) -> ServeOptions {
     o.no_stdout = true;
     o
@@ -3011,13 +3396,22 @@ pub fn serve_options_on(
     } else {
         Channel.new()
     };
+    // M436: valores PLANOS para la fibra de cada conexión (un struct con funciones dentro no se
+    // puede capturar por un `spawn` en el nativo; el `HttpConf` se arma dentro).
+    let stream_bodies: bool = opts.stream_bodies;
+    let too_large_to_handler: bool = opts.too_large_to_handler;
+    let quiet_conns: bool = opts.no_stdout;
     drain_loop(listener, limits, stop, opts.drain_ms, opts.no_stdout, fn(c: int) -> Result<int, string> {
         if (tls) { net.tls_accept(c, cert, key) } else { Result.Ok(c) }
     }, fn(c: int) {
-        handle_http(c, fn(req: Request) -> Response {
+        handle_http_with(c, fn(req: Request) -> Response {
             let h: fn(Request) -> Response = make_handler();
             h(req)
-        }, limits);
+        }, limits, HttpConf {
+            stream_bodies: stream_bodies,
+            pass_too_large: too_large_to_handler,
+            quiet: quiet_conns
+        });
     })
 }
 

@@ -19405,3 +19405,62 @@ pregunta del usuario fue si rompían compatibilidad. La respuesta condicionó el
 
 Queda #284 (cuerpo en streaming y 413 propio) para su propia PR: toca el lector de peticiones de
 `webserver` y, para no romper `Request.body`, irá como opción de `ServeOptions`.
+
+## 411. M436 — el cuerpo de la petición bajo demanda y el 413 por el handler (oct 2026)
+
+La última pieza de IDEAS §119 (#284): `webserver.Request.body` llegaba siempre entero, y un PUT de
+64 MiB costaba ~4,5× su tamaño en RSS (el búfer de lectura acumulado con `+`, el recorte, y la copia
+al cruzar al handler). Rayblob tapaba el agujero con un tope de 64 MiB por petición y multipart; un
+almacén de objetos no debería necesitarlo. Y el 413 por `max_body_bytes` lo respondía el servidor
+antes del handler, en texto plano: un cliente de S3 espera `EntityTooLarge` en XML.
+
+**Qué se decidió y por qué:**
+
+- **Tirar, no empujar.** La propuesta era un `Channel<bytes>` alimentado por una fibra lectora.
+  Se descartó: las fibras no comparten heap, así que cada trozo se COPIARÍA al cruzar el canal
+  (parte del 4,5× que se quería quitar), un error a mitad no tiene cómo llegar al handler (un canal
+  de `bytes` solo sabe cerrarse) y habría una fibra más por petición. En su lugar `BodyStream` guarda
+  la conexión, lo que falta y lo que llegó pegado a las cabeceras, y `next_body_chunk(req)` lee del
+  socket cuando el handler lo pide: la contrapresión es la del socket, el error es un `Err` normal
+  y la memoria por petición es un trozo. 64 MiB: nativo 281 → 9 MiB, VM 352 → 42 MiB.
+- **Opt-in, y el mismo handler para los dos modos.** `with_body_stream` en `ServeOptions`; sin ella
+  nada cambia. `next_body_chunk` sobre una petición sin streaming entrega `body` una vez y luego
+  `None`, así que un handler escrito para streaming corre igual en un servidor que no lo activó.
+  `Request` gana el campo `body_stream` (`Option<BodyStream>`): es el único cambio visible, y solo lo
+  nota quien construya un `Request` literal (el micro-benchmark de raylb).
+- **El 413 lo responde el handler normal, no un callback.** El primer diseño era
+  `with_too_large(opts, fn(Request) -> Response)`. No compila en el nativo: la fibra de cada
+  conexión captura las opciones por `spawn`, y un valor-función (o un struct que lo contenga) no
+  cruza —solo los parámetros `fn` marcados Send, que es exactamente por lo que `serve_options`
+  recibe una FACTORÍA `make_handler`—. Así que `pass_too_large()` es un booleano: la petición que
+  supera el tope llega al handler de siempre con `body_stream = Some(rejected)`, `body_too_large(req)`
+  lo dice, `declared_body_length` da el tamaño, y el handler responde en su formato. Un intento de
+  leer el cuerpo es `Err`. La conexión se cierra después.
+- **El lector devuelve un `ReadError` tipado.** Para que el 413 lleve la petición ya parseada, el
+  Content-Length se valida contra el tope ANTES de leer el cuerpo y el error interno es
+  `TooLarge(Request, int)`; las funciones públicas (`read_request_*`) siguen devolviendo el texto de
+  siempre.
+- **`quiet()` calla también los rechazos.** `request: body too large (…)` salía por stderr con
+  `no_stdout`; un 400/408/413/431 es un error del cliente, no del servicio. Los fallos del servidor
+  (handler que revienta, escritura que falla) siguen saliendo.
+
+**La revisión pre-release (regla M427) dejó cinco correcciones y una poda.** El 413 por el handler
+saltaba la guarda de origen/token local (M297): una página cross-site podía ejecutar un handler que
+no mirara `body_too_large` primero — ahora `local_guard` corre antes en esa rama, con la cookie de
+siembra. La respuesta a un cuerpo no agotado anunciaba keep-alive y acto seguido el servidor
+cerraba con octetos sin leer (RST, el cliente podía perder el 200) — `keep` es falso si el stream
+no acabó. El cuerpo bajo demanda heredaba el plazo TOTAL de la petición (10 s): una subida de 64 MiB
+a 5 MB/s moría al undécimo segundo con el cliente enviando — en streaming el plazo es OCIOSO por
+lectura (`BodyStream.idle_ms`), lo que se corta es un cliente que deja de enviar. El chunk `0` no
+esperaba su `\r\n` final si llegaba en otro segmento (la siguiente petición pipelineada empezaba
+con `\r\n` → 400) — ahora se espera y se comprueba, y un trailer es error explícito.
+`dns_message.put_name` escribía etiquetas de 64+ octetos como punteros (el bit 0xC0 en la longitud)
+— `write_response` devuelve `Result` y el nombre incodificable es `Err`. Y la poda: el modo clásico
+drena el MISMO `BodyStream` (`drain_body`), así que `read_body_chunked` y el bucle de Content-Length
+desaparecen — una sola implementación del encuadre, el siguiente arreglo de seguridad cae en un
+sitio. (Lo no tomado: `declared_body_length` re-parsea el Content-Length — una línea, se queda.)
+
+Verificado por TCP crudo en VM y nativo (`tests/webserver_body_stream_cli.rs`): Content-Length y
+chunked trozo a trozo, pipelining tras un cuerpo agotado, `read_body` de un cuerpo pequeño, 413 en
+XML con el tamaño declarado, cierre tras un cuerpo parcial, stderr limpio; y que el bucle del
+servidor transpila sin stubs (`RAYLANG_TRANSPILE_DEBUG`).

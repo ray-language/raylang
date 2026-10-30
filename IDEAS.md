@@ -4411,13 +4411,13 @@ piden un análisis nuevo; ninguna bloquea a las apps (todas tienen rodeo en su r
    contrapresión) y un gancho para la respuesta de 413. Impacto: medio-alto (toca el lector de
    peticiones y el contrato de `serve_raw`); la copia 4,5× es la misma pieza que el `read_bytes`
    + copia por canal de PERFORMANCE/raystream.
-2. **`net/sigv4` como servidor (#285).** Solo firma como cliente y hashea siempre el cuerpo. Un
+2. **[EJECUTADA — M435, DESIGN §410: `net/sigv4` verifica (`Claim`, `verify`, `presign`, piezas públicas), net 0.14.0]** **`net/sigv4` como servidor (#285).** Solo firma como cliente y hashea siempre el cuerpo. Un
    servidor compatible con S3 necesita verificar con el hash que declaró el cliente
    (`UNSIGNED-PAYLOAD`, `STREAMING-…`), URLs prefirmadas (`X-Amz-*` en la query) y chunks
    firmados. Propuesta: exponer `canonical_request` (con el hash dado), `signing_key`,
    `string_to_sign`, más `presign` y `verify`; rayblob lleva ~300 líneas propias verificadas contra
    los siete ejemplos de la doc de S3 — candidatas a volver al paquete.
-3. **`dns/message` de lectura y escritura (#287).** `net/dns` es cliente: `build_query`,
+3. **[EJECUTADA — M435, DESIGN §410: módulo `net/dns_message` aparte (`Query`/`Answer`/`Response`, `Data` con SOA); `Record` intacto]** **`dns/message` de lectura y escritura (#287).** `net/dns` es cliente: `build_query`,
    `parse_records`, `query_*`. Un servidor necesita leer la pregunta (punteros, EDNS OPT), escribir
    las cuatro secciones con compresión, AA/TC/RCODE y truncar a `udp_limit`; `parse_records` no
    expone authority/additional ni el rcode y `Record` no tiene SOA. raydns lleva `src/wire.ray`
@@ -4431,6 +4431,11 @@ piden un análisis nuevo; ninguna bloquea a las apps (todas tienen rodeo en su r
    `spawn` en la fibra madre: un análisis de último uso sobre el AST (el de `split_consumed_only_by_for`
    es un primo pequeño) y, en la VM, trasladar el objeto entre heaps sin copiar. Impacto medio;
    ganancia solo en ese patrón.
+
+Nota de M435: `ray doc` dentro de un proyecto resuelve las dependencias instaladas en `.ray-deps/`
+(las del índice) pero NO una dependencia `path:` (`net = "path:../packages/net"` → «is not a
+builtin…» para `sigv4.verify`), que es justo la forma de trabajar sobre un paquete sin publicarlo.
+Bajo impacto; mismo arreglo que el MCP: resolver `path:` del `ray.toml` como una raíz más.
 
 Y una nota de #296 que no es del lenguaje sino de `ray check`: un módulo chequeado SUELTO (`ray
 check` en `packages/db`, «module without main») resuelve `send(c, 112, pl)` contra el builtin

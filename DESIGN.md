@@ -19369,3 +19369,39 @@ lo que no se puede *descubrir* cuenta como inexistente — la superficie nueva s
 `query_opt` solo existía sobre `Conn` → `pool_query_opt`/`pool_exec_opt` en db 0.7.2, los mismos
 envoltorios que `pool_query`/`pool_exec`; el servidor PostgreSQL de prueba calcula ahora el SCRAM
 para cualquier nonce (iba precomputado para uno fijo y el pool marca con nonce aleatorio).
+
+## 410. M435 — el lado servidor de sigv4 y DNS vuelve al paquete `net` (oct 2026)
+
+De la tanda #280–#303 quedaron en IDEAS §119 tres piezas que cambiaban una API: el cuerpo de la
+petición en streaming (#284), sigv4 como servidor (#285) y el códec DNS de servidor (#287). Las dos
+últimas se resolvieron juntas (net 0.14.0) porque el código ya existía probado en las apps —
+rayblob llevaba ~300 líneas de `sigv4.ray` verificadas contra los siete ejemplos de la documentación
+de S3 y raydns ~400 de `wire.ray` probadas en los dos sentidos contra `net/dns` y `dig` — y la
+pregunta del usuario fue si rompían compatibilidad. La respuesta condicionó el diseño:
+
+- **`net/sigv4` crece sin cambiar lo que había.** `authorization_header` conserva su firma y ahora
+  es un envoltorio de las piezas nuevas (`canonical_request` → `sign`), que son públicas porque un
+  servidor S3 las necesita sueltas: verificar con el hash que el cliente DECLARÓ
+  (`x-amz-content-sha256`, `UNSIGNED-PAYLOAD`, `STREAMING-…`) y no con el del cuerpo recibido, firmar
+  cada chunk de un cuerpo streaming sobre la firma anterior (`signing_key` + `hmac_hex`), y leer
+  URLs prefirmadas. `Claim` es «lo que el cliente dice haber firmado» y `verify` lo contrasta con la
+  petición tal como llegó (`Request.raw_path`, la query cruda): la comparación es en tiempo constante
+  y el reloj se acota (15 min de sesgo para la cabecera; `X-Amz-Expires` ≤ 7 días para la URL). Un
+  cambio de comportamiento sí se aceptó: la query canónica decodifica y re-codifica cada par y
+  ordena por clave y luego valor, que es lo que exige AWS; la implementación anterior ordenaba las
+  cadenas `k=v` ya codificadas, que coincide salvo en casos de codificación mixta que antes fallaban.
+- **`net/dns_message` es un módulo APARTE, no una ampliación de `net/dns`.** La propuesta original
+  añadía `SOA` al enum `Record`, y en raylang el `match` es exhaustivo (SPEC §6, exhaustividad por matriz): cualquier programa
+  con un `match` sobre `Record` sin brazo `_` dejaría de compilar. Así que el servidor tiene sus
+  propios tipos (`Query`/`Answer`/`Response`, `Rr` con `Data` que sí trae `Soa` y `Other`) y
+  `net/dns` no cambia ni una línea. `parse_response` cubre lo que `parse_records` no daba —rcode,
+  AA/TC, authority y additional— y, a diferencia del cliente, un rcode distinto de cero es un dato
+  (un NXDOMAIN con su SOA en authority es una respuesta completa), no un error.
+- **Las suites viajan con el código.** Los tests de las apps se trajeron tal cual a
+  `tests/fixtures/net_server/` y corren por `ray test` sobre un proyecto que depende de
+  `packages/net` por ruta, en VM y nativo (`tests/net_server_side_cli.rs`): es la forma de probar
+  un paquete con sus imports resueltos como los resuelve el loader (la nota de IDEAS §119 sobre
+  `ray check` de un módulo suelto).
+
+Queda #284 (cuerpo en streaming y 413 propio) para su propia PR: toca el lector de peticiones de
+`webserver` y, para no romper `Request.body`, irá como opción de `ServeOptions`.

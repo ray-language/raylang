@@ -1,0 +1,207 @@
+// The examples of the S3 SigV4 documentation ("Signature Calculations for the Authorization
+// Header" and "Authenticating Requests: Using Query Parameters"), byte for byte.
+import net/sigv4;
+import std/url;
+
+const ACCESS: string = "AKIAIOSFODNN7EXAMPLE";
+
+const SECRET: string = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+
+const EMPTY_SHA: string = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+const AT: string = "20130524T000000Z";
+
+fn headers(pairs: [(string, string)]) -> Map<string, string> {
+    let m: Map<string, string> = Map.new();
+    for (k, v) in pairs {
+        m.insert(k, v);
+    }
+    m
+}
+
+fn sig_of(
+    method: string,
+    path: string,
+    query: string,
+    h: Map<string, string>,
+    signed: [string],
+    payload: string
+) -> string {
+    let c = sigv4.canonical_request(method, path, query, h, signed, payload);
+    sigv4.sign(SECRET, AT, "us-east-1", "s3", c)
+}
+
+@test
+fn get_object() {
+    let h = headers(
+        [
+            ("host", "examplebucket.s3.amazonaws.com"),
+            ("range", "bytes=0-9"),
+            ("x-amz-content-sha256", EMPTY_SHA),
+            ("x-amz-date", AT)
+        ]
+    );
+    let sig = sig_of(
+        "GET",
+        "/test.txt",
+        "",
+        h,
+        ["host", "range", "x-amz-content-sha256", "x-amz-date"],
+        EMPTY_SHA
+    );
+    assert_eq(sig, "f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41");
+    // The client-side header for the same request says the same.
+    let cred = sigv4.credentials(ACCESS, SECRET, "us-east-1", "s3");
+    let auth = sigv4.authorization_header(cred, "GET", "/test.txt", "", h, b"", AT);
+    assert(
+        auth.ends_with("Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41")
+    );
+    assert(auth.contains("SignedHeaders=host;range;x-amz-content-sha256;x-amz-date,"));
+}
+
+@test
+fn put_object_with_an_encoded_key() {
+    let body_sha = sigv4.payload_hash("Welcome to Amazon S3.".to_bytes());
+    assert_eq(body_sha, "44ce7dd67c959e0d3524ffac1771dfbba87d2b6b4b4e99e42034a8b803f8b072");
+    let h = headers(
+        [
+            ("date", "Fri, 24 May 2013 00:00:00 GMT"),
+            ("host", "examplebucket.s3.amazonaws.com"),
+            ("x-amz-content-sha256", body_sha),
+            ("x-amz-date", AT),
+            ("x-amz-storage-class", "REDUCED_REDUNDANCY")
+        ]
+    );
+    let signed = ["date", "host", "x-amz-content-sha256", "x-amz-date", "x-amz-storage-class"];
+    assert_eq(sigv4.encode_path("/test$file.text"), "/test%24file.text");
+    let sig = sig_of("PUT", sigv4.encode_path("/test$file.text"), "", h, signed, body_sha);
+    assert_eq(sig, "98ad721746da40c64f1a55b78f14c238d841ea1380cd77a1b5971af0ece108bd");
+}
+
+@test
+fn bucket_subresource_and_list_query() {
+    let h = headers(
+        [
+            ("host", "examplebucket.s3.amazonaws.com"),
+            ("x-amz-content-sha256", EMPTY_SHA),
+            ("x-amz-date", AT)
+        ]
+    );
+    let signed = ["host", "x-amz-content-sha256", "x-amz-date"];
+    assert_eq(
+        sig_of("GET", "/", "lifecycle", h, signed, EMPTY_SHA),
+        "fea454ca298b7da1c68078a5d1bdbfbbe0d65c699e0f91ac7a200a0136783543"
+    );
+    assert_eq(
+        sig_of("GET", "/", "max-keys=2&prefix=J", h, signed, EMPTY_SHA),
+        "34b48302e7b5fa45bde8084f4b7868a86f0a534bc59db6670ed5711ef69dc6f7"
+    );
+    // The order the client sent the query in does not matter.
+    assert_eq(
+        sig_of("GET", "/", "prefix=J&max-keys=2", h, signed, EMPTY_SHA),
+        "34b48302e7b5fa45bde8084f4b7868a86f0a534bc59db6670ed5711ef69dc6f7"
+    );
+}
+
+@test
+fn presigned_url_round_trip() {
+    let ms = sigv4.parse_amz_date(AT).unwrap();
+    let cred = sigv4.credentials(ACCESS, SECRET, "us-east-1", "s3");
+    let signed_url = sigv4.presign(
+        cred,
+        "GET",
+        "examplebucket.s3.amazonaws.com",
+        "/test.txt",
+        ms,
+        86400
+    );
+    assert(
+        signed_url.ends_with(
+            "&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"
+        )
+    );
+    // The server side reads the query back and verifies it against the same request.
+    let qs = signed_url.substring(signed_url.index_of("?").unwrap() + 1, signed_url.len());
+    let q: Map<string, string> = Map.new();
+    for pair in qs.split("&") {
+        let eq = pair.index_of("=").unwrap();
+        q.insert(
+            pair.substring(0, eq),
+            url.percent_decode(pair.substring(eq + 1, pair.len())).unwrap()
+        );
+    }
+    let claim = sigv4.parse_presigned_query(q).unwrap();
+    assert(claim.presigned);
+    assert_eq(claim.expires_s, 86400);
+    let h = headers([("host", "examplebucket.s3.amazonaws.com")]);
+    assert(sigv4.verify(claim, SECRET, "GET", "/test.txt", qs, h, sigv4.UNSIGNED_PAYLOAD, ms + 1000)
+        .is_ok());
+    assert_eq(
+        sigv4.verify(
+            claim,
+            SECRET,
+            "GET",
+            "/test.txt",
+            qs,
+            h,
+            sigv4.UNSIGNED_PAYLOAD,
+            ms + 86401 * 1000
+        ),
+        Result.Err("expired")
+    );
+}
+
+@test
+fn header_claim_round_trip() {
+    let v = "AWS4-HMAC-SHA256 Credential=${ACCESS}/20130524/us-east-1/s3/aws4_request,"
+        + "SignedHeaders=host;range;x-amz-content-sha256;x-amz-date,"
+        + "Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41";
+    let claim = sigv4.parse_authorization(v, AT).unwrap();
+    assert_eq(claim.access_key, ACCESS);
+    assert_eq(claim.signed_headers.len(), 4);
+    let h = headers(
+        [
+            ("host", "examplebucket.s3.amazonaws.com"),
+            ("range", "bytes=0-9"),
+            ("x-amz-content-sha256", EMPTY_SHA),
+            ("x-amz-date", AT)
+        ]
+    );
+    let now = sigv4.parse_amz_date(AT).unwrap() + 60000;
+    assert(sigv4.verify(claim, SECRET, "GET", "/test.txt", "", h, EMPTY_SHA, now).is_ok());
+    assert_eq(
+        sigv4.verify(claim, "wrong", "GET", "/test.txt", "", h, EMPTY_SHA, now),
+        Result.Err("mismatch")
+    );
+    assert_eq(
+        sigv4.verify(claim, SECRET, "GET", "/test.txt", "", h, EMPTY_SHA, now + 3600000),
+        Result.Err("skewed")
+    );
+    assert_eq(sigv4.parse_authorization("Basic abc", AT).is_err(), true);
+    assert_eq(sigv4.parse_authorization(v, "20130525T000000Z").is_err(), true);
+}
+
+// The STREAMING-AWS4-HMAC-SHA256-PAYLOAD example: each chunk's signature is the HMAC of a
+// string-to-sign over the previous signature and the chunk's hash, with the day's key.
+@test
+fn signed_chunks_use_the_public_pieces() {
+    let key = sigv4.signing_key(SECRET, "20130524", "us-east-1", "s3");
+    let scope = sigv4.scope("20130524", "us-east-1", "s3");
+    assert_eq(scope, "20130524/us-east-1/s3/aws4_request");
+    let seed = "4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9";
+    let chunk = "a".repeat(65536).to_bytes();
+    let sts = "AWS4-HMAC-SHA256-PAYLOAD\n"
+        + AT
+        + "\n"
+        + scope
+        + "\n"
+        + seed
+        + "\n"
+        + EMPTY_SHA
+        + "\n"
+        + sigv4.payload_hash(chunk);
+    assert_eq(
+        sigv4.hmac_hex(key, sts),
+        "ad80c730a21e5b8d04586a2213dd63b9a0e99e0e2307b0ade35a65485a288648"
+    );
+}

@@ -59,7 +59,17 @@ fn main() -> int {
   trataba como ausente y el token no caducaba). Sobre `net/crypto` + `std/base64`.
 - **`net/jwt_eddsa`** — JWT firmados con Ed25519 (EdDSA); `jwt_eddsa_sign_kid` para el `kid`. Sobre
   `net/crypto` + `std/base64`.
-- **`net/sigv4`** — firma AWS Signature V4 para peticiones. Sobre `net/crypto` + `std/url`.
+- **`net/sigv4`** — AWS Signature V4, cliente Y servidor. Sobre `net/crypto` + `std/url` + `std/time`.
+  Cliente: `authorization_header(cred, method, path, query, headers, payload, amz_date)` y
+  `presign(cred, method, host, path, now_ms, expires_s)` (URL prefirmada, `host` firmado,
+  `UNSIGNED-PAYLOAD`). Servidor (0.14.0, rayblob #285): `parse_authorization(value, amz_date)` /
+  `parse_presigned_query(map)` → `Claim`, y `verify(claim, secret, method, raw_path, raw_query, headers,
+  payload_hash, now_ms)` reconstruye la canonical request con la petición TAL COMO LLEGÓ
+  (`Request.raw_path`) y el hash que el cliente DECLARÓ (`x-amz-content-sha256`, `UNSIGNED_PAYLOAD`,
+  `STREAMING-…`), compara en tiempo constante y acota el sesgo (15 min) o la caducidad (`X-Amz-Expires`).
+  Piezas públicas para chunks firmados y pruebas: `canonical_request`, `canonical_query`, `signing_key`,
+  `scope`, `string_to_sign`, `sign`, `hmac_hex`, `payload_hash`, `parse_amz_date`/`amz_date`,
+  `encode_path`. Verificado contra los siete ejemplos de la documentación de S3.
 - **`net/scram`** — el handshake SCRAM-SHA-256 (autenticación de PostgreSQL). Sobre `net/crypto` +
   `std/base64`.
 - **`net/smtp`** — cliente SMTP de envío (M351): `server(host, port)` (587 → STARTTLS, 465 → TLS;
@@ -150,6 +160,16 @@ fn main() -> int {
   completos).
 - **`net/ntp`** — cliente SNTP v4 (RFC 4330): `query(host, port)` → hora del servidor + offset/delay
   del reloj local (ms Unix) + stratum. Sobre `net/udp` (M90.7).
+- **`net/dns_message`** — el formato de cable DNS como lo necesita un SERVIDOR (0.14.0, raydns #287;
+  RFC 1035 + EDNS0): `parse_query(bytes) -> Result<Query, Bad>` (una pregunta estándar; `Bad` trae el
+  rcode a devolver y `write_error` lo escribe), `write_response(q, Answer, limit)` (las tres secciones
+  con compresión de nombres, AA/RD/RCODE, OPT si el cliente lo trajo; por encima de `limit` → solo
+  cabecera+pregunta con TC para que el cliente repita por TCP), `udp_limit(q)` (512 sin EDNS, la oferta
+  del cliente acotada a 1232), `parse_response(bytes) -> Result<Response, string>` (lo que
+  `dns.parse_records` no da: rcode, AA/TC, authority y additional, con SOA tipado; un rcode ≠ 0 es
+  dato, no error), `Data` (`Addr4 Addr6 Name Mx Txt Srv Soa Other`), `Rr`, `parse_ipv4`/`parse_ipv6`,
+  `type_name`, constantes de tipos y rcodes. Módulo APARTE a propósito: añadir SOA al `Record` de
+  `net/dns` rompería todo `match` exhaustivo existente. Hoja (sin I/O).
 - **`net/dns_cache`** — caché DNS con TTL. Sobre `net/dns`.
 - **`net/websocket`** — handshake + framing WebSocket (`ws://`/`wss://`). Sobre `net/crypto` + `std/base64`.
   Lectura robusta (M58.1): `WsConn` + `read_frame`/`read_message` (tramas partidas/pegadas, ping→pong

@@ -1,0 +1,170 @@
+// The codec against net/dns: its queries parse here, and what we write parses there and here.
+// Plus compression, truncation, EDNS, broken datagrams, SOA/NXDOMAIN and the address parsers.
+import net/dns;
+import net/dns_message as msg;
+
+fn q_of(name: string, qtype: int) -> msg.Query {
+    msg.parse_query(dns.build_query(4242, name, qtype)).unwrap()
+}
+
+fn rr(name: string, rtype: int, data: msg.Data) -> msg.Rr {
+    msg.Rr { name: name, rtype: rtype, ttl: 5, data: data }
+}
+
+fn answer(rs: [msg.Rr]) -> msg.Answer {
+    msg.Answer {
+        rcode: msg.NOERROR,
+        authoritative: true,
+        answers: rs,
+        authority: [],
+        additional: []
+    }
+}
+
+@test
+fn queries_from_net_dns_parse() {
+    let q = q_of("API.service.ray.internal", msg.A);
+    assert_eq(q.id, 4242);
+    assert_eq(q.question.name, "API.service.ray.internal");
+    assert_eq((q.question.qtype, q.question.qclass), (msg.A, msg.IN));
+    assert_eq(q.edns, 0);
+}
+
+@test
+fn responses_parse_in_net_dns_and_here() {
+    let q = q_of("api.service.ray.internal", msg.A);
+    let a = answer(
+        [
+            rr("api.service.ray.internal", msg.A, msg.Data.Addr4([10, 0, 0, 5])),
+            rr("api.service.ray.internal", msg.A, msg.Data.Addr4([10, 0, 0, 6])),
+            rr(
+                "api.service.ray.internal",
+                msg.AAAA,
+                msg.Data.Addr6(msg.parse_ipv6("fd00::7").unwrap())
+            ),
+            rr(
+                "_api._tcp.service.ray.internal",
+                msg.SRV,
+                msg.Data.Srv(1, 1, 8080, "a1.api.instance.ray.internal")
+            ),
+            rr("www.ray.internal", msg.CNAME, msg.Data.Name("api.service.ray.internal")),
+            rr("ray.internal", msg.MX, msg.Data.Mx(10, "mail.ray.internal")),
+            rr("ray.internal", msg.TXT, msg.Data.Txt(["v=spf1 -all", "second"]))
+        ]
+    );
+    let out = msg.write_response(q, a, 0);
+    let got = dns.format_records(dns.parse_records(out).unwrap());
+    assert_eq(got.len(), 7);
+    assert(got[0].contains("10.0.0.5"));
+    assert(got[1].contains("10.0.0.6"));
+    assert(got[2].contains("fd00"));
+    assert(got[3].contains("8080") && got[3].contains("a1.api.instance.ray.internal"));
+    assert(got[4].contains("api.service.ray.internal"));
+    assert(got[5].contains("mail.ray.internal"));
+    assert(got[6].contains("v=spf1 -all"));
+    // Compression: seven records naming the same zone take far less than spelled out.
+    assert(out.len() < 260);
+    // And this module reads it back whole.
+    let r = msg.parse_response(out).unwrap();
+    assert_eq((r.id, r.rcode, r.authoritative, r.truncated), (4242, msg.NOERROR, true, false));
+    assert_eq(r.question.unwrap().name, "api.service.ray.internal");
+    assert_eq(r.answers.len(), 7);
+    assert_eq(r.answers[3].data, msg.Data.Srv(1, 1, 8080, "a1.api.instance.ray.internal"));
+    assert_eq(r.answers[6].data, msg.Data.Txt(["v=spf1 -all", "second"]));
+}
+
+@test
+fn nxdomain_with_a_soa_in_authority() {
+    let q = q_of("nope.ray.internal", msg.A);
+    let soa = msg.Data.Soa(
+        "ns1.ray.internal",
+        "hostmaster.ray.internal",
+        2026103001,
+        3600,
+        600,
+        604800,
+        60
+    );
+    let a = msg.Answer {
+        rcode: msg.NXDOMAIN,
+        authoritative: true,
+        answers: [],
+        authority: [rr("ray.internal", msg.SOA, soa)],
+        additional: []
+    };
+    let out = msg.write_response(q, a, msg.udp_limit(q));
+    // net/dns treats a non-zero rcode as an error; this module hands it over as data.
+    assert(dns.parse_records(out).is_err());
+    let r = msg.parse_response(out).unwrap();
+    assert_eq(r.rcode, msg.NXDOMAIN);
+    assert_eq(r.answers.len(), 0);
+    assert_eq(r.authority.len(), 1);
+    assert_eq(r.authority[0].name, "ray.internal");
+    assert_eq(r.authority[0].data, soa);
+    assert_eq(msg.type_name(r.authority[0].rtype), "SOA");
+}
+
+@test
+fn truncation_and_edns() {
+    var rs: [msg.Rr] = [];
+    for i in 0..60 {
+        rs.push(rr("api.service.ray.internal", msg.A, msg.Data.Addr4([10, 0, i / 256, i % 256])));
+    }
+    let plain = q_of("api.service.ray.internal", msg.A);
+    let full = msg.write_response(plain, answer(rs), 0);
+    assert(full.len() > 512);
+    let cut = msg.write_response(plain, answer(rs), msg.udp_limit(plain));
+    assert(cut.len() <= 512);
+    assert((cut[2] & 0x02) != 0);
+    assert(msg.parse_response(cut).unwrap().truncated);
+    // With EDNS the client offers more room (we cap at 1232).
+    var with_opt: [int] = [];
+    for x in dns.build_query(7, "api.service.ray.internal", msg.A) {
+        with_opt.push(x);
+    }
+    with_opt[11] = 1;
+    with_opt = with_opt + [0, 0, 41, 0x10, 0x00, 0, 0, 0, 0, 0, 0];
+    let eq = msg.parse_query(bytes_of(with_opt)).unwrap();
+    assert_eq(eq.edns, 4096);
+    assert_eq(msg.udp_limit(eq), 1232);
+    let roomy = msg.write_response(eq, answer(rs), msg.udp_limit(eq));
+    assert_eq((roomy[2] & 0x02), 0);
+    assert_eq(dns.parse_records(roomy).unwrap().len(), 60);
+    // The OPT we add is not a data record.
+    assert_eq(msg.parse_response(roomy).unwrap().additional.len(), 0);
+}
+
+@test
+fn broken_datagrams() {
+    assert_eq(msg.parse_query("short".to_bytes()).is_err(), true);
+    assert_eq(msg.parse_response("short".to_bytes()).is_err(), true);
+    // A pointer that points at itself.
+    let looped = bytes_of([0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0xC0, 12, 0, 1, 0, 1]);
+    match (msg.parse_query(looped)) {
+        Result.Err(b) => assert_eq((b.id, b.rcode), (1, msg.FORMERR)),
+        Result.Ok(_) => assert(false),
+    }
+    // Opcode 2 (STATUS).
+    let status = bytes_of([0, 9, 0x10, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1]);
+    match (msg.parse_query(status)) {
+        Result.Err(b) => {
+            assert_eq(b.rcode, msg.NOTIMP);
+            let reply = msg.write_error(b, status);
+            assert_eq((reply[0], reply[1], reply[3] & 0xF), (0, 9, msg.NOTIMP));
+        },
+        Result.Ok(_) => assert(false),
+    }
+}
+
+@test
+fn addresses() {
+    assert_eq(msg.parse_ipv4("10.0.0.5"), Option.Some([10, 0, 0, 5]));
+    assert(msg.parse_ipv4("10.0.0").is_none());
+    assert(msg.parse_ipv4("10.0.0.256").is_none());
+    assert(msg.parse_ipv4("010.0.0.1").is_none());
+    assert_eq(msg.parse_ipv6("::1").unwrap(), [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+    assert_eq(msg.parse_ipv6("fd00:0:0:0:0:0:0:7").unwrap(), msg.parse_ipv6("fd00::7").unwrap());
+    assert(msg.parse_ipv6("1:2:3:4:5:6:7:8:9").is_none());
+    assert(msg.parse_ipv6("1::2::3").is_none());
+    assert(msg.parse_ipv6("10.0.0.1").is_none());
+}

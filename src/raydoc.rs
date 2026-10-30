@@ -166,6 +166,10 @@ pub fn doc_lines_above(lines: &[&str], line: usize) -> Option<Vec<String>> {
         if let Some(rest) = l.strip_prefix("///") {
             docs.push(rest.trim().to_string());
             i -= 1;
+        } else if l.starts_with('@') && docs.is_empty() {
+            // M435: un atributo (`@derive(Eq, Show)`) entre la doc y la declaración no la esconde —
+            // `ray fmt` deja la doc ENCIMA del atributo, así que es la forma canónica.
+            i -= 1;
         } else {
             break;
         }
@@ -267,6 +271,17 @@ mod tests {
         assert_eq!(module_doc("// solo interno\npub fn f() {}\n"), None);
         let md = generate(src, "m").unwrap();
         assert!(md.starts_with("# m\n\nA module.\n\n  Indented line.\n\n"), "{md}");
+    }
+
+    #[test]
+    fn doc_lines_above_skips_an_attribute_between_the_doc_and_the_declaration() {
+        // M435 (net/dns_message): `/// doc` + `@derive(Eq, Show)` + `pub struct` — la doc es la de
+        // la línea 1 aunque el atributo vaya en medio (la forma canónica de `ray fmt`).
+        let lines = vec!["/// The question.", "/// Two lines.", "@derive(Eq, Show)", "pub struct Q {}"];
+        assert_eq!(doc_lines_above(&lines, 4), Some(vec!["The question.".to_string(), "Two lines.".to_string()]));
+        // Un atributo sin doc encima sigue siendo «sin doc».
+        let bare = vec!["fn other() {}", "@derive(Eq)", "pub struct R {}"];
+        assert_eq!(doc_lines_above(&bare, 3), None);
     }
 
     #[test]

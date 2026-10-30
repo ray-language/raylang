@@ -1,0 +1,696 @@
+//! The DNS wire format as a server needs it (RFC 1035, EDNS0 from RFC 6891): read a query,
+//! write a response with name compression, truncate it for UDP, and read a full response
+//! (rcode plus the answer, authority and additional sections, SOA included). `net/dns` stays the
+//! client (`build_query`, `parse_records`, `query_*`): this module is what `net/dns` does not do.
+//!
+//! ```ray
+//! import net/dns_message as msg;
+//! let q = msg.parse_query(datagram)?;            // Err(Bad) carries the rcode to send
+//! let a = msg.Answer { rcode: msg.NOERROR, authoritative: true,
+//!                      answers: [msg.Rr { name: q.question.name, rtype: msg.A, ttl: 60,
+//!                                         data: msg.Data.Addr4([10, 0, 0, 5]) }],
+//!                      authority: [], additional: [] };
+//! udp.send_to(sock, msg.write_response(q, a, msg.udp_limit(q)), peer);
+//! ```
+// raydns #287: el servidor DNS de raydns llevaba este códec en `src/wire.ray` (~400 líneas) probado en
+// los dos sentidos contra `net/dns` y `dig`. Vuelve al paquete como módulo APARTE para no tocar el
+// enum `Record` de `net/dns` (añadirle SOA rompería todo `match` exhaustivo de los programas).
+
+/// Record type A (IPv4 address).
+pub const A: int = 1;
+
+/// Record type NS (name server).
+pub const NS: int = 2;
+
+/// Record type CNAME (canonical name).
+pub const CNAME: int = 5;
+
+/// Record type SOA (start of authority).
+pub const SOA: int = 6;
+
+/// Record type MX (mail exchange).
+pub const MX: int = 15;
+
+/// Record type TXT (character-strings).
+pub const TXT: int = 16;
+
+/// Record type AAAA (IPv6 address).
+pub const AAAA: int = 28;
+
+/// Record type SRV (service locator).
+pub const SRV: int = 33;
+
+/// Pseudo-record OPT (EDNS0; carries the UDP size, never a data record).
+pub const OPT: int = 41;
+
+/// Query type ANY (`*`).
+pub const ANY: int = 255;
+
+/// The IN class.
+pub const IN: int = 1;
+
+/// Rcode NOERROR.
+pub const NOERROR: int = 0;
+
+/// Rcode FORMERR (the server could not parse the query).
+pub const FORMERR: int = 1;
+
+/// Rcode SERVFAIL (the server failed to answer).
+pub const SERVFAIL: int = 2;
+
+/// Rcode NXDOMAIN (the name does not exist; authoritative answers carry a SOA).
+pub const NXDOMAIN: int = 3;
+
+/// Rcode NOTIMP (the opcode is not implemented).
+pub const NOTIMP: int = 4;
+
+/// Rcode REFUSED (policy).
+pub const REFUSED: int = 5;
+
+/// The smallest UDP payload every resolver takes.
+pub const CLASSIC_UDP: int = 512;
+
+/// The EDNS UDP size this module offers (the DNS flag day 2020 value: no IP fragmentation).
+pub const EDNS_UDP: int = 1232;
+
+/// The question of a query.
+@derive(Eq, Show)
+pub struct Question {
+    /// As the client wrote it (case kept for the echo), without the final dot.
+    name: string,
+    qtype: int,
+    qclass: int,
+}
+
+/// A parsed query (`parse_query`): one standard question plus what the response must echo.
+pub struct Query {
+    id: int,
+    opcode: int,
+    /// Recursion desired, echoed in the response.
+    rd: bool,
+    question: Question,
+    /// The client's EDNS UDP size, or 0 if it sent no OPT record.
+    edns: int,
+}
+
+/// The RDATA of a record, typed. Names inside `Name`/`Mx`/`Soa` are written compressed; `Srv`
+/// targets are not (RFC 2782). `Other` keeps the raw RDATA of a type this module does not type.
+@derive(Eq, Show)
+pub enum Data {
+    /// A: the four octets.
+    Addr4([int]),
+    /// AAAA: the sixteen octets.
+    Addr6([int]),
+    /// NS / CNAME / PTR…: a domain name.
+    Name(string),
+    /// MX: preference, exchange.
+    Mx(int, string),
+    /// TXT: the character-strings (each written as at most 255 octets).
+    Txt([string]),
+    /// SRV: priority, weight, port, target.
+    Srv(int, int, int, string),
+    /// SOA: mname, rname, serial, refresh, retry, expire, minimum.
+    Soa(string, string, int, int, int, int, int),
+    /// Any other type: its raw RDATA octets.
+    Other([int]),
+}
+
+/// A resource record: owner name, type, TTL and typed data (class is always IN).
+@derive(Eq, Show)
+pub struct Rr {
+    name: string,
+    rtype: int,
+    ttl: int,
+    data: Data,
+}
+
+/// What a server answers: the rcode, the AA flag and the three record sections.
+pub struct Answer {
+    rcode: int,
+    authoritative: bool,
+    answers: [Rr],
+    authority: [Rr],
+    additional: [Rr],
+}
+
+/// An `Answer` with no records and the given rcode (`empty(NXDOMAIN)`).
+pub fn empty(rcode: int) -> Answer {
+    Answer { rcode: rcode, authoritative: false, answers: [], authority: [], additional: [] }
+}
+
+/// Why a datagram is not a query this module answers, and with what rcode (`id` is 0 when even
+/// the header was unreadable: such a datagram is best dropped). Reply with `write_error`.
+pub struct Bad {
+    id: int,
+    rcode: int,
+    reason: string,
+}
+
+/// A parsed response (`parse_response`): what `net/dns.parse_records` leaves out — the rcode,
+/// the flags and the authority/additional sections, with SOA typed.
+pub struct Response {
+    id: int,
+    rcode: int,
+    authoritative: bool,
+    truncated: bool,
+    question: Option<Question>,
+    answers: [Rr],
+    authority: [Rr],
+    additional: [Rr],
+}
+
+fn read_u16(b: bytes, i: int) -> int {
+    (b[i] << 8) | b[i + 1]
+}
+
+fn read_u32(b: bytes, i: int) -> int {
+    (read_u16(b, i) << 16) | read_u16(b, i + 2)
+}
+
+/// Reads a name at `pos`, following compression pointers (never more than the message length,
+/// so a loop of pointers cannot spin). Returns the name and the offset where the field ends.
+pub fn read_name(b: bytes, pos: int) -> Result<(string, int), string> {
+    var labels: [string] = [];
+    var p = pos;
+    var end = -1;
+    var jumps = 0;
+    var total = 0;
+    while (true) {
+        if (p >= b.len()) {
+            return Result.Err("name runs past the message");
+        }
+        let len = b[p];
+        if ((len & 0xC0) == 0xC0) {
+            if (p + 1 >= b.len()) {
+                return Result.Err("truncated pointer");
+            }
+            if (end < 0) {
+                end = p + 2;
+            }
+            jumps = jumps + 1;
+            if (jumps > b.len()) {
+                return Result.Err("pointer loop");
+            }
+            p = ((len & 0x3F) << 8) | b[p + 1];
+            continue;
+        }
+        if ((len & 0xC0) != 0) {
+            return Result.Err("unknown label type");
+        }
+        if (len == 0) {
+            if (end < 0) {
+                end = p + 1;
+            }
+            break;
+        }
+        if (p + 1 + len > b.len()) {
+            return Result.Err("label runs past the message");
+        }
+        total = total + len + 1;
+        if (total > 255) {
+            return Result.Err("name longer than 255 octets");
+        }
+        labels.push(from_utf8(b.sub_bytes(p + 1, p + 1 + len)).unwrap_or("?"));
+        p = p + 1 + len;
+    }
+    Result.Ok((join(labels, "."), end))
+}
+
+/// Parses a query. Anything but a standard query (opcode 0) with exactly one question is
+/// `Err(Bad)` with the rcode to send (FORMERR / NOTIMP). An OPT record among the additional
+/// records sets `edns` (never below 512).
+pub fn parse_query(b: bytes) -> Result<Query, Bad> {
+    if (b.len() < 12) {
+        return Result.Err(Bad { id: 0, rcode: FORMERR, reason: "shorter than a header" });
+    }
+    let id = read_u16(b, 0);
+    let flags = read_u16(b, 2);
+    if ((flags & 0x8000) != 0) {
+        return Result.Err(Bad { id: 0, rcode: FORMERR, reason: "a response, not a query" });
+    }
+    let opcode = (flags >> 11) & 0xF;
+    if (opcode != 0) {
+        return Result.Err(Bad { id: id, rcode: NOTIMP, reason: "opcode " + to_string(opcode) });
+    }
+    if (read_u16(b, 4) != 1) {
+        return Result.Err(Bad { id: id, rcode: FORMERR, reason: "not exactly one question" });
+    }
+    let (name, at) = match (read_name(b, 12)) {
+        Result.Ok(v) => v,
+        Result.Err(e) => return Result.Err(Bad { id: id, rcode: FORMERR, reason: e }),
+    };
+    if (at + 4 > b.len()) {
+        return Result.Err(Bad { id: id, rcode: FORMERR, reason: "truncated question" });
+    }
+    let q = Question { name: name, qtype: read_u16(b, at), qclass: read_u16(b, at + 2) };
+    // EDNS: un registro OPT entre los adicionales (tras los de respuesta/autoridad, que una
+    // consulta no lleva).
+    var edns = 0;
+    let arcount = read_u16(b, 10);
+    var p = at + 4;
+    var i = 0;
+    while (i < arcount && p < b.len()) {
+        let (_, after) = match (read_name(b, p)) {
+            Result.Ok(v) => v,
+            Result.Err(_) => break,
+        };
+        if (after + 10 > b.len()) {
+            break;
+        }
+        let rtype = read_u16(b, after);
+        if (rtype == OPT) {
+            edns = read_u16(b, after + 2);
+            if (edns < CLASSIC_UDP) {
+                edns = CLASSIC_UDP;
+            }
+        }
+        p = after + 10 + read_u16(b, after + 8);
+        i = i + 1;
+    }
+    Result.Ok(Query { id: id, opcode: opcode, rd: (flags & 0x0100) != 0, question: q, edns: edns })
+}
+
+// --- Lectura de respuestas ---
+
+// Lee los `rdlength` octetos de RDATA en `at` como `Data` según el tipo (los nombres con compresión
+// se siguen sobre el mensaje entero).
+fn read_data(b: bytes, rtype: int, at: int, rdlength: int) -> Result<Data, string> {
+    let end = at + rdlength;
+    if (rtype == A && rdlength == 4) {
+        return Result.Ok(Data.Addr4([b[at], b[at + 1], b[at + 2], b[at + 3]]));
+    }
+    if (rtype == AAAA && rdlength == 16) {
+        var xs: [int] = [];
+        for i in 0..16 {
+            xs.push(b[at + i]);
+        }
+        return Result.Ok(Data.Addr6(xs));
+    }
+    if (rtype == NS || rtype == CNAME) {
+        let (n, _) = read_name(b, at)?;
+        return Result.Ok(Data.Name(n));
+    }
+    if (rtype == MX && rdlength >= 3) {
+        let (n, _) = read_name(b, at + 2)?;
+        return Result.Ok(Data.Mx(read_u16(b, at), n));
+    }
+    if (rtype == TXT) {
+        var parts: [string] = [];
+        var p = at;
+        while (p < end) {
+            let n = b[p];
+            if (p + 1 + n > end) {
+                return Result.Err("TXT character-string runs past the RDATA");
+            }
+            parts.push(from_utf8(b.sub_bytes(p + 1, p + 1 + n)).unwrap_or("?"));
+            p = p + 1 + n;
+        }
+        return Result.Ok(Data.Txt(parts));
+    }
+    if (rtype == SRV && rdlength >= 7) {
+        let (target, _) = read_name(b, at + 6)?;
+        return Result.Ok(
+            Data.Srv(read_u16(b, at), read_u16(b, at + 2), read_u16(b, at + 4), target)
+        );
+    }
+    if (rtype == SOA) {
+        let (mname, after_m) = read_name(b, at)?;
+        let (rname, after_r) = read_name(b, after_m)?;
+        if (after_r + 20 > end) {
+            return Result.Err("truncated SOA");
+        }
+        return Result.Ok(
+            Data.Soa(
+                mname,
+                rname,
+                read_u32(b, after_r),
+                read_u32(b, after_r + 4),
+                read_u32(b, after_r + 8),
+                read_u32(b, after_r + 12),
+                read_u32(b, after_r + 16)
+            )
+        );
+    }
+    var raw: [int] = [];
+    var p = at;
+    while (p < end) {
+        raw.push(b[p]);
+        p = p + 1;
+    }
+    Result.Ok(Data.Other(raw))
+}
+
+// Lee `count` registros desde `pos`; devuelve los registros y el offset tras el último. Un OPT no es
+// un registro de datos: se salta (su información útil es solo el tamaño UDP del que pregunta).
+fn read_rrs(b: bytes, pos: int, count: int) -> Result<([Rr], int), string> {
+    var out: [Rr] = [];
+    var p = pos;
+    var i = 0;
+    while (i < count) {
+        let (name, after) = read_name(b, p)?;
+        if (after + 10 > b.len()) {
+            return Result.Err("truncated record header");
+        }
+        let rtype = read_u16(b, after);
+        let ttl = read_u32(b, after + 4);
+        let rdlength = read_u16(b, after + 8);
+        let at = after + 10;
+        if (at + rdlength > b.len()) {
+            return Result.Err("record data runs past the message");
+        }
+        if (rtype != OPT) {
+            out.push(
+                Rr { name: name, rtype: rtype, ttl: ttl, data: read_data(b, rtype, at, rdlength)? }
+            );
+        }
+        p = at + rdlength;
+        i = i + 1;
+    }
+    Result.Ok((out, p))
+}
+
+/// Parses a response message whole: id, rcode, AA/TC, the question and the three sections typed
+/// (`Other` for unknown types; OPT records are skipped). Unlike `net/dns.parse_records`, a
+/// non-zero rcode is not an error here — it is what the server said (`NXDOMAIN` with a SOA in
+/// `authority` is a complete, meaningful response).
+pub fn parse_response(b: bytes) -> Result<Response, string> {
+    if (b.len() < 12) {
+        return Result.Err("shorter than a header");
+    }
+    let flags = read_u16(b, 2);
+    if ((flags & 0x8000) == 0) {
+        return Result.Err("a query, not a response");
+    }
+    let qdcount = read_u16(b, 4);
+    var pos = 12;
+    var question: Option<Question> = Option.None;
+    var q = 0;
+    while (q < qdcount) {
+        let (name, at) = read_name(b, pos)?;
+        if (at + 4 > b.len()) {
+            return Result.Err("truncated question");
+        }
+        if (q == 0) {
+            question = Option.Some(
+                Question { name: name, qtype: read_u16(b, at), qclass: read_u16(b, at + 2) }
+            );
+        }
+        pos = at + 4;
+        q = q + 1;
+    }
+    let (answers, p1) = read_rrs(b, pos, read_u16(b, 6))?;
+    let (authority, p2) = read_rrs(b, p1, read_u16(b, 8))?;
+    let (additional, _) = read_rrs(b, p2, read_u16(b, 10))?;
+    Result.Ok(
+        Response {
+            id: read_u16(b, 0),
+            rcode: flags & 0xF,
+            authoritative: (flags & 0x0400) != 0,
+            truncated: (flags & 0x0200) != 0,
+            question: question,
+            answers: answers,
+            authority: authority,
+            additional: additional
+        }
+    )
+}
+
+// --- Escritura ---
+
+struct Out {
+    buf: [int],
+    /// Lowercased suffix → offset, for compression.
+    seen: Map<string, int>,
+}
+
+fn put16(o: Out, n: int) {
+    o.buf.push((n >> 8) & 0xFF);
+    o.buf.push(n & 0xFF);
+}
+
+fn put32(o: Out, n: int) {
+    put16(o, (n >> 16) & 0xFFFF);
+    put16(o, n & 0xFFFF);
+}
+
+// Escribe un nombre con compresión: cada sufijo ya visto (sin distinguir mayúsculas) se sustituye por
+// un puntero; los offsets por encima de 0x3FFF no se registran (no caben en 14 bits).
+fn put_name(o: Out, name: string) {
+    let labels = if (name == "") { [] } else { name.split(".") };
+    for i in 0..labels.len() {
+        let suffix = join(labels.slice(i, labels.len()), ".").to_lower();
+        match (o.seen.get(suffix)) {
+            Option.Some(off) => {
+                put16(o, 0xC000 | off);
+                return;
+            },
+            Option.None => { },
+        }
+        if (o.buf.len() < 0x3FFF) {
+            o.seen.insert(suffix, o.buf.len());
+        }
+        let raw = labels[i].to_bytes();
+        o.buf.push(raw.len());
+        for x in raw {
+            o.buf.push(x);
+        }
+    }
+    o.buf.push(0);
+}
+
+// El RDATA de un registro, con su longitud delante. Los nombres dentro de NS/CNAME/MX/SOA pueden
+// comprimirse (RFC 3597 §4); el target de SRV no (RFC 2782).
+fn put_data(o: Out, d: Data) {
+    let at = o.buf.len();
+    put16(o, 0);
+    match (d) {
+        Data.Addr4(xs) => {
+            for x in xs {
+                o.buf.push(x);
+            }
+        },
+        Data.Addr6(xs) => {
+            for x in xs {
+                o.buf.push(x);
+            }
+        },
+        Data.Name(n) => put_name(o, n),
+        Data.Mx(pref, n) => {
+            put16(o, pref);
+            put_name(o, n);
+        },
+        Data.Txt(parts) => {
+            for t in parts {
+                let raw = t.to_bytes();
+                let n = if (raw.len() > 255) { 255 } else { raw.len() };
+                o.buf.push(n);
+                for j in 0..n {
+                    o.buf.push(raw[j]);
+                }
+            }
+        },
+        Data.Srv(prio, weight, port, target) => {
+            put16(o, prio);
+            put16(o, weight);
+            put16(o, port);
+            let saved = o.seen;
+            o.seen = Map.new();
+            put_name(o, target);
+            o.seen = saved;
+        },
+        Data.Soa(mname, rname, serial, refresh, retry, expire, minimum) => {
+            put_name(o, mname);
+            put_name(o, rname);
+            put32(o, serial);
+            put32(o, refresh);
+            put32(o, retry);
+            put32(o, expire);
+            put32(o, minimum);
+        },
+        Data.Other(raw) => {
+            for x in raw {
+                o.buf.push(x);
+            }
+        },
+    }
+    let len = o.buf.len() - at - 2;
+    o.buf[at] = (len >> 8) & 0xFF;
+    o.buf[at + 1] = len & 0xFF;
+}
+
+fn put_rr(o: Out, r: Rr) {
+    put_name(o, r.name);
+    put16(o, r.rtype);
+    put16(o, IN);
+    put32(o, r.ttl);
+    put_data(o, r.data);
+}
+
+/// Writes the response to `q`. `limit` is the most a UDP reply may carry (`udp_limit(q)`; 0 = no
+/// limit, for TCP); a longer one is cut to the header, question and OPT with TC set, so the
+/// client asks again over TCP.
+pub fn write_response(q: Query, a: Answer, limit: int) -> bytes {
+    let full = render(q, a, false);
+    if (limit == 0 || full.len() <= limit) {
+        return full;
+    }
+    render(
+        q,
+        Answer {
+            rcode: a.rcode,
+            authoritative: a.authoritative,
+            answers: [],
+            authority: [],
+            additional: []
+        },
+        true
+    )
+}
+
+fn render(q: Query, a: Answer, truncated: bool) -> bytes {
+    let o = Out { buf: [], seen: Map.new() };
+    put16(o, q.id);
+    var flags = 0x8000 | (q.opcode << 11) | (a.rcode & 0xF);
+    if (a.authoritative) {
+        flags = flags | 0x0400;
+    }
+    if (truncated) {
+        flags = flags | 0x0200;
+    }
+    if (q.rd) {
+        flags = flags | 0x0100;
+    }
+    put16(o, flags);
+    put16(o, 1);
+    put16(o, a.answers.len());
+    put16(o, a.authority.len());
+    put16(o, a.additional.len() + if (q.edns > 0) { 1 } else { 0 });
+    put_name(o, q.question.name);
+    put16(o, q.question.qtype);
+    put16(o, q.question.qclass);
+    for r in a.answers {
+        put_rr(o, r);
+    }
+    for r in a.authority {
+        put_rr(o, r);
+    }
+    for r in a.additional {
+        put_rr(o, r);
+    }
+    if (q.edns > 0) {
+        o.buf.push(0);
+        put16(o, OPT);
+        put16(o, EDNS_UDP);
+        put32(o, 0);
+        put16(o, 0);
+    }
+    bytes_of(o.buf)
+}
+
+/// A bare error reply for a datagram that did not parse as a query (`Err(Bad)` of
+/// `parse_query`): the request's id, opcode and RD, QR set, the rcode, no sections.
+pub fn write_error(b: Bad, request: bytes) -> bytes {
+    var out: [int] = [(b.id >> 8) & 0xFF, b.id & 0xFF];
+    let flags = if (request.len() >= 4) { read_u16(request, 2) } else { 0 };
+    let f = 0x8000 | (flags & 0x7900) | b.rcode;
+    out = out + [(f >> 8) & 0xFF, f & 0xFF, 0, 0, 0, 0, 0, 0, 0, 0];
+    bytes_of(out)
+}
+
+/// The UDP size a reply to `q` may use: 512 without EDNS, the client's offer capped at 1232.
+pub fn udp_limit(q: Query) -> int {
+    if (q.edns == 0) {
+        CLASSIC_UDP
+    } else if (q.edns > EDNS_UDP) {
+        EDNS_UDP
+    } else {
+        q.edns
+    }
+}
+
+// --- Direcciones ---
+
+/// `10.0.0.5` → its four octets (`None` on anything else, leading zeros included).
+pub fn parse_ipv4(s: string) -> Option<[int]> {
+    let parts = s.split(".");
+    if (parts.len() != 4) {
+        return Option.None;
+    }
+    var out: [int] = [];
+    for p in parts {
+        if (p == "" || p.len() > 3) {
+            return Option.None;
+        }
+        let n = parse_int(p)?;
+        if (n < 0 || n > 255 || (p.len() > 1 && p[0] == '0')) {
+            return Option.None;
+        }
+        out.push(n);
+    }
+    Option.Some(out)
+}
+
+fn hex_group(g: string) -> Option<int> {
+    if (g == "" || g.len() > 4) {
+        return Option.None;
+    }
+    var n = 0;
+    for c in g.to_lower().chars() {
+        n = n * 16 + "0123456789abcdef".index_of(to_string(c))?;
+    }
+    Option.Some(n)
+}
+
+/// `fd00::5` → its sixteen octets (`::` once at most; no embedded IPv4).
+pub fn parse_ipv6(s: string) -> Option<[int]> {
+    if (!s.contains(":")) {
+        return Option.None;
+    }
+    let halves = s.split("::");
+    if (halves.len() > 2) {
+        return Option.None;
+    }
+    let groups = fn(part: string) -> Option<[int]> {
+        if (part == "") {
+            return Option.Some([]);
+        }
+        var out: [int] = [];
+        for g in part.split(":") {
+            out.push(hex_group(g)?);
+        }
+        Option.Some(out)
+    };
+    let head = groups(halves[0])?;
+    let tail = if (halves.len() == 2) { groups(halves[1])? } else { [] };
+    let missing = 8 - head.len() - tail.len();
+    if ((halves.len() == 1 && missing != 0) || (halves.len() == 2 && missing < 1)) {
+        return Option.None;
+    }
+    var all = head;
+    for _ in 0..missing {
+        all.push(0);
+    }
+    all = all + tail;
+    var out: [int] = [];
+    for g in all {
+        out.push((g >> 8) & 0xFF);
+        out.push(g & 0xFF);
+    }
+    Option.Some(out)
+}
+
+/// The mnemonic of a record type (`1` → `"A"`, unknown → `"TYPE<n>"`).
+pub fn type_name(t: int) -> string {
+    match (t) {
+        1 => "A",
+        2 => "NS",
+        5 => "CNAME",
+        6 => "SOA",
+        15 => "MX",
+        16 => "TXT",
+        28 => "AAAA",
+        33 => "SRV",
+        255 => "ANY",
+        _ => "TYPE" + to_string(t),
+    }
+}

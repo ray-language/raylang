@@ -15,6 +15,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   un módulo (`ray doc md5` es `md5.md5`).
 - **Documentado**: en el nativo el hasher incremental vive en `ray-runtime`, así que `--without
   crypto` conserva `md5.md5` (pegado al programa) pero no `md5.md5_init`.
+- **Paquete `db` 0.7.2**: `postgres.pool_query_opt` y `pool_exec_opt` — las variantes con `Option`
+  (`NULL` ≠ `""`) también a través del pool, con el mismo reintento que `pool_query` y sin él como
+  `pool_exec` (raysql #300, tercera vuelta: la app consulta por el pool y tenía que pasar por
+  `pool_with_retry` + `query_opt`).
 - **Paquete `db` 0.7.1**: los `///` que quedaban en español en `postgres.ray` (`Conn`, `connect`) y
   `mysql.ray` (`Conn`, `connect`, `quit`, el búfer) pasan a inglés (raysql #300, segunda vuelta).
 

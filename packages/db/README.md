@@ -113,7 +113,8 @@ fn main() -> int {
   Result<int, string>` (filas afectadas) · `exec_opt(c, sql, [Option<string>])` (0.7.0:
   `Option.None` enlaza `NULL`) · `disconnect(c)` · **Pool** (M318): `pool`/`pool_tls(host, port, user, password,
   database, size)`, `pool_query` (reintento único si la conexión reutilizada falla por el cable),
-  `pool_exec`, `pool_with(p, f)`, `pool_with_retry(p, f)`, `pool_tx(p, f)` (reintenta el `BEGIN` sobre
+  `pool_exec`, `pool_query_opt`/`pool_exec_opt` (0.7.2, raysql #300: las variantes con `Option` a
+  través del pool), `pool_with(p, f)`, `pool_with_retry(p, f)`, `pool_tx(p, f)` (reintenta el `BEGIN` sobre
   una conexión fresca si falló por el cable), `pool_close` — el pool genera el `nonce` SCRAM de cada
   conexión. M320 (findings #95): un FATAL de clase 57P (reinicio del servidor, `pg_terminate_backend`)
   se devuelve como «the server closed the connection (FATAL 57P01: …)», que el pool trata como fallo

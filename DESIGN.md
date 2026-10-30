@@ -19365,4 +19365,7 @@ resuelve por su ruta completa o por su último segmento; un nombre a secas sigue
 que módulo. Y raysql (#300) señaló los `///` en español que quedaban en `postgres.ray` y
 `mysql.ray` → db 0.7.1, solo documentación. Lección: cuando una app verifica un hallazgo con el MCP,
 lo que no se puede *descubrir* cuenta como inexistente — la superficie nueva se comprueba también con
-`ray doc` antes de cerrar.
+`ray doc` antes de cerrar. Tercera vuelta (raysql, mismo día): la app consulta por el POOL y
+`query_opt` solo existía sobre `Conn` → `pool_query_opt`/`pool_exec_opt` en db 0.7.2, los mismos
+envoltorios que `pool_query`/`pool_exec`; el servidor PostgreSQL de prueba calcula ahora el SCRAM
+para cualquier nonce (iba precomputado para uno fijo y el pool marca con nonce aleatorio).

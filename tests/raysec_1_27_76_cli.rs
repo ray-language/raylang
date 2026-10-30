@@ -187,7 +187,8 @@ fn status(p: serve.Provider, host: string, origin: string) -> int {
         version: "HTTP/1.1",
         headers: h,
         body: `{"jsonrpc":"2.0","id":1,"method":"ping"}`.to_bytes(),
-        remote: "127.0.0.1:5000"
+        remote: "127.0.0.1:5000",
+        body_stream: Option.None
     };
     serve.answer(p, req).status
 }

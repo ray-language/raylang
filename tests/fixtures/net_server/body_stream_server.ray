@@ -1,0 +1,89 @@
+import net/webserver;
+import std/net;
+
+fn handler(req: webserver.Request) -> webserver.Response {
+    if (webserver.body_too_large(req)) {
+        var r = webserver.text(
+            413,
+            "<Error><Code>EntityTooLarge</Code><Path>"
+                + req.path
+                + "</Path><Size>"
+                + to_string(webserver.declared_body_length(req))
+                + "</Size></Error>"
+        );
+        r.headers.insert("Content-Type", "application/xml");
+        return r;
+    }
+    if (req.path == "/upload") {
+        // Tira del cuerpo trozo a trozo: cuenta octetos y trozos sin retener nada.
+        var total: int = 0;
+        var pieces: int = 0;
+        var follow: bool = true;
+        while (follow) {
+            match (webserver.next_body_chunk(req)) {
+                Result.Ok(Option.Some(piece)) => {
+                    total = total + piece.len();
+                    pieces = pieces + 1;
+                },
+                Result.Ok(Option.None) => {
+                    follow = false;
+                },
+                Result.Err(e) => {
+                    return webserver.text(400, "stream error: " + e);
+                },
+            }
+        }
+        let streamed: bool = match (req.body_stream) {
+            Option.Some(_) => true,
+            Option.None => false,
+        };
+        return webserver.text(
+            200,
+            "bytes="
+                + to_string(total)
+                + " pieces>0="
+                + to_string(pieces > 0)
+                + " streamed="
+                + to_string(streamed)
+                + " declared="
+                + to_string(webserver.declared_body_length(req))
+                + " body_len="
+                + to_string(req.body.len())
+        );
+    }
+    if (req.path == "/small") {
+        match (webserver.read_body(req, 1024)) {
+            Result.Ok(b) => webserver.text(200, "small=" + from_utf8(b).unwrap_or("?")),
+            Result.Err(e) => webserver.text(413, "read_body: " + e),
+        }
+    } else if (req.path == "/partial") {
+        // Lee UN trozo y responde sin agotar el cuerpo: la conexión debe cerrarse.
+        let _ = webserver.next_body_chunk(req);
+        webserver.text(200, "partial")
+    } else {
+        webserver.text(200, "plain " + req.method + " " + req.path)
+    }
+}
+
+fn main() -> int {
+    let stream: bool = args().len() > 0 && args()[0] == "stream";
+    let srv = net.tcp_listen("127.0.0.1", 0).unwrap();
+    print("port " + to_string(net.local_port(srv)));
+    var limits = webserver.default_limits();
+    limits.max_body_bytes = 200000;
+    var opts = webserver.options().with_limits(limits).quiet();
+    if (stream) {
+        opts = opts.with_body_stream().pass_too_large();
+    }
+    match (webserver.serve_options_on(
+        srv,
+        opts,
+        fn() -> fn(webserver.Request) -> webserver.Response { handler }
+    )) {
+        Result.Ok(_) => 0,
+        Result.Err(e) => {
+            eprint(e);
+            1
+        },
+    }
+}

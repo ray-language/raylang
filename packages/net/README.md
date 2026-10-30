@@ -189,6 +189,22 @@ fn main() -> int {
 - **`net/oauth2`** — flujo OAuth2 (client credentials, authorization code). Sobre `net/http` + `std/json`
   + `std/url`.
 - **`net/webserver`** — servidor HTTP async + SSE (sobre el scheduler de fibras). Sobre `std/url`.
+  0.15.0 (rayblob #284): **cuerpo de la petición bajo demanda** — `options().with_body_stream()`
+  deja el cuerpo en la conexión: `req.body` llega vacío, `req.body_stream` es `Some(BodyStream)` y el
+  handler tira de él con `next_body_chunk(req) -> Result<Option<bytes>, string>` (un trozo por
+  lectura del socket: contrapresión real, el cuerpo nunca entero en memoria — un PUT de 64 MiB pasa
+  de 281 a 9 MiB de RSS en el nativo y de 352 a 42 en la VM) o lo reúne con `read_body(req, max)`;
+  `declared_body_length(req)` da el `Content-Length` (-1 sin él). Vale para Content-Length y para
+  `chunked`; un error a mitad (el peer cierra, vence el plazo, chunk mal formado, chunked que supera
+  `max_body_bytes`) le llega al handler como `Err`; un cuerpo que el handler no agota cierra la
+  conexión tras la respuesta, uno agotado deja pasar la siguiente petición (pipelining). Sin la
+  opción nada cambia, y el MISMO handler sirve: `next_body_chunk` sobre un `body` ya leído lo
+  entrega una vez. **413 por el handler** — `options().pass_too_large()`: una petición cuyo
+  `Content-Length` supera `max_body_bytes` llega al handler marcada (`body_too_large(req)`, cuerpo
+  sin leer e ilegible) para responder en el formato de la API (el `EntityTooLarge` en XML de S3);
+  la conexión se cierra tras esa respuesta. Y `quiet()` ya no anota en stderr las peticiones que el
+  servidor rechaza (400/408/413/431): son errores del cliente. `Request` tiene un campo nuevo
+  (`body_stream`); solo lo nota quien construya un `Request` literal a mano.
   0.13.0: el ENCUADRE del cuerpo lo pone el servidor — un `Content-Length` o `Transfer-Encoding`
   que el handler meta en `r.headers` se ignora en vez de salir repetido (rayblob #283: dos
   `Content-Length` hacen la respuesta ambigua, RFC 9112 §6.3; para HEAD el servidor ya anuncia el

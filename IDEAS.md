@@ -4403,7 +4403,7 @@ regresión anotada en PERFORMANCE desde 1.14).
 Lo pequeño y lo roto se hizo en M434 (DESIGN §409). Quedan cuatro piezas que cambian una API o
 piden un análisis nuevo; ninguna bloquea a las apps (todas tienen rodeo en su repo):
 
-1. **`webserver`: cuerpo de petición en streaming y 413 propio (#284).** `Request.body` llega
+1. **[EJECUTADA — M436, DESIGN §411: `with_body_stream` + `next_body_chunk`/`read_body`, `pass_too_large` + `body_too_large`, net 0.15.0]** **`webserver`: cuerpo de petición en streaming y 413 propio (#284).** `Request.body` llega
    entero (un PUT de 64 MiB = 316–351 MiB de RSS, ~5× el cuerpo) y un cuerpo mayor que
    `max_body_bytes` responde 413 en texto plano antes del handler (rayblob no puede contestar el
    `EntityTooLarge` en XML de S3; además escribe en stderr con `no_stdout`). Propuesta: un

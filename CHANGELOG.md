@@ -6,6 +6,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Paquete `net` 0.15.0 — `webserver` con el cuerpo de la petición bajo demanda y el 413 por el
+  handler (M436; rayblob #284).** `options().with_body_stream()` deja el cuerpo en la conexión y el
+  handler tira de él (`next_body_chunk`, `read_body`, `declared_body_length`; `Request.body_stream`)
+  con la contrapresión del socket: un PUT de 64 MiB baja de 281 a 9 MiB de RSS en el nativo y de 352
+  a 42 en la VM. Content-Length y chunked; los errores a mitad llegan al handler como `Err`; un
+  cuerpo no agotado cierra la conexión, uno agotado deja pasar la petición pipelineada. Sin la opción
+  nada cambia y el mismo handler sirve en los dos modos. `options().pass_too_large()` entrega al
+  handler, marcada (`body_too_large(req)`), la petición cuyo `Content-Length` supera
+  `max_body_bytes`, para responder el 413 en el formato de la API. `quiet()` deja de anotar en stderr
+  las peticiones rechazadas (errores del cliente). `Request` gana el campo `body_stream`: un
+  `Request` literal construido a mano (el micro-benchmark de raylb) tiene que añadirlo. Suite
+  `tests/webserver_body_stream_cli.rs` (TCP crudo contra el servidor, VM y nativo).
+
 - **Paquete `net` 0.14.0 — el lado servidor de dos protocolos (M435; rayblob #285, raydns #287),
   todo aditivo.** `net/sigv4` verifica además de firmar: `parse_authorization`/`parse_presigned_query`
   → `Claim`, `verify(claim, secret, method, raw_path, raw_query, headers, payload_hash, now_ms)` con

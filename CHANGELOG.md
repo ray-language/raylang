@@ -21,6 +21,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   código probado de rayblob (siete ejemplos de la doc de S3) y raydns (contra `net/dns` y `dig`);
   suites en `tests/fixtures/net_server/`, VM y nativo.
 
+- **`ray doc`/LSP: la doc `///` de un tipo con `@derive(…)` ya se ve.** `ray fmt` deja la doc ENCIMA
+  del atributo (`/// … ` → `@derive(Eq, Show)` → `pub struct`), y `doc_lines_above` solo leía las
+  líneas contiguas a la declaración, así que el hover y `ray doc` de todo tipo derivado salían sin
+  doc; la guarda `module_policy` lo contaba como «sin documentar». Un atributo entre la doc y la
+  declaración se salta (raydoc y la guarda).
 - **`ray doc` y el MCP ven los módulos `std/` anidados fuera de `collections/`.** `ray doc
   md5.md5_init`, `ray doc std/crypto/md5` (y `crypto/md5`, `aes.encrypt_cbc`, `std/crypto/des`…)
   respondían «is not a builtin, a prelude function, nor a public std/* function»: la resolución solo

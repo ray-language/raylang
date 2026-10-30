@@ -63,7 +63,9 @@ fn public_surface_is_documented() {
                     documented = true;
                     break;
                 }
-                if prev.starts_with("//") || prev.is_empty() {
+                // Un atributo (`@derive(Eq, Show)`) va entre la doc y la declaración: se salta, como
+                // hace raydoc (`doc_lines_above`).
+                if prev.starts_with("//") || prev.starts_with('@') || prev.is_empty() {
                     continue;
                 }
                 break;

@@ -53,7 +53,9 @@ fn get_object() {
     // The client-side header for the same request says the same.
     let cred = sigv4.credentials(ACCESS, SECRET, "us-east-1", "s3");
     let auth = sigv4.authorization_header(cred, "GET", "/test.txt", "", h, b"", AT);
-    assert(auth.ends_with("Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41"));
+    assert(
+        auth.ends_with("Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41")
+    );
     assert(auth.contains("SignedHeaders=host;range;x-amz-content-sha256;x-amz-date,"));
 }
 
@@ -105,7 +107,14 @@ fn bucket_subresource_and_list_query() {
 fn presigned_url_round_trip() {
     let ms = sigv4.parse_amz_date(AT).unwrap();
     let cred = sigv4.credentials(ACCESS, SECRET, "us-east-1", "s3");
-    let signed_url = sigv4.presign(cred, "GET", "examplebucket.s3.amazonaws.com", "/test.txt", ms, 86400);
+    let signed_url = sigv4.presign(
+        cred,
+        "GET",
+        "examplebucket.s3.amazonaws.com",
+        "/test.txt",
+        ms,
+        86400
+    );
     assert(
         signed_url.ends_with(
             "&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404"
@@ -116,15 +125,28 @@ fn presigned_url_round_trip() {
     let q: Map<string, string> = Map.new();
     for pair in qs.split("&") {
         let eq = pair.index_of("=").unwrap();
-        q.insert(pair.substring(0, eq), url.percent_decode(pair.substring(eq + 1, pair.len())).unwrap());
+        q.insert(
+            pair.substring(0, eq),
+            url.percent_decode(pair.substring(eq + 1, pair.len())).unwrap()
+        );
     }
     let claim = sigv4.parse_presigned_query(q).unwrap();
     assert(claim.presigned);
     assert_eq(claim.expires_s, 86400);
     let h = headers([("host", "examplebucket.s3.amazonaws.com")]);
-    assert(sigv4.verify(claim, SECRET, "GET", "/test.txt", qs, h, sigv4.UNSIGNED_PAYLOAD, ms + 1000).is_ok());
+    assert(sigv4.verify(claim, SECRET, "GET", "/test.txt", qs, h, sigv4.UNSIGNED_PAYLOAD, ms + 1000)
+        .is_ok());
     assert_eq(
-        sigv4.verify(claim, SECRET, "GET", "/test.txt", qs, h, sigv4.UNSIGNED_PAYLOAD, ms + 86401 * 1000),
+        sigv4.verify(
+            claim,
+            SECRET,
+            "GET",
+            "/test.txt",
+            qs,
+            h,
+            sigv4.UNSIGNED_PAYLOAD,
+            ms + 86401 * 1000
+        ),
         Result.Err("expired")
     );
 }
@@ -168,8 +190,16 @@ fn signed_chunks_use_the_public_pieces() {
     assert_eq(scope, "20130524/us-east-1/s3/aws4_request");
     let seed = "4f232c4386841ef735655705268965c44a0e4690baa4adea153f7db9fa80a0a9";
     let chunk = "a".repeat(65536).to_bytes();
-    let sts = "AWS4-HMAC-SHA256-PAYLOAD\n" + AT + "\n" + scope + "\n" + seed + "\n"
-        + EMPTY_SHA + "\n" + sigv4.payload_hash(chunk);
+    let sts = "AWS4-HMAC-SHA256-PAYLOAD\n"
+        + AT
+        + "\n"
+        + scope
+        + "\n"
+        + seed
+        + "\n"
+        + EMPTY_SHA
+        + "\n"
+        + sigv4.payload_hash(chunk);
     assert_eq(
         sigv4.hmac_hex(key, sts),
         "ad80c730a21e5b8d04586a2213dd63b9a0e99e0e2307b0ade35a65485a288648"

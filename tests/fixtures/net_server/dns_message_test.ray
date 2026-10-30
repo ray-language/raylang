@@ -12,7 +12,13 @@ fn rr(name: string, rtype: int, data: msg.Data) -> msg.Rr {
 }
 
 fn answer(rs: [msg.Rr]) -> msg.Answer {
-    msg.Answer { rcode: msg.NOERROR, authoritative: true, answers: rs, authority: [], additional: [] }
+    msg.Answer {
+        rcode: msg.NOERROR,
+        authoritative: true,
+        answers: rs,
+        authority: [],
+        additional: []
+    }
 }
 
 @test
@@ -31,8 +37,16 @@ fn responses_parse_in_net_dns_and_here() {
         [
             rr("api.service.ray.internal", msg.A, msg.Data.Addr4([10, 0, 0, 5])),
             rr("api.service.ray.internal", msg.A, msg.Data.Addr4([10, 0, 0, 6])),
-            rr("api.service.ray.internal", msg.AAAA, msg.Data.Addr6(msg.parse_ipv6("fd00::7").unwrap())),
-            rr("_api._tcp.service.ray.internal", msg.SRV, msg.Data.Srv(1, 1, 8080, "a1.api.instance.ray.internal")),
+            rr(
+                "api.service.ray.internal",
+                msg.AAAA,
+                msg.Data.Addr6(msg.parse_ipv6("fd00::7").unwrap())
+            ),
+            rr(
+                "_api._tcp.service.ray.internal",
+                msg.SRV,
+                msg.Data.Srv(1, 1, 8080, "a1.api.instance.ray.internal")
+            ),
             rr("www.ray.internal", msg.CNAME, msg.Data.Name("api.service.ray.internal")),
             rr("ray.internal", msg.MX, msg.Data.Mx(10, "mail.ray.internal")),
             rr("ray.internal", msg.TXT, msg.Data.Txt(["v=spf1 -all", "second"]))
@@ -62,7 +76,15 @@ fn responses_parse_in_net_dns_and_here() {
 @test
 fn nxdomain_with_a_soa_in_authority() {
     let q = q_of("nope.ray.internal", msg.A);
-    let soa = msg.Data.Soa("ns1.ray.internal", "hostmaster.ray.internal", 2026103001, 3600, 600, 604800, 60);
+    let soa = msg.Data.Soa(
+        "ns1.ray.internal",
+        "hostmaster.ray.internal",
+        2026103001,
+        3600,
+        600,
+        604800,
+        60
+    );
     let a = msg.Answer {
         rcode: msg.NXDOMAIN,
         authoritative: true,

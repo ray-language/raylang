@@ -4432,6 +4432,11 @@ piden un análisis nuevo; ninguna bloquea a las apps (todas tienen rodeo en su r
    es un primo pequeño) y, en la VM, trasladar el objeto entre heaps sin copiar. Impacto medio;
    ganancia solo en ese patrón.
 
+Nota de M435: `ray doc` dentro de un proyecto resuelve las dependencias instaladas en `.ray-deps/`
+(las del índice) pero NO una dependencia `path:` (`net = "path:../packages/net"` → «is not a
+builtin…» para `sigv4.verify`), que es justo la forma de trabajar sobre un paquete sin publicarlo.
+Bajo impacto; mismo arreglo que el MCP: resolver `path:` del `ray.toml` como una raíz más.
+
 Y una nota de #296 que no es del lenguaje sino de `ray check`: un módulo chequeado SUELTO (`ray
 check` en `packages/db`, «module without main») resuelve `send(c, 112, pl)` contra el builtin
 `send` y falla, mientras cargado por el loader resuelve a `postgres.send` y pasa. Es la regla de

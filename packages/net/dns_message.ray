@@ -16,39 +16,55 @@
 // los dos sentidos contra `net/dns` y `dig`. Vuelve al paquete como módulo APARTE para no tocar el
 // enum `Record` de `net/dns` (añadirle SOA rompería todo `match` exhaustivo de los programas).
 
+/// Record type A (IPv4 address).
 pub const A: int = 1;
 
+/// Record type NS (name server).
 pub const NS: int = 2;
 
+/// Record type CNAME (canonical name).
 pub const CNAME: int = 5;
 
+/// Record type SOA (start of authority).
 pub const SOA: int = 6;
 
+/// Record type MX (mail exchange).
 pub const MX: int = 15;
 
+/// Record type TXT (character-strings).
 pub const TXT: int = 16;
 
+/// Record type AAAA (IPv6 address).
 pub const AAAA: int = 28;
 
+/// Record type SRV (service locator).
 pub const SRV: int = 33;
 
+/// Pseudo-record OPT (EDNS0; carries the UDP size, never a data record).
 pub const OPT: int = 41;
 
+/// Query type ANY (`*`).
 pub const ANY: int = 255;
 
 /// The IN class.
 pub const IN: int = 1;
 
+/// Rcode NOERROR.
 pub const NOERROR: int = 0;
 
+/// Rcode FORMERR (the server could not parse the query).
 pub const FORMERR: int = 1;
 
+/// Rcode SERVFAIL (the server failed to answer).
 pub const SERVFAIL: int = 2;
 
+/// Rcode NXDOMAIN (the name does not exist; authoritative answers carry a SOA).
 pub const NXDOMAIN: int = 3;
 
+/// Rcode NOTIMP (the opcode is not implemented).
 pub const NOTIMP: int = 4;
 
+/// Rcode REFUSED (policy).
 pub const REFUSED: int = 5;
 
 /// The smallest UDP payload every resolver takes.

@@ -162,9 +162,11 @@ fn main() -> int {
   del reloj local (ms Unix) + stratum. Sobre `net/udp` (M90.7).
 - **`net/dns_message`** — el formato de cable DNS como lo necesita un SERVIDOR (0.14.0, raydns #287;
   RFC 1035 + EDNS0): `parse_query(bytes) -> Result<Query, Bad>` (una pregunta estándar; `Bad` trae el
-  rcode a devolver y `write_error` lo escribe), `write_response(q, Answer, limit)` (las tres secciones
-  con compresión de nombres, AA/RD/RCODE, OPT si el cliente lo trajo; por encima de `limit` → solo
-  cabecera+pregunta con TC para que el cliente repita por TCP), `udp_limit(q)` (512 sin EDNS, la oferta
+  rcode a devolver y `write_error` lo escribe), `write_response(q, Answer, limit) -> Result<bytes,
+  string>` (las tres secciones con compresión de nombres, AA/RD/RCODE, OPT si el cliente lo trajo;
+  por encima de `limit` → solo cabecera+pregunta con TC para que el cliente repita por TCP; `Err`
+  solo por un nombre incodificable — etiqueta vacía o de 64+ octetos, nombre de más de 255 —, que es
+  un bug de la zona: responde `empty(SERVFAIL)` y anótalo), `udp_limit(q)` (512 sin EDNS, la oferta
   del cliente acotada a 1232), `parse_response(bytes) -> Result<Response, string>` (lo que
   `dns.parse_records` no da: rcode, AA/TC, authority y additional, con SOA tipado; un rcode ≠ 0 es
   dato, no error), `Data` (`Addr4 Addr6 Name Mx Txt Srv Soa Other`), `Rr`, `parse_ipv4`/`parse_ipv6`,
@@ -195,14 +197,17 @@ fn main() -> int {
   lectura del socket: contrapresión real, el cuerpo nunca entero en memoria — un PUT de 64 MiB pasa
   de 281 a 9 MiB de RSS en el nativo y de 352 a 42 en la VM) o lo reúne con `read_body(req, max)`;
   `declared_body_length(req)` da el `Content-Length` (-1 sin él). Vale para Content-Length y para
-  `chunked`; un error a mitad (el peer cierra, vence el plazo, chunk mal formado, chunked que supera
-  `max_body_bytes`) le llega al handler como `Err`; un cuerpo que el handler no agota cierra la
+  `chunked`; en streaming el plazo es OCIOSO por lectura (`read_timeout_millis` entre trozo y trozo:
+  una subida tarda lo que tarde, lo que se corta es un cliente que deja de enviar), no el plazo total
+  de la petición del modo clásico; un error a mitad (el peer cierra, vence el plazo, chunk mal
+  formado, chunked que supera `max_body_bytes`) le llega al handler como `Err`; un cuerpo que el handler no agota cierra la
   conexión tras la respuesta, uno agotado deja pasar la siguiente petición (pipelining). Sin la
   opción nada cambia, y el MISMO handler sirve: `next_body_chunk` sobre un `body` ya leído lo
   entrega una vez. **413 por el handler** — `options().pass_too_large()`: una petición cuyo
   `Content-Length` supera `max_body_bytes` llega al handler marcada (`body_too_large(req)`, cuerpo
   sin leer e ilegible) para responder en el formato de la API (el `EntityTooLarge` en XML de S3);
-  la conexión se cierra tras esa respuesta. Y `quiet()` ya no anota en stderr las peticiones que el
+  la guarda de origen/token local (`local_limits`) se aplica igual que en el camino normal, y la
+  conexión se cierra tras esa respuesta. Y `quiet()` ya no anota en stderr las peticiones que el
   servidor rechaza (400/408/413/431): son errores del cliente. `Request` tiene un campo nuevo
   (`body_stream`); solo lo nota quien construya un `Request` literal a mano.
   0.13.0: el ENCUADRE del cuerpo lo pone el servidor — un `Content-Length` o `Transfer-Encoding`

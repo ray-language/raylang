@@ -50,7 +50,7 @@ fn has_rustc() -> bool {
 fn sigv4_server_side_and_dns_message_pass_on_the_vm() {
     let d = project("vm");
     let out = ray_test(&d, &[]);
-    assert!(out.contains("result: 12 test(s), all passed ✓"), "{out}");
+    assert!(out.contains("result: 13 test(s), all passed ✓"), "{out}");
     assert!(out.contains("ok    presigned_url_round_trip"), "{out}");
     assert!(out.contains("ok    nxdomain_with_a_soa_in_authority"), "{out}");
 }
@@ -63,6 +63,6 @@ fn sigv4_server_side_and_dns_message_pass_natively() {
     }
     let d = project("native");
     let out = ray_test(&d, &["--native"]);
-    assert!(out.contains("running 12 test(s) — native binaries"), "{out}");
-    assert!(out.contains("result: 12 test(s), all passed ✓"), "{out}");
+    assert!(out.contains("running 13 test(s) — native binaries"), "{out}");
+    assert!(out.contains("result: 13 test(s), all passed ✓"), "{out}");
 }

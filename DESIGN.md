@@ -19444,6 +19444,22 @@ antes del handler, en texto plano: un cliente de S3 espera `EntityTooLarge` en X
   `no_stdout`; un 400/408/413/431 es un error del cliente, no del servicio. Los fallos del servidor
   (handler que revienta, escritura que falla) siguen saliendo.
 
+**La revisión pre-release (regla M427) dejó cinco correcciones y una poda.** El 413 por el handler
+saltaba la guarda de origen/token local (M297): una página cross-site podía ejecutar un handler que
+no mirara `body_too_large` primero — ahora `local_guard` corre antes en esa rama, con la cookie de
+siembra. La respuesta a un cuerpo no agotado anunciaba keep-alive y acto seguido el servidor
+cerraba con octetos sin leer (RST, el cliente podía perder el 200) — `keep` es falso si el stream
+no acabó. El cuerpo bajo demanda heredaba el plazo TOTAL de la petición (10 s): una subida de 64 MiB
+a 5 MB/s moría al undécimo segundo con el cliente enviando — en streaming el plazo es OCIOSO por
+lectura (`BodyStream.idle_ms`), lo que se corta es un cliente que deja de enviar. El chunk `0` no
+esperaba su `\r\n` final si llegaba en otro segmento (la siguiente petición pipelineada empezaba
+con `\r\n` → 400) — ahora se espera y se comprueba, y un trailer es error explícito.
+`dns_message.put_name` escribía etiquetas de 64+ octetos como punteros (el bit 0xC0 en la longitud)
+— `write_response` devuelve `Result` y el nombre incodificable es `Err`. Y la poda: el modo clásico
+drena el MISMO `BodyStream` (`drain_body`), así que `read_body_chunked` y el bucle de Content-Length
+desaparecen — una sola implementación del encuadre, el siguiente arreglo de seguridad cae en un
+sitio. (Lo no tomado: `declared_body_length` re-parsea el Content-Length — una línea, se queda.)
+
 Verificado por TCP crudo en VM y nativo (`tests/webserver_body_stream_cli.rs`): Content-Length y
 chunked trozo a trozo, pipelining tras un cuerpo agotado, `read_body` de un cuerpo pequeño, 413 en
 XML con el tamaño declarado, cierre tras un cuerpo parcial, stderr limpio; y que el bucle del

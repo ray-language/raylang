@@ -140,6 +140,11 @@ compilan una vez por máquina. Ahí también se persiste el **`Cargo.lock` resue
 (`ray-native.Cargo.lock`, H20): los builds siguientes de esta máquina fijan las mismas
 versiones de deps (reproducibilidad por máquina; entre máquinas puede variar dentro de
 los rangos declarados).
+La caché está **acotada** (M437): los builds no son incrementales (`CARGO_INCREMENTAL=0`;
+medido igual o más rápido, y sin 25–30 MB por programa en `incremental/`), y al final de
+cada build se podan los programas sin usar en 7 días (máximo 32 por perfil; las deps del
+runtime nunca). `RAY_NATIVE_CACHE` la reubica (la suite del repo la pone en
+`target/ray-native-cache` vía `.cargo/config.toml`) y `ray clean [--dry-run]` la vacía.
 
 **mimalloc por defecto (N1, jul 2026).** El binario transpilado enlaza **mimalloc** como
 `#[global_allocator]` (feature `mimalloc` de `ray-runtime`, mismo crate/versión que usa el

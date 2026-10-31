@@ -4,6 +4,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **La caché de builds nativos deja de crecer sin límite (M437).** `~/.ray/native-cache` llegó a
+  198 GB en una máquina de desarrollo: Cargo no poda nunca y cada programa (y cada fixture de la
+  suite de tests) dejaba para siempre su directorio incremental y sus objetos. Ahora los builds
+  nativos no son incrementales (igual o más rápidos, 25–30 MB menos por programa), cada build poda
+  los programas sin usar en 7 días (y conserva como mucho 32 por perfil; las dependencias del
+  runtime nunca se tocan), y `RAY_NATIVE_CACHE` reubica la caché (la suite del repo usa
+  `target/ray-native-cache`). Nuevo **`ray clean [--dry-run]`**: informa de lo que ocupa cada
+  target y vacía la caché; el siguiente build recompila las dependencias del runtime.
+
 ## 1.27.87 — 2026-10-30
 
 Segunda vuelta de la tanda de apps nuevas (rayblob, raysql, raydns): lo que las apps no podían

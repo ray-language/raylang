@@ -47,6 +47,9 @@ móvil de fábrica, y un lenguaje que un agente LLM escribe bien.
    diagnóstico se emite sin ubicación. Es un principio, no un extra.
 7. **Lo que el lenguaje entrega al usuario va en inglés** (diagnósticos, LSP, CLI); los
    identificadores también. Los comentarios del código van en español. Lo vigila un test de CI.
+8. **Lo que `ray` deja en la máquina está acotado.** La caché de builds nativos se poda sola en
+   cada build (programas sin usar en 7 días, máximo 32 por perfil) y la suite de tests usa la suya
+   (`target/ray-native-cache`), nunca la del usuario. Un directorio de 198 GB (M437) no se repite.
 
 ## 3. Estado medido (oct 2026, 1.27.26)
 

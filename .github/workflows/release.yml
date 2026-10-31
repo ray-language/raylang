@@ -99,8 +99,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { os: macos-14,      target: aarch64-apple-ios }
-          - { os: macos-14,      target: aarch64-apple-ios-sim }
+          - { os: macos-15,      target: aarch64-apple-ios }
+          - { os: macos-15,      target: aarch64-apple-ios-sim }
           - { os: ubuntu-latest, target: aarch64-linux-android }
           - { os: ubuntu-latest, target: x86_64-linux-android }
     runs-on: ${{ matrix.os }}
@@ -143,8 +143,10 @@ jobs:
           # macos-13 (el último runner Intel) está RETIRADO — el x86_64 de macOS se compila
           # CRUZADO desde el runner arm (rustup target add ya está en el flujo; ring/rustls
           # compilan cruzado sin fricción con el Xcode del runner).
-          - { os: macos-14,         target: x86_64-apple-darwin }
-          - { os: macos-14,         target: aarch64-apple-darwin }
+          # macos-14 se retira el 2 nov 2026 (brownouts desde oct: los jobs de Apple de 1.27.87 y
+          # 1.27.88 se cancelaron al instante) → macos-15, pineado para no cambiar de Xcode sin querer.
+          - { os: macos-15,         target: x86_64-apple-darwin }
+          - { os: macos-15,         target: aarch64-apple-darwin }
           - { os: windows-latest,   target: x86_64-pc-windows-msvc }
           # M185: Windows ARM64 en su propio runner nativo. Cruzarlo desde el x86_64 obligaría a
           # cuadrar a mano las libs de MSVC y el clang de `ring`; nativo además puede EJECUTAR el

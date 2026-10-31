@@ -4,7 +4,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.88 — 2026-10-31
+
+La caché de builds nativos acotada (M437) y la documentación puesta al día con el modelo vigente.
 
 - **Documentación puesta al día con el modelo vigente (revisión a fondo, 31 oct 2026).** La guía del
   framework web, los README y la doc de módulo (`///`) de `web`, `net`, `rpc` y `mcp`, el handbook

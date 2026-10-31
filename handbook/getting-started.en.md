@@ -55,7 +55,7 @@ ray run                    # runs src/main.ray on the VM
 [package]
 name = "hello"
 version = "0.1.0"
-raylang = "1.27.87"   # the minimum raylang version: the toolchain that created the project
+raylang = "X.Y.Z"     # your `ray` version (`ray new` writes it): the minimum the project requires
 
 [dependencies]
 ```
@@ -485,4 +485,4 @@ stores and automatic updates.
 For everything else: the [reference](../REFERENCE.en.md) has every function with its signature,
 and the [manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:4271e00ffaa3 -->
+<!-- sync: sha256:778e0aef63ad -->

@@ -55,7 +55,7 @@ ray run                    # ejecuta src/main.ray en la VM
 [package]
 name = "hola"
 version = "0.1.0"
-raylang = "1.27.87"   # la versión mínima de raylang: la del toolchain que creó el proyecto
+raylang = "X.Y.Z"     # la versión de tu `ray` (la escribe `ray new`): el mínimo que exige el proyecto
 
 [dependencies]
 ```

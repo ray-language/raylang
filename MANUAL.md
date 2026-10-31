@@ -401,16 +401,18 @@ corta el cuerpo — todo lo que venga después de `seguir = false` sigue ejecut�
 es una fuente de errores silenciosos justo en los bucles de red. Con `break` la salida es en el
 punto en que se decide.
 
-`match` **destructura enums** (`Option`/`Result`/los tuyos), como expresión (§10 a fondo). El escrutinio
-va **entre paréntesis**. Para despachar sobre **primitivos** (int/bool/string) se usa `if/else`, no `match`:
+`match` **destructura enums** (`Option`/`Result`/los tuyos), tuplas y structs, y casa literales
+`int`/`string`/`char`/`bool`, como expresión (§10 a fondo). El escrutinio va **entre paréntesis**.
+Sobre un primitivo hace falta el brazo `_`; para rangos o condiciones, guardas o `if/else`:
 
 ```rust
-let etiqueta = match (buscar(k)) {      // match: solo sobre enums
+let etiqueta = match (buscar(k)) {
     Option.Some(v) => "encontrado",
     Option.None => "no está",
 };
 
-let clase = if (n == 0) { "cero" } else if (n < 0) { "negativo" } else { "positivo" };  // int → if/else
+let clase = if (n == 0) { "cero" } else if (n < 0) { "negativo" } else { "positivo" };  // rangos → if/else
+let nombre = match (n) { 0 => "cero", 1 => "uno", _ => "muchos" };                     // literales → match
 ```
 
 ## 5. Datos compuestos
@@ -859,7 +861,7 @@ struct Par { a: int, b: int }
 // ToJson → genera to_json(self) -> string (respuestas JSON tipadas del framework web)
 ```
 
-Son las **cuatro** derivables. `Ord` no lo es: se implementa a mano (`fn less(self, other: Self)
+Son las **cinco** derivables. `Ord` no lo es: se implementa a mano (`fn less(self, other: Self)
 -> bool`), porque el criterio de orden rara vez es "campo a campo en el orden declarado".
 
 ## 10. Pattern matching
@@ -1134,8 +1136,7 @@ espejos desde un monorepo y receta de punta a punta) está en [`PUBLISH.md`](PUB
 Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca-estándar-std)):
 
 1. **Builtins + prelude** — disponibles sin `import`: `print`, `to_string`, los métodos de
-   string/arreglo/Map, `Option`/`Result`, `parse_int`, `sort`, `assert`, la cripto (`sha256`,
-   `hmac_sha256`, `ed25519_*`, `chacha20poly1305_*`)…
+   string/arreglo/Map, `Option`/`Result`, `parse_int`, `sort`, `assert`…
 2. **`std/`** — embebida en el binario, se importa por ruta y se usa calificada:
 
    ```rust
@@ -1147,12 +1148,14 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    import std/regex;         // regex.find_all("\\d+", texto)
    import std/csv;           // csv.parse_csv(src) -> Result<[[string]], string>
    import std/random;        // random.below(6)
+   import std/crypto;        // crypto.sha256(b), crypto.hmac_sha256(key, msg), crypto.ed25519_sign(seed, msg)
    ```
 
    El catálogo: `io` `term` `fs` `process` `time` `units` `random` `math` `bigint` `text` `sort`
    `kv` `keychain` `crypto` (+ `crypto/{md5,aes,des}`) `resilience` `net` `json` `hex` `base64`
    `url` `regex` `csv` `toml` `template` `markdown` `inflate` `deflate` `zip` `huffman` `protobuf`
-   `uuid` `collections/{set,deque,stringbuilder,dict}` `image` `audio` `ui` `embed` `update` `ffi`
+   `uuid` `collections/{set,deque,stringbuilder,bytesbuilder,dict}` `image` `audio` `media` `ui` `embed`
+   `update` `ffi` `pem` `xml` `qr`
    (firmas en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca-estándar-std)).
 
    Una app de escritorio (`std/ui`) habla con el sistema sin rodeos: `platform()` en la
@@ -1201,7 +1204,7 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    búsqueda panica con `regex: backtrack limit exceeded …`. En el binario nativo `onig` exige la
    feature `regex` del runtime (con `--without regex` la función cae en el stub nativo).
 
-3. **Paquetes** (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`, `agent`) — no embebidos; se declaran como dependencia (§14).
+3. **Paquetes** (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`, `agent`, `oidc`, `yaml`, `zip`) — no embebidos; se declaran como dependencia (§14).
 
 ## 13. I/O y sistema
 
@@ -2155,7 +2158,7 @@ primer día):
 
 ### La pila de protocolos (`packages/net`, dependencia)
 
-25 módulos en raylang puro: HTTP(S) cliente (`http.fetch` con redirects/chunked/gzip), **servidor web**
+más de 30 módulos en raylang puro: HTTP(S) cliente (`http.fetch` con redirects/chunked/gzip), **servidor web**
 async con SSE (`webserver`; respuestas comprimidas con `webserver.gzip(req, resp)` — negocia
 `Accept-Encoding` por handler), WebSocket (cliente y servidor, ws/wss), HTTP/2 + gRPC, DNS (7 tipos de
 registro + caché), Redis, OAuth2, JWT (HS256/EdDSA), SCRAM, AWS SigV4, cookies, logging JSON, métricas
@@ -2775,8 +2778,8 @@ y el actor muere cuando su canal se cierra (`close(ch)`).
 **Lo que captura un handler es una COPIA**. Un servidor `web`, `rpc` o gRPC
 corre cada conexión en su fibra, y lo que el handler captura del ámbito exterior (un `Map` de
 estado, un contador) se copia al arrancar la fibra: mutarlo dentro del handler no persiste fuera.
-En la VM la copia es **por conexión** (un test con una sola conexión «funciona»); en el binario
-nativo, los closures que cruzan a `spawn` se reconstruyen **en cada invocación**, así que ni eso.
+Con `web`, además, el builder corre **en cada petición** (VM y nativo por igual), así que ni
+siquiera una conexión keep-alive conserva el valor entre dos peticiones.
 El estado compartido de un servicio vive en una base de datos o en un actor (esta sección):
 nunca en un valor capturado.
 
@@ -2800,7 +2803,8 @@ aplicación — ver la guía del framework).
   se cumplen aunque una no ceda.
 - `ray run --fuel N` / `--heap N`: límites de instrucciones y de objetos vivos, para embeber raylang
   confinado (un bucle infinito o una fuga no cuelgan al anfitrión).
-- La concurrencia requiere la **VM** (el default); `--interp` es el oráculo secuencial de desarrollo.
+- La concurrencia corre en la **VM** (el default) y en el binario nativo (fibras M:N por defecto);
+  `--interp` es el oráculo secuencial de desarrollo y rechaza `spawn`/canales con un error limpio.
 
 ## 16. FFI: llamar a C
 
@@ -3190,8 +3194,8 @@ del editor.
 - **Formatea con `ray fmt`.** Un estilo único, sin discusiones.
 - **Nombres sin sobrecarga.** raylang no tiene sobrecarga de funciones, así que la stdlib desambigua por
   nombre: p. ej. `index_of` (buscar en string) vs `position` (buscar en arreglo). Sigue esa convención.
-- **La cripto de producción son los builtins** (`sha256`, `hmac_sha256`, …, respaldados por `ring`, tiempo
-  constante). Las implementaciones en raylang de `examples/web/` son demostración del lenguaje.
+- **La cripto de producción es `std/crypto`** (`crypto.sha256`, `crypto.hmac_sha256`, …, respaldada por
+  `ring`, tiempo constante). Las implementaciones en raylang de `examples/web/` son demostración del lenguaje.
 
 ## 19. Gotchas
 
@@ -3210,8 +3214,8 @@ Cosas que sorprenden viniendo de otros lenguajes:
   detrás de `}` es necesaria.
 - **El escrutinio de `match` va entre paréntesis** (`match (e) { … }`), como `if`/`while`. Evita la
   ambigüedad con el literal de struct.
-- **La asignación no es expresión.** `x = y` es sentencia; en un brazo de `match` va en bloque:
-  `=> { x = y; },`.
+- **La asignación no es expresión** (`x = y = 5` no existe). En un brazo de `match` vale la forma corta
+  `=> x = y,`, azúcar de `=> { x = y; },` (vale `unit`).
 - **Precedencia estilo C en los bit a bit**: `(flags & 32) != 0`, con paréntesis — `&`/`|`/`^` ligan más
   flojo que `==`/`!=`.
 - **Un literal en cola tras un `if`/`while` de sentencia YA FUNCIONA**: `if (c) { … }`
@@ -3228,8 +3232,9 @@ Cosas que sorprenden viniendo de otros lenguajes:
   objeto (mutar uno muta el otro). Los primitivos (int/float/bool/char/u\*) y las tuplas se copian.
 - **No hay `null`.** Usa `Option<T>` y `match`/`?`.
 - **No hay excepciones ni sobrecarga de funciones.** Errores como valores (§7); un nombre, una firma.
-- **Un builtin gana a una función de usuario homónima.** No llames `print`/`len`/`get`/`join`… a tus
-  funciones: la llamada iría al builtin.
+- **Nombres de builtin.** El archivo de entrada no puede redefinir un builtin (es error), ni `from M import
+  close;` sin `as`. Un módulo sí puede (`pub fn close(c: Conn)`): se consume calificado (`proto.close(c)`)
+  y dentro del módulo el builtin queda en `builtin.close`.
 - **`from` es palabra clave** (del sistema de módulos): no vale como nombre de variable o parámetro.
 - **Sin aritmética de `char`.** `'a' + 1` es error; usa `char_code`/`char_from_code`.
 - **Los strings se indexan por carácter y son inmutables.** `s[i]` da `char` (no byte); `s[i] = c` es

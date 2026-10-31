@@ -14,7 +14,7 @@ ray add oidc
 
 ```toml
 [dependencies]
-oidc = "^0.1.0"
+oidc = "^0.2"
 ```
 
 ## El flujo de inicio de sesión (relying party)

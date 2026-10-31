@@ -12,7 +12,7 @@ Paquete adicional, como `net` o `db`. Se añade desde el índice con `ray add ll
 
 ```toml
 [dependencies]
-llm = "^0.1.0"
+llm = "^0.2"
 ```
 
 Dentro del monorepo de raylang se puede usar la ruta (`llm = "path:../raylang/packages/llm"`).

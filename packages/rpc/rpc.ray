@@ -10,7 +10,7 @@
 //   respuesta= {"id": n, "ok": <Json>}  |  {"id": n, "err": "mensaje"}
 //
 // Servidor: una fibra por conexión (varias peticiones secuenciales por conexión); el handler
-// corre en su propia tarea (try_join, como el webserver M56.5) → un panic responde err sin
+// corre en su propia tarea (spawn + try_join; el webserver pasó a try_call en M97.2) → un panic responde err sin
 // tumbar la conexión ni el servidor. `serve` = `serve_shutdown` con un canal que nunca llega
 // (UN solo bucle drenable, patrón M88.1b); `serve_graceful` lo cablea a `signals()`.
 // Cliente: request/response secuencial sobre una conexión persistente; el id correla y valida.

@@ -636,7 +636,7 @@ exist, a missing argument and a title that tries to leave the folder.
 
 ## 10. What the agent does not do yet
 
-`agent-cli` is short on purpose, and the packages are at their first version. Before putting it
+`agent-cli` is short on purpose, and the packages are young (0.x). Before putting it
 in front of users, it helps to know what is missing:
 
 | What | Where it stands |
@@ -653,4 +653,4 @@ in front of users, it helps to know what is missing:
 [**Performance**](performance.en.md): how to measure a program, find where the time goes and make
 it fast.
 
-<!-- sync: sha256:19016a0ad791 -->
+<!-- sync: sha256:e3521a683f78 -->

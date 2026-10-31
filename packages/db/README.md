@@ -16,7 +16,7 @@ Queda declarado en tu `ray.toml` (y fijado en `ray.lock`):
 
 ```toml
 [dependencies]
-db = "^0.2.1"
+db = "^0.7"
 ```
 
 Dentro del monorepo de raylang, los ejemplos y tests pueden usar la ruta (`db = "path:../ruta/a/packages/db"`).

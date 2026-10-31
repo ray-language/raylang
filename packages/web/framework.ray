@@ -1,5 +1,5 @@
 // El framework web de aplicación de raylang (M93), estilo Express, PROMOVIDO desde
-// examples/web/framework.ray y reescrito sobre `net/webserver` (el servidor de producción, M56):
+// el antiguo examples/web/framework.ray y reescrito sobre `net/webserver` (el servidor de producción, M56):
 // enrutado por método + patrón con parámetros (`/users/:id`), query, middleware, archivos
 // estáticos con caching ETag/304 (M56.9), cookies, headers custom, redirect, 404 personalizable,
 // logging JSON opcional (`net/log`), TLS, límites y apagado ordenado. Cero runtime nuevo: puro
@@ -1018,14 +1018,14 @@ fn finish(app: App, req: webserver.Request, resp: webserver.Response) -> webserv
 
 // --- Arranque (M93.3: UNA sola familia, sobre el patrón builder) ---
 // `listen(build_app, host, port)`: el builder es una función TOP-LEVEL que construye la App. Cada
-// PETICIÓN la llama (vía `webserver.serve_with`: el aislamiento panic→500 corre cada petición en
-// su propia tarea, también las keep-alive de una misma conexión). Así ningún valor-función cruza
-// hilos (actores de heap aislado): el mismo fuente corre en la VM y compila con `ray build
+// PETICIÓN la llama (vía `webserver.serve_with`, también las keep-alive de una misma conexión;
+// el aislamiento panic→500 es `try_call` en la fibra de la conexión, M97.2). Así ningún
+// valor-función cruza de una fibra a otra (actores de heap aislado): el mismo fuente corre en la VM y compila con `ray build
 // --native`. Consecuencia: el estado del builder es POR PETICIÓN; el estado compartido va por
 // canales a una fibra dueña (o a `net/pool`). M326 (findings #102): la doc decía «por conexión».
 /// Starts the server. `build` is the App builder: EVERY REQUEST builds its own App by calling
-/// it inside its own task (the panic→500 isolation runs each request — keep-alive ones included —
-/// in a fresh task), so the same source runs on the VM and compiles with `ray build --native`.
+/// it (keep-alive requests included; a handler panic is recovered with `try_call` and answered
+/// 500), so the same source runs on the VM and compiles with `ray build --native`.
 /// The canonical shape is a closure WRITTEN INLINE in the call that captures the shared handles
 /// created once in `main` (a `Sessions`, a `State`, a `net/pool`, a config struct):
 ///

@@ -71,8 +71,8 @@ y borrar también son `POST`:
 ## 2. El servidor
 
 La aplicación se construye en una función de nivel superior. El servidor ejecuta cada conexión en
-su propia fibra, con memoria aislada, y cada fibra llama a esa función para tener su copia de la
-app. Por eso el mismo código corre igual en la VM y compilado a binario nativo.
+su propia fibra, con memoria aislada, y llama a esa función en cada petición para tener su copia
+de la app. Por eso el mismo código corre igual en la VM y compilado a binario nativo.
 
 <!-- check: project=examples/apps/notes-ssr -->
 ```rust
@@ -288,8 +288,8 @@ fn the_note_page_renders_markdown_safely() {
 
 ## 5. Los archivos como estado compartido
 
-Cada conexión corre en su fibra con su propia memoria: dos peticiones nunca comparten una
-variable. En este sitio, lo que comparten es el **disco**. Cada nota es un archivo JSON y cada
+Cada conexión corre en su fibra con su propia memoria y la app se construye por petición: dos
+peticiones nunca comparten una variable. En este sitio, lo que comparten es el **disco**. Cada nota es un archivo JSON y cada
 escritura es atómica:
 
 <!-- check: project=examples/apps/notes-ssr -->

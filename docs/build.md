@@ -22,7 +22,7 @@ el árbol de trabajo, llama a `target/release/ray` por su ruta.
 
 ## 2. Features de compilación
 
-Cinco features, todas activas por defecto (el binario normal es idéntico a siempre).
+Trece features, todas activas por defecto (el binario normal es idéntico a siempre).
 Cada una se puede excluir para adelgazar el binario o reducir superficie de ataque;
 un programa que use la capacidad excluida recibe un **error claro como valor** (nunca
 un fallo silencioso) y el checker acepta el programa igual (la tabla BUILTINS se
@@ -32,9 +32,17 @@ registra siempre).
 |---|---|---|
 | `interp` | el intérprete de árbol (`--interp`, oráculo de desarrollo) | solo la VM (el motor de producto); `--interp` no disponible |
 | `sqlite` | rusqlite `bundled` (el C de SQLite embebido) | `db/sqlite` → `Err` claro en `connect` |
-| `net-tls` | rustls+ring+webpki: https/wss + sha/hmac/ed25519/chacha | TLS falible → `Err`-valor; cripto infalible → aborta con error claro; `ray publish --sign`/verificación de firmas no disponibles (fail-closed, explícito). El hash del lockfile NO depende de esto (`src/sha256.rs` es Rust puro) |
+| `net-tls` | rustls+ring+webpki: https/wss + sha/hmac/ed25519/chacha | TLS falible → `Err`-valor; cripto infalible → aborta con error claro; `ray registry publish --sign`/`ray registry verify` no disponibles (fail-closed, explícito). El hash del lockfile NO depende de esto (`src/sha256.rs` es Rust puro) |
 | `ffi` | `libloading`: carga de librerías nativas (`extern fn`) | propiedad "no puede cargar código nativo" (contenedores endurecidos); llamar un `extern fn` → error de ejecución claro |
 | `regex` | el crate `regex` vía `ray-runtime`: la VM despacha las `run_*` de `std/regex` al motor nativo (R7; mismo borde y dialecto que el binario transpilado, R5) | `std/regex` funciona IGUAL (misma salida): la Pike VM raylang se interpreta tal cual — más lenta (~30×), sin pérdida de capacidad. `RAYLANG_REGEX_PIKE=1` fuerza este camino aun con la feature |
+| `watch` | `fs.watch` por eventos del kernel (crate `notify` vía `ray-runtime`) | `fs.watch` → `Err` claro |
+| `unicode` | normalización NFC/NFD/NFKC/NFKD de `std/text` (unicode-normalization) | el builtin → `Err` claro |
+| `audio` | salida PCM de `std/audio` (backends a mano, cero crates) | `std/audio` → `Err` claro |
+| `ui` | ventana + webview de `std/ui` | `std/ui` → `Err` claro |
+| `bigint` | `std/bigint` (num-bigint) | → `Err` claro |
+| `deflate` | DEFLATE/INFLATE de producción (miniz_oxide) | `std/deflate`/`std/inflate` caen a su algoritmo en raylang (mismo resultado, más lento) |
+| `keychain` | el llavero del sistema (`std/keychain`, backends a mano) | → `Err` claro |
+| `qr` | `std/qr` (qrcode) | → `Err` claro |
 
 ### Combos medidos (M3 Pro, jul 2026)
 
@@ -108,12 +116,12 @@ condicionadas por target); el playground embarca solo el lenguaje núcleo.
 
 Todo lo anterior construye la **toolchain** (el binario `ray`/`raylang`: la VM + el
 resto). Distinto es compilar un **programa de usuario** a un ejecutable nativo:
-`ray build --native prog.ray` **transpila el programa a Rust** y lo compila con `rustc`
-a un binario de código máquina (24–61× la VM, byte-idéntico; ver el capítulo del libro
+`ray build --native prog.ray` **transpila el programa a Rust** y lo compila (vía un proyecto Cargo generado con `ray-runtime`;
+`rustc` pelado solo con `--without mimalloc,ahash,fibers`) a un binario de código máquina (24–61× la VM, byte-idéntico; ver el capítulo del libro
 *Compilación a binario nativo* y `docs/transpilador-nativo.md` para el diseño).
 
 ```sh
-ray build --native prog.ray            # rustc -O (opt2), ~0,2 s, portable
+ray build --native prog.ray            # opt-level 2, portable (vía Cargo por defecto)
 ray build --native prog.ray --release  # opt3+lto+cu1, portable a todo el target (1.27.66)
 ray build --native prog.ray --release --cpu native  # + target-cpu=native (no portable)
 ray build --native prog.ray --fast     # int wrapping (sin check de overflow; div/0 sí se chequea)
@@ -134,7 +142,8 @@ del workspace `crates/ray-runtime` (features `tls`/`crypto`/`sqlite`), del que d
 **tanto la VM como el binario transpilado** → paridad por construcción. Si el programa
 usa uno de esos subsistemas, `build --native` genera un proyecto Cargo temporal con
 `ray-runtime` (fuentes incrustadas vía `include_str!`) + la feature detectada y compila
-con `cargo`; si no toca ninguno, compila con `rustc` pelado (rápido, sin red). La caché
+con `cargo`; solo si no toca ninguno **y** se excluyen mimalloc/aHash/fibras (`--without
+mimalloc,ahash,fibers`) compila con `rustc` pelado (rápido, sin red). La caché
 de target es compartida y **persistente** (`~/.ray/native-cache/`, H14): ring/rustls se
 compilan una vez por máquina. Ahí también se persiste el **`Cargo.lock` resuelto**
 (`ray-native.Cargo.lock`, H20): los builds siguientes de esta máquina fijan las mismas
@@ -193,8 +202,8 @@ deja en el formato del SO: `.app` en macOS, directorio + `.desktop` en Linux, di
 ad-hoc) hornea los directorios dados DENTRO del binario (`include_bytes!`): `std/embed` los lee
 por clave ("assets/app.css") con el mismo espacio de nombres que en `ray run` (donde se leen en
 vivo del disco). Un dir configurado que no existe aborta el build (exit 64, nombrando el
-origen). No es un subsistema de ray-runtime: un programa solo-embed conserva la vía `rustc`
-pelada.
+origen). No es un subsistema de ray-runtime: `embed` no añade features ni fuerza por sí solo la vía
+Cargo.
 
 ### 6.c Toolchain autocontenida: un equipo sin Rust
 
@@ -242,9 +251,9 @@ ensamblador con clang. No hace falta ponerlo en el PATH — si está instalado d
 instaladores, `ray build --native` añade su `bin` al PATH del cargo hijo.
 
 > El workspace: el `Cargo.toml` raíz declara `[workspace] members = ["crates/ray-runtime"]`.
-> `ray-runtime` es dep **opcional** (no-wasm) del binario `ray`, activada por `net-tls`
-> (feature `crypto`); su `tls`/`sqlite` solo se enlazan en el proyecto GENERADO del
-> binario transpilado, no en la VM (que compila rustls/rusqlite directo tras sus features).
+> `ray-runtime` es dependencia **obligatoria** del binario `ray` (desde M100); cada feature de la
+> VM activa la homónima de `ray-runtime` (`sqlite`, `tls`/`crypto`, `regex`, …): el mismo código
+> que enlaza el binario transpilado.
 
 ### 6.b Android: el programa como `.so` (modo lib)
 

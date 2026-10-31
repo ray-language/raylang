@@ -135,13 +135,14 @@ pub fn search(p: Pool, query: string, limit: int) -> Result<[Note], string> {
 
 ## 4. Las rutas
 
-La app se construye en una función que recibe el pool. Cada fibra de conexión llama a esa función y
-obtiene su propia copia de la app, pero todas comparten el mismo pool:
+La app se construye en una función que recibe el pool. El servidor la llama en **cada petición**,
+dentro de la fibra que la atiende, así que cada petición tiene su propia copia de la app, pero
+todas comparten el mismo pool:
 
 <!-- check: project=examples/apps/notes-api -->
 ```rust
-// The routes. The pool is created once in `main`; this function builds the app for each
-// connection's fiber and captures the pool, which every fiber shares through its channel.
+// The routes. The pool is created once in `main`; this function builds the app for every
+// request, in its own fiber, and captures the pool, which every fiber shares through its channel.
 fn routes(db: Pool, token: string) -> App {
     var app = new_app();
     app.log_requests();

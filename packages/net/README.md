@@ -7,8 +7,8 @@ las `std/` embebidas para lo fundacional (`from std/base64 import …`).
 
 Este es el **tier 2** del ecosistema (paquete adicional, no embebido). La regla de qué va aquí vs. en `std/`
 vs. como demo en `examples/` está en la **política de tiers** ([DESIGN.md](../../DESIGN.md) §53); la
-instalación por nombre desde un registro central se diseña en §54 (M51). Hoy se consume por dependencia de
-ruta/git en `ray.toml`.
+instalación es por nombre desde el índice (`ray add net`); la dependencia de ruta/git en `ray.toml` queda
+para el monorepo o un pin sin índice.
 
 **Criptografía de producción (M43)**: el módulo `net/crypto` expone SHA/HMAC/Ed25519 respaldados por
 `ring` (tiempo constante, auditado) en la forma (`[int]`/hex) que estos módulos consumen. Las
@@ -23,7 +23,7 @@ lo escribe por ti; con el índice oficial por defecto no hay nada que configurar
 
 ```toml
 [dependencies]
-net = "^0.11"
+net = "^0.15"
 ```
 
 Si desarrollas en el monorepo, por ruta (`net = "path:../ruta/a/packages/net"`); la dependencia
@@ -235,7 +235,7 @@ fn main() -> int {
   ambiguo (error), y una conexión keep-alive (`Conn`, `Pool`) a la que le sobran octetos tras una
   respuesta se descarta en vez de entregarlos como la respuesta siguiente. HTTPS con `serve_tls`/`serve_raw_tls[_limits]
   (M56.3: cert/clave en PEM; upgrade TLS por conexión, en su fibra). Un handler que panica responde
-  500 y cierra su conexión sin tumbar el servidor ni fugar recursos (M56.5, vía `try_join`).
+  500 y cierra su conexión sin tumbar el servidor ni fugar recursos (M56.5; desde M97.2 vía `try_call`, en la fibra de la conexión).
   `serve`/`serve_tls` mantienen la conexión viva entre peticiones (M56.6: keep-alive HTTP/1.1;
   honran `Connection: close` y el ocio lo corta el read timeout); `serve_raw` sigue siendo
   una-petición-y-cerrar (el handler crudo posee la conexión — SSE). Varias cookies por respuesta

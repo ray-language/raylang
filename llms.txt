@@ -62,8 +62,8 @@ messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (
   used as an identifier (rename it)» (call it `size`). Type aliases exist since 1.27.13 (`type
   Handler = …;`, `pub type` exports; see the canonical forms below).
 - Server handlers (web/rpc/gRPC) receive a COPY of what they capture: fiber heaps are isolated,
-  so a captured `Map` mutated inside a handler does not persist — per connection on the VM
-  (one connection "works"), per call on native. Shared state lives in a database or an actor
+  so a captured `Map` mutated inside a handler does not persist across connections (VM and
+  native alike); with `web` the app builder runs on EVERY request, so not even across requests. Shared state lives in a database or an actor
   fiber reached through channels; never in a captured value.
 - `signals()` also delivers SIGWINCH (28, terminal resize): a graceful-shutdown loop must
   check the value (15/2), not stop on "any signal" (`webserver.shutdown_signals()` is that filter).
@@ -204,7 +204,7 @@ them qualified: `regex.Regex` in a signature, `json.Json.JObject(m)` in a patter
 `dir/mod.ray` file makes `dir/` an importable capsule (`import dir;`) whose internals
 are private. Inside a module, calls to its own functions and UFCS both resolve
 module-locally. Dependencies live in `ray.toml` `[dependencies]`, ALWAYS as a quoted string:
-`net = "^0.10"` (a version from the index; `ray add net` writes it), `oidc = "path:../oidc"` (a
+`net = "^0.15"` (a version from the index; `ray add net` writes it), `oidc = "path:../oidc"` (a
 local directory, relative to the project root) or `geo = "git+https://host/geo@v1.0"` (the
 package is the ROOT of that repo — there is no subdirectory syntax; a package that lives inside a
 bigger repo is published as its own repo with `ray registry mirror`). No inline tables
@@ -619,8 +619,13 @@ over h2c with a `Router`, `net/grpc_conn` persistent client h2c/TLS, `net/grpc_s
 messages are protobuf bytes from `std/protobuf` — codecs are hand-written, no `.proto`
 generator yet; infra: `net/udp` — UDP datagrams, `bind(host, port)`, `send_to(h, host, port,
 data)`, `recv_from(h) -> Result<Packet{host, port, data}, string>`, yields the fiber and honors
-`net.set_read_timeout`; `net.set_write_timeout(h, ms)` bounds a write to a peer that stops reading ("write timeout", since 1.27.78) — plus `net/dns`, `net/redis`, `net/postgres`; `std/net` itself is TCP
-only, so UDP needs `ray add net`), `web` (an Express-style app framework
+`net.set_read_timeout`; `net.set_write_timeout(h, ms)` bounds a write to a peer that stops reading ("write timeout", since 1.27.78) — plus `net/dns`, `net/dns_message` (server-side DNS codec: `parse_query`, `write_response`,
+net 0.14), `net/redis`, `net/postgres`, `net/sigv4` (AWS SigV4: client `sign` + server-side
+`parse_authorization`/`verify`/`presign`, net 0.14), `net/smtp`, `net/ntp`; `webserver` request
+body on demand: `serve_options(host, port, options().with_body_stream(), handler)` → `req.body`
+empty, read it with `next_body_chunk(req)`/`read_body(req, max)`; `pass_too_large()` hands an
+oversized body to the handler (`body_too_large(req)`) to answer its own 413 (net 0.15); `std/net`
+itself is TCP only, so UDP needs `ray add net`), `web` (an Express-style app framework
 over it — routing, middleware, sessions, `static_embedded` for `[native] embed` assets;
 the recommended base for servers and for desktop/mobile app backends with `std/ui`),
 `rpc`, `db` and `elements` (ray-elements, the web-components design system for `std/ui`
@@ -638,7 +643,7 @@ If your client supports MCP, `ray mcp` exposes this loop as tools — `ray_check
 diagnostics), `ray_run`, `ray_test`, `ray_fmt`, `ray_doc` (a bare module name like "std/kv"
 or "std/collections/deque" lists its whole public surface — constants included; with `path`,
 also a project or package module like "web/framework") — sandboxed (instruction fuel +
-heap cap + wall deadline), plus this file as the resource `raylang://llms.txt`. Connect it
+heap cap + wall deadline), plus two resources: this file (`raylang://llms.txt`) and the full catalog (`raylang://reference.md`). Connect it
 with `claude mcp add raylang -- ray mcp` (details in docs/mcp.md).
 
 Work like a developer, not a snippet machine: for anything beyond a one-file experiment,

@@ -2,9 +2,9 @@
 //
 // Como http.ray/json.ray: cero runtime, cero builtins nuevos; puro raylang + stdlib, importable. Se
 // apoya en el servidor concurrente de M15.5/M17 (tcp_listen/tcp_accept/socket_read/socket_write ceden
-// al scheduler → muchas conexiones a la vez en un hilo, readiness por kqueue/epoll). Corre en la **VM
-// y en el binario nativo** (fibras en ambos; verificado en producción por raygate, ~5.5k req/s
-// nativo); el único motor sin concurrencia es el intérprete (`--interp`, el oráculo de desarrollo).
+// al scheduler → muchas conexiones a la vez sobre el scheduler M:N de fibras, N hilos worker,
+// readiness por kqueue/epoll). Corre en la **VM y en el binario nativo** (fibras en ambos; medido en
+// docs/web-framework.md); el único motor sin concurrencia es el intérprete (`--interp`, el oráculo de desarrollo).
 //
 // M19.2: el cuerpo (de la petición y de la respuesta) es **bytes** → binario correcto (imágenes, etc.),
 // no solo texto. Las cabeceras siguen siendo texto (ASCII). Los atajos de respuesta de texto (ok/text/
@@ -3155,14 +3155,14 @@ pub fn serve_limits(
 }
 
 // --- serve_with (M93.3): el handler viene de una FACTORÍA ---
-// La factoría cruza los hilos como función plana (Send) y el handler (con sus closures/estado)
-// nace DENTRO de la tarea de cada petición — compatible con el backend nativo (actores de heap
-// aislado): el framework web arranca por aquí. Se construye POR PETICIÓN, no por conexión: el
-// aislamiento panic→500 (M56.5) corre cada petición en su propia tarea, así que el handler
-// cruzaría OTRO hilo igualmente. Handler por conexión (construir una vez y reusar en el
-// keep-alive) queda diferido: exigiría catch_unwind en el nativo o defuncionalización.
+// La factoría cruza a las fibras de conexión como función plana y el handler (con sus
+// closures/estado) nace DENTRO de la fibra de la conexión, una vez por petición — compatible con
+// el backend nativo (actores de heap aislado): el framework web arranca por aquí. Se construye
+// POR PETICIÓN, no por conexión; el aislamiento panic→500 es `try_call` en esa misma fibra
+// (M97.2). Handler por conexión (construir una vez y reusar en el keep-alive) queda diferido.
 /// Like `serve`, but takes a handler FACTORY: each request builds its handler via
-/// `make_handler()` inside its own task. The factory crosses threads as a plain function while
+/// `make_handler()` inside the connection's fiber (a panic is recovered with `try_call` and
+/// answered 500). The factory crosses to the connection fibers as a plain function while
 /// the handler (closures, state) never does — the form that also compiles with
 /// `ray build --native` (M93.3). Blocks forever.
 pub fn serve_with(

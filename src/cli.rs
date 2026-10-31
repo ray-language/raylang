@@ -3993,7 +3993,10 @@ fn gitignore_excludes(root: &Path, name: &str) -> bool {
 /// del usuario (y los limpie `cargo clean`); sirve también para CI o discos secundarios.
 fn native_cache_dir() -> std::path::PathBuf {
     if let Some(dir) = std::env::var_os("RAY_NATIVE_CACHE").filter(|d| !d.is_empty()) {
-        return PathBuf::from(dir);
+        // Absoluta SIEMPRE: cargo resuelve `CARGO_TARGET_DIR` contra SU cwd (el proyecto temporal) y
+        // `ray` contra el suyo; una ruta relativa los haría discrepar (binario "no encontrado").
+        let dir = PathBuf::from(dir);
+        return if dir.is_absolute() { dir } else { std::env::current_dir().map(|c| c.join(&dir)).unwrap_or(dir) };
     }
     match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         Some(home) => Path::new(&home).join(".ray").join("native-cache"),
@@ -4014,7 +4017,8 @@ const NATIVE_CACHE_MAX_PROGRAMS: usize = 32;
 /// entradas de `deps/`, `incremental/` y `.fingerprint/` (`<pkg>-<hash cargo>[.ext]`).
 fn native_cache_program_pkg(name: &str) -> Option<String> {
     // `<pkg>` = `<stem>_xxxxxxxx` (el stem puede llevar `-` en el binario; en `deps/` cargo lo vuelve
-    // `_`); después viene el final, `-<hash cargo>` o una extensión. Se busca el PRIMER `_<8 hex>`
+    // `_`, por eso el grupo devuelto va SIEMPRE con `_`); después viene el final, `-<hash cargo>` o
+    // una extensión. Se busca el PRIMER `_<8 hex>`
     // seguido de fin/`-`/`.`, de izquierda a derecha, para no confundir el hash con el de cargo.
     let bytes = name.as_bytes();
     for (i, b) in bytes.iter().enumerate() {
@@ -4032,14 +4036,14 @@ fn native_cache_program_pkg(name: &str) -> Option<String> {
         // `lib` queda agrupado en dos mitades: la política es la misma para ambas, no importa.)
         let pkg = &name[..end];
         let pkg = pkg.strip_prefix("lib").filter(|rest| rest.len() > 9).unwrap_or(pkg);
-        return Some(pkg.to_string());
+        return Some(pkg.replace('-', "_"));
     }
     None
 }
 
 /// M437: poda de la caché nativa. Cargo nunca borra nada: cada programa (ruta canónica distinta → pkg
 /// distinto, H14) dejaba para siempre sus objetos en `deps/`, su directorio `incremental/` y su
-/// binario — 160 GB medidos en la máquina del autor, casi todo de fixtures de tests. Los artefactos de
+/// binario — 198 GB medidos en la máquina del autor, casi todo de fixtures de tests. Los artefactos de
 /// un programa solo sirven mientras su fuente no cambie, así que retirarlos cuesta como mucho
 /// recompilar ESE programa; las dependencias del runtime (lo caro) nunca se tocan.
 ///
@@ -4093,11 +4097,20 @@ fn prune_native_cache(cache: &Path, keep: Option<&str>) -> usize {
             }
         };
         scan(&profile);
-        for sub in ["deps", "incremental", ".fingerprint"] {
+        for sub in ["deps", ".fingerprint"] {
             scan(&profile.join(sub));
         }
+        // `incremental/` es peso muerto entero: los builds ya no son incrementales (CARGO_INCREMENTAL=0),
+        // así que lo que haya ahí —de versiones anteriores de `ray`— se retira sin edad ni cupo.
+        if let Ok(rd) = fs::read_dir(profile.join("incremental")) {
+            for e in rd.flatten() {
+                let _ = if e.path().is_dir() { fs::remove_dir_all(e.path()) } else { fs::remove_file(e.path()) };
+            }
+        }
+        // `keep` llega como el pkg crudo de cargo (`my-app_1a2b3c4d`); los grupos van normalizados.
+        let keep_group = keep.and_then(native_cache_program_pkg);
         let mut ranked: Vec<(String, SystemTime, Vec<PathBuf>)> =
-            programs.into_iter().filter(|(pkg, _)| Some(pkg.as_str()) != keep).map(|(k, (t, v))| (k, t, v)).collect();
+            programs.into_iter().filter(|(pkg, _)| Some(pkg) != keep_group.as_ref()).map(|(k, (t, v))| (k, t, v)).collect();
         ranked.sort_by_key(|r| std::cmp::Reverse(r.1)); // más reciente primero
         let budget = NATIVE_CACHE_MAX_PROGRAMS.saturating_sub(usize::from(keep.is_some()));
         for (i, (_pkg, mtime, paths)) in ranked.into_iter().enumerate() {
@@ -4175,6 +4188,12 @@ fn cmd_clean(args: &[String]) {
     println!("  {:>10}  total", human_size(total));
     if dry_run {
         return;
+    }
+    // Guarda: solo se borra lo que cargo marcó como caché (`CACHEDIR.TAG` lo escribe en todo target
+    // dir). Un `RAY_NATIVE_CACHE=$HOME/.ray` por error no puede llevarse la toolchain ni las claves.
+    if !cache.join("CACHEDIR.TAG").is_file() {
+        eprintln!("ray clean: {} does not look like a native build cache (no CACHEDIR.TAG); nothing removed", cache.display());
+        process::exit(65);
     }
     if let Err(e) = fs::remove_dir_all(&cache) {
         eprintln!("ray clean: could not remove {}: {e}", cache.display());
@@ -6750,7 +6769,8 @@ mod tests {
         assert_eq!(pkg("main_6a2f893b-1f2e3d4c5b6a7988.d").as_deref(), Some("main_6a2f893b"));
         assert_eq!(pkg("libprog_d266295e.a").as_deref(), Some("prog_d266295e"));
         assert_eq!(pkg("libprog_d266295e-1f2e3d4c.rlib").as_deref(), Some("prog_d266295e"));
-        assert_eq!(pkg("my-app_1a2b3c4d").as_deref(), Some("my-app_1a2b3c4d"));
+        assert_eq!(pkg("my-app_1a2b3c4d").as_deref(), Some("my_app_1a2b3c4d"));
+        assert_eq!(pkg("libmy_app_1a2b3c4d.a").as_deref(), Some("my_app_1a2b3c4d"));
         assert_eq!(pkg("__sqlite_err_test_b1f3be09").as_deref(), Some("__sqlite_err_test_b1f3be09"));
         for dep in ["libring-0a1b2c3d4e5f6789.rlib", "ray_runtime-0a1b2c3d4e5f6789", "ring-0a1b2c3d4e5f6789", "libc-0a1b2c3d", "rustls_pki_types-1234567890abcdef", "build", "deps", ".fingerprint", "ray-native.Cargo.lock", "CACHEDIR.TAG"] {
             assert_eq!(pkg(dep), None, "{dep}");
@@ -6773,7 +6793,16 @@ mod tests {
                 std::fs::write(&p, b"x").unwrap();
             }
             let t = SystemTime::now() - Duration::from_secs(age_days * 24 * 3600);
-            std::fs::File::open(&p).unwrap().set_modified(t).unwrap();
+            // La poda mira la mtime de la ENTRADA (también si es un directorio). Abrir un directorio
+            // en Windows exige FILE_FLAG_BACKUP_SEMANTICS.
+            let mut opts = std::fs::File::options();
+            opts.read(true);
+            #[cfg(windows)]
+            {
+                use std::os::windows::fs::OpenOptionsExt;
+                opts.custom_flags(0x0200_0000); // FILE_FLAG_BACKUP_SEMANTICS
+            }
+            opts.open(&p).unwrap().set_modified(t).unwrap();
         };
         // Programa viejo (10 días) con todas sus piezas, en debug y bajo un triple.
         for prof in ["debug", "aarch64-apple-ios/release"] {
@@ -6787,19 +6816,26 @@ mod tests {
             touch(&format!("{prof}/deps/libray_runtime-eeee.rlib"), 30);
             touch(&format!("{prof}/build/ring-ffff/"), 30);
         }
-        // El recién compilado, con una pieza vieja (un build en curso toca sus entradas una a una).
-        touch("debug/cur_22222222", 0);
-        touch("debug/deps/cur_22222222-aaaa.o", 10);
+        // El recién compilado (pkg crudo con guion, como lo nombra cargo), con una pieza vieja (un build
+        // en curso toca sus entradas una a una) y su lib normalizada con `_`.
+        touch("debug/cur-x_22222222", 0);
+        touch("debug/deps/cur_x_22222222-aaaa.o", 10);
+        touch("debug/libcur_x_22222222.a", 10);
+        // Un `incremental/` reciente de otra versión de ray: peso muerto, se va aunque sea de hoy.
+        touch("debug/incremental/fresh_00000000-zzzz/", 0);
         // Programas recientes de sobra: 40 > cupo (32 − 1 por `keep`).
         for i in 0..40u32 {
             touch(&format!("debug/deps/fresh_{i:08x}-aaaa.o"), 1 + (i as u64 % 3));
         }
-        let removed = super::prune_native_cache(&cache, Some("cur_22222222"));
+        let removed = super::prune_native_cache(&cache, Some("cur-x_22222222"));
         assert_eq!(removed, 2 + (40 - 31), "viejos en ambos perfiles + los que exceden el cupo");
         assert!(!cache.join("debug/old_11111111").exists());
         assert!(!cache.join("debug/incremental/old_11111111-bbbb").exists());
         assert!(!cache.join("aarch64-apple-ios/release/deps/old_11111111-aaaa.o").exists());
-        assert!(cache.join("debug/cur_22222222").exists() && cache.join("debug/deps/cur_22222222-aaaa.o").exists());
+        assert!(cache.join("debug/cur-x_22222222").exists() && cache.join("debug/deps/cur_x_22222222-aaaa.o").exists());
+        assert!(cache.join("debug/libcur_x_22222222.a").exists());
+        assert!(!cache.join("debug/incremental/fresh_00000000-zzzz").exists());
+        assert!(!cache.join("debug/incremental/old_11111111-bbbb").exists());
         assert!(cache.join("debug/deps/libring-dddd.rlib").exists());
         assert!(cache.join("aarch64-apple-ios/release/deps/libray_runtime-eeee.rlib").exists());
         assert!(cache.join("debug/build/ring-ffff").is_dir());

@@ -164,6 +164,12 @@ subsistemas.
 
 ### 3.3 Decisión (acordada con Roberto, 15 jul 2026): **bajo demanda (núcleo) + camino rápido preservado + flags como override**
 
+> **Caché (M437, oct 2026).** El `CARGO_TARGET_DIR` compartido vive en `~/.ray/native-cache` (o donde
+> diga `RAY_NATIVE_CACHE`, siempre absoluto); la suite del repo usa `target/ray-native-cache`
+> (`.cargo/config.toml`). Cada build poda los programas sin usar en 7 días (máximo 32 por perfil) y
+> vacía `incremental/`; las deps del runtime nunca se tocan. `ray clean [--dry-run]` la vacía entera.
+
+
 1. **Detección bajo demanda** (el núcleo, opción 2): nuevos flags `needs_rt_*` que se activan al
    interceptar la feature correspondiente. Se materializan como **features de Cargo de un único
    crate `ray-runtime`** (el diseño detallado en §4) — NO como una lista de crates que el

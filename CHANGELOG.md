@@ -28,6 +28,10 @@ La caché de builds nativos acotada (M437) y la documentación puesta al día co
   runtime nunca se tocan), y `RAY_NATIVE_CACHE` reubica la caché (la suite del repo usa
   `target/ray-native-cache`). Nuevo **`ray clean [--dry-run]`**: informa de lo que ocupa cada
   target y vacía la caché; el siguiente build recompila las dependencias del runtime.
+  Tras el code-review previo a release: `RAY_NATIVE_CACHE` relativa se absolutiza (cargo y `ray`
+  la resolvían contra cwd distintos), `ray clean` se niega a borrar un directorio sin
+  `CACHEDIR.TAG`, la poda normaliza el nombre del programa recién compilado (`-`→`_`) y vacía
+  `incremental/` entero (peso muerto sin incremental).
 
 ## 1.27.87 — 2026-10-30
 

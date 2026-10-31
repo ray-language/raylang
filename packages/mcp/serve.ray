@@ -487,7 +487,7 @@ pub fn answer(p: Provider, req: Request) -> Response {
 
 /// Serves over Streamable HTTP on a listener opened with `net.tcp_listen` (bind to port 0 and
 /// read `net.local_port` to pick a free port). `build` is a TOP-LEVEL function that returns the
-/// provider: every connection runs in its own fiber and builds its own copy, so state shared
+/// provider: every request builds its own copy (inside the connection's fiber), so state shared
 /// between requests lives in a database or behind a channel, never in a captured variable.
 /// Blocks; `Err` only on a broken listener.
 pub fn http_on(build: fn() -> Provider, listener: int) -> Result<int, string> {

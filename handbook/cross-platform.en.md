@@ -44,7 +44,8 @@ package index. One command adds it:
 ray add db
 ```
 
-`ray add` finds the latest version, downloads it into `.ray-deps/` and declares it in `ray.toml`:
+`ray add` finds the latest version, downloads it into `.ray-deps/` and declares it in `ray.toml`
+(the version is the one current when the example app was written; today it writes a newer one):
 
 ```toml
 [dependencies]
@@ -399,4 +400,4 @@ together with automatic updates.
 [**Windows in depth**](windows.en.md): everything else `std/ui` offers a desktop app, with a text
 editor as the example.
 
-<!-- sync: sha256:b5a37280a835 -->
+<!-- sync: sha256:c99a4675f09b -->

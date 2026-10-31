@@ -45,7 +45,8 @@ paquetes de raylang. Se añade con un comando:
 ray add db
 ```
 
-`ray add` busca la última versión, la descarga a `.ray-deps/` y la declara en el `ray.toml`:
+`ray add` busca la última versión, la descarga a `.ray-deps/` y la declara en el `ray.toml` (la
+versión es la que había al escribir la app de ejemplo; hoy escribirá una más nueva):
 
 ```toml
 [dependencies]

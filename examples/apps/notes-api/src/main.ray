@@ -48,8 +48,8 @@ fn note_input(c: Ctx) -> Result<(string, string), string> {
     Result.Ok((title, text_))
 }
 
-// The routes. The pool is created once in `main`; this function builds the app for each
-// connection's fiber and captures the pool, which every fiber shares through its channel.
+// The routes. The pool is created once in `main`; this function builds the app for every
+// request, in its own fiber, and captures the pool, which every fiber shares through its channel.
 fn routes(db: Pool, token: string) -> App {
     var app = new_app();
     app.log_requests();

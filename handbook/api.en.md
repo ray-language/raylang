@@ -134,13 +134,14 @@ pub fn search(p: Pool, query: string, limit: int) -> Result<[Note], string> {
 
 ## 4. The routes
 
-The app is built by a function that receives the pool. Each connection's fiber calls it and gets
-its own copy of the app, but they all share the same pool:
+The app is built by a function that receives the pool. The server calls it on **every request**,
+inside the fiber serving it, so each request gets its own copy of the app, but they all share
+the same pool:
 
 <!-- check: project=examples/apps/notes-api -->
 ```rust
-// The routes. The pool is created once in `main`; this function builds the app for each
-// connection's fiber and captures the pool, which every fiber shares through its channel.
+// The routes. The pool is created once in `main`; this function builds the app for every
+// request, in its own fiber, and captures the pool, which every fiber shares through its channel.
 fn routes(db: Pool, token: string) -> App {
     var app = new_app();
     app.log_requests();
@@ -421,4 +422,4 @@ What a production environment expects from a service, and how this one meets it:
 A [**site with a React frontend**](web-react.en.md) embedded in the binary and a JSON API behind it,
 with the notes in Redis.
 
-<!-- sync: sha256:40b65fdb56a4 -->
+<!-- sync: sha256:d5478737346c -->

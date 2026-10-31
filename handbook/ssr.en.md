@@ -70,7 +70,7 @@ are `POST` too:
 ## 2. The server
 
 The application is built by a top-level function. The server runs every connection in its own
-fiber, with isolated memory, and each fiber calls that function to get its own copy of the app.
+fiber, with isolated memory, and calls that function on every request to get its own copy of the app.
 That is why the same code runs the same on the VM and compiled to a native binary.
 
 <!-- check: project=examples/apps/notes-ssr -->
@@ -287,7 +287,8 @@ fn the_note_page_renders_markdown_safely() {
 
 ## 5. Files as shared state
 
-Each connection runs in its fiber with its own memory: two requests never share a variable. On
+Each connection runs in its fiber with its own memory and the app is built per request: two
+requests never share a variable. On
 this site, what they share is the **disk**. Each note is a JSON file and every write is atomic:
 
 <!-- check: project=examples/apps/notes-ssr -->
@@ -430,4 +431,4 @@ WantedBy=multi-user.target
 The same kind of server, without pages: a [**web API**](api.en.md) that answers JSON, with
 Postgres and a connection pool.
 
-<!-- sync: sha256:649199af7f81 -->
+<!-- sync: sha256:43eac116b8b9 -->

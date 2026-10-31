@@ -55,6 +55,7 @@ ray run                    # ejecuta src/main.ray en la VM
 [package]
 name = "hola"
 version = "0.1.0"
+raylang = "1.27.87"   # la versión mínima de raylang: la del toolchain que creó el proyecto
 
 [dependencies]
 ```
@@ -74,7 +75,7 @@ El ciclo de trabajo tiene cuatro comandos:
 ```sh
 ray dev                    # recompila y reinicia al guardar
 ray test                   # corre las funciones @test
-ray fmt --write src/       # formato canónico
+ray fmt --write src/*.ray  # formato canónico (admite varios archivos)
 ray build --native         # binario nativo, con la misma salida que la VM
 ```
 
@@ -105,7 +106,8 @@ Los paquetes oficiales son `net` (HTTP/1.1 y 2, WebSocket, DNS, TLS, gRPC), `web
 aplicación al estilo Express), `rpc`, `db` (Postgres, MySQL, SQLite, Redis, MongoDB), `tz`, `cron`, y
 los tres de agentes: `llm` (hablar con un modelo), `mcp` (herramientas por el Model Context
 Protocol) y `agent` (el bucle que los une); y `oidc` (iniciar sesión con un proveedor OpenID
-Connect y aceptar sus tokens).
+Connect y aceptar sus tokens); y `yaml` (leer y escribir YAML 1.2) y `zip` (leer y escribir
+archivos ZIP).
 Las versiones quedan fijadas en `ray.lock` con su hash. Los paquetes se descargan a `.ray-deps/`,
 que no va al control de versiones: tras clonar un proyecto, `ray fetch` los vuelve a bajar.
 
@@ -113,7 +115,7 @@ Una dependencia es siempre una cadena, con tres formas:
 
 ```toml
 [dependencies]
-web = "^0.6"                              # una versión del índice (lo que escribe `ray add`)
+web = "^0.6.0"                            # una versión del índice (lo que escribe `ray add`)
 oidc = "path:../oidc"                     # un directorio local, relativo a la raíz del proyecto
 geo = "git+https://host/geo@v1.0"         # un repositorio git en una etiqueta o commit
 ```
@@ -452,7 +454,7 @@ detalle está en [docs/mcp.md](../docs/mcp.md).
 | `ray run` / `ray dev` | ejecutar en la VM / modo desarrollo con reinicio y recarga del navegador |
 | `ray check` | comprueba que el programa compila, sin ejecutarlo |
 | `ray test` | las funciones `@test`; `--watch` vuelve a correr al guardar |
-| `ray fmt --write src/` | formato canónico (conserva tus paréntesis y comentarios) |
+| `ray fmt --write src/*.ray` | formato canónico (conserva tus paréntesis y comentarios) |
 | `ray build --native --release` | binario nativo optimizado |
 | `ray bundle` | app de escritorio (`.app`, `.desktop`, `.exe`) o proyecto iOS (`--ios`) y Android (`--android`) |
 | `ray dev --device` | recarga en caliente del programa en el teléfono |

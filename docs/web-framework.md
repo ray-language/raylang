@@ -5,7 +5,8 @@ servidor HTTP de producción). Este documento es la guía de uso; el diseño y s
 en [DESIGN.md](../DESIGN.md).
 
 > **VM o binario nativo**: el servidor es concurrente — cada conexión corre en su
-> propia fibra (VM: el scheduler de fibras; nativo: hilos con heap aislado). El mismo fuente corre
+> propia fibra con heap aislado, sobre el scheduler M:N de fibras (el mismo modelo en la VM y en
+> el binario nativo; `--without fibers` recupera un hilo por tarea). El mismo fuente corre
 > con `ray run`/`ray dev` y compila con `ray build --native`. El intérprete (`--interp`) da un
 > error limpio.
 
@@ -18,14 +19,15 @@ ray add web        # descarga web y net (del que depende) y los declara en ray.t
 ```toml
 # ray.toml
 [dependencies]
-web = "^0.4.6"
+web = "^0.6"
 ```
 
 ```rust
 from web/framework import new_app, GET, listen, text, App, Ctx, Res;
 
-// La app se construye en una función TOP-LEVEL (patrón builder): la fibra de cada conexión la
-// llama UNA vez — el mismo fuente corre en la VM y compila con `ray build --native`.
+// La app se construye en una función TOP-LEVEL (patrón builder): cada petición la llama
+// (también las keep-alive de una misma conexión) — el mismo fuente corre en la VM y compila
+// con `ray build --native`.
 fn build_app() -> App {
     var app = new_app();
     app.GET("/", fn(c: Ctx, r: Res) {
@@ -79,6 +81,10 @@ app.GET_re("^/v(\\d+)/estado$", handler);  // regex sobre el path entero (ancla 
 - Un **HEAD** enruta como GET; el servidor responde las cabeceras sin el cuerpo (RFC 9110).
 - El cuerpo llega con `c.body()` (texto UTF-8; `""` si no es texto) o crudo en `c.req.body`
   (`bytes`). El resto de la petición está en `c.req` (`webserver.Request`: `headers`, `version`…).
+  Con `listen_with(build, host, port, options().with_body_stream())` el cuerpo **no** se lee por
+  adelantado: `c.req.body` llega vacío y el handler lo consume por trozos con
+  `webserver.next_body_chunk(c.req)` o entero con `webserver.read_body(c.req, max)` (net ≥ 0.15.0;
+  un cuerpo mayor que el límite lo decide el handler con `pass_too_large`/`body_too_large`).
 
 ### El contexto conecta la stdlib
 
@@ -309,6 +315,7 @@ listen(build_app, "0.0.0.0", 8080);                        // keep-alive + lími
 listen_tls(build_app, "0.0.0.0", 8443, cert_pem, key_pem); // HTTPS (rustls)
 listen_graceful(build_app, "0.0.0.0", 8080, 5000);         // SIGTERM/SIGINT → drena 5 s, sale 0
 listen_limits(build_app, "0.0.0.0", 8080, mis_limits);     // webserver.Limits explícitos
+listen_with(build_app, "0.0.0.0", 8080, options().with_limits(mis_limits).with_drain(5000).with_tls(cert_pem, key_pem)); // combinadas (+ .with_stop(ch), .quiet(), .with_body_stream())
 ```
 
 **Apps de escritorio y móvil.** Si la ventana carga desde un servidor local, usa
@@ -318,12 +325,12 @@ recibe 403 (token obligatorio + guarda de origen). Sin backend HTTP, mejor `ray:
 abre puerto alguno. Detalle en SECURITY.md «Servidores locales en apps de escritorio y móvil».
 
 Por qué el builder y no una `App` construida: una `App` contiene **closures** (los handlers) y
-el modelo de actores de heap aislado no deja que un closure cruce hilos en el backend nativo. El
-builder cruza como función plana y la `App` se construye **dentro de la tarea de cada petición**
-(`webserver.serve_with`; cada petición corre aislada en su tarea y un `panic` se convierte en un 500) —
-el mismo fuente corre en la VM y compila con `ray build --native`. El registro es barato;
-construir la App una vez por conexión (reusarla en el keep-alive) queda diferido (exigiría
-`catch_unwind` en nativo o defuncionalización). Consecuencia del modelo: el estado del builder
+el modelo de actores de heap aislado no deja que un closure cruce de una tarea a otra en el backend nativo. El
+builder cruza como función plana y la `App` se construye **en cada petición**, dentro de la fibra
+de la conexión (`webserver.serve_with`; un `panic` del handler se recupera con `try_call` y se
+responde 500) — el mismo fuente corre en la VM y compila con `ray build --native`. El registro es
+barato; construir la App una vez por conexión (reusarla en el keep-alive) queda diferido.
+Consecuencia del modelo: el estado del builder
 es **por petición**; el estado compartido va por canales a una fibra que lo posee (ver
 `examples/web/ssr/README.md`).
 
@@ -352,7 +359,7 @@ navegador** (la página se refresca sola al reiniciar; el snippet reintenta hast
 vuelve). Con `--port N` además el supervisor retiene el socket (cero conexiones rechazadas al
 reiniciar) y la app puede leer el puerto con `env("RAY_LISTEN_ADDR")` (`"host:puerto"`).
 
-Nota de diseño: raylang usa actores de heap aislado — cada conexión ve su propia copia del estado.
+Nota de diseño: raylang usa actores de heap aislado — cada fibra (y, con el builder, cada petición) ve su propia copia del estado.
 Lo idiomático es el **handler puro** (la respuesta como función de la petición); el estado
 compartido va por canales a una fibra que lo posee (ver `examples/web/ssr/README.md`).
 

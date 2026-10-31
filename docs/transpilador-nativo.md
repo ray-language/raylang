@@ -1,4 +1,11 @@
-# El transpilador nativo (`ray build --native`) — estado actual y rumbo de las dependencias externas
+# El transpilador nativo (`ray build --native`) — diseño y crónica
+
+> **Nota (oct 2026).** Los §1–§2 son la foto de **julio de 2026**, anterior a `ray-runtime`, y se
+> conservan como punto de partida de la crónica que sigue (H1…, N1…). Lo vigente: el build va por un
+> proyecto Cargo generado con `ray-runtime` (mimalloc, aHash y **fibras M:N** por defecto; TLS, cripto
+> y SQLite se enlazan cuando el programa los usa; `rustc` pelado solo con `--without
+> mimalloc,ahash,fibers`), el código vive en el directorio `src/transpile/` y `build_native` en
+> `src/cli.rs`. Ver `docs/build.md` §6 y `docs/diseno-concurrencia-nativa.md`.
 
 > Documento de referencia del **arco P2.b** (jul 2026). Complementa a `PERFORMANCE.md` (crónica
 > fase a fase, con mediciones) fijando: (1) una foto de la implementación actual, (2) el análisis
@@ -8,7 +15,7 @@
 
 ## 1. Qué es
 
-El transpilador (`src/transpile.rs`) es el **tercer backend** de raylang: traduce el programa
+El transpilador (hoy `src/transpile/`; entonces `src/transpile.rs`) es el **tercer backend** de raylang: traduce el programa
 **ya chequeado** a código Rust y lo compila a un **binario nativo**. El modelo es
 **dev = VM / deploy = nativo** (como el ciclo dev/release de Rust): la VM da el arranque
 instantáneo y el REPL; el binario nativo da la velocidad (24–61× sobre la VM; fib gana a node
@@ -22,7 +29,7 @@ fuente → [loader] → [checker] → AST bajado → [transpile.rs] → .rs → 
 
 ## 2. Implementación actual
 
-### 2.1 El CLI (`src/cli.rs::build_native`, ~línea 416)
+### 2.1 El CLI (`src/cli.rs::build_native`; foto de jul 2026)
 
 - `ray build --native [-o salida] [--release]`. Re-carga y re-chequea la entrada, llama a
   `transpile::transpile(&program)`, escribe el Rust a un temporal
@@ -34,7 +41,7 @@ fuente → [loader] → [checker] → AST bajado → [transpile.rs] → .rs → 
   1.27.66, rayffi #216: antes `--release` fijaba `native` y el binario no era portable). PGO
   descartado por medición.
 
-### 2.2 El transpilador (`src/transpile.rs`, ~4.300 líneas)
+### 2.2 El transpilador (`src/transpile.rs`, ~4.300 líneas entonces; hoy `src/transpile/`)
 
 **Modelo de valores** (espejo del intérprete): escalares *unboxed* (`i64`/`f64`/`bool`/`char`),
 `string → Rc<str>`, `bytes → Rc<[u8]>`, arreglos → `Rc<RefCell<Vec<T>>>`, `Map` →
@@ -51,7 +58,7 @@ comparaciones directas siguen bajando a `<`); `print`/`to_string` vía un trait 
 `Transpiler` lleva flags `needs_handles` / `needs_concurrency` / `needs_signals` /
 `needs_time_rng` / `needs_net` que se **activan al toparse el uso** (un `open`, un `spawn`, un
 `tcp_connect`…) y gatean la emisión de cada bloque de runtime auxiliar (registro de handles,
-canales con hilos de SO, handler de señales, `Instant` global, helpers de sockets). Un programa
+canales —entonces sobre hilos de SO; hoy sobre el scheduler de fibras—, handler de señales, `Instant` global, helpers de sockets). Un programa
 que no usa un subsistema **no arrastra su código**.
 
 **Honestidad sobre el alcance**: todo nodo fuera del subconjunto devuelve `Err` claro. Desde la
@@ -95,13 +102,14 @@ web-demos 24 → 38 byte-idénticos).
   binario).
 - **I/O completa de `std/fs`** (texto/binaria/handles/dirs/stdin/env/args), `std/time`,
   `std/random`, `std/math`, sockets **TCP y UDP** de `std/net`.
-- **Concurrencia CSP con hilos de SO reales**: spawn/canales (acotados)/`Task`/`join`/`scope`/
+- **Concurrencia CSP** (entonces sobre hilos de SO; hoy sobre el scheduler M:N de fibras con heap
+  aislado por fibra, `--without fibers` recupera hilo-por-tarea): spawn/canales (acotados)/`Task`/`join`/`scope`/
   `select`/`signals` (canales de tipos inmutables: int/float/bool/char/string/bytes).
 - **FFI a C** (libm/libc verificados byte-idénticos).
 - **38 de ~46 web-demos deterministas byte-idénticos**; 605 tests lib + 19 de integración
   `build_native` en `tests/cli_cli.rs`.
 
-### 2.4 Fuera del alcance hoy, y POR QUÉ
+### 2.4 Fuera del alcance entonces (jul 2026), y POR QUÉ — resuelto después (`try_join`, TLS/cripto/SQLite vía `ray-runtime`, ver la crónica)
 
 Dos categorías muy distintas:
 
@@ -155,6 +163,12 @@ contradice la prioridad DX del proyecto: penaliza por defecto a los programas qu
 subsistemas.
 
 ### 3.3 Decisión (acordada con Roberto, 15 jul 2026): **bajo demanda (núcleo) + camino rápido preservado + flags como override**
+
+> **Caché (M437, oct 2026).** El `CARGO_TARGET_DIR` compartido vive en `~/.ray/native-cache` (o donde
+> diga `RAY_NATIVE_CACHE`, siempre absoluto); la suite del repo usa `target/ray-native-cache`
+> (`.cargo/config.toml`). Cada build poda los programas sin usar en 7 días (máximo 32 por perfil) y
+> vacía `incremental/`; las deps del runtime nunca se tocan. `ray clean [--dry-run]` la vacía entera.
+
 
 1. **Detección bajo demanda** (el núcleo, opción 2): nuevos flags `needs_rt_*` que se activan al
    interceptar la feature correspondiente. Se materializan como **features de Cargo de un único

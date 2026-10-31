@@ -55,6 +55,7 @@ ray run                    # runs src/main.ray on the VM
 [package]
 name = "hello"
 version = "0.1.0"
+raylang = "X.Y.Z"     # your `ray` version (`ray new` writes it): the minimum the project requires
 
 [dependencies]
 ```
@@ -74,7 +75,7 @@ The working loop has four commands:
 ```sh
 ray dev                    # rebuilds and restarts on save
 ray test                   # runs the @test functions
-ray fmt --write src/       # canonical formatting
+ray fmt --write src/*.ray  # canonical formatting (takes several files)
 ray build --native         # native binary, with the same output as the VM
 ```
 
@@ -105,7 +106,8 @@ The official packages are `net` (HTTP/1.1 and 2, WebSocket, DNS, TLS, gRPC), `we
 Express-style application framework), `rpc`, `db` (Postgres, MySQL, SQLite, Redis, MongoDB), `tz`,
 `cron`, and the three for agents: `llm` (talking to a model), `mcp` (tools over the Model Context
 Protocol) and `agent` (the loop that joins them); and `oidc` (signing in with an OpenID Connect
-provider and accepting its tokens). Versions are pinned in `ray.lock` with their hash. Packages are downloaded to
+provider and accepting its tokens); and `yaml` (reading and writing YAML 1.2) and `zip`
+(reading and writing ZIP archives). Versions are pinned in `ray.lock` with their hash. Packages are downloaded to
 `.ray-deps/`, which stays out of version control: after cloning a project, `ray fetch` downloads
 them again.
 
@@ -113,7 +115,7 @@ A dependency is always a string, in one of three forms:
 
 ```toml
 [dependencies]
-web = "^0.6"                              # a version from the index (what `ray add` writes)
+web = "^0.6.0"                            # a version from the index (what `ray add` writes)
 oidc = "path:../oidc"                     # a local directory, relative to the project root
 geo = "git+https://host/geo@v1.0"         # a git repository at a tag or commit
 ```
@@ -450,7 +452,7 @@ exactly as with `ray run`. The server's own instructions tell it so. The details
 | `ray run` / `ray dev` | run on the VM / development mode with restart and browser reload |
 | `ray check` | verifies the program compiles, without running it |
 | `ray test` | the `@test` functions; `--watch` re-runs on save |
-| `ray fmt --write src/` | canonical formatting (keeps your parentheses and comments) |
+| `ray fmt --write src/*.ray` | canonical formatting (keeps your parentheses and comments) |
 | `ray build --native --release` | optimized native binary |
 | `ray bundle` | desktop app (`.app`, `.desktop`, `.exe`) or an iOS (`--ios`) and Android (`--android`) project |
 | `ray dev --device` | hot reload of the program on the phone |
@@ -483,4 +485,4 @@ stores and automatic updates.
 For everything else: the [reference](../REFERENCE.en.md) has every function with its signature,
 and the [manual](../MANUAL.md) (Spanish) explains the language in depth.
 
-<!-- sync: sha256:b58e36ae4cf7 -->
+<!-- sync: sha256:778e0aef63ad -->

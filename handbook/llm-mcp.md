@@ -636,7 +636,7 @@ que no existe, un argumento que falta y un título que intenta salir de la carpe
 
 ## 10. Lo que el agente no hace todavía
 
-`agent-cli` es corto a propósito, y los paquetes están en su primera versión. Antes de ponerlo
+`agent-cli` es corto a propósito, y los paquetes son jóvenes (0.x). Antes de ponerlo
 delante de usuarios conviene saber qué falta:
 
 | Qué | Cómo está hoy |

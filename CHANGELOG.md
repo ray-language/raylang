@@ -4,7 +4,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.88 — 2026-10-31
+
+La caché de builds nativos acotada (M437) y la documentación puesta al día con el modelo vigente.
+
+- **Documentación puesta al día con el modelo vigente (revisión a fondo, 31 oct 2026).** La guía del
+  framework web, los README y la doc de módulo (`///`) de `web`, `net`, `rpc` y `mcp`, el handbook
+  (es/en), MANUAL, REFERENCE (es/en), `llms.txt`, `docs/build.md` y `docs/transpilador-nativo.md`
+  decían cosas que ya no eran ciertas: «nativo: hilos con heap aislado» (el nativo corre sobre el
+  scheduler M:N de fibras desde M254), la app del framework «por conexión» (es por petición, y el
+  aislamiento panic→500 es `try_call` en la fibra de la conexión desde M97.2), `match` «solo sobre
+  enums», la cripto «como builtins» (es `std/crypto`), pines de paquetes y versiones de §11 viejos,
+  módulos de `net` sin catalogar (`dns_message`, `sigv4` servidor, `smtp`, `ntp`, `session_store`,
+  cuerpo bajo demanda), trece features del binario en vez de cinco, y el ejemplo del README de `web`
+  que no compilaba. La ayuda de `ray` lista ahora `dev-client`, `dev-lib`, `build --cpu`,
+  `bundle --android/--android-abi/--dev/--entitlements` y los flags de `registry mirror`.
 
 - **La caché de builds nativos deja de crecer sin límite (M437).** `~/.ray/native-cache` llegó a
   198 GB en una máquina de desarrollo: Cargo no poda nunca y cada programa (y cada fixture de la
@@ -14,6 +28,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   runtime nunca se tocan), y `RAY_NATIVE_CACHE` reubica la caché (la suite del repo usa
   `target/ray-native-cache`). Nuevo **`ray clean [--dry-run]`**: informa de lo que ocupa cada
   target y vacía la caché; el siguiente build recompila las dependencias del runtime.
+  Tras el code-review previo a release: `RAY_NATIVE_CACHE` relativa se absolutiza (cargo y `ray`
+  la resolvían contra cwd distintos), `ray clean` se niega a borrar un directorio sin
+  `CACHEDIR.TAG`, la poda normaliza el nombre del programa recién compilado (`-`→`_`) y vacía
+  `incremental/` entero (peso muerto sin incremental).
 
 ## 1.27.87 — 2026-10-30
 

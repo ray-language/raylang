@@ -28,6 +28,14 @@ fn clean_reports_sizes_per_target_and_removes_only_the_cache() {
     std::fs::write(cache.join("ray-native.Cargo.lock"), b"[]").unwrap();
     std::fs::write(sibling.join("app.key"), b"secret").unwrap();
 
+    // Sin `CACHEDIR.TAG` (lo que cargo escribe en todo target dir) no es una caché: se niega, 65,
+    // y no toca nada — es la guarda contra un `RAY_NATIVE_CACHE=$HOME/.ray` por error.
+    let (_out, err, code) = ray(&cache, &["clean"]);
+    assert_eq!(code, 65, "{err}");
+    assert!(err.contains("does not look like a native build cache"), "{err}");
+    assert!(cache.join("debug").is_dir());
+    std::fs::write(cache.join("CACHEDIR.TAG"), b"Signature: 8a477f597d28d172789f06886806bc55").unwrap();
+
     // --dry-run: informa por target, de mayor a menor, y no borra nada.
     let (out, err, code) = ray(&cache, &["clean", "--dry-run"]);
     assert_eq!(code, 0, "{err}");

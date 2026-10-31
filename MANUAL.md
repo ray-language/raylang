@@ -71,6 +71,11 @@ targets móviles: `ray toolchain add-target ios` o `android` los añade a esa to
 el enlazador del sistema (Xcode Command Line Tools, `build-essential` o las Build Tools de
 Visual Studio, que ninguna toolchain de Rust sustituye).
 
+Los builds nativos guardan lo compilado en `~/.ray/native-cache` (las dependencias del runtime se
+compilan una vez por máquina y target). La caché se cuida sola: cada build retira los programas
+que llevan 7 días sin compilarse. `ray clean` la vacía entera (`--dry-run` solo dice cuánto
+ocupa) y `RAY_NATIVE_CACHE` la reubica.
+
 Crea y ejecuta un proyecto:
 
 ```sh

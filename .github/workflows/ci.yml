@@ -112,10 +112,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-            # Caché del backend nativo (`ray build --native`): los tests `build_native_*` con crate
-            # (TLS/crypto/SQLite) compilan ring/rustls/rusqlite-bundled en este target compartido. Sin
-            # cachearlo se recompilaban en cada run (minutos). Ver docs/transpilador-nativo.md §3.3.
-            ~/.ray/native-cache
+            # La caché del backend nativo de los tests (`ray build --native` → ring/rustls/rusqlite
+            # compilados una vez) vive en `target/ray-native-cache` (M437, `.cargo/config.toml`), ya
+            # cubierta por `target` arriba. Ver docs/transpilador-nativo.md §3.3.
           key: cargo-lint-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       - name: Clippy
         run: cargo clippy --all-targets
@@ -136,10 +135,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-            # Caché del backend nativo (`ray build --native`): los tests `build_native_*` con crate
-            # (TLS/crypto/SQLite) compilan ring/rustls/rusqlite-bundled en este target compartido. Sin
-            # cachearlo se recompilaban en cada run (minutos). Ver docs/transpilador-nativo.md §3.3.
-            ~/.ray/native-cache
+            # La caché del backend nativo de los tests (`ray build --native` → ring/rustls/rusqlite
+            # compilados una vez) vive en `target/ray-native-cache` (M437, `.cargo/config.toml`), ya
+            # cubierta por `target` arriba. Ver docs/transpilador-nativo.md §3.3.
           key: cargo-tests-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       # Los tests `build_native_*` se SALTAN en silencio si falta `rustc` (en local es honesto; en CI
       # sería un falso verde). Se verifica su presencia para que un toolchain roto falle ruidosamente aquí.
@@ -181,15 +179,14 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-            # Caché del backend nativo (`ray build --native`): los tests `build_native_*` con crate
-            # (TLS/crypto/SQLite) compilan ring/rustls/rusqlite-bundled en este target compartido. Sin
-            # cachearlo se recompilaban en cada run (minutos). Ver docs/transpilador-nativo.md §3.3.
-            ~/.ray/native-cache
+            # La caché del backend nativo de los tests (`ray build --native` → ring/rustls/rusqlite
+            # compilados una vez) vive en `target/ray-native-cache` (M437, `.cargo/config.toml`), ya
+            # cubierta por `target` arriba. Ver docs/transpilador-nativo.md §3.3.
           key: cargo-main-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       - name: Verificar rustc (los tests nativos lo requieren)
         run: rustc --version
       # El corpus nativo corre en cada push a main (histórico: solo-nocturno tardaba 24 h en
-      # avisar). Con la caché de `~/.ray/native-cache` y el target compartido tarda ~2-3 min.
+      # avisar). Con la caché nativa (`target/ray-native-cache`) y el target compartido tarda ~2-3 min.
       - name: Corpus nativo ≡ VM (ejemplos deterministas)
         run: cargo test --test native_corpus -- --ignored --nocapture
       # M120: el harness DIFERENCIAL — programas GENERADOS (interacciones de features que los

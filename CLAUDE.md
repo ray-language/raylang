@@ -46,7 +46,8 @@ expresiones, sintaxis de llaves.
 - **CLI de subcomandos**: el binario de producto es **`ray`** (`raylang` es un alias
   del mismo binario; la lógica vive en `src/cli.rs`, dos envoltorios finos
   `src/main.rs`+`src/bin/ray.rs`). Subcomandos: `ray
-  new/run/build/test/fmt/doc/lsp/repl/version/help` (`doc` = raydoc). La interfaz
+  new/run/build/test/fmt/doc/clean/lsp/repl/version/help` (`doc` = raydoc; `clean` = la
+  caché nativa). La interfaz
   legada por flags (`--vm`/`--interp`/`--test`/`--fmt`/`--lsp`/`--repl`/`<archivo>`)
   se conserva (los tests la usan).
 - REPL interactivo: `cargo run --quiet` (sin archivo) o `--repl` (sobre la VM).

@@ -19464,3 +19464,49 @@ Verificado por TCP crudo en VM y nativo (`tests/webserver_body_stream_cli.rs`): 
 chunked trozo a trozo, pipelining tras un cuerpo agotado, `read_body` de un cuerpo pequeño, 413 en
 XML con el tamaño declarado, cierre tras un cuerpo parcial, stderr limpio; y que el bucle del
 servidor transpila sin stubs (`RAYLANG_TRANSPILE_DEBUG`).
+
+## 412. M437 — la caché nativa deja de crecer sin límite (oct 2026)
+
+El disco del autor lo contó: `~/.ray/native-cache` pesaba 198 GB, de los que 188 estaban en
+`debug/` — 91 GB de `deps/`, 64–85 GB en 2.654 directorios de `incremental/` y 3,5 GB de
+binarios de 2.139 programas distintos. No era la toolchain (868 MB) ni las apps del usuario:
+eran los fixtures de la suite de tests. Cada `ray build --native` genera un paquete Cargo cuyo
+nombre lleva el hash de la ruta canónica del fuente (H14, para que dos `prog.ray` no se pisen),
+los 71 archivos de tests con `--native` compilan en directorios temporales, y Cargo no poda
+nunca: cada ejecución de la suite dejaba para siempre otros ~70 MB por programa.
+
+La vara fue la de siempre: *mantener el lenguaje simple*. Una caché que el usuario no debería
+ver no puede exigirle que la administre, así que se rechazaron el tope configurable, el LRU por
+bytes y el demonio de limpieza. Quedaron cuatro piezas, dos visibles:
+
+1. **Sin compilación incremental** en los builds nativos (`CARGO_INCREMENTAL=0`). El programa
+   es un `main.rs` generado que se compila una vez por cambio del fuente; el incremental solo
+   amortizaba rebuilds del mismo crate y a cambio escribía 25–30 MB por programa. Medido sobre
+   `key_agreement.ray` (tres rebuilds tras editar, misma máquina, deps calientes): 1,92 s con
+   incremental, 1,78 s sin él; con `--release` 4,1 s en ambos, porque ahí cargo ya no era
+   incremental. Las dependencias del runtime nunca lo fueron (cargo solo lo aplica al crate del
+   workspace), así que no cambia nada para ellas.
+2. **Poda al final de cada build** (`prune_native_cache`). Por cada directorio de perfil
+   (`<caché>/{debug,release}` y `<caché>/<triple>/{debug,release}`) se conservan los programas
+   tocados en los últimos 7 días, y de esos como mucho los 32 más recientes; el recién compilado
+   siempre. Un artefacto de programa se reconoce por el sufijo `_<8 hex>` del pkg (`<pkg>`,
+   `<pkg>.d`, `lib<pkg>.a`, y en `deps/`, `incremental/` y `.fingerprint/` `<pkg>-<hash>`); los
+   crates del runtime no lo llevan y no se tocan jamás. La edad es la mtime más reciente de
+   cualquiera de sus entradas: un build en curso de otro proceso es reciente por definición y
+   no se poda (la carrera de dos builds simultáneos que IDEAS ya anotaba). Solo lista
+   directorios: milisegundos. El coste asumido es el único trade-off real: un programa que no
+   has compilado en una semana se recompila entero, segundos en debug y el LTO de release que
+   ya pagabas con cualquier edición.
+3. **`RAY_NATIVE_CACHE`** reubica la caché. La suite del repo la fija en
+   `target/ray-native-cache` con `[env]` en `.cargo/config.toml` (llega a los binarios de test
+   y de ahí, heredada, al `ray` que ejecutan): los tests comparten entre sí las deps del
+   runtime, CI las cachea junto con `target/` y `cargo clean` las borra. La caché del usuario
+   deja de ver un solo fixture.
+4. **`ray clean [--dry-run]`**: informa de lo que ocupa cada target y vacía la caché entera. Es
+   la salida manual (cambio de rustc, disco ya); no hace falta para contenerla.
+
+Qué implica para el lenguaje: nada. Ni SPEC ni semántica del binario, que sigue byte-idéntico a
+la VM. Cambian el CLI, `docs/build.md`, MANUAL/REFERENCE y PRODUCTION, donde queda como
+invariante: *lo que `ray` deja en la máquina está acotado*. Lo que no se tocó, a propósito: el
+hash de ruta en el nombre del pkg, porque resuelve una carrera de corrección real y, con la
+poda, su coste desaparece.

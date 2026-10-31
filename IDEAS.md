@@ -4442,3 +4442,30 @@ check` en `packages/db`, «module without main») resuelve `send(c, 112, pl)` co
 `send` y falla, mientras cargado por el loader resuelve a `postgres.send` y pasa. Es la regla de
 M196 vista desde el otro lado; `ray check` de un paquete debería chequear sus módulos como los
 carga el loader. Bajo impacto (los tests de los paquetes van por el loader).
+
+## 120. La caché nativa crecía sin límite (oct 2026) — ✅ EJECUTADA como M437 (DESIGN §412)
+
+**Hecho.** `~/.ray/native-cache` pesaba 198 GB en la máquina del autor: 91 GB en `debug/deps`,
+64–85 GB en `debug/incremental` (2.654 directorios) y 3,5 GB de binarios de 2.139 programas
+distintos. Cada `ray build --native` genera un pkg Cargo con el hash de la ruta canónica del fuente
+(H14) y Cargo no poda nunca: cada programa, y sobre todo cada fixture de la suite de tests (71
+archivos con `--native`, en directorios temporales), dejaba para siempre su `incremental/` y sus
+objetos en `deps/`. Las dependencias del runtime (lo caro) son 1–3 GB por target y perfil.
+
+**Clasificación.** Tooling (CLI), sin tocar la SPEC ni la semántica del binario. Impacto bajo en
+el lenguaje y alto en la experiencia: una caché que el usuario no debería ver no puede costarle el
+disco.
+
+**Decisiones** (la vara es *mantener el lenguaje simple*: lo mínimo visible, nada configurable):
+1. `CARGO_INCREMENTAL=0` en los builds nativos. Medido: igual o más rápido (1,78 s vs 1,92 s por
+   rebuild tras editar en debug; 4,1 s en ambos con `--release`, donde cargo ya no era
+   incremental), y deja de escribir 25–30 MB por programa.
+2. Poda automática al final de cada build: por perfil, conserva los programas tocados en los
+   últimos 7 días y como mucho los 32 más recientes; el recién compilado siempre; las deps del
+   runtime nunca. Sin configuración. Solo lista directorios.
+3. `RAY_NATIVE_CACHE` reubica la caché; la suite del repo la fija en `target/ray-native-cache`
+   (`.cargo/config.toml`), que cachea CI y borra `cargo clean`.
+4. `ray clean [--dry-run]`: informe por target y borrado de la caché entera.
+
+**Descartado.** Un tope configurable en bytes, LRU por tamaño, un demonio de limpieza, o quitar el
+hash de ruta del pkg (resuelve una carrera real; con la poda su coste desaparece).

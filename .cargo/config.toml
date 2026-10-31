@@ -1,0 +1,8 @@
+# M437: la suite de tests compila miles de programas con `ray build --native` (71 archivos de
+# tests, fixtures en directorios temporales → un pkg Cargo distinto por ruta). Van a una caché
+# nativa PROPIA del repo, no a la del usuario (`~/.ray/native-cache`): comparten entre sí las
+# dependencias del runtime (ring/rustls/sqlite se compilan una vez), las cachea CI junto con
+# `target/` y las borra `cargo clean`. `[env]` llega a los procesos que lanza cargo (los binarios
+# de test) y de ahí, heredado, al `ray` que ejecutan.
+[env]
+RAY_NATIVE_CACHE = { value = "target/ray-native-cache", relative = true }

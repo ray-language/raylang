@@ -100,6 +100,7 @@ fn run() {
         Some("keygen") => cmd_app_keygen(&rest[1..]),
         Some("release") => cmd_release(&rest[1..]),
         Some("toolchain") => crate::toolchain::run(&rest[1..]),
+        Some("clean") => cmd_clean(&rest[1..]),
         Some("version") | Some("--version") | Some("-V") => {
             // M309 (findings #65): `1.27.12` en una release; `1.27.12+dev.<sha>` compilado de la HEAD.
             println!("raylang {}", env!("RAYLANG_VERSION_FULL"));
@@ -176,6 +177,7 @@ Tooling:
   keygen            create the app's Ed25519 signing key (std/update): seed in ~/.ray/keys/<app-id>.key (or RAY_KEYS_DIR), public key written to [app] public_key of ray.toml [--app-id X] [--force]
   release [file]    build the bundle (ray bundle) and publish-ready files in dist/ (-o): <name>-<version>-<platform>-<arch>.zip, update.json (artifacts of this version from other platforms are kept) and update.json.sig (Ed25519; key from --key <hex>, RAY_SIGNING_KEY or ~/.ray/keys/<app-id>.key) [--notes URL] [--min-version V] [--base-url URL] [--without list] [--publish [--tag vX.Y.Z] [--repo OWNER/NAME]: gh release create + upload; base URL defaults to the download URL of the repo gh publishes to (--repo, GH_REPO or the directory's repo); warns if it is private] [--no-sign: zip + update.json without a signature, for a CI that lacks the private key; then `ray release seal <dist>` verifies every artifact in dist/ against the manifest and signs it]
   toolchain <cmd>   Rust toolchain for `build --native`: `install [--rust ch] [--targets ios,android] [--force] [--no-vendor]` sets up a private rustup under ~/.ray/toolchain (+ the release's ray-runtime vendor, so the first build needs no network); `add-target ios|android|<triple>` installs the std of extra targets for `bundle --ios/--android` (works with the private toolchain too); `status` shows which cargo/rustc a native build would use (RAY_CARGO/RAY_RUSTC → PATH → private), the system linker, the extra targets and the vendor
+  clean [--dry-run] remove the native build cache (~/.ray/native-cache, or RAY_NATIVE_CACHE) after reporting its size per target; builds keep it bounded on their own (programs unused for 7 days are pruned), this is for freeing disk now or after a rustc upgrade. --dry-run only reports
   version           the language version
   help              this help
 ",
@@ -3982,11 +3984,200 @@ fn gitignore_excludes(root: &Path, name: &str) -> bool {
 /// docs/transpilador-nativo.md §3.3). Sobrevive a la purga de `/tmp` (macOS: 3 días sin uso; Linux: reboot)
 /// → el target compartido (ring/rustls compilados una vez por máquina) NO se pierde periódicamente. Si no
 /// hay HOME/USERPROFILE, cae al temporal (comportamiento anterior).
+///
+/// M437: `RAY_NATIVE_CACHE` la reubica. Lo usa la suite de tests del propio repo (`.cargo/config.toml`
+/// → `target/ray-native-cache`) para que sus miles de programas de prueba no se mezclen con la caché
+/// del usuario (y los limpie `cargo clean`); sirve también para CI o discos secundarios.
 fn native_cache_dir() -> std::path::PathBuf {
+    if let Some(dir) = std::env::var_os("RAY_NATIVE_CACHE").filter(|d| !d.is_empty()) {
+        return PathBuf::from(dir);
+    }
     match std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         Some(home) => Path::new(&home).join(".ray").join("native-cache"),
         None => std::env::temp_dir().join("ray_native_cache"),
     }
+}
+
+/// M437: días sin uso tras los que la poda retira los artefactos de un programa de la caché nativa.
+const NATIVE_CACHE_MAX_AGE_DAYS: u64 = 7;
+/// M437: programas distintos que la poda conserva como máximo por directorio de perfil, aunque sean
+/// recientes (la suite de tests genera decenas por ejecución).
+const NATIVE_CACHE_MAX_PROGRAMS: usize = 32;
+
+/// M437: ¿es `name` el artefacto Cargo de un programa compilado por `ray build --native`?
+/// Devuelve el pkg (`<stem>_<8 hex>`, el nombre que genera `build_native`). Los crates del runtime
+/// (ring, rustls, ray_runtime…) no llevan ese sufijo y por tanto nunca se podan. Reconoce las tres
+/// formas: el binario/`.d` (`<pkg>`, `<pkg>.d`), la lib (`lib<pkg>.a|.so|.lib`, `<pkg>.lib`) y las
+/// entradas de `deps/`, `incremental/` y `.fingerprint/` (`<pkg>-<hash cargo>[.ext]`).
+fn native_cache_program_pkg(name: &str) -> Option<String> {
+    // `<pkg>` = `<stem>_xxxxxxxx` (el stem puede llevar `-` en el binario; en `deps/` cargo lo vuelve
+    // `_`); después viene el final, `-<hash cargo>` o una extensión. Se busca el PRIMER `_<8 hex>`
+    // seguido de fin/`-`/`.`, de izquierda a derecha, para no confundir el hash con el de cargo.
+    let bytes = name.as_bytes();
+    for (i, b) in bytes.iter().enumerate() {
+        if *b != b'_' || i == 0 {
+            continue;
+        }
+        let end = i + 9;
+        if end > bytes.len() || !bytes[i + 1..end].iter().all(u8::is_ascii_hexdigit) {
+            continue;
+        }
+        if end < bytes.len() && !matches!(bytes[end], b'-' | b'.') {
+            continue;
+        }
+        // `lib<pkg>.a` / `lib<pkg>-<hash>.rlib` → el mismo grupo que `<pkg>`. (Un stem que empiece por
+        // `lib` queda agrupado en dos mitades: la política es la misma para ambas, no importa.)
+        let pkg = &name[..end];
+        let pkg = pkg.strip_prefix("lib").filter(|rest| rest.len() > 9).unwrap_or(pkg);
+        return Some(pkg.to_string());
+    }
+    None
+}
+
+/// M437: poda de la caché nativa. Cargo nunca borra nada: cada programa (ruta canónica distinta → pkg
+/// distinto, H14) dejaba para siempre sus objetos en `deps/`, su directorio `incremental/` y su
+/// binario — 160 GB medidos en la máquina del autor, casi todo de fixtures de tests. Los artefactos de
+/// un programa solo sirven mientras su fuente no cambie, así que retirarlos cuesta como mucho
+/// recompilar ESE programa; las dependencias del runtime (lo caro) nunca se tocan.
+///
+/// Política, sin configuración: por cada directorio de perfil (`<caché>/{debug,release}` y
+/// `<caché>/<triple>/{debug,release}`) se conservan los programas tocados en los últimos
+/// [`NATIVE_CACHE_MAX_AGE_DAYS`] días, y de esos como mucho los [`NATIVE_CACHE_MAX_PROGRAMS`] más
+/// recientes; `keep` (el pkg que se acaba de compilar) se conserva siempre. La edad es la mtime más
+/// reciente de cualquiera de sus entradas → un build en curso de otro proceso (IDEAS: dos builds
+/// simultáneos) es por definición reciente y no se poda. Solo lista directorios: milisegundos.
+/// Devuelve cuántos programas retiró.
+fn prune_native_cache(cache: &Path, keep: Option<&str>) -> usize {
+    use std::collections::HashMap;
+    use std::time::{Duration, SystemTime};
+    let now = SystemTime::now();
+    let max_age = Duration::from_secs(NATIVE_CACHE_MAX_AGE_DAYS * 24 * 3600);
+    // Directorios de perfil: `<caché>/<perfil>` y `<caché>/<triple>/<perfil>`.
+    let mut profiles: Vec<PathBuf> = Vec::new();
+    let Ok(top) = fs::read_dir(cache) else { return 0 };
+    for e in top.flatten() {
+        let p = e.path();
+        if !p.is_dir() {
+            continue;
+        }
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name == "debug" || name == "release" {
+            profiles.push(p);
+        } else {
+            for sub in ["debug", "release"] {
+                let q = p.join(sub);
+                if q.is_dir() {
+                    profiles.push(q);
+                }
+            }
+        }
+    }
+    let mut removed = 0;
+    for profile in profiles {
+        // pkg → (mtime más reciente, rutas que le pertenecen)
+        let mut programs: HashMap<String, (SystemTime, Vec<PathBuf>)> = HashMap::new();
+        let mut scan = |dir: &Path| {
+            let Ok(rd) = fs::read_dir(dir) else { return };
+            for e in rd.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let Some(pkg) = native_cache_program_pkg(&name) else { continue };
+                let mtime = e.metadata().and_then(|m| m.modified()).unwrap_or(SystemTime::UNIX_EPOCH);
+                let entry = programs.entry(pkg).or_insert((SystemTime::UNIX_EPOCH, Vec::new()));
+                if mtime > entry.0 {
+                    entry.0 = mtime;
+                }
+                entry.1.push(e.path());
+            }
+        };
+        scan(&profile);
+        for sub in ["deps", "incremental", ".fingerprint"] {
+            scan(&profile.join(sub));
+        }
+        let mut ranked: Vec<(String, SystemTime, Vec<PathBuf>)> =
+            programs.into_iter().filter(|(pkg, _)| Some(pkg.as_str()) != keep).map(|(k, (t, v))| (k, t, v)).collect();
+        ranked.sort_by_key(|r| std::cmp::Reverse(r.1)); // más reciente primero
+        let budget = NATIVE_CACHE_MAX_PROGRAMS.saturating_sub(usize::from(keep.is_some()));
+        for (i, (_pkg, mtime, paths)) in ranked.into_iter().enumerate() {
+            let stale = now.duration_since(mtime).is_ok_and(|age| age > max_age);
+            if !stale && i < budget {
+                continue;
+            }
+            for p in paths {
+                let _ = if p.is_dir() { fs::remove_dir_all(&p) } else { fs::remove_file(&p) };
+            }
+            removed += 1;
+        }
+    }
+    removed
+}
+
+/// Tamaño en bytes de un árbol (para el informe de `ray clean`; recorre todo, solo se usa ahí).
+fn dir_size(path: &Path) -> u64 {
+    let Ok(rd) = fs::read_dir(path) else { return 0 };
+    rd.flatten()
+        .map(|e| match e.metadata() {
+            Ok(m) if m.is_dir() => dir_size(&e.path()),
+            Ok(m) => m.len(),
+            Err(_) => 0,
+        })
+        .sum()
+}
+
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut v = bytes as f64;
+    let mut i = 0;
+    while v >= 1024.0 && i < UNITS.len() - 1 {
+        v /= 1024.0;
+        i += 1;
+    }
+    if i == 0 { format!("{bytes} B") } else { format!("{v:.1} {}", UNITS[i]) }
+}
+
+/// `ray clean [--dry-run]` (M437): borra la caché de builds nativos (`~/.ray/native-cache` o
+/// `RAY_NATIVE_CACHE`), tras informar de cuánto ocupa cada target. Es la salida manual: la poda
+/// automática de [`prune_native_cache`] mantiene la caché acotada sin que nadie tenga que pensar en
+/// ella, pero tras cambiar de versión de rustc, o cuando hace falta disco ya, esto la vacía entera.
+/// El coste del siguiente `build --native` es recompilar las dependencias del runtime (minutos, una
+/// vez por target). No toca `~/.ray/toolchain` ni `~/.ray/keys`.
+fn cmd_clean(args: &[String]) {
+    let (dry_run, rest) = take_flag_bool(args, "--dry-run");
+    if let Some(extra) = rest.first() {
+        if extra == "--help" || extra == "-h" {
+            println!("usage: ray clean [--dry-run]\n  remove the native build cache ({}); --dry-run only reports its size", native_cache_dir().display());
+            return;
+        }
+        eprintln!("ray clean: unknown argument '{extra}' (usage: ray clean [--dry-run])");
+        process::exit(64);
+    }
+    let cache = native_cache_dir();
+    if !cache.is_dir() {
+        println!("native cache: {} (empty)", cache.display());
+        return;
+    }
+    let mut total = 0u64;
+    let mut rows: Vec<(String, u64)> = Vec::new();
+    if let Ok(rd) = fs::read_dir(&cache) {
+        for e in rd.flatten() {
+            let size = if e.path().is_dir() { dir_size(&e.path()) } else { e.metadata().map_or(0, |m| m.len()) };
+            total += size;
+            rows.push((e.file_name().to_string_lossy().into_owned(), size));
+        }
+    }
+    rows.sort_by_key(|r| std::cmp::Reverse(r.1));
+    println!("native cache: {}", cache.display());
+    for (name, size) in rows.iter().filter(|(_, s)| *s >= 1024 * 1024) {
+        println!("  {:>10}  {name}", human_size(*size));
+    }
+    println!("  {:>10}  total", human_size(total));
+    if dry_run {
+        return;
+    }
+    if let Err(e) = fs::remove_dir_all(&cache) {
+        eprintln!("ray clean: could not remove {}: {e}", cache.display());
+        process::exit(74);
+    }
+    println!("ok: removed {} ({}); the next `ray build --native` recompiles the runtime dependencies", cache.display(), human_size(total));
 }
 
 /// Camino rápido: transpila a un `.rs` autocontenido y lo compila con `rustc` directo (sin Cargo). Para
@@ -4472,6 +4663,11 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         process::exit(65);
     };
     cmd.arg("build").current_dir(&proj).env("CARGO_TARGET_DIR", &target_dir);
+    // M437: sin compilación incremental. El programa es UN `main.rs` generado que se compila una vez
+    // por cambio del fuente; el incremental solo pagaba en rebuilds del mismo crate y a cambio dejaba
+    // 25–30 MB por programa en `incremental/` para siempre (la mitad de la caché medida). Las deps
+    // del runtime nunca fueron incrementales (cargo solo lo aplica al crate del workspace).
+    cmd.env("CARGO_INCREMENTAL", "0");
     if let Some(t) = target {
         cmd.arg("--target").arg(t);
         // M309 (findings #45): los objetos C que compila el crate `cc` (ring: montgomery, aes,
@@ -4552,6 +4748,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
             let _ = std::fs::copy(proj.join("Cargo.lock"), &cached_lock); // persiste el lock resuelto (H20)
             let _ = std::fs::remove_dir_all(&proj); // build ok → borrar el proyecto Cargo temporal (el binario
                                                     // ya vive en la caché compartida, no en `proj/target`)
+            prune_native_cache(&target_dir, Some(&pkg)); // M437: la caché queda acotada (ver la función)
             if let Err(e) = copied {
                 eprintln!("native build: could not copy the binary ({}): {e}", produced.display());
                 process::exit(65);
@@ -6538,6 +6735,78 @@ fn render_trace(trace: &[runtime::TraceFrame], locate: &Locate) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// M437: la poda reconoce los artefactos de un programa en sus tres formas y nunca los crates del
+    /// runtime (que no llevan el sufijo `_<8 hex>`).
+    #[test]
+    fn native_cache_program_pkg_recognizes_program_artifacts_only() {
+        let pkg = |s: &str| super::native_cache_program_pkg(s);
+        assert_eq!(pkg("main_6a2f893b").as_deref(), Some("main_6a2f893b"));
+        assert_eq!(pkg("main_6a2f893b.d").as_deref(), Some("main_6a2f893b"));
+        assert_eq!(pkg("main_6a2f893b.exe").as_deref(), Some("main_6a2f893b"));
+        assert_eq!(pkg("main_6a2f893b-1f2e3d4c5b6a7988").as_deref(), Some("main_6a2f893b"));
+        assert_eq!(pkg("main_6a2f893b-1f2e3d4c5b6a7988.d").as_deref(), Some("main_6a2f893b"));
+        assert_eq!(pkg("libprog_d266295e.a").as_deref(), Some("prog_d266295e"));
+        assert_eq!(pkg("libprog_d266295e-1f2e3d4c.rlib").as_deref(), Some("prog_d266295e"));
+        assert_eq!(pkg("my-app_1a2b3c4d").as_deref(), Some("my-app_1a2b3c4d"));
+        assert_eq!(pkg("__sqlite_err_test_b1f3be09").as_deref(), Some("__sqlite_err_test_b1f3be09"));
+        for dep in ["libring-0a1b2c3d4e5f6789.rlib", "ray_runtime-0a1b2c3d4e5f6789", "ring-0a1b2c3d4e5f6789", "libc-0a1b2c3d", "rustls_pki_types-1234567890abcdef", "build", "deps", ".fingerprint", "ray-native.Cargo.lock", "CACHEDIR.TAG"] {
+            assert_eq!(pkg(dep), None, "{dep}");
+        }
+    }
+
+    /// M437: la poda retira los programas viejos y los que sobran del cupo, conserva siempre el recién
+    /// compilado y jamás toca las dependencias del runtime; cubre `<perfil>/` y `<triple>/<perfil>/`.
+    #[test]
+    fn prune_native_cache_bounds_programs_and_keeps_runtime_deps() {
+        use std::time::{Duration, SystemTime};
+        let cache = std::env::temp_dir().join(format!("ray_prune_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&cache);
+        let touch = |rel: &str, age_days: u64| {
+            let p = cache.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            if rel.ends_with('/') {
+                std::fs::create_dir_all(&p).unwrap();
+            } else {
+                std::fs::write(&p, b"x").unwrap();
+            }
+            let t = SystemTime::now() - Duration::from_secs(age_days * 24 * 3600);
+            std::fs::File::open(&p).unwrap().set_modified(t).unwrap();
+        };
+        // Programa viejo (10 días) con todas sus piezas, en debug y bajo un triple.
+        for prof in ["debug", "aarch64-apple-ios/release"] {
+            touch(&format!("{prof}/old_11111111"), 10);
+            touch(&format!("{prof}/old_11111111.d"), 10);
+            touch(&format!("{prof}/deps/old_11111111-aaaa.o"), 10);
+            touch(&format!("{prof}/incremental/old_11111111-bbbb/"), 10);
+            touch(&format!("{prof}/.fingerprint/old_11111111-cccc/"), 10);
+            // Dependencias del runtime, también viejas: intocables.
+            touch(&format!("{prof}/deps/libring-dddd.rlib"), 30);
+            touch(&format!("{prof}/deps/libray_runtime-eeee.rlib"), 30);
+            touch(&format!("{prof}/build/ring-ffff/"), 30);
+        }
+        // El recién compilado, con una pieza vieja (un build en curso toca sus entradas una a una).
+        touch("debug/cur_22222222", 0);
+        touch("debug/deps/cur_22222222-aaaa.o", 10);
+        // Programas recientes de sobra: 40 > cupo (32 − 1 por `keep`).
+        for i in 0..40u32 {
+            touch(&format!("debug/deps/fresh_{i:08x}-aaaa.o"), 1 + (i as u64 % 3));
+        }
+        let removed = super::prune_native_cache(&cache, Some("cur_22222222"));
+        assert_eq!(removed, 2 + (40 - 31), "viejos en ambos perfiles + los que exceden el cupo");
+        assert!(!cache.join("debug/old_11111111").exists());
+        assert!(!cache.join("debug/incremental/old_11111111-bbbb").exists());
+        assert!(!cache.join("aarch64-apple-ios/release/deps/old_11111111-aaaa.o").exists());
+        assert!(cache.join("debug/cur_22222222").exists() && cache.join("debug/deps/cur_22222222-aaaa.o").exists());
+        assert!(cache.join("debug/deps/libring-dddd.rlib").exists());
+        assert!(cache.join("aarch64-apple-ios/release/deps/libray_runtime-eeee.rlib").exists());
+        assert!(cache.join("debug/build/ring-ffff").is_dir());
+        let fresh_left = std::fs::read_dir(cache.join("debug/deps")).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("fresh_")).count();
+        assert_eq!(fresh_left, 31);
+        // Segunda pasada: nada que podar (idempotente).
+        assert_eq!(super::prune_native_cache(&cache, None), 0);
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
     /// M370: `[app] opens` → CFBundleDocumentTypes (UTIs y extensiones) y `MimeType=`.
     #[test]
     fn app_opens_maps_to_document_types_and_mime_types() {

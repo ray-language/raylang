@@ -4170,7 +4170,6 @@ mod mac {
                         Some((name, version, description, copyright)) => {
                             let plain_id: MsgId = std::mem::transmute(msg_send());
                             let set_kv: MsgVoidIdId = std::mem::transmute(msg_send());
-                            let id_id: MsgIdId = std::mem::transmute(msg_send());
                             let alloc: MsgId = std::mem::transmute(msg_send());
                             let dict =
                                 plain_id(cls(b"NSMutableDictionary\0"), sel(b"dictionary\0"));
@@ -4184,11 +4183,31 @@ mod mac {
                                 set_kv(dict, sel(b"setObject:forKey:\0"), nsstring(&copyright), nsstring("Copyright"));
                             }
                             if !description.is_empty() {
-                                // La descripción viaja como Credits (NSAttributedString):
-                                // es la zona de texto bajo la versión, como en el Finder.
+                                // La descripción viaja como Credits (NSAttributedString): es la
+                                // zona de texto bajo la versión, como en el Finder. rayreq #305: un
+                                // NSAttributedString SIN atributos sale a la izquierda, en
+                                // Helvetica 12 (el default de NSTextView), mientras el resto del
+                                // panel va centrado en la letra del sistema; se le ponen los de
+                                // Finder — centrado, letra del sistema pequeña, color secundario.
+                                type MsgF64 = unsafe extern "C" fn(Id, Sel) -> f64;
+                                type MsgIdF64 = unsafe extern "C" fn(Id, Sel, f64) -> Id;
+                                let ret_f64: MsgF64 = std::mem::transmute(msg_send());
+                                let id_f64: MsgIdF64 = std::mem::transmute(msg_send());
+                                let set_i64: MsgVoidI64 = std::mem::transmute(msg_send());
+                                let init_attrs: MsgIdIdIdRet = std::mem::transmute(msg_send());
+                                let small = ret_f64(cls(b"NSFont\0"), sel(b"smallSystemFontSize\0"));
+                                let font = id_f64(cls(b"NSFont\0"), sel(b"systemFontOfSize:\0"), small);
+                                let color = plain_id(cls(b"NSColor\0"), sel(b"secondaryLabelColor\0"));
+                                let para = plain_id(cls(b"NSMutableParagraphStyle\0"), sel(b"new\0"));
+                                // NSTextAlignmentCenter = 2 en AppKit (1 es right; en UIKit es al revés).
+                                set_i64(para, sel(b"setAlignment:\0"), 2);
+                                let attrs = plain_id(cls(b"NSMutableDictionary\0"), sel(b"dictionary\0"));
+                                set_kv(attrs, sel(b"setObject:forKey:\0"), font, nsstring("NSFont"));
+                                set_kv(attrs, sel(b"setObject:forKey:\0"), color, nsstring("NSColor"));
+                                set_kv(attrs, sel(b"setObject:forKey:\0"), para, nsstring("NSParagraphStyle"));
                                 let attr = {
                                     let a = alloc(cls(b"NSAttributedString\0"), sel(b"alloc\0"));
-                                    id_id(a, sel(b"initWithString:\0"), nsstring(&description))
+                                    init_attrs(a, sel(b"initWithString:attributes:\0"), nsstring(&description), attrs)
                                 };
                                 set_kv(dict, sel(b"setObject:forKey:\0"), attr, nsstring("Credits"));
                             }

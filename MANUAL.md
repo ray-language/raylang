@@ -597,6 +597,7 @@ print("hola.ray".ends_with(".ray"));     // true
 print("hola".substring(1, 3));           // "ol"  (con clamp: nunca falla)
 print("ab".repeat(3));                   // "ababab"
 print("banana".index_of("na"));          // Some(2)
+print("banana".index_of_from("na", 3));  // Some(4): desde el carácter 3 (todas las apariciones sin recortar)
 print("uno dos".chars().len());          // 7
 ```
 
@@ -2937,11 +2938,12 @@ manda — la variable siempre gana al default.
 ```sh
 ray dev [archivo]        # modo desarrollo: recompila y REINICIA ante cambios (solo si compila)
 ray fmt archivo.ray      # formatea (canónico e idempotente); --write / -w reescribe en el sitio
+ray fmt .                # un directorio: comprueba todos sus .ray (lista los que cambiarían, sale 1); con --write los reescribe
                          # conserva tus paréntesis y los comentarios pegados a cada operando/argumento
 ray test [archivo]       # corre las funciones @test (filtro opcional por nombre); --watch re-corre ante cambios; --native [--release] sobre el binario nativo
 ray doc archivo.ray      # documentación Markdown desde ///; `ray doc std/ui`, `ray doc ui.MenuItem`, `ray doc crypto.PASSWORD_ITERATIONS`;
                          # `ray doc bytes.index_of_from` / `Result.map` (Tipo.metodo) y, dentro de un proyecto, sus módulos y dependencias
-ray check [archivo]      # alias de `ray build`: chequea sin ejecutar
+ray check [archivo|dir]  # alias de `ray build`: chequea sin ejecutar (un directorio = el proyecto que vive ahí; también run/test/fmt)
 ray serve [dir]          # sirve un directorio estático por HTTP para previsualizar (127.0.0.1:8000; --host/--port)
 ray build --templates-only vistas/        # compila templates .ray.html a funciones raylang tipadas (ver abajo)
 ray repl                 # REPL interactivo

@@ -190,8 +190,10 @@ fn path_mode_resolves_a_real_project_with_deps() {
     let fmt = mcp.call(6, "ray_fmt", &format!(r#"{{"path":"{}"}}"#, messy.to_str().unwrap()));
     assert!(fmt.contains("print(1 + 2);"), "fmt por path: {fmt}");
     assert_eq!(std::fs::read_to_string(&messy).unwrap(), "fn f() {   print(  1+2 ); }\n");
+    // raymcp #306: fmt por directorio COMPRUEBA — lista lo que cambiaría (exit 1) y no reescribe.
     let fmt_dir = mcp.call(7, "ray_fmt", &format!(r#"{{"path":"{dir_path}"}}"#));
-    assert!(fmt_dir.contains("needs a .ray file"), "fmt de un directorio: {fmt_dir}");
+    assert!(fmt_dir.contains("would format") && fmt_dir.contains("messy.ray"), "fmt de un directorio: {fmt_dir}");
+    assert_eq!(std::fs::read_to_string(&messy).unwrap(), "fn f() {   print(  1+2 ); }\n");
 }
 
 /// M150 — `ray_doc` con `path`: los símbolos del PROYECTO y de sus paquetes descargados

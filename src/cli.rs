@@ -3,14 +3,14 @@
 //!
 //! Interfaz de **subcomandos** (estilo `cargo`/`go`), agrupada por ROL — DESIGN.md §88 (M99):
 //!   `ray new <nombre>`      — crea un proyecto nuevo (ray.toml + src/main.ray).
-//!   `ray run [archivo]`     — ejecuta (por defecto `src/main.ray`) en la VM (M35).
+//!   `ray run [archivo|dir]` — ejecuta (por defecto `src/main.ray`; un directorio = su proyecto) en la VM (M35).
 //!   `ray build [archivo]`   — chequea y compila sin ejecutar (para CI); 0 ok / 65 error.
 //!                             con `--native [-o <salida>] [--release]` transpila a Rust y compila con
 //!                             rustc → binario nativo (P2.b, requiere `rustc`). `--release` = opt3+lto+
 //!                             codegen-units=1 (más lento de compilar); `--cpu native` = la CPU del host.
 //!                             con `--templates-only [ruta...]` solo compila los `.ray.html` (M99).
 //!   `ray test [archivo]`    — corre las funciones `@test` (M10.1); `--watch` re-corre ante cambios (M140).
-//!   `ray fmt <archivo>`     — imprime la versión canónica por stdout (M29.2).
+//!   `ray fmt <archivo|dir>` — imprime la versión canónica por stdout (M29.2); un directorio comprueba todos sus `.ray`.
 //!   `ray doc <archivo>`     — genera la documentación Markdown (raydoc).
 //!   `ray add|remove|update|search|fetch` — gestión de dependencias, uso diario (M39b/M51).
 //!   `ray registry <sub>`    — comandos del PUBLICADOR: `publish`/`yank`/`keygen`/`verify` (M51/M99).
@@ -143,16 +143,16 @@ Usage: ray <subcommand> [options]
 
 Project:
   new <name>        create a new project (ray.toml + src/main.ray) [--frontend <vite-template>]
-  run [file]        run (src/main.ray by default) [--interp] [--deterministic] [--devtools] [--fuel N] [--heap N] [args...]
+  run [file | dir]  run (src/main.ray by default; a directory = the project living there) [--interp] [--deterministic] [--devtools] [--fuel N] [--heap N] [args...]
   profile [file]    run on the VM with the per-function profiler; report on exit [--json] [--out FILE] [--top N] [args...]
   dev [file]        like run, but RESTARTS on changes to .ray/.ray.html/ray.toml (development mode; webview devtools on; with [frontend] in ray.toml it also runs the frontend dev server — Vite & co. — and app:// URLs point at it; --device sends the program to linked devices instead of running it (the link — port + token — is kept in `.ray-dev` at the project root, git-ignored by `ray new`; delete the file to rotate it) here)
   dev-client <url> <dir>  desktop client of `ray dev --device`: connects to the printed `<shell>.dev://ip:port/token` link and runs each pushed program in its own VM
   dev-lib --target T -o F  build the mobile development library (what `bundle --dev` links; targets: aarch64-apple-ios, aarch64-apple-ios-sim, aarch64-linux-android, x86_64-linux-android)
-  check [file]      alias of build: type-check without running (0 ok / 65 error)
-  build [file]      check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--cpu name (target-cpu; `native` = this machine, default portable)] [--no-stubs | --allow-stubs] [--target triple] [--without crypto,tls,sqlite,regex,bigint,qr,deflate,keychain,unicode,watch,audio,ui,process,mimalloc,ahash,fibers] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
+  check [file | dir] alias of build: type-check without running (0 ok / 65 error)
+  build [file | dir] check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--cpu name (target-cpu; `native` = this machine, default portable)] [--no-stubs | --allow-stubs] [--target triple] [--without crypto,tls,sqlite,regex,bigint,qr,deflate,keychain,unicode,watch,audio,ui,process,mimalloc,ahash,fibers] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
   bundle [file]     package an app (name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process; [ios] background_audio = true keeps std/audio playing in the background; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved and checked against the new shell); --android generates a Gradle project (Java shell + WebView, the program as libray_app.so; --android-abi arm64|x86_64|all, arm64 by default); --dev (with --ios/--android) builds the DEVELOPMENT shell `<app>-dev` for `ray dev --device`; --entitlements plist / [app] entitlements for macOS signing [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed). Signing: --sign IDENTITY / [app] sign / RAY_SIGN_IDENTITY → macOS codesign with hardened runtime + timestamp (Windows: signtool), --notary PROFILE / [app] notary → notarytool submit --wait + stapler; without them the .app is ad-hoc signed and macOS 15+ asks for approval
-  test [file]       run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch] [--native [--release] [--no-stubs | --allow-stubs]]
-  fmt <file>...     print the canonical version to stdout (--write / -w: rewrite in place)
+  test [file | dir] run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch] [--native [--release] [--no-stubs | --allow-stubs]]
+  fmt <file | dir>... print the canonical version to stdout (--write / -w: rewrite in place; a directory = every .ray under it, and without --write it only lists what would change, exit 1)
   doc <file>        generate the Markdown documentation of its public surface
   serve [dir]       serve a directory of static files over HTTP (preview; default . on 127.0.0.1:8000) [--host H] [--port N]
 
@@ -3513,7 +3513,9 @@ fn cmd_build(args: &[String]) {
                 && Some(a.as_str()) != embed_arg.as_deref()
                 && Some(a.as_str()) != cpu_arg.as_deref()
         })
-        .map(String::as_str);
+        .map(String::as_str)
+        // raymcp #306: `ray check .` / `ray build app/` = el proyecto de ese directorio.
+        .filter(|f| !adopt_project_dir(f));
     // M360 (rayauth R36): `ray check` de un paquete-librería verifica cada módulo como módulo.
     if check_only
         && file.is_none()
@@ -4893,6 +4895,11 @@ fn split_test_args(args: &[String]) -> (Vec<String>, Option<String>) {
     let mut explicit = Vec::new();
     let mut idx = 0;
     while let Some(a) = args.get(idx) {
+        // raymcp #306: `ray test .` — un directorio es el proyecto, no un filtro por nombre.
+        if adopt_project_dir(a) {
+            idx += 1;
+            continue;
+        }
         if !a.ends_with(".ray") {
             break;
         }
@@ -5973,17 +5980,51 @@ fn cmd_fetch(_args: &[String]) {
 /// una decisión propia, y el glob del shell ya cubre el caso común.
 fn cmd_fmt(args: &[String]) {
     let write = args.iter().any(|a| a == "--write" || a == "-w");
-    let paths: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
-    if paths.is_empty() {
-        eprintln!("usage: ray fmt <file>... [--write]");
+    let given: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    if given.is_empty() {
+        eprintln!("usage: ray fmt <file | dir>... [--write]");
         process::exit(64);
     }
+    // raymcp #306: un DIRECTORIO se expande a todos sus `.ray` (sin `.ray-deps/`, ocultos ni
+    // `target/`), como `ray check .` toma el proyecto. Sin `--write`, un directorio no imprime
+    // (serían varios archivos): COMPRUEBA — lista los que cambiarían y sale 1 si hay alguno.
+    let mut paths: Vec<String> = Vec::new();
+    let mut had_dir = false;
+    for g in &given {
+        if Path::new(g.as_str()).is_dir() {
+            had_dir = true;
+            let found = ray_files_under(Path::new(g.as_str()));
+            if found.is_empty() {
+                eprintln!("ray fmt: no .ray files under '{g}'");
+                process::exit(64);
+            }
+            paths.extend(found.into_iter().map(|p| p.to_string_lossy().into_owned()));
+        } else {
+            paths.push((*g).clone());
+        }
+    }
     if !write {
+        if had_dir {
+            let mut pending = 0usize;
+            for path in &paths {
+                let source = read_source(path);
+                if format_source_of(path, &source) != source {
+                    println!("would format {path}");
+                    pending += 1;
+                }
+            }
+            if pending == 0 {
+                println!("already formatted ({} file(s))", paths.len());
+                return;
+            }
+            eprintln!("{pending} file(s) would change: run `ray fmt --write` to rewrite them");
+            process::exit(1);
+        }
         if paths.len() > 1 {
             eprintln!("usage: ray fmt <file> (several files require --write)");
             process::exit(64);
         }
-        format_file(paths[0]);
+        format_file(&paths[0]);
         return;
     }
     let mut changed = 0usize;
@@ -6232,6 +6273,8 @@ fn legacy(rest: &[String]) {
 /// el cwd; si nada, error de uso. Avisa —una vez— si el manifiesto declara dependencias
 /// (aún no se resuelven, M39c).
 fn resolve_entry(explicit: Option<&str>, banner: bool) -> String {
+    // raymcp #306: un DIRECTORIO (`ray run .`, `ray check app/`) es «el proyecto que vive ahí».
+    let explicit = explicit.filter(|p| !adopt_project_dir(p));
     if let Some(p) = explicit {
         adopt_project_of(p);
     }
@@ -6275,6 +6318,13 @@ fn resolve_entry(explicit: Option<&str>, banner: bool) -> String {
         return entry.to_string_lossy().into_owned();
     }
     let def = "src/main.ray";
+    if let Some(dir) = PROJECT_DIR.get() {
+        // Un directorio adoptado sin `ray.toml` (solo `src/main.ray`): la entrada va bajo él.
+        let entry = dir.join(def);
+        if entry.is_file() {
+            return entry.to_string_lossy().into_owned();
+        }
+    }
     if Path::new(def).exists() {
         def.to_string()
     } else {
@@ -6287,6 +6337,30 @@ fn resolve_entry(explicit: Option<&str>, banner: bool) -> String {
 /// `src/main.ray`: sus módulos son la superficie, no hay programa que correr.
 fn is_library_package(m: &Manifest) -> bool {
     !m.entry_declared && !m.entry_path().is_file()
+}
+
+/// raymcp #306: todos los `.ray` bajo `dir` (para `ray fmt <dir>`): recursivo y ordenado, sin
+/// `.ray-deps/` (las dependencias no son del usuario), `target/` ni directorios ocultos.
+fn ray_files_under(dir: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        let Ok(entries) = fs::read_dir(dir) else { return };
+        let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+        entries.sort();
+        for p in entries {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with('.') || name == "target" {
+                continue;
+            }
+            if p.is_dir() {
+                walk(&p, out);
+            } else if name.ends_with(".ray") {
+                out.push(p);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, &mut out);
+    out
 }
 
 /// Los módulos de un paquete-librería: todo `.ray` bajo la raíz, menos `tests/` (van aparte),
@@ -6343,6 +6417,32 @@ static PROJECT_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 /// copiaba el módulo a mano). Si el cwd no pertenece a ningún proyecto, el proyecto es el del
 /// archivo — como ya hacían `configure_embed` y el LSP. Un cwd DENTRO de un proyecto manda, como
 /// siempre (un archivo de fuera se trata como módulo suelto de ese proyecto).
+/// raymcp #306: `ray check .`, `ray run app/`, `ray test .`, `ray fmt src/` — un DIRECTORIO como
+/// argumento es «el proyecto que vive ahí», como en las herramientas MCP (`path` = directorio) y
+/// en `cargo run --manifest-path`. Si `arg` es un directorio lo adopta como proyecto (el `ray.toml`
+/// más cercano por encima, o el propio directorio si tiene `src/main.ray`) y devuelve `true`: el
+/// llamador sigue como si no hubiera argumento. Un directorio que no es un proyecto aborta con
+/// 64 y un mensaje que orienta (antes: «could not read module 'main' (.): Is a directory»).
+fn adopt_project_dir(arg: &str) -> bool {
+    let p = Path::new(arg);
+    if !p.is_dir() {
+        return false;
+    }
+    let dir = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let root = match Manifest::find(&dir) {
+        Some(toml) => toml.parent().map(Path::to_path_buf).unwrap_or(dir),
+        None if dir.join("src/main.ray").is_file() => dir,
+        None => {
+            eprintln!(
+                "'{arg}' is a directory but not a project (no ray.toml above it and no src/main.ray inside): pass a .ray file, or run the command inside the project"
+            );
+            process::exit(64);
+        }
+    };
+    let _ = PROJECT_DIR.set(root);
+    true
+}
+
 fn adopt_project_of(entry: &str) {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     if Manifest::find(&cwd).is_some() {

@@ -1307,3 +1307,37 @@ fn main() -> int {
     assert_eq!(code, 0, "{err}");
     assert_eq!(out, "3\n1\n2\n3\n", "{out}");
 }
+
+/// raymcp #307: `s.index_of_from(sub, start)` — el simétrico en string de `bytes.index_of_from`:
+/// índice de carácter en o después de `start`, `start` negativo = 0, `start > len` = None, aguja
+/// vacía = `Some(start)`; recorrer todas las apariciones sin recortar.
+#[test]
+fn string_index_of_from_runs_on_all_engines() {
+    let d = tmp("string_index_of_from");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"fn main() {
+    let s = "banana";
+    print(s.index_of_from("na", 0).unwrap_or(0 - 1));
+    print(s.index_of_from("na", 3).unwrap_or(0 - 1));
+    print(s.index_of_from("na", 5).is_none());
+    print(s.index_of_from("", 6).unwrap_or(0 - 1));
+    print(s.index_of_from("", 7).is_none());
+    print(s.index_of_from("a", 0 - 3).unwrap_or(0 - 1));
+    print("añaña".index_of_from("ña", 2).unwrap_or(0 - 1));
+    var from = 0;
+    var hits: [int] = [];
+    var go = true;
+    while (go) {
+        match ("na-na-na".index_of_from("na", from)) {
+            Option.Some(i) => { hits.push(i); from = i + 1; },
+            Option.None => { go = false; },
+        }
+    }
+    print(hits);
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "2\n4\ntrue\n6\ntrue\n1\n3\n[0, 3, 6]\n");
+}

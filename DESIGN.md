@@ -19510,3 +19510,43 @@ la VM. Cambian el CLI, `docs/build.md`, MANUAL/REFERENCE y PRODUCTION, donde que
 invariante: *lo que `ray` deja en la máquina está acotado*. Lo que no se tocó, a propósito: el
 hash de ruta en el nombre del pkg, porque resuelve una carrera de corrección real y, con la
 poda, su coste desaparece.
+
+## 413. M438 — tres hallazgos de ergonomía: directorios en la CLI, `index_of_from` en string y el About de Finder (nov 2026)
+
+Tres hallazgos de las apps (`ray-apps/findings` #305–#307), ninguno de tipo B, resueltos juntos
+porque los tres son de la misma clase: la herramienta sabía hacerlo y la superficie no lo
+ofrecía donde la mano lo esperaba.
+
+**#306 — la CLI no aceptaba un directorio.** `ray check .` se escribe por costumbre (cargo, go,
+npm lo aceptan) y las herramientas MCP ya tomaban `path` = directorio; la CLI respondía «could
+not read module 'main' (.): Is a directory», un error del loader que no orientaba. La pieza es
+una sola, `adopt_project_dir`, que `resolve_entry` aplica a todo argumento posicional: si es un
+directorio, el proyecto es el `ray.toml` más cercano por encima (o el propio directorio con
+`src/main.ray`), se fija como `PROJECT_DIR` y el subcomando sigue como sin argumento — así
+`run`/`build`/`check`/`dev`/`profile` lo ganan a la vez y la rama de paquete-librería de `check`
+(que mira `file.is_none()`) también entra. `test` lo necesita antes de decidir qué es filtro;
+`fmt` es el único que no tiene «proyecto por defecto», así que un directorio se expande a sus
+`.ray` (sin `.ray-deps/`, `target/` ni ocultos) y, sin `--write`, no imprime varios archivos a
+stdout: comprueba (lista `would format`, sale 1), que es lo que un CI o un agente quieren. Lo que
+se rechazó: enseñar a `ray fmt` sin argumentos a formatear el proyecto entero (demasiado
+implícito para una orden que reescribe), y un `--check` aparte (el directorio ya lo expresa).
+
+**#307 — `string` sin `index_of_from`.** `bytes` lo tenía desde M304 y `string` solo `index_of` y
+`last_index_of`; recorrer las apariciones de una subcadena obligaba a recortar y a llevar el
+desfase aparte. Va en el prelude sobre `substring` + `index_of` (una copia del resto por llamada:
+el mismo coste que el rodeo manual, sin opcode nuevo en tres motores ni espejo selfhost); si
+alguna app lo mide caliente, el primitivo nativo es el paso siguiente. Detalle del transpilador
+que lo decidió: `__index_of` crudo se traduce a un helper que ya devuelve `Option`, así que una
+función del prelude que lo llame directamente no compila en nativo — las funciones nuevas del
+prelude se escriben sobre las del prelude, no sobre los `__builtins`.
+
+**#305 — el About de macOS.** La descripción viajaba como `NSAttributedString` sin atributos, y
+el `NSTextView` del panel la pintaba con su default (Helvetica 12, a la izquierda) junto a un
+nombre, versión y copyright centrados en la letra del sistema. Finder la pone centrada, pequeña
+y en color secundario; eso es lo que se le pone ahora (`NSParagraphStyle` centrado,
+`systemFontOfSize: smallSystemFontSize`, `secondaryLabelColor`). Nada cambia en la API: la doc
+ya prometía «como el subtítulo de Finder» y ahora es verdad.
+
+Qué implica para el lenguaje: `index_of_from` entra en la superficie estable de `string`
+(REFERENCE/MANUAL/llms.txt); la CLI gana `[archivo | dir]` en cinco subcomandos; ni SPEC ni
+semántica de los motores cambian.

@@ -4,6 +4,27 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+Tres hallazgos de ergonomía de rayreq y raymcp (#305–#307).
+
+- **La CLI acepta un directorio de proyecto (raymcp #306).** `ray check .`, `ray run app/`,
+  `ray build .`, `ray test .` y `ray fmt src/` toman el directorio como «el proyecto que vive ahí»
+  (el `ray.toml` más cercano por encima, o el propio directorio si tiene `src/main.ray`), igual que
+  el `path` de las herramientas MCP, desde dentro o desde fuera del proyecto. En `test` ya no es un
+  filtro por nombre; `fmt <dir>` recorre todos sus `.ray` (sin `.ray-deps/`, `target/` ni ocultos):
+  con `--write` los reescribe y sin él **comprueba** (lista `would format …` y sale 1). Un directorio
+  que no es proyecto sale 64 con un mensaje que orienta, en vez de «could not read module 'main'
+  (.): Is a directory». La herramienta MCP `ray_fmt` acepta ahora un directorio (comprobación).
+- **`s.index_of_from(sub, start)` en string (raymcp #307).** El simétrico de `bytes.index_of_from`:
+  índice de carácter en o después de `start` (negativo = 0, `start > len` → `None`, aguja vacía →
+  `Some(start)`). Recorrer todas las apariciones de una subcadena ya no obliga a ir recortando y
+  llevar el desfase aparte.
+- **`ui.set_about`: la descripción sale como el subtítulo de Finder (rayreq #305).** Los créditos
+  del panel About de macOS iban como `NSAttributedString` sin atributos — a la izquierda, en
+  Helvetica 12 — mientras nombre, versión y copyright iban centrados en la letra del sistema. Ahora
+  van centrados, en la letra del sistema pequeña y en color secundario, como en Finder.
+
 ## 1.27.88 — 2026-10-31
 
 La caché de builds nativos acotada (M437) y la documentación puesta al día con el modelo vigente.

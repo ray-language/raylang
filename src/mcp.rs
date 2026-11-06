@@ -280,7 +280,7 @@ fn tools_list() -> Json {
         ),
         tool(
             "ray_fmt",
-            "Format a raylang program canonically: pass 'code' (a snippet) or 'path' (a .ray file on disk). Returns the formatted source (the file is not modified).",
+            "Format a raylang program canonically: pass 'code' (a snippet) or 'path' (a .ray file on disk). Returns the formatted source (the file is not modified). With 'path' = a project directory it CHECKS every .ray under it instead: lists 'would format <file>' and exits 1 when any is not canonical (nothing is rewritten).",
             code_schema("A raylang source file to format."),
         ),
         tool(
@@ -337,11 +337,15 @@ fn call_tool(name: &str, args: &Json) -> Result<String, String> {
             Some(p) => run_self_at(&["test"], p, None),
             None => run_self(&["test"], code()?, None),
         },
-        // M323 (findings #98): `path` también aquí — un `.ray` real del proyecto. Un directorio
-        // no sirve: `ray fmt` no recorre directorios y sin `--write` imprime UN archivo.
+        // M323 (findings #98): `path` también aquí — un `.ray` real del proyecto. raymcp #306: un
+        // directorio COMPRUEBA todos sus `.ray` (`ray fmt <dir>` sin `--write`: lista los que
+        // cambiarían, exit 1), que es lo útil para un agente; el archivo imprime la canónica.
         "ray_fmt" => match path {
             Some(p) if std::path::Path::new(p).is_dir() => {
-                Err(format!("ray_fmt needs a .ray file (got the directory '{p}'): pass the file's path, or 'code'"))
+                let target = std::path::Path::new(p)
+                    .canonicalize()
+                    .map_err(|e| format!("could not resolve '{p}': {e}"))?;
+                run_child(&["fmt"], Some(&target), &target, None, false)
             }
             Some(p) => run_self_at(&["fmt"], p, None),
             None => run_self(&["fmt"], code()?, None),
@@ -1433,16 +1437,11 @@ mod tests {
         assert!(doc_text_at("nope", Some(&p)).contains("is not a builtin"));
     }
 
-    /// M323 (findings #98): `ray_fmt` con `path` — el caso del archivo real vive en
-    /// tests/mcp_cli.rs (lanza el binario); aquí, los dos rechazos que no lanzan nada.
+    /// M323 (findings #98): `ray_fmt` con `path` — los casos que lanzan el binario (archivo real y,
+    /// desde raymcp #306, un directorio que se COMPRUEBA) viven en tests/mcp_cli.rs; aquí, el
+    /// rechazo que no lanza nada: sin argumento.
     #[test]
-    fn ray_fmt_rejects_a_directory_and_a_missing_argument() {
-        let base = std::env::temp_dir().join("ray_mcp_fmt_dir");
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).unwrap();
-        let dir = Json::Obj(vec![("path".into(), Json::Str(base.to_string_lossy().into_owned()))]);
-        let err = call_tool("ray_fmt", &dir).unwrap_err();
-        assert!(err.contains("needs a .ray file"), "{err}");
+    fn ray_fmt_rejects_a_missing_argument() {
         let none = call_tool("ray_fmt", &Json::Obj(vec![])).unwrap_err();
         assert!(none.contains("missing argument"), "{none}");
     }

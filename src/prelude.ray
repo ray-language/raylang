@@ -1510,6 +1510,29 @@ fn last_index_of(s: string, sub: string) -> Option<int> {
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
+// raymcp #307: índice (de carácter) de la primera ocurrencia de `sub` EN O DESPUÉS de `start`,
+// simétrico de `bytes.index_of_from`. Recorrer todas las apariciones de una subcadena es
+// `while let Some(i) = s.index_of_from(sub, from)` sin ir recortando ni llevar el desfase aparte.
+// Sobre `substring` + `index_of` (una copia del resto por llamada, el mismo coste que el rodeo
+// manual); `start` negativo cuenta como 0 y `start > len` da `None`.
+/// Returns the character index of the first occurrence of `sub` at or after character index
+/// `start`, or `None` (`Some(start)` for an empty `sub` while `start <= s.len()`). The string
+/// counterpart of `bytes.index_of_from`: walk every occurrence without re-slicing the string.
+fn index_of_from(s: string, sub: string, start: int) -> Option<int> {
+    let from = if (start < 0) { 0 } else { start };
+    let n = s.len();
+    if (from > n) {
+        return Option.None;
+    }
+    // Sin `match`: en el transpilador un `match` consume un temporal numerado (`match_temp`) y
+    // desplazaría los nombres de las fusiones del programa del usuario (`__rt_sp0` → `__rt_sp1`).
+    let found = s.substring(from, n).index_of(sub);
+    if (found.is_none()) {
+        return Option.None;
+    }
+    Option.Some(found.unwrap() + from)
+}
+
 // M11.7b: quita y devuelve el último elemento del arreglo (lo muta); None si está vacío.
 /// Removes and returns the last element of the array (mutating it), or `None` if it is empty.
 fn pop<T>(a: [T]) -> Option<T> {

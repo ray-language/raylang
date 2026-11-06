@@ -4024,6 +4024,59 @@ fn check_alias_and_unknown_subcommand() {
     assert!(err.contains("unknown subcommand 'bogus-cmd'") && err.contains("ray help"), "{err}");
 }
 
+/// raymcp #306: un DIRECTORIO como argumento de `check`/`run`/`test`/`fmt` es el proyecto que vive
+/// ahí (como el `path` de las herramientas MCP) — desde dentro (`.`, `src`) y desde fuera (`demo`);
+/// en `test` no es un filtro; `fmt <dir>` sin `--write` comprueba (lista y sale 1) y con `--write`
+/// reescribe; un directorio que no es proyecto sale 64 con un mensaje que orienta (antes: «could
+/// not read module 'main' (.): Is a directory»).
+#[test]
+fn a_directory_argument_means_the_project_living_there() {
+    let base = tmp("dir_arg");
+    let (_o, err, code) = ray(&base, &["new", "demo"]);
+    assert_eq!(code, 0, "{err}");
+    let proj = base.join("demo");
+    std::fs::write(
+        proj.join("src/main.ray"),
+        "@test\nfn t() { assert_eq(1, 1); }\n\nfn main() {\n    print(\"dir ok\");\n}\n",
+    )
+    .unwrap();
+    for dir in [".", "src"] {
+        let (out, err, code) = ray(&proj, &["check", dir]);
+        assert_eq!(code, 0, "check {dir}: {err}");
+        assert!(out.contains("compiles"), "check {dir}: {out}");
+        let (out, err, code) = ray(&proj, &["run", dir]);
+        assert_eq!(code, 0, "run {dir}: {err}");
+        assert_eq!(out, "dir ok\n", "run {dir}");
+    }
+    let (out, err, code) = ray(&proj, &["test", "."]);
+    assert_eq!(code, 0, "test .: {err}");
+    assert!(out.contains("1 test(s), all passed"), "test .: {out}");
+    // Desde fuera del proyecto, el directorio lo adopta (deps, entrada y raíces desde él).
+    let (out, err, code) = ray(&base, &["run", "demo"]);
+    assert_eq!(code, 0, "run demo: {err}");
+    assert_eq!(out, "dir ok\n");
+    let (out, _e, code) = ray(&base, &["test", "demo"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("all passed"), "{out}");
+    // `fmt <dir>`: sin --write comprueba; con --write reescribe; después, ya está canónico.
+    std::fs::write(proj.join("src/util.ray"), "fn   twice(x: int) -> int {   x * 2 }\n").unwrap();
+    let (out, err, code) = ray(&proj, &["fmt", "."]);
+    assert_eq!(code, 1, "{err}");
+    assert!(out.contains("would format") && out.contains("util.ray"), "{out}");
+    let (out, err, code) = ray(&proj, &["fmt", ".", "--write"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("formatted") && out.contains("util.ray"), "{out}");
+    let (out, _e, code) = ray(&proj, &["fmt", "."]);
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("already formatted (2 file(s))"), "{out}");
+    // Un directorio que no es un proyecto: 64 y el mensaje orienta.
+    std::fs::create_dir_all(base.join("plain")).unwrap();
+    let (_o, err, code) = ray(&base, &["check", "plain"]);
+    assert_eq!(code, 64, "{err}");
+    assert!(err.contains("is a directory but not a project") && err.contains("src/main.ray"), "{err}");
+    assert!(!err.contains("could not read module"), "{err}");
+}
+
 /// M217 (ray-sublime #7): `ray doc std/<módulo>` y `ray doc <módulo>.<símbolo>` desde el CLI — la
 /// misma resolución que `ray_doc` del MCP; un símbolo inexistente sale 66.
 #[test]

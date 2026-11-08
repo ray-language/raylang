@@ -4,22 +4,25 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.89 — 2026-11-08
 
-Hallazgos de rayreq, raymcp y ray-sublime (#305–#311, #315).
+Hallazgos de rayreq, raymcp y ray-sublime (#305–#311, #315): la clase RefCell-en-args cerrada de
+raíz en nativo, directorios en la CLI, `string.index_of_from`, `--sign none` y el About de Finder.
 
-- **Nativo: un argumento de una llamada a la stdlib que muta un struct leído por otro argumento
-  ya no panica con «RefCell already borrowed» (ray-sublime #315, M439).** `fs.write_file_bytes(sh.path,
-  bytes_for(sh))`, con `bytes_for` asignando un campo de `sh`, cerraba la app nativa (la VM iba
-  bien): los intercepts de `std::fs`/`net`/`time`/… emitían los argumentos en línea y el guard del
-  `borrow()` del primero vivía mientras se evaluaba el segundo. Ahora, cuando algún argumento puede
-  llamar, todos se izan a temporales en orden (como ya hacían las llamadas de usuario y los
-  constructores de variante) y la llamada se reemite sobre ellos. De paso, `write_file_bytes` ya no
-  evalúa su segundo argumento dos veces.
+- **Nativo: leer un campo de un struct ya no deja su `RefCell` prestado hasta el final de la
+  sentencia (ray-sublime #315, M439).** `fs.write_file_bytes(sh.path, bytes_for(sh))`, con `bytes_for`
+  asignando un campo de `sh`, cerraba la app nativa con «RefCell already borrowed» (la VM iba bien).
+  La causa era general: `sh.path` se emitía como `sh.borrow().path.clone()` y ese guard temporal
+  vivía mientras se evaluaba el argumento siguiente, la llamada entera o el resto de un `+`. Ahora la
+  lectura va en su propio bloque (`({ sh.borrow().path.clone() })`, edition 2024: el guard muere al
+  cerrarlo), lo mismo para las `var` capturadas, y la clase desaparece en las llamadas a la stdlib,
+  en los builtins, en la concatenación y en los argumentos anidados, no solo en el caso del hallazgo.
+  De paso, `write_file_bytes` ya no evalúa su segundo argumento dos veces.
 - **`ray bundle`/`ray release`: `--sign none` desactiva la firma (rayreq #309).** `--sign none` (o
-  `--sign ""`, o `RAY_SIGN_IDENTITY=none`) construye sin firmar aunque `[app] sign` tenga valor, y en
-  Windows una identidad de codesign de Apple en `[app] sign` se ignora con aviso en vez de hacer fallar
-  signtool con el bundle ya construido.
+  `--sign ""`, o `RAY_SIGN_IDENTITY=none`) construye sin firmar aunque `[app] sign` tenga valor (una
+  `RAY_SIGN_IDENTITY` vacía sigue siendo «sin valor» y cae al manifiesto), y en Windows una identidad
+  de codesign de Apple en `[app] sign` se ignora con aviso en vez de hacer fallar signtool con el
+  bundle ya construido.
 - **`ui.edit_menu`: documentado cómo localizar su título (rayreq #311).** El menú se titula «Edit»
   en todas las plataformas; `rename_menu("Edit", "Edición")` tras la última llamada a `edit_menu` lo
   traduce, y después sus ítems se cambian con `replace_menu("Edición", …)`.
@@ -29,8 +32,10 @@ Hallazgos de rayreq, raymcp y ray-sublime (#305–#311, #315).
 - **La CLI acepta un directorio de proyecto (raymcp #306).** `ray check .`, `ray run app/`,
   `ray build .`, `ray test .` y `ray fmt src/` toman el directorio como «el proyecto que vive ahí»
   (el `ray.toml` más cercano por encima, o el propio directorio si tiene `src/main.ray`), igual que
-  el `path` de las herramientas MCP, desde dentro o desde fuera del proyecto. En `test` ya no es un
-  filtro por nombre; `fmt <dir>` recorre todos sus `.ray` (sin `.ray-deps/`, `target/` ni ocultos):
+  el `path` de las herramientas MCP, desde dentro o desde fuera del proyecto. En `test` solo cuenta
+  el primer argumento y solo si es una raíz de proyecto o `.` (`ray test tests` sigue siendo un
+  filtro), y `--watch` vigila el proyecto adoptado; `fmt <dir>` recorre todos sus `.ray` (sin
+  `.ray-deps/`, `target/`, `node_modules/` ni ocultos):
   con `--write` los reescribe y sin él **comprueba** (lista `would format …` y sale 1). Un directorio
   que no es proyecto sale 64 con un mensaje que orienta, en vez de «could not read module 'main'
   (.): Is a directory». La herramienta MCP `ray_fmt` acepta ahora un directorio (comprobación).

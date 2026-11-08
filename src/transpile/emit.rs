@@ -1276,7 +1276,8 @@ impl Transpiler {
                 if self.is_cell(name) {
                     // Var-celda (B1): leer = desenvolver la celda con un clon del valor (`n.borrow().clone()`).
                     // clone() vale para todo tipo (para int es copia); mantiene la semántica de "leer clona".
-                    write!(out, "{}.borrow().clone()", mangle(name)).unwrap();
+                    // El bloque cierra el guard al salir (M439, misma clase que el `Field` de abajo).
+                    write!(out, "({{ {}.borrow().clone() }})", mangle(name)).unwrap();
                 } else if let Some(ty) = self.lookup(name) {
                     // M309 (findings #60): un param fn MARCADO (genérico `__F: Fn + Send…`, H21-N5c)
                     // usado como VALOR (guardado en un mapa, devuelto, pasado a un param no marcado)
@@ -1708,14 +1709,22 @@ impl Transpiler {
                 }
             }
             // Acceso a campo (lectura). Tupla: `t.0` → `t.0` (campo nativo, sin borrow). Struct: `p.x` →
-            // `p.borrow().x.clone()`. (El `Field` de un método/UFCS lo consume `emit_call`.)
+            // `({ p.borrow().x.clone() })`. (El `Field` de un método/UFCS lo consume `emit_call`.)
+            // ray-sublime #315 (M439): el BLOQUE es la corrección de raíz de la clase RefCell-en-args
+            // (IDEAS §64). Sin él, el guard temporal del `borrow()` vive hasta el final de la
+            // sentencia que lo contiene —durante la evaluación de los argumentos siguientes, de la
+            // llamada entera, de un `+`…— y cualquier `borrow_mut` del mismo objeto en ese tramo
+            // panica. En la edition 2024 del crate generado los temporales de la expresión final
+            // de un bloque mueren al cerrar el bloque: el clon sale y el guard ya no existe. Los
+            // paréntesis permiten encadenar (`({ … }).len()` también al inicio de una sentencia).
             ExprKind::Field { object, name } => {
                 if matches!(self.type_of(object)?, Type::Tuple(_)) {
                     self.emit_expr(out, object)?;
                     write!(out, ".{}", name).unwrap(); // índice numérico de tupla: NO manglar
                 } else {
+                    out.push_str("({ ");
                     self.emit_expr(out, object)?;
-                    write!(out, ".borrow().{}.clone()", mangle(name)).unwrap();
+                    write!(out, ".borrow().{}.clone() }})", mangle(name)).unwrap();
                 }
             }
             // Construcción de variante de enum. Option/Result → Some/None/Ok/Err NATIVOS de Rust (sin Rc);

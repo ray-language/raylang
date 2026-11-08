@@ -19574,11 +19574,30 @@ propio. Los intercepts no cambian, y como los argumentos ya no contienen llamada
 izar. Solo se paga cuando hay una llamada entre los argumentos: el camino caliente de
 `socket_write(h, buf)` con variables planas sigue en línea.
 
+Esa fue la primera versión (#617). La revisión de código previa al release señaló lo obvio
+una vez dicho: el izado por sitio de llamada es un parche sobre el síntoma, y la clase seguía
+viva en la concatenación (`sh.path + f(sh)`), en los builtins (`sh.path.index_of(key(sh))`) y
+en un argumento anidado (`fs.read_file(sh.path + suffix(sh))`, donde el izado del argumento
+entero mete guard y `borrow_mut` en el mismo `let`). La corrección de raíz (esta PR, la del
+release) está en la emisión de la lectura misma: `({ sh.borrow().path.clone() })`. En la
+edition 2024 del crate generado, los temporales de la expresión final de un bloque mueren al
+cerrar el bloque, así que el clon sale y el guard no sobrevive a la lectura; lo mismo para las
+`var` capturadas (`({ n.borrow().clone() })`). Con eso, el izado especial de `std::` sobraba y
+se retiró: una regla en un sitio, para todos los consumidores. Lo que no cambia: las escrituras
+(`SetField`/`SetIndex`) ya izaban sus operandos a temporales antes del `borrow_mut`.
+
 Dos cosas más salieron al mirar: `write_file_bytes` emitía el segundo argumento DOS veces (una
 para escribir, otra para el `.len()` del `Ok`), con lo que `bump(b)` corría dos veces en nativo
 y una en la VM; ahora ambos argumentos van a temporales. Y el hallazgo pedía que el panic del
 runtime nombrara la línea `.ray`: con el izado el panic desaparece, pero la petición sigue en
 pie para cualquier otro «already borrowed» futuro — queda anotada, no resuelta.
+
+La misma revisión dejó tres ajustes en M438: `ray test <dir>` adopta solo el primer posicional
+y solo si es una raíz de proyecto (o `.`), para que `ray test tests` siga siendo un filtro aunque
+exista el directorio; `--watch` vigila el proyecto adoptado y no el cwd; y el recorrido de
+`ray fmt <dir>` comparte el walker de `library_modules` (salta `node_modules/`). Y en M439:
+`RAY_SIGN_IDENTITY` vacía no apaga la firma (un secreto de CI sin definir cae al manifiesto, como
+antes); solo `none` o el flag.
 
 **rayreq #309.** `[app] sign` con una identidad de codesign de Apple hacía fallar `ray release`
 en Windows al final, con el bundle ya construido, y no había forma de anularlo desde la línea de

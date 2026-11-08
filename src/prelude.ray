@@ -1524,13 +1524,10 @@ fn index_of_from(s: string, sub: string, start: int) -> Option<int> {
     if (from > n) {
         return Option.None;
     }
-    // Sin `match`: en el transpilador un `match` consume un temporal numerado (`match_temp`) y
-    // desplazaría los nombres de las fusiones del programa del usuario (`__rt_sp0` → `__rt_sp1`).
-    let found = s.substring(from, n).index_of(sub);
-    if (found.is_none()) {
-        return Option.None;
+    match (s.substring(from, n).index_of(sub)) {
+        Option.Some(i) => Option.Some(i + from),
+        Option.None => Option.None,
     }
-    Option.Some(found.unwrap() + from)
 }
 
 // M11.7b: quita y devuelve el último elemento del arreglo (lo muta); None si está vacío.

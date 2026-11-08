@@ -855,13 +855,17 @@ impl Transpiler {
                 );
             }
             "write_file_bytes" => {
-                out.push_str("(match std::fs::write(&*");
+                // ray-sublime #315: los dos args a temporales (antes el segundo se emitía DOS veces —
+                // una para escribir y otra para el `.len()` del Ok— y el guard del primero vivía
+                // durante la evaluación del segundo).
+                out.push_str("{ let __rt_p = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(", &*");
+                out.push_str("; let __rt_d = ");
                 self.emit_expr(out, eff[1])?;
-                out.push_str(") { Ok(()) => Ok::<i64, Rc<str>>(");
-                self.emit_expr(out, eff[1])?;
-                out.push_str(".len() as i64), Err(__e) => Err(Rc::<str>::from(__e.to_string())) })");
+                out.push_str(
+                    "; match std::fs::write(&*__rt_p, &*__rt_d) { Ok(()) => Ok::<i64, Rc<str>>(__rt_d.len() as i64), \
+                     Err(__e) => Err(Rc::<str>::from(__e.to_string())) } }",
+                );
             }
             // append_file(path, content): añade al final (crea si no existe). Devuelve Ok(nº de
             // CARACTERES escritos) como la VM (`std/fs.ray`: `Result.Ok(content.len())`, y `len` de
@@ -1255,6 +1259,49 @@ impl Transpiler {
         }
         // Argumentos efectivos: el receptor de UFCS (si lo hay) va primero.
         let eff: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
+        // ray-sublime #315: la clase RefCell-en-args (IDEAS §64) en la stdlib INTERCEPTADA. Las
+        // llamadas de usuario (`emit_user_call_hoisted`) y los constructores de variante izan sus
+        // argumentos a temporales; los intercepts de `std::fs`/`net`/`time`/… emitían los args EN
+        // LÍNEA (`std::fs::write(&*sh.borrow().path.clone(), &*bytes_for(sh))`): el guard del
+        // `borrow()` del primer arg vive hasta el final de la sentencia, y si un arg posterior
+        // llama a una función que hace `borrow_mut` del mismo struct, panic «already borrowed»
+        // (la VM evalúa los args y ya). Solo cuando algún argumento PUEDE llamar (lo demás no
+        // muta nada) se izan todos los no-literales a `let __rt_sa{i}` en orden —cada `let`
+        // cierra sus guards— y se reemite la MISMA llamada con identificadores sintéticos: los
+        // intercepts no cambian, y al no haber ya llamadas en los args no se vuelve a izar. De
+        // paso, un intercept que emite un arg dos veces (p. ej. el `.len()` del resultado) ya no
+        // ejecuta su efecto dos veces.
+        if recv.is_none()
+            && name.starts_with("std::")
+            && eff.len() >= 2
+            && eff.iter().any(|a| may_call(a))
+            && let Some(tys) = eff.iter().map(|a| self.type_of(a).ok()).collect::<Option<Vec<Type>>>()
+        {
+            out.push_str("{ ");
+            let mut synthetic: Vec<Expr> = Vec::with_capacity(eff.len());
+            self.scopes.push(HashMap::new());
+            let mut r = Ok(());
+            for (i, a) in eff.iter().enumerate() {
+                if is_pure_literal(a) {
+                    synthetic.push((*a).clone());
+                    continue;
+                }
+                let tmp = format!("__rt_sa{i}");
+                write!(out, "let {tmp} = ").unwrap();
+                r = self.emit_expr(out, a);
+                if r.is_err() {
+                    break;
+                }
+                out.push_str("; ");
+                self.declare(&tmp, tys[i].clone());
+                synthetic.push(Expr { kind: ExprKind::Ident(tmp), line: a.line, col: a.col });
+            }
+            let r = r.and_then(|_| self.emit_call(out, callee, &synthetic));
+            self.scopes.pop();
+            r?;
+            out.push_str(" }");
+            return Ok(());
+        }
         // `std::math::*` (módulo std/math) → los métodos de `f64` de Rust (misma impl que la VM → mismo
         // resultado). abs/min/max son ad-hoc int|float (ambos tienen esos métodos en Rust).
         if let Some(mfn) = name.strip_prefix("std::math::")

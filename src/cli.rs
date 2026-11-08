@@ -2288,7 +2288,8 @@ const BUNDLE_USAGE: &str = "usage: ray bundle [file] [--name N] [--icon icon.png
 [--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]] [--dev] [--devtools] \
 [--allow-stubs] [--sign IDENTITY] [--notary PROFILE] [--entitlements plist]\n\
   --sign: macOS codesign with hardened runtime + timestamp (Developer ID identity), Windows signtool (subject or .pfx, \
-password in RAY_SIGN_PFX_PASSWORD); --notary: notarytool keychain profile → submit --wait + stapler (macOS). \
+password in RAY_SIGN_PFX_PASSWORD); --sign none (or \"\") disables signing even when [app] sign is set — on Windows an \
+Apple identity in [app] sign is ignored with a warning; --notary: notarytool keychain profile → submit --wait + stapler (macOS). \
 Defaults: [app] sign/notary/entitlements of ray.toml, or RAY_SIGN_IDENTITY / RAY_NOTARY_PROFILE.\n\
   --devtools: the app's webview ships with devtools (desktop: Inspect Element/F12; mobile shell: inspectable from the \
 desktop — Safari's Develop menu for iOS, chrome://inspect for Android). A build without the flag can never enable them.\n\
@@ -2818,6 +2819,18 @@ fn cmd_bundle(args: &[String]) {
         // recursos) y el acceso directo `<name>.lnk`.
         #[cfg_attr(not(windows), allow(unused_variables))]
         let signing = signing_config(manifest.as_ref(), sign_arg, notary_arg, entitlements_arg);
+        // rayreq #309: una identidad de codesign de Apple (`Developer ID Application: …`) en
+        // `[app] sign` nunca sirve para signtool; se ignora con aviso en vez de fallar al final
+        // («No certificates were found…») con el bundle ya construido.
+        #[cfg_attr(not(windows), allow(unused_variables))]
+        let identity = signing.identity.as_deref().filter(|id| {
+            if is_apple_signing_identity(id) {
+                eprintln!("ignoring [app] sign '{id}': an Apple codesign identity does not work with signtool (on Windows pass --sign <subject | file.pfx>, RAY_SIGN_IDENTITY, or --sign none)");
+                false
+            } else {
+                true
+            }
+        });
         #[cfg(windows)]
         if let Err(e) = crate::bundle_windows::bundle(
             &out_dir,
@@ -2826,7 +2839,7 @@ fn cmd_bundle(args: &[String]) {
             manifest.as_ref().and_then(|m| m.app_copyright.as_deref()),
             icon.as_deref().map(Path::new),
             &tmp_bin,
-            signing.identity.as_deref(),
+            identity,
         ) {
             eprintln!("bundle: {e}");
             process::exit(74);
@@ -3015,7 +3028,24 @@ fn plist_escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }
 
+/// rayreq #309: ¿es `id` una identidad de `codesign` de Apple? (El sujeto de un certificado de
+/// signtool nunca empieza así.)
+fn is_apple_signing_identity(id: &str) -> bool {
+    const APPLE: [&str; 8] = [
+        "Developer ID Application:",
+        "Developer ID Installer:",
+        "Apple Development:",
+        "Apple Distribution:",
+        "Mac Developer:",
+        "3rd Party Mac Developer",
+        "iPhone Developer:",
+        "iPhone Distribution:",
+    ];
+    APPLE.iter().any(|p| id.trim_start().starts_with(p))
+}
+
 /// M249: qué firma lleva el bundle. Prioridad: flag → variable de entorno → `[app]` del ray.toml.
+/// `--sign none`/`""` (o `RAY_SIGN_IDENTITY=none`) = sin firma aunque `[app] sign` tenga valor (#309).
 pub(crate) struct Signing {
     pub identity: Option<String>,
     pub notary: Option<String>,
@@ -3024,7 +3054,15 @@ pub(crate) struct Signing {
 
 fn signing_config(manifest: Option<&Manifest>, sign: Option<String>, notary: Option<String>, entitlements: Option<String>) -> Signing {
     let env_nonempty = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
-    let identity = sign.or_else(|| env_nonempty("RAY_SIGN_IDENTITY")).or_else(|| manifest.and_then(|m| m.app_sign.clone()));
+    // rayreq #309: `--sign none` (o `--sign ""`, o `RAY_SIGN_IDENTITY=none`) DESACTIVA la firma
+    // aunque `[app] sign` tenga valor: el ray.toml de un proyecto que firma en macOS no sirve en
+    // la máquina de Windows (ni en un CI sin certificado), y antes no había forma de anularlo.
+    let is_off = |v: &str| v.trim().is_empty() || v.trim().eq_ignore_ascii_case("none");
+    let identity = match sign.or_else(|| std::env::var("RAY_SIGN_IDENTITY").ok()) {
+        Some(v) if is_off(&v) => None,
+        Some(v) => Some(v),
+        None => manifest.and_then(|m| m.app_sign.clone()).filter(|v| !is_off(v)),
+    };
     let notary = notary.or_else(|| env_nonempty("RAY_NOTARY_PROFILE")).or_else(|| manifest.and_then(|m| m.app_notary.clone()));
     let entitlements = entitlements
         .map(PathBuf::from)
@@ -6857,6 +6895,24 @@ fn render_trace(trace: &[runtime::TraceFrame], locate: &Locate) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// rayreq #309: `--sign none`/`""` anula `[app] sign`; una identidad de Apple se reconoce.
+    #[test]
+    fn sign_none_disables_signing_and_apple_identities_are_recognized() {
+        let m = crate::manifest::parse(
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n\n[app]\nsign = \"Developer ID Application: Rayala (A2CY27N22G)\"\n",
+            std::path::PathBuf::from("/proj"),
+        )
+        .unwrap();
+        assert_eq!(super::signing_config(Some(&m), None, None, None).identity.as_deref(), Some("Developer ID Application: Rayala (A2CY27N22G)"));
+        assert_eq!(super::signing_config(Some(&m), Some("none".into()), None, None).identity, None);
+        assert_eq!(super::signing_config(Some(&m), Some("".into()), None, None).identity, None);
+        assert_eq!(super::signing_config(Some(&m), Some("CN=Rayala".into()), None, None).identity.as_deref(), Some("CN=Rayala"));
+        assert!(super::is_apple_signing_identity("Developer ID Application: Rayala (A2CY27N22G)"));
+        assert!(super::is_apple_signing_identity("Apple Development: dev@example.com (TEAM)"));
+        assert!(!super::is_apple_signing_identity("CN=Rayala, O=Rayala"));
+        assert!(!super::is_apple_signing_identity("certs/rayala.pfx"));
+    }
+
     /// M437: la poda reconoce los artefactos de un programa en sus tres formas y nunca los crates del
     /// runtime (que no llevan el sufijo `_<8 hex>`).
     #[test]

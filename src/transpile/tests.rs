@@ -313,6 +313,35 @@ fn fuses_substring_into_parse_int_and_index_of() {
     assert!(rust.contains("__rt_fs[__rt_lo..__rt_hi]"), "{}", rust);
 }
 
+/// ray-sublime #315: una llamada interceptada de la stdlib con un argumento que PUEDE llamar iza
+/// todos los args no literales a `let __rt_sa{i}` (cada `let` cierra el guard del `borrow()` del
+/// anterior) y reemite la misma llamada sobre ellos; con args sin llamadas no se iza nada.
+#[test]
+fn std_call_with_a_calling_arg_hoists_its_args() {
+    // `import std/fs` necesita el loader (como el test de fs.sync).
+    let dir = std::env::temp_dir().join(format!("ray_std_call_hoist_test_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let src = "import std/fs;\n\
+         struct S { p: string }\n\
+         fn data(s: S) -> bytes { s.p = \"q\"; \"x\".to_bytes() }\n\
+         fn main() {\n\
+             let s = S { p: \"a\" };\n\
+             let _ = fs.write_file_bytes(s.p, data(s));\n\
+             let y = \"y\".to_bytes();\n\
+             let _ = fs.write_file_bytes(s.p, y);\n\
+         }\n";
+    std::fs::write(dir.join("main.ray"), src).unwrap();
+    let loaded = match crate::loader::load(&dir.join("main.ray")) { Ok(l) => l, Err(e) => panic!("no se pudo cargar std/fs: {}", e.message) };
+    let mut prog = loaded.program;
+    crate::checker::check(&mut prog).expect("check");
+    let rust = super::transpile_full(&prog, &[], false, true).expect("transpile").source;
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(rust.contains("let __rt_sa0 = s.clone().borrow().p.clone(); let __rt_sa1 = "), "iza los args: {rust}");
+    assert!(rust.contains("std::fs::write(&*__rt_p, &*__rt_d)"), "escribe sobre temporales: {rust}");
+    assert_eq!(rust.matches("let __rt_sa0").count(), 1, "sin llamada en los args no se iza: {rust}");
+    assert!(rust.contains("let __rt_p = s.clone().borrow().p.clone(); let __rt_d = y.clone();"), "args planos, en línea: {rust}");
+}
+
 /// N-D4b: `let f = s.split(sep)` consumido SOLO por `f[const]` → extracción en una pasada, sin
 /// materializar el `Vec<Rc<str>>`; el pánico OOB replica el del indexado de Vec.
 #[test]

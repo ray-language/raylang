@@ -6,7 +6,25 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
-Tres hallazgos de ergonomía de rayreq y raymcp (#305–#307).
+Hallazgos de rayreq, raymcp y ray-sublime (#305–#311, #315).
+
+- **Nativo: un argumento de una llamada a la stdlib que muta un struct leído por otro argumento
+  ya no panica con «RefCell already borrowed» (ray-sublime #315, M439).** `fs.write_file_bytes(sh.path,
+  bytes_for(sh))`, con `bytes_for` asignando un campo de `sh`, cerraba la app nativa (la VM iba
+  bien): los intercepts de `std::fs`/`net`/`time`/… emitían los argumentos en línea y el guard del
+  `borrow()` del primero vivía mientras se evaluaba el segundo. Ahora, cuando algún argumento puede
+  llamar, todos se izan a temporales en orden (como ya hacían las llamadas de usuario y los
+  constructores de variante) y la llamada se reemite sobre ellos. De paso, `write_file_bytes` ya no
+  evalúa su segundo argumento dos veces.
+- **`ray bundle`/`ray release`: `--sign none` desactiva la firma (rayreq #309).** `--sign none` (o
+  `--sign ""`, o `RAY_SIGN_IDENTITY=none`) construye sin firmar aunque `[app] sign` tenga valor, y en
+  Windows una identidad de codesign de Apple en `[app] sign` se ignora con aviso en vez de hacer fallar
+  signtool con el bundle ya construido.
+- **`ui.edit_menu`: documentado cómo localizar su título (rayreq #311).** El menú se titula «Edit»
+  en todas las plataformas; `rename_menu("Edit", "Edición")` tras la última llamada a `edit_menu` lo
+  traduce, y después sus ítems se cambian con `replace_menu("Edición", …)`.
+- rayreq #310 (el © del copyright como «c» en Windows) verificado en la VM: el recurso lleva U+00A9;
+  es la consola de PowerShell con página de códigos 437 la que lo pinta como «c».
 
 - **La CLI acepta un directorio de proyecto (raymcp #306).** `ray check .`, `ray run app/`,
   `ray build .`, `ray test .` y `ray fmt src/` toman el directorio como «el proyecto que vive ahí»

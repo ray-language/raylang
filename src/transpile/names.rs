@@ -115,6 +115,37 @@ pub(super) fn is_core_impl_key(key: &str) -> bool {
 
 /// Resuelve el `callee` de una llamada a `(nombre, receptor)`. UFCS `obj.m(args)` llega como callee
 /// `Field{object, name}` (el checker no lo baja para builtins) ≡ `m(obj, args)`: el receptor va primero.
+/// ray-sublime #315: ¿evaluar `e` PUEDE ejecutar una llamada (y con ella un `borrow_mut`)? Las
+/// llamadas, y conservadoramente todo lo que lleva bloques (`match`/`if`/`while`/bloque/`?`), sí;
+/// una función anónima no (definirla no la ejecuta); literales e identificadores no; el resto,
+/// lo que digan sus hijos.
+pub(super) fn may_call(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Call { .. }
+        | ExprKind::Match { .. }
+        | ExprKind::If { .. }
+        | ExprKind::While { .. }
+        | ExprKind::Block(_)
+        | ExprKind::Try(_) => true,
+        ExprKind::Int(..)
+        | ExprKind::Float(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Str(_)
+        | ExprKind::Char(_)
+        | ExprKind::Bytes(_)
+        | ExprKind::Ident(_)
+        | ExprKind::Func(_) => false,
+        ExprKind::Unary { expr, .. } | ExprKind::Cast { expr, .. } => may_call(expr),
+        ExprKind::Binary { left, right, .. } => may_call(left) || may_call(right),
+        ExprKind::Index { array, index } => may_call(array) || may_call(index),
+        ExprKind::Field { object, .. } => may_call(object),
+        ExprKind::ArrayLit(xs) | ExprKind::TupleLit(xs) => xs.iter().any(may_call),
+        ExprKind::EnumLit { args, .. } => args.iter().any(may_call),
+        ExprKind::MapLit(kvs) => kvs.iter().any(|(k, v)| may_call(k) || may_call(v)),
+        ExprKind::StructLit { fields, .. } => fields.iter().any(|(_, v)| may_call(v)),
+    }
+}
+
 pub(super) fn resolve_callee(callee: &Expr) -> Result<(&str, Option<&Expr>), String> {
     match &callee.kind {
         ExprKind::Ident(n) => Ok((n, None)),

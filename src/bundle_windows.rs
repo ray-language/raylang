@@ -12,7 +12,10 @@
 //! 3. **VERSIONINFO** (nombre, versión, copyright de `[app] copyright`): lo que muestra la
 //!    pestaña "Detalles" de Propiedades — el `Info.plist` de Windows. El bloque se construye a
 //!    mano (es una jerarquía de `{wLength, wValueLength, wType, szKey, value, children}`
-//!    alineada a 4 bytes) y se inyecta con `UpdateResourceW` de kernel32, sin `rc.exe`.
+//!    alineada a 4 bytes) y se inyecta con `UpdateResourceW` de kernel32, sin `rc.exe`. Las
+//!    cadenas van en UTF-16 (rayreq #310, verificado en la VM: `© 2026` llega como U+00A9;
+//!    la consola de PowerShell con página de códigos 437 lo PINTA como `c`, pero
+//!    `FileVersionInfo` lo lee entero).
 //!
 //! El `.lnk` lo escribe `WScript.Shell` (COM, vía PowerShell): apunta al exe con ruta ABSOLUTA
 //! y cwd = el directorio del bundle (el `Exec=` absoluto del `.desktop` de Linux). Como ese

@@ -170,9 +170,8 @@ fn last_frames() -> &'static Mutex<HashMap<i64, (i64, i64, i64, i64)>> {
 }
 
 /// M441: fija la línea base del marco de una ventana SIN emitir evento (la colocación inicial
-/// no es «el usuario la movió»). La usan Windows (al terminar `open`) y GTK (primer
-/// configure-event); en macOS el sistema no notifica la colocación inicial.
-#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+/// no es «el usuario la movió»). La misma regla en todos los backends: `open` la fija al volver
+/// del backend; GTK además durante la gracia de colocación del gestor de ventanas.
 fn prime_frame(id: i64, frame: (i64, i64, i64, i64)) {
     last_frames().lock().unwrap().insert(id, frame);
 }
@@ -1296,11 +1295,20 @@ impl Appearance {
     }
 }
 
+/// M441: la apariencia de la APP pedida con `set_appearance(0, …)`, para que en Windows (donde no
+/// hay un ajuste de app) las ventanas que se abran DESPUÉS la reciban también.
+fn app_appearance_pref() -> &'static Mutex<Option<Appearance>> {
+    static PREF: std::sync::OnceLock<Mutex<Option<Appearance>>> = std::sync::OnceLock::new();
+    PREF.get_or_init(|| Mutex::new(None))
+}
+
 /// M441: la apariencia de TODA la app (`set_appearance(0, …)`): en macOS `NSApp.appearance`
 /// (también el panel About y las ventanas futuras); en Linux el ajuste GTK
-/// `gtk-application-prefer-dark-theme` (que ya es global); en Windows, cada ventana abierta.
+/// `gtk-application-prefer-dark-theme` (que ya es global); en Windows, cada ventana abierta y,
+/// vía `app_appearance_pref`, las que se abran después.
 pub fn app_appearance(mode: &str) -> Result<(), String> {
     let a = Appearance::parse(mode).ok_or_else(|| format!("ui: unknown appearance '{mode}' (system | light | dark)"))?;
+    *app_appearance_pref().lock().unwrap() = Some(a);
     if ui_trace() {
         eprintln!("[ui] app appearance {a:?}");
     }
@@ -1967,6 +1975,11 @@ pub fn open_window_with(id: i64, title: &str, url: &str, opts: &WindowOptions) -
     let r = open_placed(id, title, url, opts);
     if r.is_ok() {
         LAST_OPENED.store(id, std::sync::atomic::Ordering::SeqCst);
+        // M441 (rayreq #316): el marco con que la ventana nace es la línea base del evento
+        // `frame` en TODOS los backends: abrir no es «el usuario la movió».
+        if let Ok(f) = window_frame(id) {
+            prime_frame(id, f);
+        }
     }
     r
 }
@@ -2568,30 +2581,22 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
         }
         return Ok(());
     }
+    // M441 (rayreq #316): en headless el marco cambia solo por estas órdenes → el evento `frame`
+    // que en el escritorio emite el sistema al soltar el arrastre (tras la traza, abajo).
+    let mut frame_after: Option<(i64, i64, i64, i64)> = None;
     if let Win::Headless { frame } = &mut state.win {
-        let moved = match cmd {
+        match cmd {
             Some(WindowCmd::Position(x, y)) => {
                 frame.0 = x;
                 frame.1 = y;
-                true
+                frame_after = Some(*frame);
             }
             Some(WindowCmd::Size(w, h)) => {
                 frame.2 = w;
                 frame.3 = h;
-                true
+                frame_after = Some(*frame);
             }
-            _ => false,
-        };
-        // M441 (rayreq #316): en headless el marco cambia solo por estas órdenes → el evento
-        // `frame` que en el escritorio emite el sistema al soltar el arrastre.
-        if moved {
-            if ui_trace() {
-                eprintln!("[ui] window {id} {:?}", cmd.expect("moved implies a geometry command"));
-            }
-            let f = *frame;
-            drop(map);
-            push_frame_event(id, f);
-            return Ok(());
+            _ => {}
         }
     }
     match &state.win {
@@ -2602,6 +2607,10 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
                     None if op == "set_title" => eprintln!("[ui] title {id} {arg}"),
                     None => eprintln!("[ui] edited {id} {on}"),
                 }
+            }
+            drop(map);
+            if let Some(f) = frame_after {
+                push_frame_event(id, f);
             }
             Ok(())
         }
@@ -2782,6 +2791,7 @@ pub fn reset_for_restart() {
         q.clear();
         drain_pipe(ev.pipe_rd, usize::MAX);
     }
+    last_frames().lock().unwrap().clear();
     headless_menu_tags().lock().unwrap().clear();
     headless_menu_titles().lock().unwrap().clear();
     headless_key_window().store(0, std::sync::atomic::Ordering::Relaxed);
@@ -4074,8 +4084,9 @@ mod mac {
                     super::push_frame_event(id, unsafe { frame_tuple(win) });
                 }
             }
-            // M441: `windowDidResize:` solo cuando NO es un redimensionado en vivo (ese termina en
-            // `windowDidEndLiveResize:`): zoom, `set_size`, pantalla completa.
+            // M441: `windowDidResize:`/`windowDidMove:` solo cuando NO es un redimensionado en vivo
+            // (ese termina en `windowDidEndLiveResize:`): zoom, `set_size`/`set_position`,
+            // pantalla completa, y el arrastre de la ventana (que no es un resize).
             extern "C" fn window_did_resize(this: Id, sel_: Sel, notification: Id) {
                 // SAFETY: como arriba; `inLiveResize` es un mensaje estándar de NSWindow.
                 let live = unsafe {
@@ -4467,10 +4478,12 @@ mod mac {
                 // "x,y,w,h"). `windowDidMove:` llega al soltar el arrastre; el redimensionado en
                 // vivo se espera a `windowDidEndLiveResize:` (y `windowDidResize:` cubre los
                 // cambios programáticos y el zoom, que no son «en vivo»).
+                // (Arrastrar el borde izquierdo/superior también MUEVE el origen en cada paso:
+                // `windowDidMove:` pasa por el mismo filtro `inLiveResize` que el resize.)
                 class_addMethod(
                     cls_new,
                     sel(b"windowDidMove:\0"),
-                    window_frame_changed as extern "C" fn(Id, Sel, Id) as *const c_void,
+                    window_did_resize as extern "C" fn(Id, Sel, Id) as *const c_void,
                     c"v@:@".as_ptr(),
                 );
                 class_addMethod(
@@ -7392,7 +7405,7 @@ mod gtk {
                     0,
                 );
                 // M441 (rayreq #316): movimientos y redimensionados → evento `frame`.
-                let configure_ctx = Box::into_raw(Box::new(FrameCtx { id, alive: alive2.clone(), primed: AtomicBool::new(false) }));
+                let configure_ctx = Box::into_raw(Box::new(FrameCtx { id, alive: alive2.clone(), opened: std::time::Instant::now() }));
                 (api.signal_connect_ret)(
                     window,
                     c"configure-event".as_ptr(),
@@ -7704,13 +7717,17 @@ mod gtk {
         on_main(move || unsafe { apply_appearance(a) });
     }
 
-    /// M441: el ctx de `configure-event`: el PRIMERO (el mapeo de la ventana) fija la línea base
-    /// sin emitir; los siguientes emiten si el marco cambió.
+    /// M441: el ctx de `configure-event`. Un toplevel recibe VARIOS configure-event al mapearse
+    /// (la asignación de GTK y después la colocación/reparent del gestor de ventanas), así que
+    /// durante una gracia tras `open` solo se actualiza la línea base; después, cada cambio emite.
     struct FrameCtx {
         id: i64,
         alive: Arc<AtomicBool>,
-        primed: AtomicBool,
+        opened: std::time::Instant,
     }
+
+    /// M441: cuánto dura la colocación inicial del gestor de ventanas (medida con margen).
+    const FRAME_PLACEMENT_GRACE: std::time::Duration = std::time::Duration::from_millis(750);
 
     extern "C" fn drop_frame_ctx(data: *mut c_void, _closure: *mut c_void) {
         // SAFETY: reclamamos el Box exactamente una vez (GTK invoca el notify al destruir).
@@ -7735,10 +7752,10 @@ mod gtk {
                 get_size(w, &mut cw, &mut ch);
             }
             let frame = (x as i64, y as i64, cw as i64, ch as i64);
-            if ctx.primed.swap(true, Ordering::SeqCst) {
-                super::push_frame_event(ctx.id, frame);
-            } else {
+            if ctx.opened.elapsed() < FRAME_PLACEMENT_GRACE {
                 super::prime_frame(ctx.id, frame);
+            } else {
+                super::push_frame_event(ctx.id, frame);
             }
         }
         0 // propagar: GTK sigue con su layout
@@ -8953,9 +8970,11 @@ mod win {
         (outer.left as i64, outer.top as i64, (client.right - client.left) as i64, (client.bottom - client.top) as i64)
     }
 
-    /// M441: ("frame", id, "x,y,w,h") de esta ventana, si está armado y el marco cambió.
+    /// M441: ("frame", id, "x,y,w,h") de esta ventana, si está armado, no está minimizada
+    /// (Windows la manda a (−32000, −32000) con WM_MOVE) y el marco cambió.
     unsafe fn push_frame(hwnd: HWND, ctx: &WinCtx) {
-        if !ctx.frame_armed {
+        // SAFETY: hwnd vivo en el hilo 1 (el llamador).
+        if !ctx.frame_armed || unsafe { IsIconic(hwnd) }.as_bool() {
             return;
         }
         super::push_frame_event(ctx.id, unsafe { frame_tuple(hwnd) });
@@ -9935,9 +9954,13 @@ mod win {
                         if !ctx_ptr.is_null() {
                             (*ctx_ptr).controller = Some(controller);
                             (*ctx_ptr).webview = Some(webview);
-                            // M441: la ventana ya está creada y mostrada: desde aquí, `frame`.
-                            super::prime_frame(id, frame_tuple(hwnd));
+                            // M441: la ventana ya está creada y mostrada: desde aquí, `frame`
+                            // (la línea base la fija `open` al volver). Y la apariencia de app
+                            // pedida antes (`set_appearance(0, …)`) se aplica a la ventana nueva.
                             (*ctx_ptr).frame_armed = true;
+                            if let Some(a) = *super::app_appearance_pref().lock().unwrap() {
+                                apply_appearance(hwnd, (*ctx_ptr).webview.as_ref(), a);
+                            }
                         }
                         Ok(hwnd.0 as usize)
                     }

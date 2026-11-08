@@ -870,11 +870,19 @@ pub fn frame(h: int) -> Result<(int, int, int, int), string> {
     if (r[0] != "ok") {
         return Result.Err(r[1]);
     }
-    let parts = r[1].split(",");
-    if (parts.len() != 4) {
-        return Result.Err("ui: unexpected frame: " + r[1]);
+    match (parse_frame(r[1])) {
+        Option.Some(f) => Result.Ok(f),
+        Option.None => Result.Err("ui: unexpected frame: " + r[1]),
     }
-    Result.Ok(
+}
+
+// M441: la codificación "x,y,ancho,alto" que comparten `frame`, el evento `frame` y `screens`.
+fn parse_frame(s: string) -> Option<(int, int, int, int)> {
+    let parts = s.split(",");
+    if (parts.len() != 4) {
+        return Option.None;
+    }
+    Option.Some(
         (
             parse_int(parts[0]).unwrap_or(0),
             parse_int(parts[1]).unwrap_or(0),
@@ -890,18 +898,7 @@ pub fn event_frame(e: UiEvent) -> Option<(int, int, int, int)> {
     if (e.kind != "frame") {
         return Option.None;
     }
-    let parts = e.tag.split(",");
-    if (parts.len() != 4) {
-        return Option.None;
-    }
-    Option.Some(
-        (
-            parse_int(parts[0]).unwrap_or(0),
-            parse_int(parts[1]).unwrap_or(0),
-            parse_int(parts[2]).unwrap_or(0),
-            parse_int(parts[3]).unwrap_or(0)
-        )
-    )
+    parse_frame(e.tag)
 }
 
 /// The screens (M441, rayreq #316): the USABLE area of each one — without the menu bar, dock or
@@ -917,16 +914,8 @@ pub fn screens() -> Result<[(int, int, int, int)], string> {
     }
     var out: [(int, int, int, int)] = [];
     for entry in r[1].split(";") {
-        let parts = entry.split(",");
-        if (parts.len() == 4) {
-            out.push(
-                (
-                    parse_int(parts[0]).unwrap_or(0),
-                    parse_int(parts[1]).unwrap_or(0),
-                    parse_int(parts[2]).unwrap_or(0),
-                    parse_int(parts[3]).unwrap_or(0)
-                )
-            );
+        if let Option.Some(f) = parse_frame(entry) {
+            out.push(f);
         }
     }
     Result.Ok(out)

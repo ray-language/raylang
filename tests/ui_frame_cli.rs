@@ -49,4 +49,17 @@ fn appearance_screens_and_the_frame_event_work_headless() {
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{flags:?}: {}", String::from_utf8_lossy(&out.stderr));
     }
+    // Nativo: el shim `__ray_ui_window` enruta `screens` y `appearance` con h = 0 igual que la VM
+    // (revisión de #620: faltaba y las apps empaquetadas son nativas).
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = dir.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "a.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert!(st.status.success(), "build --native: {}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).env("RAY_UI_BACKEND", "headless").current_dir(&dir).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "nativo: {}", String::from_utf8_lossy(&out.stderr));
+    }
 }

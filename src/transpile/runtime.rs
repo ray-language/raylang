@@ -1133,8 +1133,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // M257: operaciones de ventana por nombre (título, punto de modificado, interceptar
             // cierre/salida); `intercept_quit` no exige ventana.
             "fn __ray_ui_window(h: i64, op: &str, arg: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
-            "    let known = matches!(op, \"intercept_quit\" | \"single_instance\" | \"notify\" | \"badge\" | \"request_attention\" | \"media_now_playing\" | \"media_clear\" | \"media_controls\" | \"rename_menu\") || matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
-            "    let r = if !known { Err(\"ui: not an open window\".to_string()) } else if op == \"frame\" { ray_runtime::ui::window_frame(h).map(|(x, y, w, hh)| format!(\"{x},{y},{w},{hh}\")) } else { ray_runtime::ui::window_op(h, op, arg).map(|_| String::new()) };\n",
+            // M441: `screens` y `appearance` con h = 0 son de la APP (espejo de builtins::ui_window_value/ui_window_op).
+            "    let known = matches!(op, \"intercept_quit\" | \"single_instance\" | \"notify\" | \"badge\" | \"request_attention\" | \"media_now_playing\" | \"media_clear\" | \"media_controls\" | \"rename_menu\" | \"screens\") || (op == \"appearance\" && h == 0) || matches!(__ray_reg().lock().unwrap().open.get(&h), Some(__RayHandle::Window(_)));\n",
+            "    let r = if !known { Err(\"ui: not an open window\".to_string()) } else if op == \"screens\" { ray_runtime::ui::screens().map(|l| l.iter().map(|(x, y, w, hh)| format!(\"{x},{y},{w},{hh}\")).collect::<Vec<_>>().join(\";\")) } else if op == \"appearance\" && h == 0 { ray_runtime::ui::app_appearance(arg).map(|_| String::new()) } else if op == \"frame\" { ray_runtime::ui::window_frame(h).map(|(x, y, w, hh)| format!(\"{x},{y},{w},{hh}\")) } else { ray_runtime::ui::window_op(h, op, arg).map(|_| String::new()) };\n",
             "    Rc::new(std::cell::RefCell::new(match r { Ok(v) if v.is_empty() => vec![Rc::<str>::from(\"ok\")], Ok(v) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(v.as_str())], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             // M229: foco a una ventana abierta.
             "fn __ray_ui_focus(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",

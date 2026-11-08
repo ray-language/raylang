@@ -19669,3 +19669,22 @@ Lo que se verificó: headless en los dos motores (test), macOS a mano con el pro
 (`screens` = `(0, 34, 1512, 948)`, el evento tras `set_size`); Linux y Windows compilan en
 cruzado (`cargo check --target`), y los backends reales los miden rayreq y ray-sublime con la
 release, que es el flujo de los hallazgos.
+
+**Lo que corrigió la revisión previa al release (1.27.90).** El humo de Windows del CI cazó lo
+primero: crear y mostrar la ventana ya manda `WM_SIZE`/`WM_MOVE`, y el evento salía al abrir;
+después la revisión de código señaló el resto. La regla quedó una sola para todos los backends:
+`open` fija el marco de nacimiento como línea base al volver del backend, y un `frame` solo se
+emite si el marco cambió respecto al último emitido (deduplicación por ventana, limpiada al
+cerrar y en el reinicio de `ray dev`). Encima de eso, lo específico de cada sistema: Windows arma
+el evento al terminar `open`, ignora la ventana minimizada (`IsIconic`: Windows la manda a
+−32000,−32000 con un `WM_MOVE`) y recuerda la apariencia de app para las ventanas que se abran
+después (no hay ajuste de app, se aplica al crear cada una); GTK trata los `configure-event` de
+los primeros 750 ms como colocación del gestor de ventanas (un toplevel recibe varios al
+mapearse: la asignación de GTK y luego el reparent/colocación del WM) y solo actualiza la línea
+base; macOS pasa también `windowDidMove:` por el filtro `inLiveResize` (arrastrar el borde
+izquierdo o superior mueve el origen en cada paso). Y el hallazgo que de verdad importaba: el
+shim nativo `__ray_ui_window` no enrutaba `screens` ni `appearance` con `h = 0`, así que las dos
+funciones nuevas fallaban en todo binario de `ray build --native`/`ray bundle` —las apps que las
+pidieron son nativas—; el test de `ui_frame_cli` corre ahora también el binario nativo. De paso,
+`std/ui` comparte un `parse_frame` entre `frame`, `event_frame` y `screens`, y MANUAL cuenta el
+flujo de recordar el marco y seguir el tema.

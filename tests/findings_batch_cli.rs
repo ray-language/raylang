@@ -1341,3 +1341,41 @@ fn string_index_of_from_runs_on_all_engines() {
     .unwrap();
     three_engines(&d, "2\n4\ntrue\n6\ntrue\n1\n3\n[0, 3, 6]\n");
 }
+
+/// ray-sublime #315: un argumento de una llamada INTERCEPTADA de la stdlib que lee un campo de un
+/// struct (`sh.path`) seguido de otro que llama a una función que muta ese struct (`bytes_for(sh)`)
+/// panicaba en nativo con «RefCell already borrowed» (la VM: `ok 3 CRLF`). Y el segundo argumento
+/// de `write_file_bytes` se emitía dos veces (`.len()` del Ok): el efecto corría dos veces.
+#[test]
+fn std_call_args_are_hoisted_so_a_mutating_call_arg_does_not_panic_on_all_engines() {
+    let d = tmp("std_call_hoist");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import std/fs;
+
+struct Sheet { path: string, line_ending: string, writes: int }
+
+fn bytes_for(sh: Sheet) -> bytes {
+    sh.line_ending = "CRLF";
+    sh.writes = sh.writes + 1;
+    "x\r\n".to_bytes()
+}
+
+fn main() -> int {
+    let dir = match (fs.make_temp_dir("refcell")) { Result.Ok(d) => d, Result.Err(e) => panic(e) };
+    var sheets: Map<int, Sheet> = Map.new();
+    sheets.insert(1, Sheet { path: "${dir}/a.txt", line_ending: "LF", writes: 0 });
+    match (get(sheets, 1)) {
+        Option.Some(sh) => match (fs.write_file_bytes(sh.path, bytes_for(sh))) {
+            Result.Ok(n) => print("ok ${n} ${sh.line_ending} ${sh.writes}"),
+            Result.Err(e) => print("err ${e}"),
+        },
+        Option.None => { },
+    }
+    0
+}
+"#,
+    )
+    .unwrap();
+    three_engines(&d, "ok 3 CRLF 1\n");
+}

@@ -424,6 +424,11 @@ pub fn rename_menu(old: string, new: string) -> Result<int, string> {
 ///     ui.separator(), ui.item("find", "Find...", "cmd+f"), ui.item("role:select_all", "", ""),
 /// ])?;
 /// ```
+///
+/// The menu is titled `"Edit"` on every platform (rayreq #311). A bar in another language
+/// localizes it with `rename_menu("Edit", "Edición")` AFTER the last `edit_menu` call — this
+/// function looks the menu up by `"Edit"`, so once renamed, change its items with
+/// `replace_menu("Edición", …)`.
 pub fn edit_menu(items: [MenuItem]) -> Result<int, string> {
     match (replace_menu("Edit", items)) {
         Result.Ok(v) => Result.Ok(v),

@@ -19550,3 +19550,52 @@ ya prometía «como el subtítulo de Finder» y ahora es verdad.
 Qué implica para el lenguaje: `index_of_from` entra en la superficie estable de `string`
 (REFERENCE/MANUAL/llms.txt); la CLI gana `[archivo | dir]` en cinco subcomandos; ni SPEC ni
 semántica de los motores cambian.
+
+
+## 414. M439 — la clase RefCell-en-args llega a la stdlib interceptada, y tres hallazgos de rayreq (nov 2026)
+
+**ray-sublime #315 (tipo B).** La app nativa firmada se cerraba al guardar en cualquier carpeta
+con un `.editorconfig` que fijara `end_of_line` o `charset`: `fs.write_file_bytes(sh.path,
+bytes_for(sh))`, donde `bytes_for` asigna dos campos de `sh`. Es la *clase RefCell-en-args* que
+IDEAS §64 ya describió para los constructores de variante y que `emit_user_call_hoisted` cerró
+para las llamadas de usuario: un argumento `sh.path` emite `sh.borrow().path.clone()`, y en Rust
+ese guard temporal vive hasta el final de la sentencia, es decir, durante la evaluación del
+argumento siguiente; si ese argumento hace `borrow_mut` del mismo objeto, panic. Quedaba un
+tercer sitio sin izar: los *intercepts* de la stdlib (`std::fs`, `net`, `time`, `random`,
+`regex`…), que emiten los argumentos en línea dentro de la expresión Rust que sustituye a la
+llamada.
+
+La pieza entra en `emit_call`, antes de los intercepts, y reutiliza la propia recursión: si el
+callee es `std::…`, hay 2+ argumentos y alguno PUEDE llamar (`may_call`: llamadas y, por
+conservadurismo, todo lo que lleva bloques; una `fn` anónima no, definirla no la ejecuta), se
+emiten `let __rt_sa{i} = <arg>;` en orden para todo argumento no literal —cada `let` cierra sus
+guards— y se vuelve a llamar a `emit_call` con identificadores sintéticos declarados en un ámbito
+propio. Los intercepts no cambian, y como los argumentos ya no contienen llamadas no se vuelve a
+izar. Solo se paga cuando hay una llamada entre los argumentos: el camino caliente de
+`socket_write(h, buf)` con variables planas sigue en línea.
+
+Dos cosas más salieron al mirar: `write_file_bytes` emitía el segundo argumento DOS veces (una
+para escribir, otra para el `.len()` del `Ok`), con lo que `bump(b)` corría dos veces en nativo
+y una en la VM; ahora ambos argumentos van a temporales. Y el hallazgo pedía que el panic del
+runtime nombrara la línea `.ray`: con el izado el panic desaparece, pero la petición sigue en
+pie para cualquier otro «already borrowed» futuro — queda anotada, no resuelta.
+
+**rayreq #309.** `[app] sign` con una identidad de codesign de Apple hacía fallar `ray release`
+en Windows al final, con el bundle ya construido, y no había forma de anularlo desde la línea de
+órdenes. `--sign none` (o `""`, o `RAY_SIGN_IDENTITY=none`) desactiva la firma por encima del
+manifiesto, y en Windows una identidad que empieza como las de Apple se ignora con aviso. Las
+claves por plataforma (`[app.macos] sign`, `[app.windows] sign`) que el hallazgo propone como
+mejor solución no se hicieron: cambian el esquema del manifiesto y es una decisión aparte
+(IDEAS).
+
+**rayreq #310.** Verificado en la VM de Windows con un bundle real: `LegalCopyright` lleva
+U+00A9 (13 caracteres); la «c» es la consola de PowerShell con página de códigos 437 pintando el
+carácter que no tiene. No es un bug del recurso; queda la nota en `bundle_windows.rs`.
+
+**rayreq #311.** El menú de `edit_menu` se titula «Edit» en todas las plataformas (también en
+macOS: lo crea la toolchain, no el sistema). `rename_menu("Edit", "Edición")` ya lo localizaba en
+los tres backends y en headless; lo que faltaba era decirlo, con su orden: tras la ÚLTIMA llamada a
+`edit_menu` (que busca «Edit») y después `replace_menu` por el título nuevo. Solo documentación.
+
+**rayreq #312** (apariencia clara/oscura de ventana y diálogos nativos) es una API nueva de
+`std/ui` en tres plataformas: queda propuesta, pendiente de autorización.

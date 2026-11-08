@@ -161,6 +161,34 @@ const UI_EVENT_QUEUE_CAP: usize = 65536;
 /// Total de eventos descartados por el cap (proceso entero); alimenta el throttle del aviso.
 static DROPPED_EVENTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+/// M441 (rayreq #316): el último marco EMITIDO (o fijado como línea base) por ventana: un `frame`
+/// igual al anterior no se emite (Windows manda WM_SIZE/WM_MOVE también al crear y al mostrar la
+/// ventana; GTK, configure-event al mapearla). Se limpia al cerrar.
+fn last_frames() -> &'static Mutex<HashMap<i64, (i64, i64, i64, i64)>> {
+    static LAST: std::sync::OnceLock<Mutex<HashMap<i64, (i64, i64, i64, i64)>>> = std::sync::OnceLock::new();
+    LAST.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// M441: fija la línea base del marco de una ventana SIN emitir evento (la colocación inicial
+/// no es «el usuario la movió»). La usan Windows (al terminar `open`) y GTK (primer
+/// configure-event); en macOS el sistema no notifica la colocación inicial.
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+fn prime_frame(id: i64, frame: (i64, i64, i64, i64)) {
+    last_frames().lock().unwrap().insert(id, frame);
+}
+
+/// M441: ("frame", id, "x,y,w,h") si el marco cambió respecto al último emitido.
+fn push_frame_event(id: i64, frame: (i64, i64, i64, i64)) {
+    {
+        let mut last = last_frames().lock().unwrap();
+        if last.get(&id) == Some(&frame) {
+            return;
+        }
+        last.insert(id, frame);
+    }
+    push_event("frame", id, &format!("{},{},{},{}", frame.0, frame.1, frame.2, frame.3));
+}
+
 // Aplica la cota sobre la cola YA bloqueada (llamado con el lock tomado, antes del push).
 fn enforce_queue_cap(q: &mut VecDeque<Event>) {
     if q.len() < UI_EVENT_QUEUE_CAP {
@@ -276,6 +304,9 @@ pub(crate) fn push_media_event(tag: &str) {
 
 fn push_event(kind: &str, window: i64, tag: &str) {
     EVENT_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    if kind == "closed" {
+        last_frames().lock().unwrap().remove(&window);
+    }
     let ev = events();
     {
         let mut q = ev.queue.lock().unwrap();
@@ -2557,9 +2588,9 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
             if ui_trace() {
                 eprintln!("[ui] window {id} {:?}", cmd.expect("moved implies a geometry command"));
             }
-            let tag = format!("{},{},{},{}", frame.0, frame.1, frame.2, frame.3);
+            let f = *frame;
             drop(map);
-            push_event("frame", id, &tag);
+            push_frame_event(id, f);
             return Ok(());
         }
     }
@@ -4040,8 +4071,7 @@ mod mac {
                     object(notification, sel(b"object\0"))
                 };
                 if let Some(id) = window_id_of(win) {
-                    let (x, y, w, h) = unsafe { frame_tuple(win) };
-                    super::push_event("frame", id, &format!("{x},{y},{w},{h}"));
+                    super::push_frame_event(id, unsafe { frame_tuple(win) });
                 }
             }
             // M441: `windowDidResize:` solo cuando NO es un redimensionado en vivo (ese termina en
@@ -7362,13 +7392,13 @@ mod gtk {
                     0,
                 );
                 // M441 (rayreq #316): movimientos y redimensionados → evento `frame`.
-                let configure_ctx = Box::into_raw(Box::new(DestroyCtx { id, alive: alive2.clone() }));
+                let configure_ctx = Box::into_raw(Box::new(FrameCtx { id, alive: alive2.clone(), primed: AtomicBool::new(false) }));
                 (api.signal_connect_ret)(
                     window,
                     c"configure-event".as_ptr(),
                     on_configure_event,
                     configure_ctx as *mut c_void,
-                    drop_destroy_ctx,
+                    drop_frame_ctx,
                     0,
                 );
                 let ctx = Box::into_raw(Box::new(DestroyCtx { id, alive: alive2 }));
@@ -7674,12 +7704,25 @@ mod gtk {
         on_main(move || unsafe { apply_appearance(a) });
     }
 
+    /// M441: el ctx de `configure-event`: el PRIMERO (el mapeo de la ventana) fija la línea base
+    /// sin emitir; los siguientes emiten si el marco cambió.
+    struct FrameCtx {
+        id: i64,
+        alive: Arc<AtomicBool>,
+        primed: AtomicBool,
+    }
+
+    extern "C" fn drop_frame_ctx(data: *mut c_void, _closure: *mut c_void) {
+        // SAFETY: reclamamos el Box exactamente una vez (GTK invoca el notify al destruir).
+        drop(unsafe { Box::from_raw(data as *mut FrameCtx) });
+    }
+
     /// M441 (rayreq #316): `configure-event` de la ventana → ("frame", id, "x,y,w,h"). GTK lo
     /// emite en cada paso del arrastre; `push_event` funde los `frame` consecutivos de la misma
-    /// ventana, así que la app lee el último.
+    /// ventana, así que la app lee el último. El del mapeo inicial solo fija la línea base.
     extern "C" fn on_configure_event(w: Widget, _event: *mut c_void, data: *mut c_void) -> i32 {
-        // SAFETY: `data` es el DestroyCtx propio de esta señal; vive hasta su GClosureNotify.
-        let ctx = unsafe { &*(data as *const DestroyCtx) };
+        // SAFETY: `data` es el FrameCtx propio de esta señal; vive hasta su GClosureNotify.
+        let ctx = unsafe { &*(data as *const FrameCtx) };
         if !ctx.alive.load(Ordering::SeqCst) {
             return 0;
         }
@@ -7691,7 +7734,12 @@ mod gtk {
                 get_pos(w, &mut x, &mut y);
                 get_size(w, &mut cw, &mut ch);
             }
-            super::push_event("frame", ctx.id, &format!("{x},{y},{cw},{ch}"));
+            let frame = (x as i64, y as i64, cw as i64, ch as i64);
+            if ctx.primed.swap(true, Ordering::SeqCst) {
+                super::push_frame_event(ctx.id, frame);
+            } else {
+                super::prime_frame(ctx.id, frame);
+            }
         }
         0 // propagar: GTK sigue con su layout
     }
@@ -8889,6 +8937,9 @@ mod win {
         /// M441 (rayreq #316): dentro del bucle modal de mover/redimensionar (WM_ENTERSIZEMOVE …
         /// WM_EXITSIZEMOVE): el evento `frame` se emite al salir, no en cada paso.
         in_size_move: bool,
+        /// M441: `frame` armado — a partir del final de `open` (crear y mostrar la ventana ya
+        /// mandan WM_SIZE/WM_MOVE, y eso no es «el usuario la movió»).
+        frame_armed: bool,
     }
 
     /// M441: el marco de una ventana — esquina del marco y tamaño del área cliente (como `frame`).
@@ -8902,10 +8953,12 @@ mod win {
         (outer.left as i64, outer.top as i64, (client.right - client.left) as i64, (client.bottom - client.top) as i64)
     }
 
-    /// M441: ("frame", id, "x,y,w,h") de esta ventana.
-    unsafe fn push_frame(hwnd: HWND, id: i64) {
-        let (x, y, w, h) = unsafe { frame_tuple(hwnd) };
-        super::push_event("frame", id, &format!("{x},{y},{w},{h}"));
+    /// M441: ("frame", id, "x,y,w,h") de esta ventana, si está armado y el marco cambió.
+    unsafe fn push_frame(hwnd: HWND, ctx: &WinCtx) {
+        if !ctx.frame_armed {
+            return;
+        }
+        super::push_frame_event(ctx.id, unsafe { frame_tuple(hwnd) });
     }
 
     /// M327: COLORREF (0x00BBGGRR) de un `#rrggbb`.
@@ -8970,7 +9023,7 @@ mod win {
                     // `frame`; minimizada no (el marco no es útil).
                     if !ctx.in_size_move && wparam.0 as u32 != SIZE_MINIMIZED {
                         // SAFETY: hilo 1, ventana viva.
-                        unsafe { push_frame(hwnd, ctx.id) };
+                        unsafe { push_frame(hwnd, ctx) };
                     }
                 }
                 LRESULT(0)
@@ -8989,7 +9042,7 @@ mod win {
                     // SAFETY: como arriba.
                     unsafe {
                         (*ctx_ptr).in_size_move = false;
-                        push_frame(hwnd, (*ctx_ptr).id);
+                        push_frame(hwnd, &*ctx_ptr);
                     }
                 }
                 // SAFETY: reenvío estándar.
@@ -9002,7 +9055,7 @@ mod win {
                     let ctx = unsafe { &*ctx_ptr };
                     if !ctx.in_size_move {
                         // SAFETY: hilo 1, ventana viva.
-                        unsafe { push_frame(hwnd, ctx.id) };
+                        unsafe { push_frame(hwnd, ctx) };
                     }
                 }
                 // SAFETY: reenvío estándar.
@@ -9870,7 +9923,7 @@ mod win {
                 // M327: el fondo hasta que la página pinte — el HWND lo borra de ese color y
                 // WebView2 lo usa como fondo por defecto.
                 let background = super::effective_background(&opts);
-                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels, min_track, fullscreen_saved: None, background: background.map(colorref), in_size_move: false });
+                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels, min_track, fullscreen_saved: None, background: background.map(colorref), in_size_move: false, frame_armed: false });
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(ctx) as isize);
                 let _ = ShowWindow(hwnd, SW_SHOW);
                 match attach_webview(hwnd, id, &url) {
@@ -9882,6 +9935,9 @@ mod win {
                         if !ctx_ptr.is_null() {
                             (*ctx_ptr).controller = Some(controller);
                             (*ctx_ptr).webview = Some(webview);
+                            // M441: la ventana ya está creada y mostrada: desde aquí, `frame`.
+                            super::prime_frame(id, frame_tuple(hwnd));
+                            (*ctx_ptr).frame_armed = true;
                         }
                         Ok(hwnd.0 as usize)
                     }

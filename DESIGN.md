@@ -19618,3 +19618,20 @@ los tres backends y en headless; lo que faltaba era decirlo, con su orden: tras 
 
 **rayreq #312** (apariencia clara/oscura de ventana y diálogos nativos) es una API nueva de
 `std/ui` en tres plataformas: queda propuesta, pendiente de autorización.
+
+
+## 415. M440 — la firma del bundle por plataforma en el manifiesto (nov 2026)
+
+rayreq #309 tenía dos mitades. La urgente (M439) fue poder apagar la firma desde fuera del
+manifiesto (`--sign none`) y que Windows ignorara una identidad de Apple en vez de fallar con el
+bundle ya construido. La de fondo es que `[app] sign` mezclaba dos cosas que nunca son la misma:
+la identidad de `codesign` y el sujeto o `.pfx` de `signtool`. Un proyecto que se libera desde
+los dos sistemas tenía que editar el `ray.toml` en uno de ellos.
+
+Las tablas `[app.macos]` (`sign`, `notary`, `entitlements`) y `[app.windows]` (`sign`) resuelven
+eso sin romper nada: `[app] sign` sigue valiendo como común, y la prioridad es flag → entorno →
+`[app.<host>]` → `[app]`. `notary` y `entitlements` solo tienen sentido en macOS, por eso viven
+solo en esa tabla (y en `[app]` por compatibilidad). El parser las trata como a `[app.plist]`:
+una sección más, con sus claves conocidas y las desconocidas ignoradas. La resolución se separó
+en `signing_config_for(host, …)` para que los tests la ejerciten sin depender del sistema donde
+corren.

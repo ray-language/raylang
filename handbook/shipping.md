@@ -75,6 +75,22 @@ mismas opciones existen como `--sign`, `--notary` y `--entitlements`, y como las
 **Windows** usa `signtool`: `[app] sign` es el sujeto del certificado instalado, o la ruta de un
 archivo `.pfx` cuya contraseña va en `RAY_SIGN_PFX_PASSWORD`.
 
+Un proyecto que se libera desde macOS **y** Windows lleva cada identidad en su tabla, porque una
+identidad de codesign nunca sirve para signtool:
+
+```toml
+[app.macos]
+sign = "Developer ID Application: Rayala (TEAMID)"
+notary = "rayala"
+
+[app.windows]
+sign = "CN=Rayala"
+```
+
+Cada sistema mira primero su tabla y después `[app] sign`. Para construir sin firmar en una máquina
+que no tiene el certificado, `--sign none` (o `RAY_SIGN_IDENTITY=none`) apaga la firma aunque el
+`ray.toml` la declare.
+
 Para comprobar el resultado en macOS antes de publicarlo:
 
 ```sh

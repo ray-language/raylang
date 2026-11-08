@@ -75,6 +75,22 @@ the `RAY_SIGN_IDENTITY` and `RAY_NOTARY_PROFILE` variables for CI.
 **Windows** uses `signtool`: `[app] sign` is the subject of the installed certificate, or the path
 of a `.pfx` file whose password goes in `RAY_SIGN_PFX_PASSWORD`.
 
+A project released from macOS **and** Windows keeps each identity in its own table, because a
+codesign identity never works with signtool:
+
+```toml
+[app.macos]
+sign = "Developer ID Application: Rayala (TEAMID)"
+notary = "rayala"
+
+[app.windows]
+sign = "CN=Rayala"
+```
+
+Each system looks at its table first and then at `[app] sign`. To build unsigned on a machine
+without the certificate, `--sign none` (or `RAY_SIGN_IDENTITY=none`) turns signing off even when
+`ray.toml` declares it.
+
 To check the result on macOS before publishing it:
 
 ```sh
@@ -301,4 +317,4 @@ CMD ["notes-api"]
 That is the end of the chapters. For other use cases, [**More examples**](examples.en.md) gathers
 the apps of the ray-language organization, with their full source.
 
-<!-- sync: sha256:7accae018191 -->
+<!-- sync: sha256:69a43c176e4b -->

@@ -2290,7 +2290,8 @@ const BUNDLE_USAGE: &str = "usage: ray bundle [file] [--name N] [--icon icon.png
   --sign: macOS codesign with hardened runtime + timestamp (Developer ID identity), Windows signtool (subject or .pfx, \
 password in RAY_SIGN_PFX_PASSWORD); --sign none (or \"\") disables signing even when [app] sign is set — on Windows an \
 Apple identity in [app] sign is ignored with a warning; --notary: notarytool keychain profile → submit --wait + stapler (macOS). \
-Defaults: [app] sign/notary/entitlements of ray.toml, or RAY_SIGN_IDENTITY / RAY_NOTARY_PROFILE.\n\
+Defaults: [app.macos] sign/notary/entitlements or [app.windows] sign of ray.toml (per host), then [app] sign/notary/entitlements, \
+or RAY_SIGN_IDENTITY / RAY_NOTARY_PROFILE.\n\
   --devtools: the app's webview ships with devtools (desktop: Inspect Element/F12; mobile shell: inspectable from the \
 desktop — Safari's Develop menu for iOS, chrome://inspect for Android). A build without the flag can never enable them.\n\
   --allow-stubs: a bundle is a release build, so a function outside the native subset is an error; this flag \
@@ -3053,7 +3054,21 @@ pub(crate) struct Signing {
 }
 
 fn signing_config(manifest: Option<&Manifest>, sign: Option<String>, notary: Option<String>, entitlements: Option<String>) -> Signing {
+    let host = if cfg!(target_os = "macos") { "macos" } else if cfg!(windows) { "windows" } else { "" };
+    signing_config_for(host, manifest, sign, notary, entitlements)
+}
+
+/// M440 (rayreq #309): la misma resolución con el host explícito (para los tests). Prioridad:
+/// flag → entorno → `[app.<host>]` → `[app]`.
+fn signing_config_for(host: &str, manifest: Option<&Manifest>, sign: Option<String>, notary: Option<String>, entitlements: Option<String>) -> Signing {
     let env_nonempty = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
+    let manifest_sign = |m: &Manifest| match host {
+        "macos" => m.app_macos_sign.clone().or_else(|| m.app_sign.clone()),
+        "windows" => m.app_windows_sign.clone().or_else(|| m.app_sign.clone()),
+        _ => m.app_sign.clone(),
+    };
+    let manifest_notary = |m: &Manifest| m.app_macos_notary.clone().or_else(|| m.app_notary.clone());
+    let manifest_entitlements = |m: &Manifest| m.app_macos_entitlements.clone().or_else(|| m.app_entitlements.clone());
     // rayreq #309: `--sign none` (o `--sign ""`, o `RAY_SIGN_IDENTITY=none`) DESACTIVA la firma
     // aunque `[app] sign` tenga valor: el ray.toml de un proyecto que firma en macOS no sirve en
     // la máquina de Windows (ni en un CI sin certificado), y antes no había forma de anularlo.
@@ -3063,12 +3078,12 @@ fn signing_config(manifest: Option<&Manifest>, sign: Option<String>, notary: Opt
     let identity = match sign.or_else(|| env_nonempty("RAY_SIGN_IDENTITY")) {
         Some(v) if is_off(&v) => None,
         Some(v) => Some(v),
-        None => manifest.and_then(|m| m.app_sign.clone()).filter(|v| !is_off(v)),
+        None => manifest.and_then(manifest_sign).filter(|v| !is_off(v)),
     };
-    let notary = notary.or_else(|| env_nonempty("RAY_NOTARY_PROFILE")).or_else(|| manifest.and_then(|m| m.app_notary.clone()));
+    let notary = notary.or_else(|| env_nonempty("RAY_NOTARY_PROFILE")).or_else(|| manifest.and_then(manifest_notary));
     let entitlements = entitlements
         .map(PathBuf::from)
-        .or_else(|| manifest.and_then(|m| m.app_entitlements.as_ref().map(|e| m.root.join(e))));
+        .or_else(|| manifest.and_then(|m| manifest_entitlements(m).map(|e| m.root.join(e))));
     Signing { identity, notary, entitlements }
 }
 
@@ -6915,6 +6930,30 @@ mod tests {
         assert!(super::is_apple_signing_identity("Apple Development: dev@example.com (TEAM)"));
         assert!(!super::is_apple_signing_identity("CN=Rayala, O=Rayala"));
         assert!(!super::is_apple_signing_identity("certs/rayala.pfx"));
+    }
+
+    /// M440 (rayreq #309): `[app.macos] sign` gana en macOS, `[app.windows] sign` en Windows, y
+    /// `[app] sign` es el común; el flag y `none` siguen por encima.
+    #[test]
+    fn per_platform_signing_keys_pick_the_hosts_identity() {
+        let m = crate::manifest::parse(
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n\n[app]\nsign = \"common\"\nnotary = \"n-common\"\n\n[app.macos]\nsign = \"Developer ID Application: X (T)\"\nnotary = \"n-mac\"\n\n[app.windows]\nsign = \"CN=Rayala\"\n",
+            std::path::PathBuf::from("/proj"),
+        )
+        .unwrap();
+        let mac = super::signing_config_for("macos", Some(&m), None, None, None);
+        assert_eq!(mac.identity.as_deref(), Some("Developer ID Application: X (T)"));
+        assert_eq!(mac.notary.as_deref(), Some("n-mac"));
+        let win = super::signing_config_for("windows", Some(&m), None, None, None);
+        assert_eq!(win.identity.as_deref(), Some("CN=Rayala"));
+        assert_eq!(super::signing_config_for("", Some(&m), None, None, None).identity.as_deref(), Some("common"));
+        assert_eq!(super::signing_config_for("windows", Some(&m), Some("none".into()), None, None).identity, None);
+        let only_common = crate::manifest::parse(
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n\n[app]\nsign = \"common\"\n",
+            std::path::PathBuf::from("/proj"),
+        )
+        .unwrap();
+        assert_eq!(super::signing_config_for("windows", Some(&only_common), None, None, None).identity.as_deref(), Some("common"));
     }
 
     /// M437: la poda reconoce los artefactos de un programa en sus tres formas y nunca los crates del

@@ -116,6 +116,15 @@ pub struct Manifest {
     /// M249: `[app] entitlements` — ruta (relativa al proyecto) de un plist de entitlements para
     /// la firma con hardened runtime; sin ella, uno vacío (lo que una app raylang necesita).
     pub app_entitlements: Option<String>,
+    /// M440 (rayreq #309): `[app.macos] sign / notary / entitlements` — la firma SOLO para el
+    /// bundle de macOS. Un proyecto que se libera desde varios sistemas lleva aquí la identidad
+    /// de codesign y en `[app.windows] sign` la de signtool; `[app] sign` queda como valor
+    /// común (cada plataforma mira primero el suyo y después el común).
+    pub app_macos_sign: Option<String>,
+    pub app_macos_notary: Option<String>,
+    pub app_macos_entitlements: Option<String>,
+    /// M440: `[app.windows] sign` — sujeto del certificado o ruta de un `.pfx` para signtool.
+    pub app_windows_sign: Option<String>,
     /// M209 (feedback 26 de ray-remote): `[app.plist]` — claves extra que `ray bundle` vuelca tal
     /// cual al `Info.plist` del `.app` (macOS), en orden de declaración. `"texto"` → `<string>`,
     /// `true`/`false` sin comillas → `<true/>`/`<false/>`. Sin ella, `ray bundle` no daba forma de
@@ -237,6 +246,10 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut app_sign = None;
     let mut app_notary = None;
     let mut app_entitlements = None;
+    let mut app_macos_sign = None;
+    let mut app_macos_notary = None;
+    let mut app_macos_entitlements = None;
+    let mut app_windows_sign = None;
     let mut app_plist: Vec<(String, PlistValue)> = Vec::new();
     let mut app_opens: Vec<String> = Vec::new();
     let mut raylang_min: Option<String> = None;
@@ -385,6 +398,17 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "background_audio" => ios_background_audio = as_bool()?,
                 _ => {} // otras claves de [ios] se ignoran por ahora (extensibilidad)
             },
+            // M440 (rayreq #309): firma por plataforma.
+            "app.macos" => match key {
+                "sign" => app_macos_sign = Some(as_string()?),
+                "notary" => app_macos_notary = Some(as_string()?),
+                "entitlements" => app_macos_entitlements = Some(as_string()?),
+                _ => {} // otras claves de [app.macos] se ignoran por ahora (extensibilidad)
+            },
+            "app.windows" => match key {
+                "sign" => app_windows_sign = Some(as_string()?),
+                _ => {} // otras claves de [app.windows] se ignoran por ahora (extensibilidad)
+            },
             // M209: `[app.plist]` — cada clave va al Info.plist tal cual (cadena, bool o, M324,
             // array de cadenas).
             "app.plist" => {
@@ -437,6 +461,10 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         app_sign,
         app_notary,
         app_entitlements,
+        app_macos_sign,
+        app_macos_notary,
+        app_macos_entitlements,
+        app_windows_sign,
     })
 }
 
@@ -636,6 +664,23 @@ mod tests {
         assert!(bare.app_plist.is_empty() && !bare.ios_background_audio && !bare.android_background_audio);
         let bad = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[ios]\nbackground_audio = \"yes\"\n");
         assert!(bad.unwrap_err().contains("must be true or false"));
+    }
+
+    /// M440 (rayreq #309): `[app.macos] sign/notary/entitlements` y `[app.windows] sign` se leen
+    /// aparte de `[app] sign`.
+    #[test]
+    fn per_platform_signing_keys_parse() {
+        let m = parse_src(
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[app]\nsign = \"common\"\n\n[app.macos]\nsign = \"Developer ID Application: X (T)\"\nnotary = \"rayala\"\nentitlements = \"ent.plist\"\n\n[app.windows]\nsign = \"CN=Rayala\"\n",
+        )
+        .unwrap();
+        assert_eq!(m.app_sign.as_deref(), Some("common"));
+        assert_eq!(m.app_macos_sign.as_deref(), Some("Developer ID Application: X (T)"));
+        assert_eq!(m.app_macos_notary.as_deref(), Some("rayala"));
+        assert_eq!(m.app_macos_entitlements.as_deref(), Some("ent.plist"));
+        assert_eq!(m.app_windows_sign.as_deref(), Some("CN=Rayala"));
+        let bare = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n").unwrap();
+        assert!(bare.app_macos_sign.is_none() && bare.app_windows_sign.is_none());
     }
 
     #[test]

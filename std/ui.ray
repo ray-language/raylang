@@ -34,6 +34,10 @@ from std/json import Json;
 /// `ray bundle` there is one more kind, "lifecycle" (`tag` is "background" or "foreground"),
 /// and every event carries `window == 0` — the shell's single webview; `reply(0, …)` and
 /// `eval_js(0, …)` address it.
+/// `"frame"` (M441): the user finished moving or resizing the window (or `set_size`/
+/// `set_position`/`center` changed it); `tag` is `"x,y,width,height"` as `frame(h)` reports it
+/// — `event_frame(e)` parses it. Consecutive unread `frame` events of one window collapse into
+/// the latest, so a drag costs one read.
 /// In headless mode opening a window produces no event; `focus(h)` emits "focused", the
 /// env var RAY_UI_MSG injects one "message" per opened window, and RAY_UI_OPEN (paths
 /// separated by `:`) injects the "open" events once per process (tests).
@@ -878,6 +882,66 @@ pub fn frame(h: int) -> Result<(int, int, int, int), string> {
             parse_int(parts[3]).unwrap_or(0)
         )
     )
+}
+
+/// The `(x, y, width, height)` carried by a `"frame"` event (M441), or `None` for any other
+/// event: `if let Option.Some(f) = ui.event_frame(e) { save(e.window, f); }`.
+pub fn event_frame(e: UiEvent) -> Option<(int, int, int, int)> {
+    if (e.kind != "frame") {
+        return Option.None;
+    }
+    let parts = e.tag.split(",");
+    if (parts.len() != 4) {
+        return Option.None;
+    }
+    Option.Some(
+        (
+            parse_int(parts[0]).unwrap_or(0),
+            parse_int(parts[1]).unwrap_or(0),
+            parse_int(parts[2]).unwrap_or(0),
+            parse_int(parts[3]).unwrap_or(0)
+        )
+    )
+}
+
+/// The screens (M441, rayreq #316): the USABLE area of each one — without the menu bar, dock or
+/// taskbar — as `(x, y, width, height)` in the coordinates of `frame`/`set_position` (origin at
+/// the top left of the main screen); the main screen comes first. What an app needs to decide
+/// whether a saved frame still fits before `place_at`. macOS, Linux (GDK 3.22+; older GDK
+/// reports the default screen as one entry) and Windows; headless reports one 1440×900 screen;
+/// Err in the mobile shells.
+pub fn screens() -> Result<[(int, int, int, int)], string> {
+    let r = __ui_window(0, "screens", "");
+    if (r[0] != "ok") {
+        return Result.Err(r[1]);
+    }
+    var out: [(int, int, int, int)] = [];
+    for entry in r[1].split(";") {
+        let parts = entry.split(",");
+        if (parts.len() == 4) {
+            out.push(
+                (
+                    parse_int(parts[0]).unwrap_or(0),
+                    parse_int(parts[1]).unwrap_or(0),
+                    parse_int(parts[2]).unwrap_or(0),
+                    parse_int(parts[3]).unwrap_or(0)
+                )
+            );
+        }
+    }
+    Result.Ok(out)
+}
+
+/// The appearance the NATIVE pieces follow (M441, rayreq #312): popup menus, confirm/message
+/// dialogs, the title bar and sheets. `mode` is `"system"` (the desktop's, the default),
+/// `"light"` or `"dark"`; call it when the page switches its own theme so a light page does not
+/// get dark native menus. `h` is a window, or `0` for the whole app (on macOS also the About
+/// panel and the windows opened afterwards). Per window on macOS; on Windows the title bar is
+/// per window and the webview's scheme is shared by every window; on Linux the GTK preference
+/// is application-wide, so any window sets it for all. Headless: Ok.
+pub fn set_appearance(h: int, mode: string) -> Result<int, string> {
+    let r = __ui_window(h, "appearance", mode);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
 /// Centers an OPEN window on its screen (M260).

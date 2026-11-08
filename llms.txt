@@ -528,7 +528,10 @@ jump (1.27.81): `ui.open_with(t, url, ui.place_at(ui.options(w, h), x, y))` or `
 is (frame corner in `set_position` coordinates, content size); in the page
 `window.screenX/screenY/outerWidth/outerHeight` are not meaningful, `screen.avail*` is;
 events from `ui.next_event()`: `closed`, `menu` (tag; `window` = the key window), `message`
-(page → program) and `focused` (a window became key/active: on open, `focus(h)`, user switch —
+(page → program), `frame` (the user moved/resized the window: tag `x,y,w,h`, parse with
+`ui.event_frame(e)`; `ui.screens()` lists each screen's usable area, main first;
+`ui.set_appearance(h or 0, "system"|"light"|"dark")` makes native menus/dialogs/title bar follow
+the page's theme) and `focused` (a window became key/active: on open, `focus(h)`, user switch —
 NOT when the process runs outside the graphical session: from ssh/CI/an agent shell the window
 stays `hidden`, rAF never fires and WebKit throttles timers to ~1 s; automate with `eval_js` +
 `MessageChannel`, or launch from the session); desktop:

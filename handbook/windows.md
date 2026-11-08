@@ -106,6 +106,7 @@ instancia devuelve `true` y recibe sus `args()` y los de cada lanzamiento poster
 `"open"`; la posterior devuelve `false` y retorna de `main`. Así `miapp carpeta/` desde la
 terminal y «Abrir con» se tratan igual que el arrastre al icono en macOS.
 | `"focused"` | una ventana pasó al frente | |
+| `"frame"` | el usuario terminó de mover o redimensionar la ventana | `"x,y,ancho,alto"`; `ui.event_frame(e)` lo parsea |
 | `"notification"` | el usuario pulsó una notificación de `ui.notify` | la etiqueta de la notificación |
 | `"lifecycle"` | en móvil, la app pasó a segundo plano o volvió | `"background"` / `"foreground"` |
 
@@ -397,7 +398,12 @@ fn open_find(parent: int) -> int {
 
 `parent` hace que la ventana quede encima de su dueña y la siga. Sobre una ventana abierta:
 `set_fullscreen`, `set_always_on_top`, `set_size`, `set_position`, `center`, `minimize`,
-`maximize` y `focus`, que la trae al frente.
+`maximize` y `focus`, que la trae al frente. `frame(h)` dice dónde está y qué tamaño tiene, y
+`screens()` da el área útil de cada pantalla (la principal primero): con las dos, una app
+recuerda el marco de cada ventana y comprueba que sigue cabiendo antes de reabrirla con
+`place_at`. Si la página lleva su propio tema claro/oscuro, `set_appearance(h, "light" | "dark" |
+"system")` hace que los menús contextuales, los diálogos y la barra de título nativos lo sigan;
+con `h = 0` vale para toda la app.
 
 Con `full_content`, en macOS, la página reserva la franja de la barra con
 `window.ray.titlebar_height` y marca con el atributo `data-ray-drag` el elemento que arrastra la

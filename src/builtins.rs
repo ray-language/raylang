@@ -1832,6 +1832,11 @@ pub fn ui_window(h: i64, op: &str, arg: &str) -> Result<(), String> {
 /// `__ui_window` con su valor: `frame` (#245) devuelve `"x,y,ancho,alto"`; las demás, `""`.
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_window_value(h: i64, op: &str, arg: &str) -> Result<String, String> {
+    // M441 (rayreq #316): `screens` → "x,y,w,h;x,y,w,h" (la principal primero).
+    if op == "screens" {
+        let list = ray_runtime::ui::screens()?;
+        return Ok(list.iter().map(|(x, y, w, h)| format!("{x},{y},{w},{h}")).collect::<Vec<_>>().join(";"));
+    }
     if op == "frame" {
         let win = match registry().lock().unwrap().open.get(&h) {
             Some(OpenHandle::Window(w)) => w.0,
@@ -1847,6 +1852,10 @@ pub fn ui_window_value(h: i64, op: &str, arg: &str) -> Result<String, String> {
 fn ui_window_op(h: i64, op: &str, arg: &str) -> Result<(), String> {
     if matches!(op, "intercept_quit" | "single_instance" | "notify" | "badge" | "request_attention" | "media_now_playing" | "media_clear" | "media_controls" | "rename_menu") {
         return ray_runtime::ui::window_op(0, op, arg);
+    }
+    // M441 (rayreq #312): `set_appearance(0, mode)` = toda la app.
+    if op == "appearance" && h == 0 {
+        return ray_runtime::ui::app_appearance(arg);
     }
     let win = match registry().lock().unwrap().open.get(&h) {
         Some(OpenHandle::Window(w)) => w.0,

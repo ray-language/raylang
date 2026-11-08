@@ -105,6 +105,7 @@ to reach the running app too, call `ui.single_instance()` first: the first insta
 one returns `false` and returns from `main`. That way `myapp folder/` from a terminal and "Open
 with" behave like dropping on the Dock icon on macOS.
 | `"focused"` | a window came to the front | |
+| `"frame"` | the user finished moving or resizing the window | `"x,y,width,height"`; `ui.event_frame(e)` parses it |
 | `"notification"` | the user clicked a notification from `ui.notify` | the notification's tag |
 | `"lifecycle"` | on mobile, the app went to the background or came back | `"background"` / `"foreground"` |
 
@@ -396,7 +397,12 @@ fn open_find(parent: int) -> int {
 
 `parent` keeps the window above its owner and makes it follow. On an open window:
 `set_fullscreen`, `set_always_on_top`, `set_size`, `set_position`, `center`, `minimize`,
-`maximize` and `focus`, which brings it to the front.
+`maximize` and `focus`, which brings it to the front. `frame(h)` tells where it is and how big,
+and `screens()` gives the usable area of each screen (the main one first): with both, an app
+remembers each window's frame and checks that it still fits before reopening it with `place_at`.
+If the page carries its own light/dark theme, `set_appearance(h, "light" | "dark" | "system")`
+makes the native popup menus, dialogs and title bar follow it; with `h = 0` it applies to the
+whole app.
 
 With `full_content`, on macOS, the page reserves the title bar strip with
 `window.ray.titlebar_height` and marks the element that drags the window with the `data-ray-drag`
@@ -452,4 +458,4 @@ subsystem out of a binary that opens no windows.
 
 The notes leave the device: a [**server-rendered site**](ssr.en.md).
 
-<!-- sync: sha256:0457a9d433dc -->
+<!-- sync: sha256:71b4216121a9 -->

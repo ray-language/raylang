@@ -19635,3 +19635,37 @@ solo en esa tabla (y en `[app]` por compatibilidad). El parser las trata como a 
 una sección más, con sus claves conocidas y las desconocidas ignoradas. La resolución se separó
 en `signing_config_for(host, …)` para que los tests la ejerciten sin depender del sistema donde
 corren.
+
+## 416. M441 — `std/ui`: apariencia, evento `frame` y pantallas (nov 2026)
+
+Dos hallazgos de rayreq y ray-sublime sobre la misma frontera: lo que la ventana nativa sabe y
+la página no, y al revés.
+
+**#312 — la apariencia.** La página de rayreq lleva su propio tema (claro con el sistema en
+oscuro) y todo lo que pasa por `std/ui` —`popup_menu` nativo, `confirm`/`message`, el About—
+salía oscuro. No había manera de decirle a la ventana qué apariencia seguir. `set_appearance(h,
+mode)` lo hace con lo que cada sistema ofrece, y la doc dice hasta dónde llega cada uno: en
+macOS `NSWindow.appearance` es por ventana y `NSApp.appearance` (`h = 0`) cubre el About y las
+ventanas futuras; en Windows la barra de título es por ventana (`DWMWA_USE_IMMERSIVE_DARK_MODE`)
+pero el esquema de color de WebView2 vive en el perfil, compartido por todas las ventanas; en
+GTK 3 la preferencia `gtk-application-prefer-dark-theme` es de la aplicación, así que una ventana
+la fija para todas. `"system"` restaura: en Linux se lee y guarda el valor inicial del ajuste la
+primera vez; en Windows se consulta `AppsUseLightTheme` del registro para la barra y `AUTO` para
+el webview. Se rechazó un campo en `WindowOptions`: el tema de la página cambia en caliente y la
+llamada acompaña a ese cambio.
+
+**#316 — el marco y las pantallas.** ray-sublime quiere reabrir cada ventana donde la dejó el
+usuario. Con `frame`/`place_at` se hace, pero para saber CUÁNDO guardar había que sondear
+`frame` en cada vuelta, y para saber si el marco guardado sigue cabiendo no había geometría de
+pantallas. El evento `"frame"` sale cuando el usuario suelta el arrastre (macOS
+`windowDidMove:`/`windowDidEndLiveResize:`, Windows `WM_EXITSIZEMOVE`) y cuando el marco cambia
+por código; GTK solo da `configure-event`, uno por paso del arrastre, así que la cola funde los
+`"frame"` consecutivos sin leer de una misma ventana en el último: lo que la app necesita es el
+marco final, no la trayectoria. `screens()` devuelve el área ÚTIL de cada pantalla (la principal
+primero) en las mismas coordenadas que `frame`; en Linux exige GDK 3.22 (`gdk_monitor_get_workarea`,
+resuelto con `dlsym` como el resto) y, sin ella, cae a la pantalla por defecto entera.
+
+Lo que se verificó: headless en los dos motores (test), macOS a mano con el programa de humo
+(`screens` = `(0, 34, 1512, 948)`, el evento tras `set_size`); Linux y Windows compilan en
+cruzado (`cargo check --target`), y los backends reales los miden rayreq y ray-sublime con la
+release, que es el flujo de los hallazgos.

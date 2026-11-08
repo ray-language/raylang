@@ -11,6 +11,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   que queda como valor común. Un proyecto que se libera desde macOS y Windows ya no necesita editar
   el manifiesto en una de las dos máquinas. Prioridad completa: flag → entorno → `[app.<host>]` →
   `[app]`.
+- **`std/ui`: apariencia clara/oscura, evento `frame` y `screens()` (M441, rayreq #312 y #316).**
+  `set_appearance(h, "system" | "light" | "dark")` hace que los menús contextuales, los diálogos
+  `confirm`/`message`, la barra de título y las hojas nativas sigan el tema de la página (`h = 0` =
+  toda la app; en macOS también el About). El evento `"frame"` llega cuando el usuario termina de
+  mover o redimensionar una ventana (o lo hace `set_size`/`set_position`), con `"x,y,ancho,alto"`
+  en `tag` y `event_frame(e)` para leerlo; los consecutivos sin leer se funden. `screens()` da el
+  área útil de cada pantalla, la principal primero, para comprobar que un marco guardado sigue
+  cabiendo antes de `place_at`. macOS verificado a mano; Linux y Windows en compilación cruzada.
 
 ## 1.27.89 — 2026-11-08
 

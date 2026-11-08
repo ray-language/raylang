@@ -279,8 +279,19 @@ fn push_event(kind: &str, window: i64, tag: &str) {
     let ev = events();
     {
         let mut q = ev.queue.lock().unwrap();
-        enforce_queue_cap(&mut q);
-        q.push_back((kind.to_string(), window, tag.to_string()));
+        // M441 (rayreq #316): un `frame` que nadie ha leído aún se SUSTITUYE por el más nuevo de
+        // la misma ventana (GTK emite configure-event en cada paso del arrastre; a la app solo le
+        // sirve el último marco).
+        if kind == "frame"
+            && let Some(last) = q.back_mut()
+            && last.0 == "frame"
+            && last.1 == window
+        {
+            last.2 = tag.to_string();
+        } else {
+            enforce_queue_cap(&mut q);
+            q.push_back((kind.to_string(), window, tag.to_string()));
+        }
     }
     ev.ready.notify_all();
     #[cfg(unix)]
@@ -1230,6 +1241,91 @@ pub enum WindowCmd {
     Center,
     Minimize,
     Maximize,
+    /// M441 (rayreq #312): la apariencia (clara/oscura/sistema) de la ventana.
+    Appearance(Appearance),
+}
+
+/// M441 (rayreq #312): la apariencia que siguen los menús contextuales, los diálogos y la barra
+/// de título nativos — `System` = la del escritorio (el default).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Appearance {
+    System,
+    Light,
+    Dark,
+}
+
+impl Appearance {
+    fn parse(s: &str) -> Option<Appearance> {
+        match s.trim() {
+            "system" | "" => Some(Appearance::System),
+            "light" => Some(Appearance::Light),
+            "dark" => Some(Appearance::Dark),
+            _ => None,
+        }
+    }
+}
+
+/// M441: la apariencia de TODA la app (`set_appearance(0, …)`): en macOS `NSApp.appearance`
+/// (también el panel About y las ventanas futuras); en Linux el ajuste GTK
+/// `gtk-application-prefer-dark-theme` (que ya es global); en Windows, cada ventana abierta.
+pub fn app_appearance(mode: &str) -> Result<(), String> {
+    let a = Appearance::parse(mode).ok_or_else(|| format!("ui: unknown appearance '{mode}' (system | light | dark)"))?;
+    if ui_trace() {
+        eprintln!("[ui] app appearance {a:?}");
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if !headless() {
+            mac::app_appearance(a);
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if !headless() {
+            gtk::app_appearance(a);
+        }
+    }
+    #[cfg(windows)]
+    {
+        let targets: Vec<(usize, std::sync::Arc<std::sync::atomic::AtomicBool>)> = windows()
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|w| !w.closed)
+            .filter_map(|w| match &w.win {
+                Win::Windows { hwnd, alive } => Some((*hwnd, alive.clone())),
+                _ => None,
+            })
+            .collect();
+        for (hwnd, alive) in targets {
+            win::window_command(hwnd, alive, WindowCmd::Appearance(a));
+        }
+    }
+    Ok(())
+}
+
+/// M441 (rayreq #316): las pantallas — `(x, y, ancho, alto)` del área ÚTIL de cada una (sin la
+/// barra de menús ni el dock/la barra de tareas) en las coordenadas de `frame`/`set_position`
+/// (origen arriba-izquierda de la pantalla principal); la principal va primero. Headless: una
+/// pantalla fija de 1440×900. `Err` en los shells móviles.
+pub fn screens() -> Result<Vec<(i64, i64, i64, i64)>, String> {
+    if headless() {
+        return Ok(vec![(0, 0, 1440, 900)]);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return mac::screens();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return gtk::screens();
+    }
+    #[cfg(windows)]
+    {
+        return win::screens();
+    }
+    #[allow(unreachable_code)]
+    Err("ui: screens is not available on this platform".to_string())
 }
 
 /// M224: `#rrggbb` → (r, g, b) en 0..=255. `None` si no tiene esa forma exacta (el runtime lo
@@ -2423,6 +2519,10 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
         "center" => Some(WindowCmd::Center),
         "minimize" => Some(WindowCmd::Minimize),
         "maximize" => Some(WindowCmd::Maximize),
+        // M441 (rayreq #312): `set_appearance(h, mode)`; con h = 0 llega a `app_appearance`.
+        "appearance" => Some(WindowCmd::Appearance(
+            Appearance::parse(arg).ok_or_else(|| format!("ui: unknown appearance '{arg}' (system | light | dark)"))?,
+        )),
         "set_title" | "set_edited" | "intercept_close" => None,
         _ => return Err(format!("ui: unknown window operation '{op}'")),
     };
@@ -2438,16 +2538,29 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
         return Ok(());
     }
     if let Win::Headless { frame } = &mut state.win {
-        match cmd {
+        let moved = match cmd {
             Some(WindowCmd::Position(x, y)) => {
                 frame.0 = x;
                 frame.1 = y;
+                true
             }
             Some(WindowCmd::Size(w, h)) => {
                 frame.2 = w;
                 frame.3 = h;
+                true
             }
-            _ => {}
+            _ => false,
+        };
+        // M441 (rayreq #316): en headless el marco cambia solo por estas órdenes → el evento
+        // `frame` que en el escritorio emite el sistema al soltar el arrastre.
+        if moved {
+            if ui_trace() {
+                eprintln!("[ui] window {id} {:?}", cmd.expect("moved implies a geometry command"));
+            }
+            let tag = format!("{},{},{},{}", frame.0, frame.1, frame.2, frame.3);
+            drop(map);
+            push_event("frame", id, &tag);
+            return Ok(());
         }
     }
     match &state.win {
@@ -3919,6 +4032,32 @@ mod mac {
     fn delegate_class() -> Id {
         static CLASS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
         *CLASS.get_or_init(|| {
+            // M441 (rayreq #316): el marco de la ventana de una NSNotification → evento `frame`.
+            extern "C" fn window_frame_changed(_this: Id, _sel: Sel, notification: Id) {
+                // SAFETY: el run loop entrega una NSNotification válida; `object` es la ventana.
+                let win = unsafe {
+                    let object: MsgId = std::mem::transmute(msg_send());
+                    object(notification, sel(b"object\0"))
+                };
+                if let Some(id) = window_id_of(win) {
+                    let (x, y, w, h) = unsafe { frame_tuple(win) };
+                    super::push_event("frame", id, &format!("{x},{y},{w},{h}"));
+                }
+            }
+            // M441: `windowDidResize:` solo cuando NO es un redimensionado en vivo (ese termina en
+            // `windowDidEndLiveResize:`): zoom, `set_size`, pantalla completa.
+            extern "C" fn window_did_resize(this: Id, sel_: Sel, notification: Id) {
+                // SAFETY: como arriba; `inLiveResize` es un mensaje estándar de NSWindow.
+                let live = unsafe {
+                    let object: MsgId = std::mem::transmute(msg_send());
+                    let is: MsgBool = std::mem::transmute(msg_send());
+                    let win = object(notification, sel(b"object\0"));
+                    !win.is_null() && is(win, sel(b"inLiveResize\0")) != 0
+                };
+                if !live {
+                    window_frame_changed(this, sel_, notification);
+                }
+            }
             // M252 (ray-sublime #76): `windowDidBecomeKey:` → ("focused", id, ""). Mismo mapa
             // ventana → id que el cierre.
             extern "C" fn window_did_become_key(_this: Id, _sel: Sel, notification: Id) {
@@ -4292,6 +4431,28 @@ mod mac {
                     cls_new,
                     sel(b"windowDidBecomeKey:\0"),
                     window_did_become_key as extern "C" fn(Id, Sel, Id) as *const c_void,
+                    c"v@:@".as_ptr(),
+                );
+                // M441 (rayreq #316): la ventana se movió o cambió de tamaño → ("frame", id,
+                // "x,y,w,h"). `windowDidMove:` llega al soltar el arrastre; el redimensionado en
+                // vivo se espera a `windowDidEndLiveResize:` (y `windowDidResize:` cubre los
+                // cambios programáticos y el zoom, que no son «en vivo»).
+                class_addMethod(
+                    cls_new,
+                    sel(b"windowDidMove:\0"),
+                    window_frame_changed as extern "C" fn(Id, Sel, Id) as *const c_void,
+                    c"v@:@".as_ptr(),
+                );
+                class_addMethod(
+                    cls_new,
+                    sel(b"windowDidEndLiveResize:\0"),
+                    window_frame_changed as extern "C" fn(Id, Sel, Id) as *const c_void,
+                    c"v@:@".as_ptr(),
+                );
+                class_addMethod(
+                    cls_new,
+                    sel(b"windowDidResize:\0"),
+                    window_did_resize as extern "C" fn(Id, Sel, Id) as *const c_void,
                     c"v@:@".as_ptr(),
                 );
                 class_addMethod(
@@ -5557,26 +5718,87 @@ mod mac {
                     C::Center => plain(w, sel(b"center\0")),
                     C::Minimize => set_id(w, sel(b"miniaturize:\0"), std::ptr::null_mut()),
                     C::Maximize => set_id(w, sel(b"zoom:\0"), std::ptr::null_mut()),
+                    // M441 (rayreq #312): `setAppearance:` (nil = la del sistema). Los menús
+                    // contextuales, las hojas y los diálogos anclados a la ventana la heredan.
+                    C::Appearance(a) => set_id(w, sel(b"setAppearance:\0"), appearance_id(a)),
                 }
             }
         });
     }
 
+    /// M441: el `NSAppearance` de un modo; nulo para `System` (= heredar).
+    unsafe fn appearance_id(a: super::Appearance) -> Id {
+        let name = match a {
+            super::Appearance::System => return std::ptr::null_mut(),
+            super::Appearance::Light => "NSAppearanceNameAqua",
+            super::Appearance::Dark => "NSAppearanceNameDarkAqua",
+        };
+        // SAFETY: mensaje de clase estándar; devuelve un objeto compartido (autoreleased).
+        unsafe {
+            let id_id: MsgIdId = std::mem::transmute(msg_send());
+            id_id(cls(b"NSAppearance\0"), sel(b"appearanceNamed:\0"), nsstring(name))
+        }
+    }
+
+    /// M441: `NSApp.appearance` — toda la app (About incluido) y las ventanas que se abran después.
+    pub(super) fn app_appearance(a: super::Appearance) {
+        on_main(move || {
+            // SAFETY: mensajes estándar de NSApplication en el hilo principal.
+            unsafe {
+                let shared: MsgId = std::mem::transmute(msg_send());
+                let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                let app = shared(cls(b"NSApplication\0"), sel(b"sharedApplication\0"));
+                set_id(app, sel(b"setAppearance:\0"), appearance_id(a));
+            }
+        });
+    }
+
+    /// #245/M441: el marco de una ventana YA en el hilo principal — esquina superior izquierda
+    /// en coordenadas arriba-izquierda y tamaño del área de contenido.
+    unsafe fn frame_tuple(w: Id) -> (i64, i64, i64, i64) {
+        // SAFETY: mensajes estándar de NSWindow/NSView; el llamador está en el hilo principal.
+        unsafe {
+            let rect_of: MsgRect = std::mem::transmute(msg_send());
+            let get_id: MsgId = std::mem::transmute(msg_send());
+            let frame = rect_of(w, sel(b"frame\0"));
+            let content = get_id(w, sel(b"contentView\0"));
+            let size = if content.is_null() { frame } else { rect_of(content, sel(b"frame\0")) };
+            let screen = CGDisplayBounds(CGMainDisplayID());
+            let top = screen.h - (frame.y + frame.h);
+            (frame.x.round() as i64, top.round() as i64, size.w.round() as i64, size.h.round() as i64)
+        }
+    }
+
     /// #245: el marco de la ventana en el hilo principal — esquina superior izquierda del marco
     /// en coordenadas arriba-izquierda (las de `set_position`) y tamaño del área de contenido.
     pub(super) fn window_frame(window: usize) -> Result<(i64, i64, i64, i64), String> {
+        on_main_sync(move || Ok(unsafe { frame_tuple(window as Id) }))
+    }
+
+    /// M441 (rayreq #316): `[NSScreen screens]` → el `visibleFrame` de cada una (sin barra de
+    /// menús ni dock) en coordenadas arriba-izquierda de la principal, que va primero.
+    pub(super) fn screens() -> Result<Vec<(i64, i64, i64, i64)>, String> {
         on_main_sync(move || {
-            // SAFETY: mensajes estándar de NSWindow/NSView en el hilo principal.
+            // SAFETY: mensajes estándar de NSScreen/NSArray en el hilo principal.
             unsafe {
-                let w = window as Id;
-                let rect_of: MsgRect = std::mem::transmute(msg_send());
                 let get_id: MsgId = std::mem::transmute(msg_send());
-                let frame = rect_of(w, sel(b"frame\0"));
-                let content = get_id(w, sel(b"contentView\0"));
-                let size = if content.is_null() { frame } else { rect_of(content, sel(b"frame\0")) };
-                let screen = CGDisplayBounds(CGMainDisplayID());
-                let top = screen.h - (frame.y + frame.h);
-                Ok((frame.x.round() as i64, top.round() as i64, size.w.round() as i64, size.h.round() as i64))
+                let count: MsgU64 = std::mem::transmute(msg_send());
+                let at: MsgIdI64 = std::mem::transmute(msg_send());
+                let rect_of: MsgRect = std::mem::transmute(msg_send());
+                let list = get_id(cls(b"NSScreen\0"), sel(b"screens\0"));
+                if list.is_null() {
+                    return Err("ui: no screens".to_string());
+                }
+                let main_h = CGDisplayBounds(CGMainDisplayID()).h;
+                let n = count(list, sel(b"count\0"));
+                let mut out = Vec::with_capacity(n as usize);
+                for i in 0..n {
+                    let s = at(list, sel(b"objectAtIndex:\0"), i as i64);
+                    let r = rect_of(s, sel(b"visibleFrame\0"));
+                    let top = main_h - (r.y + r.h);
+                    out.push((r.x.round() as i64, top.round() as i64, r.w.round() as i64, r.h.round() as i64));
+                }
+                Ok(out)
             }
         })
     }
@@ -7139,6 +7361,16 @@ mod gtk {
                     drop_destroy_ctx,
                     0,
                 );
+                // M441 (rayreq #316): movimientos y redimensionados → evento `frame`.
+                let configure_ctx = Box::into_raw(Box::new(DestroyCtx { id, alive: alive2.clone() }));
+                (api.signal_connect_ret)(
+                    window,
+                    c"configure-event".as_ptr(),
+                    on_configure_event,
+                    configure_ctx as *mut c_void,
+                    drop_destroy_ctx,
+                    0,
+                );
                 let ctx = Box::into_raw(Box::new(DestroyCtx { id, alive: alive2 }));
                 (api.signal_connect)(
                     window,
@@ -7215,6 +7447,27 @@ mod gtk {
         screen_height: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
         /// M371: `request_attention` — la pista de urgencia (el WM resalta la ventana en la barra).
         set_urgency_hint: Option<unsafe extern "C" fn(Widget, i32)>,
+        /// M441 (rayreq #316): monitores (GDK 3.22+): display → n, monitor(i), área útil, primario.
+        display_default: Option<unsafe extern "C" fn() -> *mut c_void>,
+        display_n_monitors: Option<unsafe extern "C" fn(*mut c_void) -> i32>,
+        display_get_monitor: Option<unsafe extern "C" fn(*mut c_void, i32) -> *mut c_void>,
+        display_primary_monitor: Option<unsafe extern "C" fn(*mut c_void) -> *mut c_void>,
+        monitor_workarea: Option<unsafe extern "C" fn(*mut c_void, *mut GdkRectangle)>,
+        /// M441 (rayreq #312): `gtk-application-prefer-dark-theme` del GtkSettings por defecto
+        /// (`g_object_set`/`g_object_get` son variádicas: `(obj, "prop", valor, NULL)`).
+        settings_default: Option<unsafe extern "C" fn() -> *mut c_void>,
+        object_set_bool: Option<unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char, i32, *const c_void)>,
+        object_get_bool: Option<unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char, *mut i32, *const c_void)>,
+    }
+
+    /// M441: `GdkRectangle` (cuatro `gint`).
+    #[repr(C)]
+    #[derive(Default, Clone, Copy)]
+    struct GdkRectangle {
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
     }
     unsafe impl Send for WindowApi {}
     unsafe impl Sync for WindowApi {}
@@ -7249,6 +7502,14 @@ mod gtk {
                     screen_width: opt(gdk, c"gdk_screen_get_width").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> i32>(p)),
                     screen_height: opt(gdk, c"gdk_screen_get_height").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> i32>(p)),
                     set_urgency_hint: opt(gtk, c"gtk_window_set_urgency_hint").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
+                    display_default: opt(gdk, c"gdk_display_get_default").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> *mut c_void>(p)),
+                    display_n_monitors: opt(gdk, c"gdk_display_get_n_monitors").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> i32>(p)),
+                    display_get_monitor: opt(gdk, c"gdk_display_get_monitor").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void, i32) -> *mut c_void>(p)),
+                    display_primary_monitor: opt(gdk, c"gdk_display_get_primary_monitor").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> *mut c_void>(p)),
+                    monitor_workarea: opt(gdk, c"gdk_monitor_get_workarea").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void, *mut GdkRectangle)>(p)),
+                    settings_default: opt(gtk, c"gtk_settings_get_default").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> *mut c_void>(p)),
+                    object_set_bool: opt(gtk, c"g_object_set").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char, i32, *const c_void)>(p)),
+                    object_get_bool: opt(gtk, c"g_object_get").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char, *mut i32, *const c_void)>(p)),
                 }
             }
         })
@@ -7370,9 +7631,110 @@ mod gtk {
                     }
                     C::Minimize => { if let Some(f) = wa.iconify { f(w); } }
                     C::Maximize => { if let Some(f) = wa.maximize { f(w); } }
+                    // M441 (rayreq #312): en GTK 3 la preferencia de tema es de la APLICACIÓN;
+                    // una ventana la aplica a todas (documentado).
+                    C::Appearance(a) => apply_appearance(a),
                 }
             }
         });
+    }
+
+    /// M441: el valor inicial de `gtk-application-prefer-dark-theme` (lo que el tema del usuario
+    /// pedía), para que `System` lo restaure. −1 = aún no leído.
+    static INITIAL_PREFER_DARK: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+
+    /// M441: `g_object_set(settings, "gtk-application-prefer-dark-theme", …)` en el hilo gtk.
+    /// Los menús contextuales y los diálogos GTK lo siguen al instante.
+    unsafe fn apply_appearance(a: super::Appearance) {
+        let wa = window_api();
+        let (Some(settings_default), Some(set), Some(get)) = (wa.settings_default, wa.object_set_bool, wa.object_get_bool) else { return };
+        // SAFETY: hilo gtk; GtkSettings por defecto vive toda la sesión; firmas variádicas con NULL final.
+        unsafe {
+            let settings = settings_default();
+            if settings.is_null() {
+                return;
+            }
+            let prop = c"gtk-application-prefer-dark-theme".as_ptr();
+            if INITIAL_PREFER_DARK.load(Ordering::SeqCst) < 0 {
+                let mut cur: i32 = 0;
+                get(settings, prop, &mut cur, std::ptr::null());
+                INITIAL_PREFER_DARK.store(if cur != 0 { 1 } else { 0 }, Ordering::SeqCst);
+            }
+            let want = match a {
+                super::Appearance::System => INITIAL_PREFER_DARK.load(Ordering::SeqCst).max(0),
+                super::Appearance::Light => 0,
+                super::Appearance::Dark => 1,
+            };
+            set(settings, prop, want, std::ptr::null());
+        }
+    }
+
+    /// M441: la apariencia de la app = la misma preferencia global.
+    pub(super) fn app_appearance(a: super::Appearance) {
+        on_main(move || unsafe { apply_appearance(a) });
+    }
+
+    /// M441 (rayreq #316): `configure-event` de la ventana → ("frame", id, "x,y,w,h"). GTK lo
+    /// emite en cada paso del arrastre; `push_event` funde los `frame` consecutivos de la misma
+    /// ventana, así que la app lee el último.
+    extern "C" fn on_configure_event(w: Widget, _event: *mut c_void, data: *mut c_void) -> i32 {
+        // SAFETY: `data` es el DestroyCtx propio de esta señal; vive hasta su GClosureNotify.
+        let ctx = unsafe { &*(data as *const DestroyCtx) };
+        if !ctx.alive.load(Ordering::SeqCst) {
+            return 0;
+        }
+        let wa = window_api();
+        if let (Some(get_pos), Some(get_size)) = (wa.get_position, wa.get_size) {
+            let (mut x, mut y, mut cw, mut ch) = (0i32, 0i32, 0i32, 0i32);
+            // SAFETY: ventana viva en el hilo del loop; firmas C de GTK 3.
+            unsafe {
+                get_pos(w, &mut x, &mut y);
+                get_size(w, &mut cw, &mut ch);
+            }
+            super::push_event("frame", ctx.id, &format!("{x},{y},{cw},{ch}"));
+        }
+        0 // propagar: GTK sigue con su layout
+    }
+
+    /// M441 (rayreq #316): el área útil de cada monitor (GDK 3.22+), el primario primero; sin esa
+    /// API, la pantalla por defecto entera como única entrada.
+    pub(super) fn screens() -> Result<Vec<(i64, i64, i64, i64)>, String> {
+        on_main_sync(move || {
+            let wa = window_api();
+            // SAFETY: hilo gtk; punteros de GDK vivos durante la sesión; firmas C de GDK 3.
+            unsafe {
+                if let (Some(display_default), Some(n_of), Some(monitor_at), Some(workarea)) =
+                    (wa.display_default, wa.display_n_monitors, wa.display_get_monitor, wa.monitor_workarea)
+                {
+                    let d = display_default();
+                    if !d.is_null() {
+                        let primary = wa.display_primary_monitor.map(|f| f(d)).unwrap_or(std::ptr::null_mut());
+                        let n = n_of(d);
+                        let mut out = Vec::with_capacity(n.max(0) as usize);
+                        for i in 0..n {
+                            let m = monitor_at(d, i);
+                            if m.is_null() {
+                                continue;
+                            }
+                            let mut r = GdkRectangle::default();
+                            workarea(m, &mut r);
+                            let entry = (r.x as i64, r.y as i64, r.width as i64, r.height as i64);
+                            if m == primary { out.insert(0, entry) } else { out.push(entry) }
+                        }
+                        if !out.is_empty() {
+                            return Ok(out);
+                        }
+                    }
+                }
+                if let (Some(screen), Some(sw), Some(sh)) = (wa.screen_default, wa.screen_width, wa.screen_height) {
+                    let s = screen();
+                    if !s.is_null() {
+                        return Ok(vec![(0, 0, sw(s) as i64, sh(s) as i64)]);
+                    }
+                }
+            }
+            Err("ui: screens needs GDK 3.22+ (gdk_monitor_get_workarea)".to_string())
+        })
     }
 
     /// M257: `gtk_window_set_title` en el hilo gtk.
@@ -8524,6 +8886,26 @@ mod win {
         /// M327: el color (COLORREF) con que se borra el fondo del HWND hasta que WebView2 pinta;
         /// `None` = el pincel de la clase (blanco).
         background: Option<u32>,
+        /// M441 (rayreq #316): dentro del bucle modal de mover/redimensionar (WM_ENTERSIZEMOVE …
+        /// WM_EXITSIZEMOVE): el evento `frame` se emite al salir, no en cada paso.
+        in_size_move: bool,
+    }
+
+    /// M441: el marco de una ventana — esquina del marco y tamaño del área cliente (como `frame`).
+    unsafe fn frame_tuple(hwnd: HWND) -> (i64, i64, i64, i64) {
+        let (mut outer, mut client) = (RECT::default(), RECT::default());
+        // SAFETY: el llamador garantiza hwnd vivo en el hilo 1.
+        unsafe {
+            let _ = GetWindowRect(hwnd, &mut outer);
+            let _ = GetClientRect(hwnd, &mut client);
+        }
+        (outer.left as i64, outer.top as i64, (client.right - client.left) as i64, (client.bottom - client.top) as i64)
+    }
+
+    /// M441: ("frame", id, "x,y,w,h") de esta ventana.
+    unsafe fn push_frame(hwnd: HWND, id: i64) {
+        let (x, y, w, h) = unsafe { frame_tuple(hwnd) };
+        super::push_event("frame", id, &format!("{x},{y},{w},{h}"));
     }
 
     /// M327: COLORREF (0x00BBGGRR) de un `#rrggbb`.
@@ -8584,8 +8966,47 @@ mod win {
                             let _ = c.SetBounds(rc);
                         }
                     }
+                    // M441 (rayreq #316): maximizar/restaurar/`set_size` (fuera del arrastre) →
+                    // `frame`; minimizada no (el marco no es útil).
+                    if !ctx.in_size_move && wparam.0 as u32 != SIZE_MINIMIZED {
+                        // SAFETY: hilo 1, ventana viva.
+                        unsafe { push_frame(hwnd, ctx.id) };
+                    }
                 }
                 LRESULT(0)
+            }
+            // M441 (rayreq #316): el arrastre (mover o redimensionar) emite UN `frame` al soltar.
+            WM_ENTERSIZEMOVE => {
+                if !ctx_ptr.is_null() {
+                    // SAFETY: como arriba.
+                    unsafe { (*ctx_ptr).in_size_move = true };
+                }
+                // SAFETY: reenvío estándar.
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
+            WM_EXITSIZEMOVE => {
+                if !ctx_ptr.is_null() {
+                    // SAFETY: como arriba.
+                    unsafe {
+                        (*ctx_ptr).in_size_move = false;
+                        push_frame(hwnd, (*ctx_ptr).id);
+                    }
+                }
+                // SAFETY: reenvío estándar.
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
+            // M441: `set_position`/`center` (fuera del arrastre) → `frame`.
+            WM_MOVE => {
+                if !ctx_ptr.is_null() {
+                    // SAFETY: como arriba.
+                    let ctx = unsafe { &*ctx_ptr };
+                    if !ctx.in_size_move {
+                        // SAFETY: hilo 1, ventana viva.
+                        unsafe { push_frame(hwnd, ctx.id) };
+                    }
+                }
+                // SAFETY: reenvío estándar.
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
             }
             WM_COMMAND => {
                 let id = (wparam.0 & 0xFFFF) as u16;
@@ -9449,7 +9870,7 @@ mod win {
                 // M327: el fondo hasta que la página pinte — el HWND lo borra de ese color y
                 // WebView2 lo usa como fondo por defecto.
                 let background = super::effective_background(&opts);
-                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels, min_track, fullscreen_saved: None, background: background.map(colorref) });
+                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels, min_track, fullscreen_saved: None, background: background.map(colorref), in_size_move: false });
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(ctx) as isize);
                 let _ = ShowWindow(hwnd, SW_SHOW);
                 match attach_webview(hwnd, id, &url) {
@@ -9532,14 +9953,87 @@ mod win {
                 return Err("ui: not an open window".to_string());
             }
             // SAFETY: hilo 1, ventana viva (alive).
-            unsafe {
-                let hwnd = HWND(hwnd as *mut _);
-                let (mut outer, mut client) = (RECT::default(), RECT::default());
-                let _ = GetWindowRect(hwnd, &mut outer);
-                let _ = GetClientRect(hwnd, &mut client);
-                Ok((outer.left as i64, outer.top as i64, (client.right - client.left) as i64, (client.bottom - client.top) as i64))
-            }
+            Ok(unsafe { frame_tuple(HWND(hwnd as *mut _)) })
         })
+    }
+
+    /// M441 (rayreq #316): `EnumDisplayMonitors` → el área útil (`rcWork`) de cada monitor, el
+    /// primario primero.
+    pub(super) fn screens() -> Result<Vec<(i64, i64, i64, i64)>, String> {
+        use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
+        /// `MONITORINFOF_PRIMARY` (winuser.h): el crate `windows` no lo expone como constante.
+        const MONITORINFOF_PRIMARY: u32 = 1;
+        unsafe extern "system" fn each(m: HMONITOR, _dc: HDC, _rc: *mut RECT, data: LPARAM) -> windows::core::BOOL {
+            // SAFETY: `data` es el Vec del llamador, vivo durante la enumeración (síncrona).
+            let out = unsafe { &mut *(data.0 as *mut Vec<(bool, (i64, i64, i64, i64))>) };
+            let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            // SAFETY: monitor válido durante el callback.
+            if unsafe { GetMonitorInfoW(m, &mut info) }.as_bool() {
+                let r = info.rcWork;
+                let primary = info.dwFlags & MONITORINFOF_PRIMARY != 0;
+                out.push((primary, (r.left as i64, r.top as i64, (r.right - r.left) as i64, (r.bottom - r.top) as i64)));
+            }
+            windows::core::BOOL(1)
+        }
+        on_main_sync(move || {
+            let mut found: Vec<(bool, (i64, i64, i64, i64))> = Vec::new();
+            // SAFETY: callback síncrono con un puntero a un Vec local.
+            unsafe {
+                let _ = EnumDisplayMonitors(None, None, Some(each), LPARAM(&mut found as *mut _ as isize));
+            }
+            if found.is_empty() {
+                return Err("ui: no monitors".to_string());
+            }
+            found.sort_by_key(|(primary, _)| !primary);
+            Ok(found.into_iter().map(|(_, r)| r).collect())
+        })
+    }
+
+    /// M441 (rayreq #312): apariencia de una ventana — la barra de título por DWM
+    /// (`DWMWA_USE_IMMERSIVE_DARK_MODE`, Windows 10 1809+/11) y el esquema de color del PERFIL de
+    /// WebView2 (menús contextuales y diálogos del webview; el perfil es compartido por todas las
+    /// ventanas). `System` lee `AppsUseLightTheme` del registro para la barra y pone AUTO en el webview.
+    unsafe fn apply_appearance(hwnd: HWND, webview: Option<&ICoreWebView2>, a: super::Appearance) {
+        use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE};
+        use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
+        use windows::core::{w, Interface};
+        let dark: i32 = match a {
+            super::Appearance::Light => 0,
+            super::Appearance::Dark => 1,
+            super::Appearance::System => {
+                let mut light: u32 = 1;
+                let mut size: u32 = 4;
+                // SAFETY: lectura de un DWORD en un buffer local.
+                let ok = unsafe {
+                    RegGetValueW(
+                        HKEY_CURRENT_USER,
+                        w!("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"),
+                        w!("AppsUseLightTheme"),
+                        RRF_RT_REG_DWORD,
+                        None,
+                        Some(&mut light as *mut u32 as *mut std::ffi::c_void),
+                        Some(&mut size),
+                    )
+                };
+                if ok.is_ok() && light == 0 { 1 } else { 0 }
+            }
+        };
+        // SAFETY: atributo documentado con un BOOL (i32) local vivo durante la llamada.
+        unsafe {
+            let _ = DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &dark as *const i32 as *const std::ffi::c_void, 4);
+        }
+        if let Some(wv) = webview
+            && let Ok(wv13) = wv.cast::<ICoreWebView2_13>()
+            && let Ok(profile) = unsafe { wv13.Profile() }
+        {
+            let scheme = match a {
+                super::Appearance::System => COREWEBVIEW2_PREFERRED_COLOR_SCHEME_AUTO,
+                super::Appearance::Light => COREWEBVIEW2_PREFERRED_COLOR_SCHEME_LIGHT,
+                super::Appearance::Dark => COREWEBVIEW2_PREFERRED_COLOR_SCHEME_DARK,
+            };
+            // SAFETY: COM sobre un perfil vivo en el hilo 1.
+            let _ = unsafe { profile.SetPreferredColorScheme(scheme) };
+        }
     }
 
     pub(super) fn window_command(hwnd: usize, alive: Arc<AtomicBool>, cmd: super::WindowCmd) {
@@ -9592,6 +10086,11 @@ mod win {
                     }
                     C::Position(x, y) => {
                         let _ = SetWindowPos(hwnd, None, x as i32, y as i32, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+                    }
+                    C::Appearance(a) => {
+                        let ctx_ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut WinCtx;
+                        let webview = if ctx_ptr.is_null() { None } else { (*ctx_ptr).webview.as_ref() };
+                        apply_appearance(hwnd, webview, a);
                     }
                     C::Center => {
                         let mut rc = RECT::default();

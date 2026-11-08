@@ -4051,6 +4051,12 @@ fn a_directory_argument_means_the_project_living_there() {
     let (out, err, code) = ray(&proj, &["test", "."]);
     assert_eq!(code, 0, "test .: {err}");
     assert!(out.contains("1 test(s), all passed"), "test .: {out}");
+    // Un subdirectorio que NO es raíz de proyecto sigue siendo un FILTRO por nombre en `test`
+    // (revisión de #617): `ray test tests` con un `tests/` presente filtra, no adopta.
+    std::fs::create_dir_all(proj.join("tests")).unwrap();
+    let (out, _e, code) = ray(&proj, &["test", "tests"]);
+    let _ = code;
+    assert!(out.contains("containing 'tests'") || out.contains("no tests"), "filtro, no directorio: {out}");
     // Desde fuera del proyecto, el directorio lo adopta (deps, entrada y raíces desde él).
     let (out, err, code) = ray(&base, &["run", "demo"]);
     assert_eq!(code, 0, "run demo: {err}");

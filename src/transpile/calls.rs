@@ -1259,49 +1259,6 @@ impl Transpiler {
         }
         // Argumentos efectivos: el receptor de UFCS (si lo hay) va primero.
         let eff: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
-        // ray-sublime #315: la clase RefCell-en-args (IDEAS §64) en la stdlib INTERCEPTADA. Las
-        // llamadas de usuario (`emit_user_call_hoisted`) y los constructores de variante izan sus
-        // argumentos a temporales; los intercepts de `std::fs`/`net`/`time`/… emitían los args EN
-        // LÍNEA (`std::fs::write(&*sh.borrow().path.clone(), &*bytes_for(sh))`): el guard del
-        // `borrow()` del primer arg vive hasta el final de la sentencia, y si un arg posterior
-        // llama a una función que hace `borrow_mut` del mismo struct, panic «already borrowed»
-        // (la VM evalúa los args y ya). Solo cuando algún argumento PUEDE llamar (lo demás no
-        // muta nada) se izan todos los no-literales a `let __rt_sa{i}` en orden —cada `let`
-        // cierra sus guards— y se reemite la MISMA llamada con identificadores sintéticos: los
-        // intercepts no cambian, y al no haber ya llamadas en los args no se vuelve a izar. De
-        // paso, un intercept que emite un arg dos veces (p. ej. el `.len()` del resultado) ya no
-        // ejecuta su efecto dos veces.
-        if recv.is_none()
-            && name.starts_with("std::")
-            && eff.len() >= 2
-            && eff.iter().any(|a| may_call(a))
-            && let Some(tys) = eff.iter().map(|a| self.type_of(a).ok()).collect::<Option<Vec<Type>>>()
-        {
-            out.push_str("{ ");
-            let mut synthetic: Vec<Expr> = Vec::with_capacity(eff.len());
-            self.scopes.push(HashMap::new());
-            let mut r = Ok(());
-            for (i, a) in eff.iter().enumerate() {
-                if is_pure_literal(a) {
-                    synthetic.push((*a).clone());
-                    continue;
-                }
-                let tmp = format!("__rt_sa{i}");
-                write!(out, "let {tmp} = ").unwrap();
-                r = self.emit_expr(out, a);
-                if r.is_err() {
-                    break;
-                }
-                out.push_str("; ");
-                self.declare(&tmp, tys[i].clone());
-                synthetic.push(Expr { kind: ExprKind::Ident(tmp), line: a.line, col: a.col });
-            }
-            let r = r.and_then(|_| self.emit_call(out, callee, &synthetic));
-            self.scopes.pop();
-            r?;
-            out.push_str(" }");
-            return Ok(());
-        }
         // `std::math::*` (módulo std/math) → los métodos de `f64` de Rust (misma impl que la VM → mismo
         // resultado). abs/min/max son ad-hoc int|float (ambos tienen esos métodos en Rust).
         if let Some(mfn) = name.strip_prefix("std::math::")

@@ -121,6 +121,16 @@ const NATIVE_STUBBED_BUILTINS: &[&str] = &[];
 
 use super::transpile;
 
+/// El primer temporal numerado `<prefix><N>` que aparece en el `ray_main` del Rust generado
+/// (p. ej. `__rt_sp3`): los contadores dependen de lo que el prelude emite antes.
+fn temp_prefix(rust: &str, prefix: &str) -> String {
+    let main_i = rust.find("fn ray_main(").unwrap_or(0);
+    let body = &rust[main_i..];
+    let at = body.find(prefix).unwrap_or_else(|| panic!("no hay temporal {prefix} en ray_main: {rust}"));
+    let digits: String = body[at + prefix.len()..].chars().take_while(|c| c.is_ascii_digit()).collect();
+    format!("{prefix}{digits}")
+}
+
 fn transpile_src(src: &str) -> String {
     let tokens = crate::lexer::lex(src).expect("lex");
     let mut prog = crate::parser::parse(tokens).expect("parse");
@@ -313,13 +323,14 @@ fn fuses_substring_into_parse_int_and_index_of() {
     assert!(rust.contains("__rt_fs[__rt_lo..__rt_hi]"), "{}", rust);
 }
 
-/// ray-sublime #315: una llamada interceptada de la stdlib con un argumento que PUEDE llamar iza
-/// todos los args no literales a `let __rt_sa{i}` (cada `let` cierra el guard del `borrow()` del
-/// anterior) y reemite la misma llamada sobre ellos; con args sin llamadas no se iza nada.
+/// ray-sublime #315 (M439): la lectura de un campo cierra su guard en un bloque propio
+/// (`({ s.borrow().p.clone() })`), así que un argumento posterior que muta el mismo struct no
+/// encuentra el `RefCell` prestado — en las llamadas interceptadas de la stdlib, en UFCS y en
+/// cualquier otra expresión (un `+`, un builtin). `write_file_bytes` evalúa sus dos argumentos una sola vez.
 #[test]
-fn std_call_with_a_calling_arg_hoists_its_args() {
+fn field_reads_close_their_borrow_guard_before_the_next_argument() {
     // `import std/fs` necesita el loader (como el test de fs.sync).
-    let dir = std::env::temp_dir().join(format!("ray_std_call_hoist_test_{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("ray_field_guard_test_{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let src = "import std/fs;\n\
          struct S { p: string }\n\
@@ -327,8 +338,6 @@ fn std_call_with_a_calling_arg_hoists_its_args() {
          fn main() {\n\
              let s = S { p: \"a\" };\n\
              let _ = fs.write_file_bytes(s.p, data(s));\n\
-             let y = \"y\".to_bytes();\n\
-             let _ = fs.write_file_bytes(s.p, y);\n\
          }\n";
     std::fs::write(dir.join("main.ray"), src).unwrap();
     let loaded = match crate::loader::load(&dir.join("main.ray")) { Ok(l) => l, Err(e) => panic!("no se pudo cargar std/fs: {}", e.message) };
@@ -336,10 +345,7 @@ fn std_call_with_a_calling_arg_hoists_its_args() {
     crate::checker::check(&mut prog).expect("check");
     let rust = super::transpile_full(&prog, &[], false, true).expect("transpile").source;
     let _ = std::fs::remove_dir_all(&dir);
-    assert!(rust.contains("let __rt_sa0 = s.clone().borrow().p.clone(); let __rt_sa1 = "), "iza los args: {rust}");
-    assert!(rust.contains("std::fs::write(&*__rt_p, &*__rt_d)"), "escribe sobre temporales: {rust}");
-    assert_eq!(rust.matches("let __rt_sa0").count(), 1, "sin llamada en los args no se iza: {rust}");
-    assert!(rust.contains("let __rt_p = s.clone().borrow().p.clone(); let __rt_d = y.clone();"), "args planos, en línea: {rust}");
+    assert_eq!(rust.matches("let __rt_p = ({ s.clone().borrow().p.clone() }); let __rt_d = { let __rt_a0 = s.clone(); data(__rt_a0) }; match std::fs::write(&*__rt_p, &*__rt_d)").count(), 1, "el campo en su bloque y los args una vez: {rust}");
 }
 
 /// N-D4b: `let f = s.split(sep)` consumido SOLO por `f[const]` → extracción en una pasada, sin
@@ -353,8 +359,11 @@ fn fuses_split_consumed_by_constant_indexes() {
              print(f[3]);\n\
          }",
     );
-    assert!(rust.contains("__rt_sp0_len"), "{}", rust);
-    assert!(rust.contains("__ray_index_err(1i64, __rt_sp0_len as usize)"), "OOB con el texto de la VM: {}", rust);
+    // El número del temporal (`match_temp`) depende de cuántos `match`/fusiones lo preceden,
+    // prelude incluido: se lee del propio Rust generado en vez de fijarlo.
+    let sp = temp_prefix(&rust, "__rt_sp");
+    assert!(rust.contains(&format!("{sp}_len")), "{}", rust);
+    assert!(rust.contains(&format!("__ray_index_err(1i64, {sp}_len as usize)")), "OOB con el texto de la VM: {}", rust);
     assert!(!rust.contains("__ray_split(&"), "{}", rust); // el Vec intermedio no se emite
 }
 
@@ -371,7 +380,7 @@ fn does_not_fuse_split_with_escaping_uses() {
          }",
     );
     assert!(iterated.contains("__ray_split(&"), "{}", iterated);
-    assert!(!iterated.contains("__rt_sp0_len"), "{}", iterated);
+    assert!(!iterated.contains("_len, __rt_sp"), "{}", iterated);
     // índice variable → materializado
     let dynamic = transpile_src(
         "fn main() {\n\
@@ -678,7 +687,7 @@ fn a_pattern_binding_named_like_a_cell_var_of_another_arm_is_not_a_cell() {
          }",
     );
     assert!(rust.contains("let addr = Rc::new(std::cell::RefCell::new("), "la var del primer brazo es celda: {}", rust);
-    assert!(rust.contains("(addr.borrow().clone())") || rust.contains("(addr.borrow().clone()."), "lectura de la celda: {}", rust);
+    assert!(rust.contains("({ addr.borrow().clone() })"), "lectura de la celda (en su bloque, M439): {}", rust);
     // El binding del segundo brazo se lee sin `.borrow()`: exactamente UNA lectura por borrow (la del
     // primer brazo) y ninguna `addr.borrow()` dentro de la closure `f`.
     let f_body = rust.split("let f = ").nth(1).expect("closure f");
@@ -1217,8 +1226,9 @@ fn fuses_let_split_consumed_only_by_a_for() {
         "fn main() -> int { let s = \"a,b,c\"; let parts = s.split(\",\"); var n = 0; \
          for p in parts { n = n + p.len(); } n }",
     );
-    assert!(rust.contains("let __rt_spsrc0 = s.clone(); let __rt_spsep0 = "), "el let deja temporales: {rust}");
-    assert!(rust.contains("for __rt_spw in __rt_spsrc0.split(&*__rt_spsep0) { let p = Rc::<str>::from(__rt_spw);"), "el for itera el split directo: {rust}");
+    let k = temp_prefix(&rust, "__rt_spsrc").trim_start_matches("__rt_spsrc").to_string();
+    assert!(rust.contains(&format!("let __rt_spsrc{k} = s.clone(); let __rt_spsep{k} = ")), "el let deja temporales: {rust}");
+    assert!(rust.contains(&format!("for __rt_spw in __rt_spsrc{k}.split(&*__rt_spsep{k}) {{ let p = Rc::<str>::from(__rt_spw);")), "el for itera el split directo: {rust}");
     let main_i = rust.find("fn ray_main(").unwrap();
     assert!(!rust[main_i..].contains("__ray_split("), "sin Vec materializado: {rust}");
     let rust2 = transpile_src(

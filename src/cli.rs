@@ -3058,7 +3058,9 @@ fn signing_config(manifest: Option<&Manifest>, sign: Option<String>, notary: Opt
     // aunque `[app] sign` tenga valor: el ray.toml de un proyecto que firma en macOS no sirve en
     // la máquina de Windows (ni en un CI sin certificado), y antes no había forma de anularlo.
     let is_off = |v: &str| v.trim().is_empty() || v.trim().eq_ignore_ascii_case("none");
-    let identity = match sign.or_else(|| std::env::var("RAY_SIGN_IDENTITY").ok()) {
+    // El flag vacío apaga; la variable de entorno VACÍA no es «apagar» sino «sin valor» (un
+    // secreto de CI sin definir): cae al manifiesto, como antes. `RAY_SIGN_IDENTITY=none` sí apaga.
+    let identity = match sign.or_else(|| env_nonempty("RAY_SIGN_IDENTITY")) {
         Some(v) if is_off(&v) => None,
         Some(v) => Some(v),
         None => manifest.and_then(|m| m.app_sign.clone()).filter(|v| !is_off(v)),
@@ -4933,8 +4935,11 @@ fn split_test_args(args: &[String]) -> (Vec<String>, Option<String>) {
     let mut explicit = Vec::new();
     let mut idx = 0;
     while let Some(a) = args.get(idx) {
-        // raymcp #306: `ray test .` — un directorio es el proyecto, no un filtro por nombre.
-        if adopt_project_dir(a) {
+        // raymcp #306: `ray test .` / `ray test ~/work/demo` — un directorio es el proyecto, no un
+        // filtro por nombre. Solo el PRIMER posicional, y solo si es una RAÍZ de proyecto (tiene
+        // `ray.toml` o `src/main.ray`) o `.`: `ray test tests` / `ray test util` siguen siendo
+        // filtros aunque exista un subdirectorio con ese nombre.
+        if idx == 0 && is_project_root_dir(a) && adopt_project_dir(a) {
             idx += 1;
             continue;
         }
@@ -5004,7 +5009,10 @@ fn test_suites_and_roots(explicit: &[String]) -> (Vec<PathBuf>, crate::loader::D
 /// Entre corridas, `q` sale (tecla única, como en dev).
 fn cmd_test_watch(args: &[String]) -> ! {
     let exe = env::current_exe().unwrap_or_else(|_| PathBuf::from("ray"));
-    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // raymcp #306: `ray test <dir> --watch` — el directorio se adopta ANTES de elegir qué árbol
+    // vigilar (si no, desde fuera del proyecto se vigilaba el cwd entero).
+    let (explicit, filter) = split_test_args(args);
+    let cwd = project_dir();
     let root = Manifest::find(&cwd)
         .and_then(|toml| toml.parent().map(Path::to_path_buf))
         .or_else(|| {
@@ -5017,7 +5025,6 @@ fn cmd_test_watch(args: &[String]) -> ! {
     eprintln!("[watch] watching {} (.ray, .ray.html, ray.toml); Ctrl-C to exit", root.display());
     install_cleanup_on_death();
 
-    let (explicit, filter) = split_test_args(args);
     // Baseline del termios (como en dev): si una corrida cortada dejó el terminal cambiado
     // (un test en crudo matado a mitad), se repone antes de re-correr.
     let baseline_tty = crate::builtins::term_attrs_fingerprint();
@@ -6377,42 +6384,32 @@ fn is_library_package(m: &Manifest) -> bool {
     !m.entry_declared && !m.entry_path().is_file()
 }
 
-/// raymcp #306: todos los `.ray` bajo `dir` (para `ray fmt <dir>`): recursivo y ordenado, sin
-/// `.ray-deps/` (las dependencias no son del usuario), `target/` ni directorios ocultos.
+/// raymcp #306: todos los `.ray` bajo `dir` (para `ray fmt <dir>`): el mismo recorrido que
+/// `library_modules`, con `tests/` incluido (son archivos del usuario que también se formatean).
 fn ray_files_under(dir: &Path) -> Vec<PathBuf> {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-        let Ok(entries) = fs::read_dir(dir) else { return };
-        let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
-        entries.sort();
-        for p in entries {
-            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
-            if name.starts_with('.') || name == "target" {
-                continue;
-            }
-            if p.is_dir() {
-                walk(&p, out);
-            } else if name.ends_with(".ray") {
-                out.push(p);
-            }
-        }
-    }
-    let mut out = Vec::new();
-    walk(dir, &mut out);
-    out
+    walk_ray_files(dir, false)
 }
 
 /// Los módulos de un paquete-librería: todo `.ray` bajo la raíz, menos `tests/` (van aparte),
 /// la caché `.ray-deps/` y los directorios ocultos. Ordenados, para una salida determinista.
 fn library_modules(root: &Path) -> Vec<PathBuf> {
-    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+    walk_ray_files(root, true)
+}
+
+/// El recorrido común: recursivo y ordenado; salta los directorios ocultos (`.ray-deps/`,
+/// `.git/`), `target/` y `node_modules/` (el árbol del frontend, M369: decenas de miles de
+/// entradas), y `tests/` solo si `skip_tests`.
+fn walk_ray_files(root: &Path, skip_tests: bool) -> Vec<PathBuf> {
+    fn walk(dir: &Path, skip_tests: bool, out: &mut Vec<PathBuf>) {
         let Ok(entries) = fs::read_dir(dir) else { return };
         let mut entries: Vec<_> = entries.flatten().map(|e| e.path()).collect();
         entries.sort();
         for p in entries {
             let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
             if p.is_dir() {
-                if !name.starts_with('.') && name != "tests" && name != "target" && name != "node_modules" {
-                    walk(&p, out);
+                let skip = name.starts_with('.') || name == "target" || name == "node_modules" || (skip_tests && name == "tests");
+                if !skip {
+                    walk(&p, skip_tests, out);
                 }
             } else if p.extension().is_some_and(|e| e == "ray") {
                 out.push(p);
@@ -6420,7 +6417,7 @@ fn library_modules(root: &Path) -> Vec<PathBuf> {
         }
     }
     let mut out = Vec::new();
-    walk(root, &mut out);
+    walk(root, skip_tests, &mut out);
     out
 }
 
@@ -6461,6 +6458,13 @@ static PROJECT_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
 /// más cercano por encima, o el propio directorio si tiene `src/main.ray`) y devuelve `true`: el
 /// llamador sigue como si no hubiera argumento. Un directorio que no es un proyecto aborta con
 /// 64 y un mensaje que orienta (antes: «could not read module 'main' (.): Is a directory»).
+/// ¿`arg` es `.` o un directorio con `ray.toml` o `src/main.ray` directamente dentro? (Lo que
+/// `ray test <dir>` acepta como proyecto; los demás subcomandos aceptan cualquier directorio.)
+fn is_project_root_dir(arg: &str) -> bool {
+    let p = Path::new(arg);
+    arg == "." || (p.is_dir() && (p.join("ray.toml").is_file() || p.join("src/main.ray").is_file()))
+}
+
 fn adopt_project_dir(arg: &str) -> bool {
     let p = Path::new(arg);
     if !p.is_dir() {

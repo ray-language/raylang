@@ -4198,9 +4198,12 @@ mod mac {
                                 let small = ret_f64(cls(b"NSFont\0"), sel(b"smallSystemFontSize\0"));
                                 let font = id_f64(cls(b"NSFont\0"), sel(b"systemFontOfSize:\0"), small);
                                 let color = plain_id(cls(b"NSColor\0"), sel(b"secondaryLabelColor\0"));
-                                let para = plain_id(cls(b"NSMutableParagraphStyle\0"), sel(b"new\0"));
-                                // NSTextAlignmentCenter = 2 en AppKit (1 es right; en UIKit es al revés).
-                                set_i64(para, sel(b"setAlignment:\0"), 2);
+                                // `new` devuelve +1: se autolibera como el resto del bloque (los
+                                // constructores de clase `dictionary`/`systemFontOfSize:` ya lo son).
+                                let para = plain_id(plain_id(cls(b"NSMutableParagraphStyle\0"), sel(b"new\0")), sel(b"autorelease\0"));
+                                // NSTextAlignment de AppKit: left 0, right 1, CENTER 2 (en UIKit center es 1).
+                                const NS_TEXT_ALIGNMENT_CENTER: i64 = 2;
+                                set_i64(para, sel(b"setAlignment:\0"), NS_TEXT_ALIGNMENT_CENTER);
                                 let attrs = plain_id(cls(b"NSMutableDictionary\0"), sel(b"dictionary\0"));
                                 set_kv(attrs, sel(b"setObject:forKey:\0"), font, nsstring("NSFont"));
                                 set_kv(attrs, sel(b"setObject:forKey:\0"), color, nsstring("NSColor"));

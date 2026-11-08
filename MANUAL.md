@@ -1167,8 +1167,14 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    app de terminal en macOS y Windows). Nada de eso pasa por una shell. Una ventana se abre
    donde se le pida, sin saltar después: `ui.place_at(ui.options(800, 600), x, y)` o
    `ui.cascade(o)`, escalonada respecto a la anterior como hace una app de documentos; y
-   `ui.frame(h)` dice dónde está. `ui.rename_menu("File", "Archivo")` traduce la barra de menús
-   sin reiniciar.
+   `ui.frame(h)` dice dónde está. Para recordar el marco de cada ventana no hace falta sondear:
+   el evento `"frame"` llega cuando el usuario termina de moverla o redimensionarla
+   (`ui.event_frame(e)` da la tupla), y `ui.screens()` dice el área útil de cada pantalla, la
+   principal primero, para comprobar que un marco guardado sigue cabiendo antes de reabrir con
+   `place_at`. Si la página lleva su propio tema claro/oscuro, `ui.set_appearance(h, "dark")`
+   (o `"light"`/`"system"`; `h = 0` para toda la app) hace que los menús contextuales, los
+   diálogos y la barra de título nativos lo sigan. `ui.rename_menu("File", "Archivo")` traduce la
+   barra de menús sin reiniciar.
 
    `std/url` trocea y resuelve URLs según la RFC 3986: `url.parse(s)` da esquema, host, puerto,
    ruta, query y fragmento tal como se escribieron, y `url.resolve("https://api.x/v1/users",

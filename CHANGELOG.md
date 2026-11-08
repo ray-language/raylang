@@ -4,7 +4,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.90 — 2026-11-08
+
+Firma por plataforma en el manifiesto (M440) y `std/ui` con apariencia clara/oscura, evento `frame` y pantallas (M441).
 
 - **Firma por plataforma en `ray.toml` (M440, rayreq #309).** `[app.macos] sign / notary /
   entitlements` y `[app.windows] sign`: cada sistema mira primero su tabla y después `[app] sign`,
@@ -18,7 +20,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   mover o redimensionar una ventana (o lo hace `set_size`/`set_position`), con `"x,y,ancho,alto"`
   en `tag` y `event_frame(e)` para leerlo; los consecutivos sin leer se funden. `screens()` da el
   área útil de cada pantalla, la principal primero, para comprobar que un marco guardado sigue
-  cabiendo antes de `place_at`. macOS verificado a mano; Linux y Windows en compilación cruzada.
+  cabiendo antes de `place_at`. Abrir una ventana no emite `frame` (la colocación inicial es la
+  línea base en todos los backends); en Linux la colocación del gestor de ventanas de los primeros
+  750 ms tampoco. macOS y el nativo verificados a mano; Linux y Windows en compilación cruzada.
 
 ## 1.27.89 — 2026-11-08
 

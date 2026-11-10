@@ -3,7 +3,9 @@
 //! with another sound: Android arms it with `AlarmManager.setAlarmClock` (exact, shown in the
 //! status bar) and, when it fires, the shell of `ray bundle --android` starts a foreground
 //! service that plays the sound and shows a full-screen alarm over the lock screen with "Stop"
-//! and, if asked, "Snooze"; alarms survive a reboot. The answer comes back as an `"alarm"`
+//! and, if asked, "Snooze"; alarms survive a reboot (re-armed at the first unlock; one whose
+//! time passed meanwhile is reported as `"missed"`) and a daily or weekly one follows a
+//! time-zone change. The answer comes back as an `"alarm"`
 //! event on the `std/ui` queue (`event_response`), queued for the next launch when the app was
 //! closed. iOS: not yet (AlarmKit, iOS 26, comes in a later release) — `status()` is
 //! `"unsupported"` and `schedule` is `Err`; `std/notify` with `sound_name` rings once. Desktop:
@@ -44,9 +46,10 @@ pub enum Trigger {
     Weekly([int], int, int),
 }
 
-/// The user's answer to an alarm: `action` is `"stop"`, `"snooze"` or `"timeout"` (nobody
-/// answered in `max_minutes`), and `"open"` on a system that offers it; `data` is the alarm's
-/// `data`.
+/// The user's answer to an alarm: `action` is `"stop"`, `"snooze"`, `"timeout"` (nobody
+/// answered in `max_minutes`, or another alarm took over while it rang) or `"missed"` (its time
+/// passed while the phone was off: it did not ring), and `"open"` on a system that offers it;
+/// `data` is the alarm's `data`.
 pub struct Response {
     id: string,
     action: string,
@@ -160,5 +163,7 @@ pub fn event_response(e: UiEvent) -> Option<Response> {
     let at = fn(i: int) -> string {
         if (i < f.len()) { f[i] } else { "" }
     };
-    Option.Some(Response { id: at(0), action: at(1), data: at(2) })
+    // `data` is everything after the second tab: it may carry tabs of its own.
+    let data = if (f.len() > 2) { f.slice(2, f.len()).join("\t") } else { "" };
+    Option.Some(Response { id: at(0), action: at(1), data: data })
 }

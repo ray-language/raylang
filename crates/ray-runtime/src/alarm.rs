@@ -28,7 +28,7 @@ pub struct Alarm {
     /// Vacío = "Snooze".
     pub snooze_label: String,
     pub data: String,
-    /// Minutos máximos sonando (0 = hasta que el usuario responda; el shell pone un tope de 60).
+    /// Minutos máximos sonando sin respuesta (0 = el tope del shell, 60); después, `timeout`.
     pub max_minutes: i64,
 }
 
@@ -42,8 +42,11 @@ pub enum Trigger {
 
 static SEQ: AtomicI64 = AtomicI64::new(0);
 
+/// Un id para una alarma que no trae ninguno. Lleva el instante (ms), no el pid: las alarmas
+/// persisten entre arranques y un pid se repite tras reiniciar — el id nuevo pisaría una armada.
 fn next_id() -> String {
-    format!("alarm-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::SeqCst) + 1)
+    let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    format!("alarm-{ms}-{}", SEQ.fetch_add(1, Ordering::SeqCst) + 1)
 }
 
 /// `at:<unix>` | `daily:<h>:<m>` | `weekly:<d,d,…>:<h>:<m>`.
@@ -144,7 +147,11 @@ pub fn parse_alarm(arg: &str) -> Result<(Trigger, Alarm), String> {
         return Err("alarm: snooze_minutes must be between 0 (no snooze) and 120".to_string());
     }
     if !(0..=60).contains(&a.max_minutes) {
-        return Err("alarm: max_minutes must be between 0 (until answered) and 60".to_string());
+        return Err("alarm: max_minutes must be between 0 (the default cap, 60) and 60".to_string());
+    }
+    // El separador de campos no puede viajar dentro de uno (desplazaría los demás).
+    if arg.matches(SEP).count() > 8 || f.len() > 9 {
+        return Err("alarm: a field contains the unit separator U+001F".to_string());
     }
     Ok((trigger, a))
 }
@@ -230,10 +237,11 @@ fn headless(op: &str, arg: &str) -> Result<String, String> {
                 a.max_minutes,
                 trigger_text(&trigger)
             ));
+            // Como el shell de Android: sin el permiso concedido no se arma (no habría botones).
             match status() {
                 "unsupported" => return Err(UNSUPPORTED.to_string()),
-                "denied" => return Err("alarm: alarms are not authorized for this app".to_string()),
-                _ => {}
+                "granted" => {}
+                st => return Err(format!("alarm: alarms are not authorized for this app (notifications: {st}; call request_permission)")),
             }
             {
                 let mut p = pending().lock().unwrap();
@@ -359,6 +367,9 @@ mod tests {
         assert!(bad(&["daily:8:0", "x", "T", "", "500", "", "", "0"]).contains("snooze_minutes"));
         assert!(bad(&["daily:8:0", "x", "T", "", "0", "", "", "90"]).contains("max_minutes"));
         assert!(bad(&["daily:8:0", "x"]).contains("malformed"));
+        // Un campo con el separador dentro desplazaría los demás: se rechaza.
+        assert!(bad(&["daily:8:0", "x", "T\u{1f}oops", "", "0", "", "", "0", ""]).contains("unit separator"));
+        assert!(bad(&["daily:8:0", "x", "T", "", "0", "", "", "61"]).contains("the default cap, 60"));
         assert_eq!(response_tag("med", "snooze", "d"), "med\tsnooze\td");
     }
 }

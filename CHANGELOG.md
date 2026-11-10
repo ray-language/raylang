@@ -11,7 +11,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 - **`std/alarm`: alarmas del sistema que suenan con la app cerrada (M448, fase Android; pepa #341).**
   Una alarma suena en bucle, con el volumen de alarma, hasta que el usuario responde, también con
   la pantalla bloqueada y la app cerrada: `alarm.schedule(a, Trigger.At | Daily | Weekly)`,
-  `cancel`, `pending`, y la respuesta (`"stop"`, `"snooze"`, `"timeout"`) como evento `"alarm"`
+  `cancel`, `pending`, y la respuesta (`"stop"`, `"snooze"`, `"timeout"`, `"missed"`) como evento `"alarm"`
   (`alarm.event_response(e)`), en cola para el siguiente arranque si la app estaba cerrada.
   Android: `setAlarmClock` + servicio en primer plano (`USAGE_ALARM`) + pantalla de alarma sobre
   el bloqueo, con rearme tras reiniciar; los permisos de alarma solo se declaran si el programa

@@ -110,6 +110,8 @@ fn android_manifest(icon: bool, background_audio: bool, url_scheme: Option<&str>
         android:enabled="false">
       <intent-filter>
         <action android:name="android.intent.action.BOOT_COMPLETED" />
+        <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+        <action android:name="android.intent.action.TIME_SET" />
       </intent-filter>
     </receiver>
   </application>
@@ -421,6 +423,7 @@ public class MainActivity extends Activity {
             web.loadUrl(RayBridge.lastUrl); // recreación: el programa sigue vivo, recargar
         }
         RayBridge.startOnce();
+        RayAlarm.catchUp(getApplicationContext()); // M448: lo que el reinicio dejó sin armar
         RayAlarm.deliverPending(getApplicationContext()); // M448: alarmas respondidas con la app cerrada
         rayNotificationIntent(getIntent()); // M442: la app arrancó por una notificación pulsada
         /*RAY_DEV_LINK_ONCREATE*/
@@ -1300,6 +1303,7 @@ public final class RayAlarm {
                     return;
                 case "alarm_cancel_all":
                     for (String k : pending(c)) { cancel(c, k); }
+                    RayAlarmService.stopAny(c); // también la que esté sonando ahora
                     RayBridge.requestResult(id, "", null);
                     return;
                 case "alarm_pending":
@@ -1318,12 +1322,12 @@ public final class RayAlarm {
     }
 
     static ArrayList<String> pending(Context c) {
-        ArrayList<String> ids = new ArrayList<>();
+        // Una alarma pospuesta sigue pendiente aunque solo quede su clave `id|snooze`.
+        java.util.TreeSet<String> ids = new java.util.TreeSet<>();
         for (String k : prefs(c).getAll().keySet()) {
-            if (!k.endsWith(SNOOZE)) { ids.add(k); }
+            ids.add(k.endsWith(SNOOZE) ? k.substring(0, k.length() - SNOOZE.length()) : k);
         }
-        java.util.Collections.sort(ids);
-        return ids;
+        return new ArrayList<>(ids);
     }
 
     static boolean canExact(Context c) {
@@ -1362,6 +1366,11 @@ public final class RayAlarm {
         if (!canExact(c)) {
             throw new IllegalStateException("exact alarms are not allowed for this app (Settings > Alarms & reminders)");
         }
+        // Sin notificaciones no habría pantalla ni botones: la alarma sonaría sin forma de pararla.
+        String st = RayNotify.status(c);
+        if (!st.equals("granted")) {
+            throw new IllegalStateException("alarms are not authorized for this app (notifications: " + st + "; call request_permission)");
+        }
         String id = f[1];
         long at = next(f[0], System.currentTimeMillis());
         AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
@@ -1397,6 +1406,13 @@ public final class RayAlarm {
     // Un disparo (desde el receiver; `key` = el id, o `id#snooze` para una posposición): rearmar
     // la siguiente si repite y hacer sonar.
     static void fire(Context c, String key) {
+        fire(c, key, true);
+    }
+
+    // `ring = false` (rearme tras reiniciar): la hora pasó con el teléfono apagado. Android 15 no
+    // deja arrancar un servicio en primer plano desde BOOT_COMPLETED, así que no suena: se rearma
+    // la siguiente y se informa como `missed`.
+    static void fire(Context c, String key, boolean ring) {
         String rec = prefs(c).getString(key, null);
         if (rec == null) { return; }
         String[] f = rec.split("\\|", 2)[1].split(SEP, -1);
@@ -1408,7 +1424,16 @@ public final class RayAlarm {
             prefs(c).edit().remove(key).apply();
         }
         RayNotify.syncBootReceiver(c);
-        RayAlarmService.ring(c, f);
+        if (!ring) {
+            respond(c, f[1], "missed", f[6]);
+            return;
+        }
+        try {
+            RayAlarmService.ring(c, f);
+        } catch (RuntimeException e) { // el sistema no dejó arrancar el servicio
+            android.util.Log.w("ray", "alarm: could not start ringing: " + e);
+            respond(c, f[1], "missed", f[6]);
+        }
     }
 
     static String snoozeLabel(String[] f) {
@@ -1431,7 +1456,34 @@ public final class RayAlarm {
         long now = System.currentTimeMillis();
         for (Map.Entry<String, ?> e : new java.util.HashMap<>(prefs(c).getAll()).entrySet()) {
             long at = Long.parseLong(String.valueOf(e.getValue()).split("\\|", 2)[0]);
-            if (at <= now) { fire(c, e.getKey()); } else { arm(c, e.getKey(), at); }
+            if (at <= now) { fire(c, e.getKey(), false); } else { arm(c, e.getKey(), at); }
+        }
+    }
+
+    // Al abrir la app: repasar lo guardado, por si el aviso de arranque del sistema aún no llegó
+    // (o no llegó nunca). Lo vencido hace más de un minuto se da por perdido; lo que venció hace
+    // nada se deja a su disparo (o se arma para ya, si el reinicio lo desarmó); lo futuro se rearma.
+    static void catchUp(Context c) {
+        if (!ENABLED) { return; }
+        long now = System.currentTimeMillis();
+        for (Map.Entry<String, ?> e : new java.util.HashMap<>(prefs(c).getAll()).entrySet()) {
+            long at = Long.parseLong(String.valueOf(e.getValue()).split("\\|", 2)[0]);
+            if (at <= now - 60000) { fire(c, e.getKey(), false); } else { arm(c, e.getKey(), Math.max(at, now + 2000)); }
+        }
+    }
+
+    // El reloj o la zona horaria cambiaron: una `daily`/`weekly` se armó como un instante
+    // absoluto en la zona de entonces — se recalcula para que suene a su hora LOCAL.
+    static void retime(Context c) {
+        if (!ENABLED) { return; }
+        long now = System.currentTimeMillis();
+        for (Map.Entry<String, ?> e : new java.util.HashMap<>(prefs(c).getAll()).entrySet()) {
+            if (e.getKey().endsWith(SNOOZE)) { continue; }
+            String[] f = String.valueOf(e.getValue()).split("\\|", 2)[1].split(SEP, -1);
+            if (f[0].startsWith("at:")) { continue; }
+            long at = next(f[0], now);
+            prefs(c).edit().putString(e.getKey(), at + "|" + String.join(SEP, f)).apply();
+            arm(c, e.getKey(), at);
         }
     }
 
@@ -1515,6 +1567,10 @@ public class RayAlarmService extends Service {
         if (Build.VERSION.SDK_INT >= 26) { c.startForegroundService(i); } else { c.startService(i); }
     }
 
+    static void stopAny(Context c) {
+        if (current != null) { c.stopService(new Intent(c, RayAlarmService.class)); }
+    }
+
     static void stopIfRinging(Context c, String id) {
         if (current != null && current[1].equals(id)) {
             c.stopService(new Intent(c, RayAlarmService.class));
@@ -1543,7 +1599,14 @@ public class RayAlarmService extends Service {
     }
 
     private void begin(String[] f) {
-        silence(); // otra que estuviera sonando cede
+        // Otra que estuviera sonando cede: se informa como `timeout` (nadie la respondió) y su
+        // pantalla se cierra; la nueva abre la suya.
+        String[] old = current;
+        silence();
+        if (old != null && !old[1].equals(f[1])) {
+            RayAlarm.respond(this, old[1], "timeout", old[6]);
+            sendBroadcast(new Intent(RayAlarm.ACTION_DONE).setPackage(getPackageName()));
+        }
         current = f;
         int snooze = 0;
         int max = 0;
@@ -1730,6 +1793,12 @@ public class RayAlarmActivity extends Activity {
     }
 
     @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        recreate(); // otra alarma tomó el relevo: su título y sus botones
+    }
+
+    @Override
     protected void onDestroy() {
         if (done != null) { unregisterReceiver(done); }
         super.onDestroy();
@@ -1751,6 +1820,8 @@ public class RayNotifyReceiver extends BroadcastReceiver {
         if (Intent.ACTION_BOOT_COMPLETED.equals(action)) {
             RayNotify.rearm(c);
             RayAlarm.rearm(c); // M448: las alarmas de std/alarm
+        } else if (Intent.ACTION_TIMEZONE_CHANGED.equals(action) || Intent.ACTION_TIME_CHANGED.equals(action)) {
+            RayAlarm.retime(c); // M448: las diarias/semanales siguen la hora local
         } else if (RayNotify.ACTION_FIRE.equals(action)) {
             String id = intent.getStringExtra("id");
             if (id != null) { RayNotify.fire(c, id); }
@@ -2301,10 +2372,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// M442 (IDEAS §121): std/notify en el shell — el manifest declara el permiso y el receiver
-    /// (deshabilitado hasta que haya programadas), `exact_alarms` añade SCHEDULE_EXACT_ALARM y fija
-    /// la constante de RayNotify, las pulsaciones entran por onCreate/onNewIntent, el diálogo de
-    /// permisos no produce un `lifecycle` fantasma y RayBridge atiende las peticiones.
     /// M448 (IDEAS §122): std/alarm — las clases van siempre, pero los permisos de alarma, el
     /// servicio, la pantalla y el receiver solo entran al manifiesto (y `ENABLED` solo es true)
     /// cuando el programa importa `std/alarm`.
@@ -2349,11 +2416,23 @@ mod tests {
         assert!(RAY_ALARM_SERVICE_JAVA.contains(".setUsage(AudioAttributes.USAGE_ALARM)") && RAY_ALARM_SERVICE_JAVA.contains(".setFullScreenIntent(full, true)"));
         assert!(RAY_ALARM_SERVICE_JAVA.contains("ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK") && RAY_ALARM_SERVICE_JAVA.contains("finishWith(\"timeout\")"));
         assert!(RAY_ALARM_ACTIVITY_JAVA.contains("setShowWhenLocked(true);") && RAY_ALARM_ACTIVITY_JAVA.contains("Context.RECEIVER_NOT_EXPORTED"));
+        // Revisión 1.27.93: sin sonar desde BOOT_COMPLETED (Android 15), sin armar sin permiso de
+        // notificaciones, las pospuestas cuentan como pendientes y las diarias siguen la hora local.
+        assert!(RAY_ALARM_JAVA.contains("fire(c, e.getKey(), false)") && RAY_ALARM_JAVA.contains("respond(c, f[1], \"missed\", f[6]);"));
+        assert!(RAY_ALARM_JAVA.contains("alarms are not authorized for this app (notifications: ") && RAY_ALARM_JAVA.contains("static void retime(Context c)"));
+        assert!(RAY_ALARM_JAVA.contains("k.endsWith(SNOOZE) ? k.substring(0, k.length() - SNOOZE.length()) : k"));
+        assert!(with.contains("android.intent.action.TIMEZONE_CHANGED") && RAY_NOTIFY_RECEIVER_JAVA.contains("RayAlarm.retime(c);"));
         assert!(RAY_BRIDGE_JAVA.contains("if (op.startsWith(\"alarm_\")) {") && RAY_BRIDGE_JAVA.contains("static boolean isStarted()"));
-        assert!(MAIN_ACTIVITY_JAVA.contains("RayAlarm.deliverPending(getApplicationContext());"));
+        let (catch_up, deliver) = (MAIN_ACTIVITY_JAVA.find("RayAlarm.catchUp(getApplicationContext());").unwrap(), MAIN_ACTIVITY_JAVA.find("RayAlarm.deliverPending(getApplicationContext());").unwrap());
+        assert!(catch_up < deliver, "el repaso de lo guardado va antes de entregar las respuestas");
+        assert!(RAY_ALARM_JAVA.contains("if (at <= now - 60000) { fire(c, e.getKey(), false); } else { arm(c, e.getKey(), Math.max(at, now + 2000)); }"));
         assert!(RAY_NOTIFY_RECEIVER_JAVA.contains("RayAlarm.rearm(c);") && RAY_NOTIFY_JAVA.contains("static void syncBootReceiver(Context c)"));
     }
 
+    /// M442 (IDEAS §121): std/notify en el shell — el manifest declara el permiso y el receiver
+    /// (deshabilitado hasta que haya programadas), `exact_alarms` añade SCHEDULE_EXACT_ALARM y fija
+    /// la constante de RayNotify, las pulsaciones entran por onCreate/onNewIntent, el diálogo de
+    /// permisos no produce un `lifecycle` fantasma y RayBridge atiende las peticiones.
     #[test]
     fn the_shell_ships_the_notification_bridge_and_exact_alarms_are_opt_in() {
         let plain = android_manifest(false, false, None, false, false);

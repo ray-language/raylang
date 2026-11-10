@@ -1523,7 +1523,7 @@ fn run() -> Result<int, string> {
     while (true) {
         let e = ui.next_event()?;
         match (alarm.event_response(e)) {
-            Option.Some(r) => print(r.id + ": " + r.action),   // "stop", "snooze" o "timeout"
+            Option.Some(r) => print(r.id + ": " + r.action),   // "stop", "snooze", "timeout" o "missed"
             Option.None => {},
         }
     }

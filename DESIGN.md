@@ -19928,3 +19928,26 @@ app para recibir los eventos guardados.
 **iOS queda para M448b**: AlarmKit solo existe desde iOS 26 y solo en Swift, lo que obliga a la
 primera pieza Swift de la shell. Mientras tanto el MANUAL y el handbook cuentan el rodeo de
 audio en segundo plano y sus límites.
+
+**La revisión previa a la release** (`/code-review high` sobre `v1.27.92..`) trajo diez
+hallazgos; nueve se corrigen en la misma PR. El más serio: tras un reinicio, `rearm` hacía sonar
+las alarmas vencidas desde `BOOT_COMPLETED`, y Android 15 prohíbe arrancar ahí un servicio en
+primer plano `mediaPlayback` (la app moría al arrancar el teléfono y la alarma se perdía sin
+aviso) — ahora una alarma cuya hora pasó con el teléfono apagado no suena: se rearma la
+siguiente y se informa como `missed`, y cualquier fallo al arrancar el servicio cae a lo mismo.
+También: `pending`/`cancel_all` ignoraban una alarma pospuesta (solo queda su clave
+`id|snooze`) y la que sonaba en ese momento; `schedule` armaba sin permiso de notificaciones
+(sonaría sin pantalla ni botones hasta el tope) y ahora es `Err`, igual que el headless; una
+segunda alarma que vence mientras otra suena la releva informando `timeout` de la primera y
+rehaciendo la pantalla; los ids generados llevaban el pid, que se repite tras reiniciar y
+pisaba una alarma armada (ahora el instante); las diarias y semanales se recalculan con
+`TIMEZONE_CHANGED`/`TIME_SET` para sonar a su hora local; un campo con U+001F se rechaza y
+`event_response` conserva los tabuladores de `data`; el texto de `max_minutes` decía «hasta
+responder» cuando 0 es el tope de 60; y dos comentarios de documentación habían quedado sobre
+el elemento equivocado. El décimo queda como límite documentado: las alarmas se rearman con
+`BOOT_COMPLETED`, que llega en el primer desbloqueo; hacerlo antes exigiría `directBootAware`
+y almacenamiento protegido por dispositivo.
+La prueba del reinicio en el AVD destapó además que `BOOT_COMPLETED` puede tardar (o no llegar)
+y que nada más repasaba lo guardado: `MainActivity` llama ahora a `RayAlarm.catchUp` al abrir la
+app — lo vencido hace más de un minuto se informa como `missed`, lo recién vencido se arma para
+ya y lo futuro se rearma —, antes de entregar las respuestas pendientes.

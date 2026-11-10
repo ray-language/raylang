@@ -2881,8 +2881,6 @@ fn cmd_bundle(args: &[String]) {
 /// El `.app` de macOS: la estructura es un árbol de carpetas + un Info.plist mínimo. El icns es
 /// best-effort (sips + iconutil, herramientas del sistema); el codesign ad-hoc también (mantiene
 /// válida la firma que el linker de arm64 aplicó, tras mover el binario).
-/// M209: ¿el programa importa la red (`std/net`, `std/udp` o el paquete `net`, directa o
-/// transitivamente)? Se mira la lista de módulos cargados, que ya incluye las dependencias.
 /// M448: ¿el programa (o alguna dependencia) importa el módulo `name` (`std/alarm`)? El shell
 /// Android declara los permisos de alarma solo entonces.
 fn uses_module(entry: &str, name: &str) -> bool {
@@ -2890,6 +2888,8 @@ fn uses_module(entry: &str, name: &str) -> bool {
     loaded.modules.iter().any(|m| m.name.replace("::", "/") == name)
 }
 
+/// M209: ¿el programa importa la red (`std/net`, `std/udp` o el paquete `net`, directa o
+/// transitivamente)? Se mira la lista de módulos cargados, que ya incluye las dependencias.
 fn uses_network(entry: &str) -> bool {
     let Ok(loaded) = loader::load_with_deps(Path::new(entry), &dependency_roots()) else { return false };
     loaded.modules.iter().any(|m| {

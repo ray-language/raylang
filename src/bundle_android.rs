@@ -1029,7 +1029,9 @@ public final class RayNotify {
     // M447 (pepa #331): un sonido de `[android] sounds` (res/raw/<nombre>) como URI de recurso.
     static android.net.Uri soundUri(Context c, String sound) {
         if (sound.isEmpty()) { return null; }
-        int res = c.getResources().getIdentifier(sound, "raw", c.getPackageName());
+        int dot = sound.lastIndexOf('.');
+        if (dot > 0) { sound = sound.substring(0, dot); } // "alarm.caf" (forma de iOS) → recurso "alarm"
+        int res = c.getResources().getIdentifier(sound.toLowerCase(), "raw", c.getPackageName());
         if (res == 0) {
             android.util.Log.w("ray", "notify: sound '" + sound + "' is not in res/raw (list the file in [android] sounds of ray.toml)");
             return null;
@@ -1779,7 +1781,7 @@ mod tests {
         assert!(RAY_BRIDGE_JAVA.contains("public static void onRequest(String id, String op, String arg)"));
         assert!(RAY_NOTIFY_JAVA.contains("a.requestPermissions(new String[] { POST }, PERMISSION_REQUEST);"));
         // M447 (pepa #331): el sonido del canal viene de res/raw (`[android] sounds`).
-        assert!(RAY_NOTIFY_JAVA.contains("ch.setSound(uri, new android.media.AudioAttributes.Builder()") && RAY_NOTIFY_JAVA.contains("getIdentifier(sound, \"raw\""));
+        assert!(RAY_NOTIFY_JAVA.contains("ch.setSound(uri, new android.media.AudioAttributes.Builder()") && RAY_NOTIFY_JAVA.contains("getIdentifier(sound.toLowerCase(), \"raw\""));
         assert!(RAY_NOTIFY_JAVA.contains("setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP"));
         assert!(RAY_NOTIFY_RECEIVER_JAVA.contains("Intent.ACTION_BOOT_COMPLETED.equals(action)"));
         let base = std::env::temp_dir().join(format!("ray_android_notify_{}", std::process::id()));

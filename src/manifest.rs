@@ -469,6 +469,10 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         }
     }
 
+    // M447: `background_dark` sin `background` no pintaría nada — mejor decirlo que ignorarlo.
+    if ios_background_dark.is_some() && ios_background.is_none() {
+        return Err("ray.toml: [ios] background_dark needs [ios] background (the light color)".to_string());
+    }
     Ok(Manifest {
         name: name.ok_or("ray.toml: missing 'name' in [package]")?,
         version: version.ok_or("ray.toml: missing 'version' in [package]")?,
@@ -522,8 +526,11 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
 /// El texto de la línea sin su comentario: el primer `#` fuera de una cadena entre comillas.
 fn strip_comment(line: &str) -> &str {
     let mut quoted = false;
+    let mut escaped = false;
     for (i, c) in line.char_indices() {
         match c {
+            _ if escaped => escaped = false,
+            '\\' if quoted => escaped = true,
             '"' => quoted = !quoted,
             '#' if !quoted => return &line[..i],
             _ => {}
@@ -748,7 +755,6 @@ mod tests {
         assert!(bare.app_macos_sign.is_none() && bare.app_windows_sign.is_none());
     }
 
-    #[test]
     /// M447 (pepa #334/#336/#331): las claves nuevas de `[ios]` y `[android]`, con su validación.
     #[test]
     fn ios_launch_background_audio_session_and_sounds_are_parsed() {
@@ -763,6 +769,10 @@ mod tests {
         assert!(bare.ios_background.is_none() && bare.ios_audio_session.is_none() && bare.ios_sounds.is_empty() && bare.android_sounds.is_empty());
         assert!(parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[ios]\nbackground = \"red\"\n").unwrap_err().contains("#rrggbb"));
         assert!(parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[ios]\naudio_session = \"ambient\"\n").unwrap_err().contains("playback_mix"));
+        assert!(parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[ios]\nbackground_dark = \"#141414\"\n").unwrap_err().contains("needs [ios] background"));
+        // Un `#` entre comillas (también tras una comilla escapada) no es comentario.
+        let m = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\ndescription = \"say \\\"hi\\\" #1\" # real comment\n").unwrap();
+        assert!(m.description.as_deref().is_some_and(|d| d.ends_with("#1")), "{:?}", m.description); // (las secuencias \\" se conservan tal cual, como siempre)
     }
 
     #[test]

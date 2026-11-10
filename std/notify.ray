@@ -36,8 +36,10 @@ pub struct Notification {
     data: string,
     sound: bool,
     /// A custom sound (pepa #331): the name of a file listed in `[ios] sounds` of `ray.toml`
-    /// (`"alarm"` or `"alarm.caf"`; caf/aiff/wav, 30 s at most). Empty = the default sound. On
-    /// Android the sound belongs to the CHANNEL (`Channel.sound`): this field is ignored there.
+    /// (`"alarm"` or `"alarm.caf"`; caf/aiff/wav, 30 s at most). Empty = the default sound. A
+    /// macOS `.app` has no way to bundle it: the default sound plays instead. On Android 8+ the
+    /// sound belongs to the CHANNEL (`Channel.sound`) and this field is ignored; before 8 it is
+    /// looked up in `[android] sounds` (extension dropped).
     sound_name: string,
     badge: int,
     interruption: string,

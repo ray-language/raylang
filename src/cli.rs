@@ -3396,6 +3396,7 @@ fn write_ios_launch_color(proj: &Path, light: &str, dark: Option<&str>) -> bool 
 /// del proyecto; uno que no exista es error (un sonido ausente se descubriría en el teléfono).
 fn resolve_sound_files(spec: Option<(&PathBuf, &[String])>, key: &str) -> Vec<PathBuf> {
     let Some((root, list)) = spec else { return Vec::new() };
+    let mut stems: Vec<String> = Vec::new();
     list.iter()
         .map(|s| {
             let p = root.join(s);
@@ -3403,6 +3404,13 @@ fn resolve_sound_files(spec: Option<(&PathBuf, &[String])>, key: &str) -> Vec<Pa
                 eprintln!("bundle: {key}: '{s}' is not a file (relative to the project root)");
                 process::exit(66);
             }
+            // Dos archivos con el mismo nombre (sin extensión) serían el mismo recurso: error aquí, no en aapt/Xcode.
+            let stem = p.file_stem().map(|f| f.to_string_lossy().to_lowercase()).unwrap_or_default();
+            if stems.contains(&stem) {
+                eprintln!("bundle: {key}: two sounds named '{stem}' (the name without extension must be unique)");
+                process::exit(66);
+            }
+            stems.push(stem);
             p
         })
         .collect()

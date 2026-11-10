@@ -811,9 +811,19 @@ mod apple {
                 set_id(content, sel(b"setThreadIdentifier:\0"), nsstring(&n.group));
             }
             if n.sound {
-                let snd = if !n.sound_name.is_empty() {
-                    // M447 (pepa #331): un archivo del bundle (`[ios] sounds`): caf/aiff/wav de ≤ 30 s.
-                    let file = bundled_sound(&n.sound_name).ok_or_else(|| format!("notify: sound '{}' is not in the app bundle (list the file in [ios] sounds of ray.toml and regenerate the shell)", n.sound_name))?;
+                let custom = if n.sound_name.is_empty() { None } else { bundled_sound(&n.sound_name) };
+                if !n.sound_name.is_empty() && custom.is_none() {
+                    // M447 (pepa #331): en iOS el archivo viene de `[ios] sounds` y su ausencia es un error
+                    // de empaquetado; en macOS no hay forma de meterlo en el bundle → el sonido por defecto.
+                    if cfg!(target_os = "ios") {
+                        return Err(format!("notify: sound '{}' is not in the app bundle (list the file in [ios] sounds of ray.toml and regenerate the shell)", n.sound_name));
+                    }
+                    if crate::ui::ui_trace() {
+                        eprintln!("[ui] notify: sound '{}' is not in the bundle; using the default sound", n.sound_name);
+                    }
+                }
+                let snd = if let Some(file) = custom {
+                    // caf/aiff/wav de ≤ 30 s del bundle principal.
                     let named: MsgIdId = std::mem::transmute(msg_send());
                     named(cls(b"UNNotificationSound\0"), sel(b"soundNamed:\0"), nsstring(&file))
                 } else if n.interruption == "critical" && responds(cls(b"UNNotificationSound\0"), sel(b"defaultCriticalSound\0")) {

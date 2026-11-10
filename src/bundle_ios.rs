@@ -267,6 +267,7 @@ static NSString *const rayLogShim =
 
 static WKWebView *rayWebView = nil;
 static NSString *rayLastURL = nil;
+static UIColor *rayLastBackground = nil; // M447: el WindowOptions.background del programa (sobrevive a la escena)
 
 // M382: `ui.pick_file*` → UIDocumentPickerViewController en modo COPIA (`asCopy:YES`): el
 // sistema deja una copia en el tmp de la app y las rutas que vuelven se leen con std/fs sin
@@ -338,6 +339,7 @@ static void ray_open(const char *title, const char *url) {
     dispatch_async(dispatch_get_main_queue(), ^{
       rayLastURL = u;
       if (bg != nil) { // pepa #334: lo que se ve hasta que la página pinta (y detrás de ella)
+        rayLastBackground = bg;
         rayWebView.window.backgroundColor = bg;
         rayWebView.window.rootViewController.view.backgroundColor = bg;
       }
@@ -362,8 +364,11 @@ static void ray_eval(const char *js) {
     UIViewController *vc = [UIViewController new];
     // M447 (pepa #334): el color de arranque (`[ios] background`, catálogo LaunchBackground) sigue
     // bajo la página hasta que esta pinta — sin él, el blanco del sistema.
-    UIColor *launch = [UIColor colorNamed:@"LaunchBackground"];
-    if (launch != nil) { self.window.backgroundColor = launch; vc.view.backgroundColor = launch; }
+    // Prioridad: el fondo que pidió el programa (reconexión), el color de arranque, el del sistema
+    // (el webview es transparente: sin esto una app sin color vería negro donde antes había blanco).
+    UIColor *launch = rayLastBackground ?: ([UIColor colorNamed:@"LaunchBackground"] ?: UIColor.systemBackgroundColor);
+    self.window.backgroundColor = launch;
+    vc.view.backgroundColor = launch;
     // El puente se (re)instala EN CADA conexión de escena — el webview muere y renace
     // con ella (sceneDidDisconnect lo anula), así que esto va fuera del dispatch_once.
     WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
@@ -543,7 +548,7 @@ pub struct ShellOptions {
 
 /// El xcconfig: TODO lo afinable vive aquí (el pbxproj solo lo referencia). La elección del
 /// `.a` por SDK es la pieza clave: dispositivo y simulador son ambos arm64.
-fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing, opts: ShellOptions) -> String {
+fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing, opts: &ShellOptions) -> String {
     let mut sign = String::new();
     if let Some(style) = &signing.style {
         sign.push_str(&format!("CODE_SIGN_STYLE = {style}\n"));
@@ -795,7 +800,7 @@ pub fn write_project(
     };
     let plist = launch_screen(plist);
     write("Shell/Info.plist", &plist)?;
-    write("App.xcconfig", &xcconfig(name, bundle_id, version, signing, opts.clone()))?;
+    write("App.xcconfig", &xcconfig(name, bundle_id, version, signing, &opts))?;
     // M447 (pepa #331): los sonidos van a Shell/ y a la fase Resources (cada uno con su referencia).
     let mut sound_names = Vec::new();
     for src in sounds {
@@ -898,8 +903,8 @@ mod tests {
         assert!(!without.contains("Assets.xcassets"), "{without}");
         assert!(without.contains("PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ()"), "{without}");
         let opts = ShellOptions { icon: true, ..Default::default() };
-        assert!(xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), opts).contains("ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon\n"));
-        assert!(!xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), ShellOptions::default()).contains("ASSETCATALOG"));
+        assert!(xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), &opts).contains("ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon\n"));
+        assert!(!xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), &ShellOptions::default()).contains("ASSETCATALOG"));
     }
 
     /// M447 (pepa #334/#336/#331): color de arranque en el plist y la escena, webview transparente
@@ -933,7 +938,7 @@ mod tests {
         assert!(!std::fs::read_to_string(base.join("App.xcodeproj/project.pbxproj")).unwrap().contains("Assets.xcassets"));
         let _ = std::fs::remove_dir_all(&base);
         // La escena: color de arranque, webview transparente y el fondo del programa al abrir.
-        for s in ["[UIColor colorNamed:@\"LaunchBackground\"]", "rayWebView.opaque = NO;", "rayColorFromHex(ray_ui_open_background())", "extern const char *ray_ui_open_background(void);"] {
+        for s in ["[UIColor colorNamed:@\"LaunchBackground\"] ?: UIColor.systemBackgroundColor", "rayWebView.opaque = NO;", "rayColorFromHex(ray_ui_open_background())", "extern const char *ray_ui_open_background(void);", "rayLastBackground = bg;", "UIColor *launch = rayLastBackground ?:"] {
             assert!(SCENE_DELEGATE_M.contains(s), "{s}");
         }
     }
@@ -969,20 +974,20 @@ mod tests {
         assert!(APP_DELEGATE_M.contains("didReceiveNotificationResponse:(UNNotificationResponse *)response"));
         assert!(APP_DELEGATE_M.contains("ray_ui_push_event(\"notification\", 0, tag.UTF8String);"));
         assert!(APP_DELEGATE_M.contains("UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionList"));
-        let cfg = xcconfig("App", "org.example.app", "1.0.0", &Signing::default(), ShellOptions::default());
+        let cfg = xcconfig("App", "org.example.app", "1.0.0", &Signing::default(), &ShellOptions::default());
         assert!(cfg.contains("-framework UserNotifications"), "{cfg}");
     }
 
     #[test]
     fn the_xcconfig_carries_the_resolved_signing() {
         let s = Signing { team: Some("ABC123".into()), style: Some("Automatic".into()) };
-        let text = xcconfig("Demo", "org.raylang.demo", "1.0.0", &s, ShellOptions::default());
+        let text = xcconfig("Demo", "org.raylang.demo", "1.0.0", &s, &ShellOptions::default());
         assert!(text.contains("DEVELOPMENT_TEAM = ABC123"), "{text}");
         assert!(text.contains("CODE_SIGN_STYLE = Automatic"), "{text}");
         // Y el round-trip: lo que el bundle escribe, la siguiente regeneración lo preserva.
         let back = Signing::from_xcconfig(&text);
         assert_eq!(back.team.as_deref(), Some("ABC123"));
-        let bare = xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), ShellOptions::default());
+        let bare = xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), &ShellOptions::default());
         assert!(!bare.contains("DEVELOPMENT_TEAM"), "{bare}");
     }
 

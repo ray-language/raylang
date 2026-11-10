@@ -1499,6 +1499,54 @@ función lo exige: alarmas, recordatorios); en Linux y en un binario suelto de m
 `main`, así que lee los eventos pronto. Para probar sin ventanas: `RAY_UI_BACKEND=headless` traza
 cada llamada y `RAY_UI_NOTIFY_CLICK=1` «pulsa» cada notificación al mostrarla.
 
+### Alarmas (`std/alarm`)
+
+Una notificación suena una vez. Una **alarma** suena en bucle, con el volumen de alarma del
+teléfono, hasta que alguien responde — también con la pantalla bloqueada y con la app cerrada,
+porque quien la hace sonar es el sistema:
+
+```rust
+import std/alarm;
+import std/ui;
+
+fn run() -> Result<int, string> {
+    let w = ui.open("Pastillas", "ray://app/index.html", 400, 700)?;
+    alarm.request_permission()?;                 // Android 13+: el diálogo de notificaciones
+    var a = alarm.message("Hora de tu medicamento");
+    a.id = "med-8";
+    a.sound = "melody";                          // un archivo de [android] sounds, sin extensión
+    a.snooze_minutes = 10;
+    a.stop_label = "Ya la tomé";
+    a.snooze_label = "Posponer";
+    a.data = "dose-1";
+    alarm.schedule(a, alarm.Trigger.Daily(8, 0))?;   // también At(unix) y Weekly([1, 3, 5], 8, 0)
+    while (true) {
+        let e = ui.next_event()?;
+        match (alarm.event_response(e)) {
+            Option.Some(r) => print(r.id + ": " + r.action),   // "stop", "snooze", "timeout" o "missed"
+            Option.None => {},
+        }
+    }
+    Result.Ok(0)
+}
+```
+
+- **Android**: funciona con el shell de `ray bundle --android`. La respuesta de una alarma que
+  sonó con la app cerrada espera en la cola y llega en el siguiente arranque. El shell declara
+  los permisos de alarma solo si el programa importa `std/alarm` (Google Play los reserva a
+  apps de alarma y calendario). En Android 14+ la pantalla completa sobre el bloqueo depende de
+  que el sistema conceda el «full-screen intent»; si no, la alarma suena igual y se responde
+  desde la notificación.
+- **iOS**: todavía no (hace falta AlarmKit, de iOS 26; llegará en una versión posterior).
+  `alarm.status()` devuelve `"unsupported"` y `schedule` un `Err`: comprueba el estado y cae a
+  `std/notify` con `sound_name`, que suena una vez.
+- **Mientras iOS no tenga alarmas**, el rodeo para que una melodía suene a su hora es mantener
+  vivo el programa: `[ios] background_audio = true` y una salida de `std/audio` abierta (aunque
+  reproduzca silencio) mientras la app está en segundo plano, y tocar la melodía desde el
+  programa. Límites: no sobrevive a que el usuario cierre la app desde el selector ni a que iOS
+  la termine, gasta batería, y una sesión de audio que solo reproduce silencio es un uso que la
+  revisión de la App Store puede cuestionar.
+
 ### Sonido (`std/audio`)
 
 Salida PCM al dispositivo, con la **contrapresión como pacing**: `write` aparca la fibra cuando

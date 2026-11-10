@@ -19873,3 +19873,81 @@ antes de atender su tick (`next_event_timeout(next_tick - now)`, con 0 cuando ya
 quedaba colgado. `0` pasa a ser «sin esperar» en los tres motores (la VM responde `timeout` sin
 aparcar la fibra; el intérprete y el nativo consultan `try_next_event`), `next_event` pide
 `-1`, y `ui.try_next_event()` lo dice por su nombre.
+
+## 421. M448 — `std/alarm`: alarmas del sistema, fase Android y contrato (nov 2026)
+
+pepa (#341) necesitaba lo que una notificación no da: que a la hora de la toma el teléfono
+suene en bucle hasta que alguien responda, con la pantalla bloqueada y con la app cerrada. Con
+la app cerrada no corre código del programa, así que solo el sistema puede sonar; IDEAS §122
+comparó las dos vías (AlarmKit en iOS 26, `AlarmManager` + servicio en primer plano en Android)
+y partió el trabajo en dos fases. Esta es la primera: el **contrato** y **Android**.
+
+**El contrato.** `std/alarm` habla con el runtime por el mismo túnel que `std/notify`
+(`__ui_window(0, "alarm_<op>", arg)`, enrutado en `builtins::ui_window_value` y en el shim
+nativo) hacia un módulo propio, `ray-runtime/alarm.rs`: el formato (campos separados por
+`\x1f`, con `snooze_label` como campo opcional al final), la validación (título, id sin `|`
+ni saltos, sonido como nombre y no ruta, `snooze_minutes` 0–120, `max_minutes` 0–60, hora
+válida, `At` en el futuro, días ISO 1–7 sin repetir) y el reparto por plataforma. `Trigger` es
+un enum propio (`At`, `Daily`, `Weekly`): una alarma no tiene `After`, y `Weekly` no existe en
+`std/notify`. La respuesta del usuario es un evento `"alarm"` con `tag = id\taction\tdata`
+(`stop`, `snooze`, `timeout`), y `status()` distingue `"unsupported"` para que un programa
+portable caiga a `std/notify`. El headless traza, guarda los pendientes y, con
+`RAY_UI_ALARM_RESPONSE`, responde a cada alarma al programarla: el contrato queda fijado por
+`ui_alarm_cli` en los tres motores.
+
+**Android.** Cuatro clases en la shell. `RayAlarm` arma con `setAlarmClock` (exacta, exenta de
+Doze, visible como alarma próxima) y guarda cada alarma en `SharedPreferences`; al vencer,
+`RayAlarmReceiver` rearma la siguiente si repite y arranca `RayAlarmService`, un servicio en
+primer plano (`mediaPlayback`: no hay tipo «alarm») que reproduce el sonido en bucle con
+`USAGE_ALARM` —el volumen de alarma, que suena con el teléfono en silencio— y publica una
+notificación `CATEGORY_ALARM` en un canal mudo con los botones y el full-screen intent a
+`RayAlarmActivity`, la pantalla sobre el bloqueo. Posponer es otra alarma de reloj bajo la
+clave `id|snooze` (un id no puede llevar `|`). El rearme tras reiniciar reusa
+`RayNotifyReceiver` (M442), que ahora se mantiene encendido mientras haya notificaciones O
+alarmas pendientes. La pieza delicada es la **respuesta con la app cerrada**: el servicio corre
+en un proceso que el sistema revivió solo para el receiver, donde el programa raylang no ha
+arrancado (`RayBridge.isStarted()` es falso), así que la respuesta se guarda en preferencias y
+`MainActivity` la entrega tras `startOnce`, en orden; con el programa vivo va directa a la cola.
+Sin símbolos JNI nuevos: las peticiones viajan por `onRequest` y los eventos por `pushEvent`.
+
+**Permisos, solo si se usa.** `USE_EXACT_ALARM` (API 33+, sin diálogo, y `SCHEDULE_EXACT_ALARM`
+hasta la 32), `USE_FULL_SCREEN_INTENT` y el servicio `mediaPlayback` son permisos que Google
+Play reserva a apps de alarma y calendario; declararlos en toda app generada pondría a las
+demás ante esa política. `ray bundle --android` los añade (con los tres componentes y
+`RayAlarm.ENABLED`) solo cuando el programa importa `std/alarm` —o en la shell de desarrollo—;
+sin ellos, `status()` responde `"unsupported"`. En Android 14+ el full-screen intent puede no
+estar concedido (el emulador lo trae denegado): la alarma suena igual y se responde desde la
+notificación; el servicio lo anota en logcat.
+
+**Verificación.** En el AVD (Android 15): programar, mandar la app al fondo y detenerla
+(`am stop-app`, que no cancela alarmas), comprobar que el sistema revive el proceso al vencer,
+que el servicio queda en primer plano con el reproductor en `USAGE_ALARM`, responder desde la
+pantalla de alarma con el teléfono bloqueado (posponer, volver a sonar, detener) y reabrir la
+app para recibir los eventos guardados.
+
+**iOS queda para M448b**: AlarmKit solo existe desde iOS 26 y solo en Swift, lo que obliga a la
+primera pieza Swift de la shell. Mientras tanto el MANUAL y el handbook cuentan el rodeo de
+audio en segundo plano y sus límites.
+
+**La revisión previa a la release** (`/code-review high` sobre `v1.27.92..`) trajo diez
+hallazgos; nueve se corrigen en la misma PR. El más serio: tras un reinicio, `rearm` hacía sonar
+las alarmas vencidas desde `BOOT_COMPLETED`, y Android 15 prohíbe arrancar ahí un servicio en
+primer plano `mediaPlayback` (la app moría al arrancar el teléfono y la alarma se perdía sin
+aviso) — ahora una alarma cuya hora pasó con el teléfono apagado no suena: se rearma la
+siguiente y se informa como `missed`, y cualquier fallo al arrancar el servicio cae a lo mismo.
+También: `pending`/`cancel_all` ignoraban una alarma pospuesta (solo queda su clave
+`id|snooze`) y la que sonaba en ese momento; `schedule` armaba sin permiso de notificaciones
+(sonaría sin pantalla ni botones hasta el tope) y ahora es `Err`, igual que el headless; una
+segunda alarma que vence mientras otra suena la releva informando `timeout` de la primera y
+rehaciendo la pantalla; los ids generados llevaban el pid, que se repite tras reiniciar y
+pisaba una alarma armada (ahora el instante); las diarias y semanales se recalculan con
+`TIMEZONE_CHANGED`/`TIME_SET` para sonar a su hora local; un campo con U+001F se rechaza y
+`event_response` conserva los tabuladores de `data`; el texto de `max_minutes` decía «hasta
+responder» cuando 0 es el tope de 60; y dos comentarios de documentación habían quedado sobre
+el elemento equivocado. El décimo queda como límite documentado: las alarmas se rearman con
+`BOOT_COMPLETED`, que llega en el primer desbloqueo; hacerlo antes exigiría `directBootAware`
+y almacenamiento protegido por dispositivo.
+La prueba del reinicio en el AVD destapó además que `BOOT_COMPLETED` puede tardar (o no llegar)
+y que nada más repasaba lo guardado: `MainActivity` llama ahora a `RayAlarm.catchUp` al abrir la
+app — lo vencido hace más de un minuto se informa como `missed`, lo recién vencido se arma para
+ya y lo futuro se rearma —, antes de entregar las respuestas pendientes.

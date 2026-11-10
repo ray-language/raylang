@@ -491,7 +491,15 @@ UNUserNotificationCenter; Android: channels + AlarmManager (inexact unless `[and
 exact_alarms = true`); Linux/bare macOS binary: immediate `show` only; Windows: `Err`.
 macOS, iOS (needs `[ios] background_audio = true`), Android (MediaSession, regenerate the shell with
 `ray bundle --android`), Linux (MPRIS over D-Bus, needs GLib) and Windows (System Media Transport Controls);
-`[app.plist]` values may be strings, booleans or string arrays; menus:
+`[app.plist]` values may be strings, booleans or string arrays;
+a REAL alarm (rings in a loop with the alarm volume until answered, screen locked, app CLOSED): `import std/alarm;`
+`var a = alarm.message(title); a.id = …; a.sound = "melody"` (a file of `[android] sounds`, no extension)`; a.snooze_minutes = 10;
+a.stop_label = …; a.snooze_label = …; a.data = …;` then `alarm.schedule(a, alarm.Trigger.At(unix) | .Daily(h, m) | .Weekly([1, 3, 5], h, m))`
+(`request_permission()`, `status()`, `cancel(id)`, `cancel_all()`, `pending()`); the answer is an `"alarm"` event —
+`alarm.event_response(e)` gives `Response { id, action, data }` with action `"stop" | "snooze" | "timeout" | "missed"` (missed = its time passed while the phone was off), queued for the next
+launch when the app was closed. Android only for now (shell ≥ 1.27.93; permissions declared only if the program imports
+`std/alarm`); iOS/desktop: `status()` = `"unsupported"` and `schedule` = `Err` → fall back to `std/notify` with `sound_name`;
+menus:
 `ui.menu(title, [ui.item(tag, title, "cmd+shift+s"), ui.separator()])` (shortcut = one character
 — `"s"` cmd+S, `"S"` cmd+shift+S — or `mod+…+key` with modifiers `cmd` (Command on macOS, Ctrl on
 Linux/Windows; aliases `command super meta primary`), `ctrl`/`control`, `alt`/`option`/`opt`,

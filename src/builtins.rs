@@ -1838,6 +1838,10 @@ pub fn ui_window_value(h: i64, op: &str, arg: &str) -> Result<String, String> {
     if op.starts_with("notify_") {
         return ray_runtime::notify::op(op, arg);
     }
+    // M448 (IDEAS §122): `alarm_*` → std/alarm (estado, id, pendientes).
+    if op.starts_with("alarm_") {
+        return ray_runtime::alarm::op(op, arg);
+    }
     // M441 (rayreq #316): `screens` → "x,y,w,h;x,y,w,h" (la principal primero).
     if op == "screens" {
         let list = ray_runtime::ui::screens()?;

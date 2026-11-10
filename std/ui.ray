@@ -32,7 +32,8 @@ from std/json import Json;
 /// `id\taction\ttext\tdata` when a button was pressed or it carried data; `notify.event_tap(e)`
 /// decodes it, also on iOS and Android) or "media" (M403: a system media command for a program that declared them
 /// with `media.controls` — `tag` is "play", "pause", "toggle", "next", "previous", "stop" or
-/// "seek:<ms>"; `window` is 0). In the iOS/Android shells of
+/// "seek:<ms>"; `window` is 0) or "alarm" (M448: the answer to an alarm of `std/alarm` — `tag` is
+/// `id\taction\tdata`, decoded by `alarm.event_response(e)`; `window` is 0). In the iOS/Android shells of
 /// `ray bundle` there is one more kind, "lifecycle" (`tag` is "background" or "foreground"),
 /// and every event carries `window == 0` — the shell's single webview; `reply(0, …)` and
 /// `eval_js(0, …)` address it.

@@ -55,6 +55,7 @@ const MODULES: &[(&str, &str)] = &[
     ("std/media", include_str!("../std/media.ray")),
     // M442 (IDEAS §121): notificaciones del sistema, locales y programadas.
     ("std/notify", include_str!("../std/notify.ray")),
+    ("std/alarm", include_str!("../std/alarm.ray")), // M448 (IDEAS §122, pepa #341)
     // M146: ventana + webview (IDEAS §80 F1; AppKit/WKWebView a mano, headless para tests).
     ("std/ui", include_str!("../std/ui.ray")),
     // M147: assets del proyecto ([native] embed): en vivo en VM/interp, horneados en nativo.

@@ -4,7 +4,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.91 — 2026-11-10
+
+Notificaciones locales y programadas (`std/notify`, M442), la ronda de pepa 1.27.90 (M445: avisos del compilador, `@derive(ToJson)` con contenedores, `Map.clear`, viewport iOS, `ui.haptic`, `ray dev --device`) y `std/charset` (M446), más la actualización de SQLite por `cargo audit`.
 
 - **`std/charset`: codificaciones heredadas (M446, ray-sublime #317).** `decode(bytes, label)`,
   `encode(text, label)` y `labels()` con las tablas del WHATWG Encoding Standard (`encoding_rs`):

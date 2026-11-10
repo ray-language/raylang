@@ -4577,3 +4577,115 @@ antes con una `.p8` real** que ring acepta su PKCS#8 (ring exige la clave públi
 `UNTextInputNotificationAction`), adjuntos de imagen, Live Activities / Live Updates
 (`ProgressStyle`), alertas críticas (entitlement de Apple), Notification Service Extension
 (`mutable-content`), UnifiedPush, modo FID de FCM, AlarmKit (iOS 26), notificaciones en Windows.
+
+## 122. `std/alarm`: alarmas de verdad con la app cerrada (nov 2026) — PROPUESTO como M448
+
+**Hecho.** pepa (#341, re-medido con 1.27.91 en un iPhone 12): a la hora de la toma, la
+notificación programada de `std/notify` llega y suena **una vez**, con el tono por defecto o
+—desde M447— con la melodía de la app, hasta 30 s. Quien prueba la app pidió «que comience a
+sonar la alerta de la app, no un simple clic», en bucle hasta responder, con la pantalla
+bloqueada **y con la app cerrada**. Con la app cerrada no corre ningún código del programa: solo
+el sistema puede sonar. El rodeo actual de pepa (`[ios] background_audio` + una salida de
+`std/audio` abierta en silencio para que iOS no la suspenda, y la melodía a la hora) funciona
+mientras nadie cierre la app desde el selector, y gasta batería.
+
+**Qué ofrece cada plataforma** (verificado contra la documentación y la sesión 230 de la WWDC25,
+nov 2026):
+
+| | iOS 26+ (AlarmKit) | Android (AlarmManager + servicio en primer plano) |
+|---|---|---|
+| Permiso | `NSAlarmKitUsageDescription` en Info.plist (ya expresable con `[app.plist]`); `AlarmManager.shared.requestAuthorization()` o el sistema lo pide con la primera alarma; estados `notDetermined/authorized/denied`; revocable en Ajustes. | `SCHEDULE_EXACT_ALARM` (el usuario la concede en Ajustes) o `USE_EXACT_ALARM` (permiso normal, política de Play: solo apps de alarma/calendario — pepa lo es). `POST_NOTIFICATIONS` (API 33). |
+| Programación | `Alarm.Schedule.fixed(Date)` (absoluta, no sigue cambios de zona) y `.relative(time: (hour, minute), repeats: .never | .weekly([días]))` (sigue la zona). Cuenta atrás opcional `CountdownDuration(preAlert:postAlert:)`. `schedule(id:configuration:)`, `cancel`, `stop`, `pause`, `resume`, `alarms` (lista). | `setAlarmClock(AlarmClockInfo, PendingIntent)`: exacta, visible en la barra de estado como alarma próxima, exenta de Doze. Un `BroadcastReceiver` recibe el disparo; `RECEIVE_BOOT_COMPLETED` rearma (como `RayNotifyReceiver`, M442). |
+| Qué ve el usuario | Alerta **del sistema** (Lock Screen, Dynamic Island, StandBy, Apple Watch) con título, botón de parar (`AlarmButton`) y un botón secundario opcional (`secondaryButton`: `.countdown` = posponer con la cuenta atrás, o `.custom` → un `LiveActivityIntent`, p. ej. abrir la app). Atraviesa **silencio y Concentración** (por eso pide permiso). | Un **servicio en primer plano** (`foregroundServiceType="mediaPlayback"`; no existe tipo «alarm») que reproduce el sonido en bucle con `MediaPlayer`/`AudioAttributes USAGE_ALARM` (respeta el volumen de alarma, no el de medios, y suena en silencio) + una notificación `CATEGORY_ALARM` con `setFullScreenIntent` a una Activity de alarma (pantalla completa sobre el bloqueo, `setShowWhenLocked`/`setTurnScreenOn`). `USE_FULL_SCREEN_INTENT`: en Android 14+ Play lo concede por defecto solo a apps de alarma/llamadas; en otras, `canUseFullScreenIntent()` y el ajuste `ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT`. |
+| Sonido | `AlertConfiguration.AlertSound.named("x")` — un archivo del **bundle** o de `Library/Sounds` del contenedor; por defecto el del sistema. Suena hasta que el usuario responde (es el sistema quien lo reproduce). | El servicio decide: bucle hasta «Detener», o `maxMinutes` y auto-silencio. Archivo de `res/raw/` (`[android] sounds`, M447). |
+| Respuesta | El botón de parar lo gestiona el sistema; el secundario con `.custom` ejecuta un `LiveActivityIntent` (`openAppWhenRun = true`) cuyo `perform()` corre en el **proceso de la app** (la arranca si hace falta) → ahí la app sabe qué alarma y qué botón. | La Activity de alarma / las acciones de la notificación mandan Intents a la app (como el tap de M442: extra con el tag; `onNewIntent` y `onCreate`). |
+| Dónde se escribe | **Swift**: AlarmKit no expone API a Objective-C. La shell iOS (ObjC) necesita un archivo Swift en el mismo target (puente por `@objc`). La **cuenta atrás** y las presentaciones `countdown/paused` exigen una **extensión de widget** con `ActivityConfiguration(for: AlarmAttributes<Meta>.self)`; la alerta sola no la necesita. | Java en la shell, como `RayNotify.java`. |
+| Antes de iOS 26 | No hay nada equivalente: `Err` claro (`notify` + `sound_name` como alternativa, suena una vez). | API 24+: todo disponible (minSdk de la shell). |
+
+**Piezas que ya existen.** La petición genérica shell↔runtime con respuesta (`shell::request`,
+`onRequest`, M442) y su plazo (revisión 1.27.91); el evento con tag encolado antes de `main`
+cuando la pulsación arranca la app (M442); `RayNotifyReceiver` + `SharedPreferences` + rearme
+tras reinicio (M442) — la alarma usa el mismo almacén; `[ios] sounds` / `[android] sounds`
+(M447) para el archivo; `[android] exact_alarms` (M442) para el permiso; `[app.plist]` para la
+clave de uso de AlarmKit; la verificación en el simulador iPhone 15 Pro (iOS 26.5 disponible) y
+en el AVD `rayavd` (Android 15).
+
+**Clasificación.** Stdlib + shells + bundle. Sin tocar la SPEC. Impacto alto para apps de
+recordatorios/salud (pepa), medio para el resto. Riesgo principal: la pieza Swift en la shell
+iOS (hasta hoy toda en ObjC y C) y el entitlement implícito de Play para el full-screen intent
+en Android.
+
+**API propuesta: `std/alarm`.**
+
+```rust
+import std/alarm;
+
+struct Alarm {
+    id: string,            // generado si está vacío
+    title: string,         // lo que muestra la alerta del sistema
+    sound: string,         // "" = el del sistema; un archivo de [ios] sounds / [android] sounds
+    snooze_minutes: int,   // 0 = sin «Posponer»; > 0 = botón secundario que pospone N minutos
+    stop_label: string,    // "" = "Stop"
+    data: string,          // vuelve en el evento
+    max_minutes: int,      // Android: minutos máximos sonando (0 = hasta responder); iOS lo decide el sistema
+}
+fn message(title: string) -> Alarm                              // valores por defecto
+fn request_permission() -> Result<string, string>               // "granted" | "denied"; espera
+fn status() -> Result<string, string>                            // "not_determined" | "granted" | "denied" | "unsupported"
+fn schedule(a: Alarm, when: Trigger) -> Result<string, string>   // Trigger.At(unix) | Daily(h, m) | Weekly([días], h, m)
+fn cancel(id: string) -> Result<int, string>
+fn cancel_all() -> Result<int, string>
+fn pending() -> Result<[string], string>
+fn event_response(e: UiEvent) -> Option<Response>               // evento "alarm": Response { id, action, data }
+```
+
+`action` es `"stop"`, `"snooze"` o `"open"`; el evento `"alarm"` llega por `ui.next_event`
+(`tag` = `id\taction\tdata`), encolado antes de `main` si la alarma arrancó la app, como el
+`"notification"` de M442. `Trigger` se comparte con `std/notify` (mismo enum; `Weekly` es nuevo
+y también serviría a `notify`). `status()` da `"unsupported"` en iOS < 26, escritorio y Linux;
+`schedule` devuelve `Err` ahí con el remedio (en iOS < 26: «use std/notify with sound_name»).
+
+**Lo que hace cada shell.**
+
+- **iOS**: un `RayAlarm.swift` en el target (la primera pieza Swift de la shell; el pbxproj gana
+  `SWIFT_VERSION` y el puente `@objc class RayAlarm: NSObject`), que atiende las peticiones
+  `alarm_*` del runtime por `onRequest` — como Android desde M442, en vez de más símbolos C — y
+  programa con `AlarmManager.shared.schedule(id:configuration:)`: `AlarmPresentation.Alert(title,
+  stopButton, secondaryButton: snooze ? .countdown : nil)`, `AlertSound.named(sound)` si hay
+  archivo, `Schedule.fixed`/`.relative`. Un `LiveActivityIntent` (`RayAlarmOpenIntent`,
+  `openAppWhenRun = true`) para el botón secundario cuando no es posponer; su `perform()` hace
+  `ray_ui_push_event("alarm", 0, tag)`. Parar lo gestiona el sistema: la app lo sabe observando
+  `AlarmManager.shared.alarmUpdates` (el estado pasa a terminado) y entonces emite `"alarm"` con
+  `action = "stop"`. Sin cuenta atrás ni Live Activity propia en esta fase (evita la extensión
+  de widget). `[app.plist]` debe traer `NSAlarmKitUsageDescription`; `ray bundle --ios` avisa si
+  el programa importa `std/alarm` y falta. Con `IPHONEOS_DEPLOYMENT_TARGET = 15.0`, todo va bajo
+  `if #available(iOS 26, *)`.
+- **Android**: `RayAlarm.java` + `RayAlarmReceiver` + `RayAlarmService` (primer plano,
+  `mediaPlayback`, `MediaPlayer` en bucle con `USAGE_ALARM`, se detiene a los `max_minutes`) +
+  `RayAlarmActivity` (pantalla completa sobre el bloqueo: título, «Detener», «Posponer»). La
+  programación con `setAlarmClock` (visible en la barra de estado) guarda la alarma en
+  `SharedPreferences` (el mismo `ray_notify` de M442, otra clave) y el rearme tras reinicio reusa
+  `RayNotifyReceiver`. Manifiesto: `USE_EXACT_ALARM` (en vez de pedir el ajuste), `USE_FULL_SCREEN_INTENT`,
+  `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_MEDIA_PLAYBACK`, declarados solo cuando el programa
+  importa `std/alarm` (la detección por uso que ya hace el bundle con `std/process`), para no
+  cargar a las demás apps con permisos de alarma ante Play.
+- **Headless**: traza `[ui] alarm …`, pendientes en memoria y `RAY_UI_ALARM_RESPONSE=stop|snooze`
+  inyecta la respuesta — el contrato en un test de los tres motores, como `ui_notify_cli`.
+
+**Fases propuestas.**
+
+1. **M448a — Android + contrato.** `std/alarm`, headless, la shell Android completa (receiver,
+   servicio, Activity de alarma, rearme), docs. Verificable entero en el AVD. En iOS, `status()`
+   = `"unsupported"` y `schedule` → `Err` con el remedio.
+2. **M448b — iOS 26 con AlarmKit.** La pieza Swift, el intent, `alarmUpdates`, el aviso del
+   plist. Verificable en el simulador iOS 26.5. Requiere un Xcode con el SDK de iOS 26 en el
+   runner de la release (comprobar `macos-15`).
+3. **Mientras tanto (ya, en una PR de docs)**: el patrón de audio en segundo plano para mantener
+   vivo el programa (`[ios] background_audio` + una salida de `std/audio` abierta), con sus
+   límites escritos (no sobrevive a cerrar la app, gasta batería, y una sesión `playback` que
+   solo reproduce silencio es un uso que la revisión de la App Store puede cuestionar).
+
+**Fuera de la primera versión (apuntado, no descartado):** cuenta atrás y Live Activity propia
+(extensión de widget), `Weekly` en `std/notify`, alarmas en macOS/Windows/Linux (no hay
+equivalente de sistema; una ventana + `std/audio` del propio programa), `pause`/`resume`
+de AlarmKit, varias alarmas simultáneas sonando en Android (el servicio atiende una).

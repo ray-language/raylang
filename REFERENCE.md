@@ -742,6 +742,23 @@ sin ella ni `[registry] index` se usa el oficial `ray-language/ray-index`; vací
 `RAY_AUDIO_SINK=null` (sumidero de `std/audio` sin hardware, a ritmo real),
 `RAY_KEYCHAIN_FILE` (un archivo plano como llavero de `std/keychain`, para tests y CI).
 
+### Claves de `ray.toml` para las apps móviles
+
+Lo que `ray bundle --ios` / `--android` lee del manifiesto (además de `[app] name`/`id`/`icon`,
+`[app.plist]` y `[native] embed`). Un array puede ir en varias líneas y con coma final.
+
+| Clave | Valores | Qué genera |
+|---|---|---|
+| `[ios] development_team` | el Team ID de Apple | la firma del proyecto de Xcode (`DEVELOPMENT_TEAM` en `App.xcconfig`) |
+| `[ios] background_audio` | `true` / `false` | sesión `AVAudioSession` `playback` activada al arrancar + `UIBackgroundModes = ["audio"]`: `std/audio` sigue sonando en segundo plano y con el interruptor de silencio. Sola, **interrumpe** el audio de otras apps |
+| `[ios] audio_session` | `"playback"` / `"playback_mix"` | la categoría de la sesión, sin el modo en segundo plano: `"playback"` suena con el interruptor de silencio e interrumpe a las demás; `"playback_mix"` añade `MixWithOthers` (la música de otra app sigue sonando). **Se combina** con `background_audio = true`: `playback_mix` + `background_audio` da `MixWithOthers` Y `UIBackgroundModes = audio`. Sin ninguna de las dos claves, la sesión por defecto (respeta el silencio) |
+| `[ios] background` / `background_dark` | `"#rrggbb"` | el color `LaunchBackground` del catálogo: la pantalla de arranque (`UILaunchScreen`) y la vista bajo la página (el webview es transparente). `background_dark` es la variante del modo oscuro y exige `background`. El `WindowOptions.background` del programa manda una vez abre la ventana |
+| `[ios] sounds` | lista de rutas relativas a la raíz del proyecto; el nombre del archivo admite `*` (`"tones/*.wav"`) | archivos copiados al bundle para `Notification.sound_name` de `std/notify` (y `Alarm.sound` cuando llegue AlarmKit). Formatos: `.caf`, `.aiff`, `.wav`, de **30 s como máximo** — `ray bundle` avisa de uno más largo o de otro formato, porque iOS pondría el sonido por defecto. El nombre sin extensión debe ser único |
+| `[android] application_id` | un id de aplicación | el `applicationId` del APK, si difiere de `[app] id` |
+| `[android] background_audio` | `true` / `false` | un servicio en primer plano `mediaPlayback` mientras la app está en segundo plano |
+| `[android] exact_alarms` | `true` / `false` | `SCHEDULE_EXACT_ALARM`: las notificaciones programadas de `std/notify` usan alarmas exactas |
+| `[android] sounds` | lista de rutas, como en `[ios] sounds` (`.ogg`, `.wav`, `.mp3`) | archivos copiados a `res/raw/` (nombre en minúsculas, `[a-z0-9_]`) para `Channel.sound` de `std/notify` y `Alarm.sound` de `std/alarm` |
+
 ## 15. Códigos de salida
 
 | Código | Significado |

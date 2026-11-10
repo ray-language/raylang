@@ -4,6 +4,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ray.toml`: arrays en varias líneas, y las claves móviles en la referencia (pepa #344 y #345).**
+  Un array del manifiesto puede partirse en líneas y llevar coma final, como en TOML (antes era
+  «must be an array» sin decir por qué). `[ios] sounds` y `[android] sounds` admiten `*` en el
+  nombre del archivo (`"tones/*.wav"`), y `ray bundle --ios` avisa de un sonido de más de 30 s
+  o en un formato que iOS no reproduce. REFERENCE gana la tabla de claves de `ray.toml` para
+  apps móviles (`audio_session` y cómo se combina con `background_audio`, `background`, `sounds`…).
+
 ## 1.27.93 — 2026-11-10
 
 `std/alarm`: alarmas del sistema que suenan con la app cerrada, en Android (M448, fase a).

@@ -3401,16 +3401,21 @@ fn write_ios_launch_color(proj: &Path, light: &str, dark: Option<&str>) -> bool 
 
 /// M447 (pepa #331): los archivos de `[ios] sounds` / `[android] sounds` resueltos contra la raíz
 /// del proyecto; uno que no exista es error (un sonido ausente se descubriría en el teléfono).
+/// pepa #345: el NOMBRE del archivo admite `*` (`"tones/*.wav"`), y en iOS se avisa de lo que el
+/// sistema no reproduciría (más de 30 s, o un formato que no es caf/aiff/wav).
 fn resolve_sound_files(spec: Option<(&PathBuf, &[String])>, key: &str) -> Vec<PathBuf> {
     let Some((root, list)) = spec else { return Vec::new() };
     let mut stems: Vec<String> = Vec::new();
-    list.iter()
-        .map(|s| {
-            let p = root.join(s);
-            if !p.is_file() {
-                eprintln!("bundle: {key}: '{s}' is not a file (relative to the project root)");
+    let mut out = Vec::new();
+    for s in list {
+        let files = match expand_sound_pattern(root, s) {
+            Ok(files) => files,
+            Err(e) => {
+                eprintln!("bundle: {key}: {e}");
                 process::exit(66);
             }
+        };
+        for p in files {
             // Dos archivos con el mismo nombre (sin extensión) serían el mismo recurso: error aquí, no en aapt/Xcode.
             let stem = p.file_stem().map(|f| f.to_string_lossy().to_lowercase()).unwrap_or_default();
             if stems.contains(&stem) {
@@ -3418,9 +3423,98 @@ fn resolve_sound_files(spec: Option<(&PathBuf, &[String])>, key: &str) -> Vec<Pa
                 process::exit(66);
             }
             stems.push(stem);
-            p
-        })
-        .collect()
+            if key.starts_with("[ios]")
+                && let Some(w) = ios_sound_warning(&p)
+            {
+                eprintln!("[bundle] warning: {key}: '{}' {w}", p.strip_prefix(root).unwrap_or(&p).display());
+            }
+            out.push(p);
+        }
+    }
+    out
+}
+
+/// Una entrada de `sounds`: una ruta, o un patrón con `*` en el nombre del archivo (no en los
+/// directorios). Los resultados van ordenados; un patrón sin coincidencias es error.
+fn expand_sound_pattern(root: &Path, entry: &str) -> Result<Vec<PathBuf>, String> {
+    let rel = Path::new(entry);
+    let name = rel.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    if rel.parent().is_some_and(|d| d.to_string_lossy().contains('*')) {
+        return Err(format!("'{entry}': `*` is only allowed in the file name, not in a directory"));
+    }
+    if !name.contains('*') {
+        let p = root.join(rel);
+        return if p.is_file() { Ok(vec![p]) } else { Err(format!("'{entry}' is not a file (relative to the project root)")) };
+    }
+    let dir = root.join(rel.parent().unwrap_or(Path::new("")));
+    let mut found: Vec<PathBuf> = fs::read_dir(&dir)
+        .map_err(|e| format!("'{entry}': {}: {e}", dir.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_file() && p.file_name().is_some_and(|n| wildcard_match(&name, &n.to_string_lossy())))
+        .collect();
+    found.sort();
+    if found.is_empty() { Err(format!("'{entry}' matches no file")) } else { Ok(found) }
+}
+
+/// `*` = cualquier tramo (también vacío); el resto, literal.
+fn wildcard_match(pattern: &str, text: &str) -> bool {
+    let parts: Vec<&str> = pattern.split('*').collect();
+    if parts.len() == 1 {
+        return pattern == text;
+    }
+    let (first, last) = (parts[0], parts[parts.len() - 1]);
+    if text.len() < first.len() + last.len() || !text.starts_with(first) || !text.ends_with(last) {
+        return false;
+    }
+    let mut rest = &text[first.len()..text.len() - last.len()];
+    for mid in &parts[1..parts.len() - 1] {
+        match rest.find(mid) {
+            Some(i) => rest = &rest[i + mid.len()..],
+            None => return false,
+        }
+    }
+    true
+}
+
+/// pepa #345: lo que iOS no reproduciría como sonido de notificación — un formato que no es
+/// caf/aiff/wav, o más de 30 s — y por lo que pondría el sonido por defecto sin decir nada.
+fn ios_sound_warning(path: &Path) -> Option<String> {
+    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+    if !matches!(ext.as_str(), "caf" | "aiff" | "aif" | "wav") {
+        return Some("is not a .caf, .aiff or .wav file: iOS would play the default notification sound instead".to_string());
+    }
+    let secs = if ext == "wav" { fs::read(path).ok().and_then(|b| wav_seconds(&b)) } else { None }.or_else(|| afinfo_seconds(path))?;
+    (secs > 30.0).then(|| format!("is {secs:.0} s long: iOS plays notification sounds of 30 s at most (it would play the default sound instead)"))
+}
+
+/// La duración de un WAV (RIFF): tamaño del chunk `data` / bytes por segundo del chunk `fmt `.
+fn wav_seconds(bytes: &[u8]) -> Option<f64> {
+    if bytes.len() < 12 || &bytes[0..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return None;
+    }
+    let (mut pos, mut byte_rate, mut data_len) = (12usize, None, None);
+    while pos + 8 <= bytes.len() {
+        let size = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().ok()?) as usize;
+        match &bytes[pos..pos + 4] {
+            b"fmt " if pos + 20 <= bytes.len() => byte_rate = Some(u32::from_le_bytes(bytes[pos + 16..pos + 20].try_into().ok()?)),
+            b"data" => data_len = Some(size.min(bytes.len().saturating_sub(pos + 8))),
+            _ => {}
+        }
+        pos += 8 + size + (size & 1);
+    }
+    match (byte_rate, data_len) {
+        (Some(rate), Some(len)) if rate > 0 => Some(len as f64 / rate as f64),
+        _ => None,
+    }
+}
+
+/// La duración según `afinfo` (macOS, donde se genera el proyecto de Xcode); `None` si no está.
+fn afinfo_seconds(path: &Path) -> Option<f64> {
+    let out = process::Command::new("afinfo").arg(path).output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text.lines().find(|l| l.contains("estimated duration:"))?;
+    line.split(':').nth(1)?.trim().split_whitespace().next()?.parse().ok()
 }
 
 /// `true` si el catálogo quedó escrito (y el proyecto puede cablearlo).
@@ -7470,4 +7564,46 @@ mod tests {
         assert_eq!(tag_from_latest_url("https://github.com/o/r/releases"), None);
         assert_eq!(tag_from_latest_url("https://github.com/o/r/releases/tag/"), None);
     }
+    /// pepa #345: `sounds` admite `*` en el nombre, y un WAV de más de 30 s o un formato que iOS
+    /// no reproduce se avisan al empaquetar.
+    #[test]
+    fn sound_patterns_expand_and_ios_limits_are_warned() {
+        assert!(super::wildcard_match("*.wav", "a.wav") && super::wildcard_match("alarm*", "alarm.caf") && super::wildcard_match("a*b*c", "aXbYc"));
+        assert!(!super::wildcard_match("*.wav", "a.ogg") && !super::wildcard_match("a*b*c", "acb") && super::wildcard_match("x.wav", "x.wav"));
+        let dir = std::env::temp_dir().join(format!("ray_sounds_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("tones")).unwrap();
+        // Un WAV mínimo: 8000 bytes/s y `secs` segundos de datos.
+        let wav = |secs: usize| {
+            let data = vec![0u8; 8000 * secs];
+            let mut b = Vec::new();
+            b.extend_from_slice(b"RIFF");
+            b.extend_from_slice(&((36 + data.len()) as u32).to_le_bytes());
+            b.extend_from_slice(b"WAVEfmt ");
+            b.extend_from_slice(&16u32.to_le_bytes());
+            b.extend_from_slice(&[1, 0, 1, 0]);
+            b.extend_from_slice(&8000u32.to_le_bytes());
+            b.extend_from_slice(&8000u32.to_le_bytes());
+            b.extend_from_slice(&[1, 0, 8, 0]);
+            b.extend_from_slice(b"data");
+            b.extend_from_slice(&(data.len() as u32).to_le_bytes());
+            b.extend_from_slice(&data);
+            b
+        };
+        std::fs::write(dir.join("tones/short.wav"), wav(2)).unwrap();
+        std::fs::write(dir.join("tones/long.wav"), wav(36)).unwrap();
+        std::fs::write(dir.join("tones/song.mp3"), b"x").unwrap();
+        let names = |v: Vec<PathBuf>| v.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(names(super::expand_sound_pattern(&dir, "tones/*.wav").unwrap()), ["long.wav", "short.wav"]);
+        assert_eq!(names(super::expand_sound_pattern(&dir, "tones/short.wav").unwrap()), ["short.wav"]);
+        assert!(super::expand_sound_pattern(&dir, "tones/*.caf").unwrap_err().contains("matches no file"));
+        assert!(super::expand_sound_pattern(&dir, "tones/nope.wav").unwrap_err().contains("is not a file"));
+        assert!(super::expand_sound_pattern(&dir, "*/a.wav").unwrap_err().contains("only allowed in the file name"));
+        assert_eq!(super::wav_seconds(&wav(36)).map(|s| s.round() as i64), Some(36));
+        assert!(super::ios_sound_warning(&dir.join("tones/short.wav")).is_none());
+        assert!(super::ios_sound_warning(&dir.join("tones/long.wav")).unwrap().contains("is 36 s long"));
+        assert!(super::ios_sound_warning(&dir.join("tones/song.mp3")).unwrap().contains("not a .caf, .aiff or .wav"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

@@ -1454,6 +1454,46 @@ antes de 1.27.59) y en Linux (MPRIS por D-Bus: `playerctl`, los applets del escr
 teclas multimedia; hace falta GLib y un bus de sesión) y en Windows (los System Media Transport
 Controls: el panel que aparece junto al volumen y las teclas multimedia).
 
+### Notificaciones (`std/notify`)
+
+Una notificación del sistema, ahora o programada, en el teléfono y en el escritorio con el mismo
+código. Pide el permiso cuando el usuario active lo que lo necesita, no al arrancar; comprueba
+`status()` antes de fiarte, porque puede revocarlo en Ajustes.
+
+```rust
+import std/ui;
+import std/notify;
+
+if (notify.status()? != "granted") {
+    print(notify.request_permission()?);          // "granted" | "denied" | "provisional"; espera al usuario
+}
+notify.create_channel(notify.Channel { id: "orders", name: "Pedidos", description: "", importance: "high" })?; // Android; Ok en los demás
+var n = notify.message("Pedido enviado", "Llega el viernes");
+n.id = "order-42";                                 // repetir el id sustituye la anterior
+n.channel = "orders";
+n.data = "{\"order\":42}";                        // vuelve en la pulsación
+n.actions = [notify.action("track", "Seguir")];    // botones; su id vuelve en la pulsación
+notify.show(n)?;                                   // ahora
+notify.schedule(n, notify.Trigger.After(3600, false))?;   // o dentro de una hora…
+notify.schedule(n, notify.Trigger.Daily(9, 0))?;          // …o cada día a las 9 (hora local)
+// En el bucle de eventos de std/ui:
+match (ui.next_event()) {
+    Result.Ok(e) => if let Option.Some(t) = notify.event_tap(e) {
+        open_order(t.id, t.action, t.data);        // action "" = la notificación; "track" = el botón
+    },
+    Result.Err(_) => {},
+}
+```
+
+Las claves por plataforma: en iOS y en un `.app` de macOS es `UNUserNotificationCenter` (si nunca
+pediste el permiso, `show` lo pide sin esperar y la notificación sale cuando el usuario acepta); en
+Android las programadas se muestran con la app cerrada y sobreviven al reinicio, y son inexactas
+—minutos de margen— salvo que `ray.toml` declare `[android] exact_alarms = true` (para apps cuya
+función lo exige: alarmas, recordatorios); en Linux y en un binario suelto de macOS solo hay
+`show` inmediato; Windows aún no. Una pulsación que abre la app desde cero queda encolada antes de
+`main`, así que lee los eventos pronto. Para probar sin ventanas: `RAY_UI_BACKEND=headless` traza
+cada llamada y `RAY_UI_NOTIFY_CLICK=1` «pulsa» cada notificación al mostrarla.
+
 ### Sonido (`std/audio`)
 
 Salida PCM al dispositivo, con la **contrapresión como pacing**: `write` aparca la fibra cuando

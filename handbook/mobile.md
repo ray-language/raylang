@@ -482,6 +482,7 @@ El mismo `main` corre en los tres sitios, pero el sistema que hay debajo no se c
 | Errores y `console.error` de la página | el inspector (`--devtools`) | la misma consola, con prefijo `[page]` (shell de 1.27.65+) | `adb logcat -s ray` |
 | Inspeccionar la página | `ray dev`, o `ray run --devtools` | Safari, menú Develop, con `--devtools` | `chrome://inspect`, con `--devtools` |
 | Modo claro/oscuro | `prefers-color-scheme` sigue al sistema | sigue al sistema | sigue al sistema, iconos de las barras del sistema incluidos (shell de 1.27.64+; regenera el shell si es anterior) |
+| Notificaciones (`std/notify`) | el centro de notificaciones (en un `.app`) o libnotify | `UNUserNotificationCenter`: permiso, programadas, acciones, badge | canales, permiso de Android 13+, programadas que sobreviven al reinicio (shell de 1.27.91+) |
 
 Lo que eso obliga a hacer:
 
@@ -495,6 +496,12 @@ Lo que eso obliga a hacer:
 - **No escribas URLs absolutas a mano.** En Android la página se carga por
   `https://app.ray.invalid/…`, un alias de `ray://app/` que nunca sale a la red. Las rutas
   relativas y `fetch("/api/x")` funcionan igual en los tres sitios.
+- **Las notificaciones se piden en contexto.** `notify.request_permission()` abre el diálogo del
+  sistema (iOS, Android 13+) y espera la respuesta: llámalo cuando el usuario active lo que las
+  necesita, nunca al arrancar, y comprueba `notify.status()` antes de contar con ellas. Lo que
+  programes con `notify.schedule` se muestra con la app cerrada; una pulsación que la abre llega
+  como evento `"notification"` encolado antes de `main` (`notify.event_tap`). Programa con
+  `std/notify`, no con temporizadores de la página: se congelan en segundo plano.
 
 ## 12. Opciones y configuración
 
@@ -522,6 +529,7 @@ Y lo que se declara en el `ray.toml`:
 | `[ios] background_audio` | el audio sigue sonando con la app en segundo plano |
 | `[android] application_id` | un application id distinto del de `[app] id` |
 | `[android] background_audio` | lo mismo en Android, con un servicio en primer plano |
+| `[android] exact_alarms` | las notificaciones programadas con `std/notify` usan alarmas exactas (permiso «Alarmas y recordatorios»); sin la clave, inexactas, con minutos de margen |
 | `[frontend]` | los comandos y la carpeta del frontend (sección 2) |
 
 ## 13. Problemas frecuentes

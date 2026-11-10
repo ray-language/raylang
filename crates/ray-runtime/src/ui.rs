@@ -301,6 +301,60 @@ pub(crate) fn push_media_event(tag: &str) {
     push_event("media", 0, tag);
 }
 
+/// M442: una notificación pulsada → `("notification", 0, tag)` (ver `notify::tap_tag`).
+pub(crate) fn push_notification_event(tag: &str) {
+    push_event("notification", 0, tag);
+}
+
+/// M442: ¿backend headless? (lo consulta `notify`, que vive en otro módulo).
+pub(crate) fn is_headless() -> bool {
+    headless()
+}
+
+/// M442: el `notify` de M371 sin bundle (macOS: centro clásico/osascript; Linux: libnotify) —
+/// el camino al que cae `std/notify` donde no hay UNUserNotificationCenter.
+#[cfg_attr(not(any(target_os = "macos", target_os = "linux")), allow(dead_code))]
+pub(crate) fn legacy_notify(title: &str, body: &str, tag: &str, sound: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        ensure_app()?;
+        return mac::notify(title.to_string(), body.to_string(), tag.to_string(), sound);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = sound;
+        return gtk::notify(title.to_string(), body.to_string(), tag.to_string());
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = (title, body, tag, sound);
+        Err("ui: notifications are not available on this platform yet".to_string())
+    }
+}
+
+/// M442: ¿corre dentro de un `.app` con identificador? (solo entonces existe
+/// UNUserNotificationCenter en macOS).
+#[cfg(target_os = "macos")]
+pub(crate) fn apple_bundled() -> bool {
+    mac::bundled()
+}
+
+/// M442: el delegate de AppKit/UserNotifications de `ui.rs` (pulsaciones y presentación en primer
+/// plano), para que `notify` lo instale en el centro.
+#[cfg(target_os = "macos")]
+pub(crate) fn mac_un_delegate() -> *mut std::ffi::c_void {
+    // SAFETY: crea (una vez) el objeto delegate; seguro desde cualquier hilo.
+    unsafe { mac::menu_target() }
+}
+
+/// M442: una petición genérica al shell móvil con respuesta (`std/notify` en Android). Sin shell
+/// o con un shell anterior, `Err` que dice cómo regenerarlo.
+#[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
+#[cfg_attr(not(target_os = "android"), allow(dead_code))] // iOS habla con UserNotifications sin pasar por el shell
+pub(crate) fn shell_request(op: &str, arg: &str) -> Result<String, String> {
+    shell::request(op, arg)
+}
+
 fn push_event(kind: &str, window: i64, tag: &str) {
     EVENT_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     if kind == "closed" {
@@ -2462,9 +2516,22 @@ fn app_op(op: &str, arg: &str) -> Result<(), String> {
     if op.starts_with("media_") {
         return media_op(op, arg);
     }
+    // M442: en los shells móviles `ui.notify`/`ui.badge` son `std/notify` (UNUserNotificationCenter
+    // en iOS, RayNotify.java en Android); la atención no existe en un teléfono.
     #[cfg(any(target_os = "ios", target_os = "android", feature = "ui-shell"))]
     if shell::active() {
-        return Err("ui: notifications are not available in the mobile shell yet".to_string());
+        return match op {
+            "notify" => {
+                let mut it = arg.split('\n');
+                let title = it.next().unwrap_or("");
+                let body = it.next().unwrap_or("");
+                let tag = it.next().unwrap_or("");
+                let sound = it.next().unwrap_or("0") == "1";
+                crate::notify::show_now(crate::notify::legacy_note(title, body, tag, sound))
+            }
+            "badge" => crate::notify::op("notify_badge", if arg.trim().is_empty() { "0" } else { arg.trim() }).map(|_| ()),
+            _ => Err("ui: request_attention is not available on mobile".to_string()),
+        };
     }
     #[cfg(target_os = "macos")]
     {
@@ -2476,7 +2543,13 @@ fn app_op(op: &str, arg: &str) -> Result<(), String> {
                 let body = it.next().unwrap_or("").to_string();
                 let tag = it.next().unwrap_or("").to_string();
                 let sound = it.next().unwrap_or("0") == "1";
-                mac::notify(title, body, tag, sound)
+                // M442: dentro de un `.app` el centro moderno lo lleva `notify` (un solo estado de
+                // autorización para `ui.notify` y `std/notify`); fuera, el camino clásico de M371.
+                if mac::bundled() {
+                    crate::notify::show_now(crate::notify::legacy_note(&title, &body, &tag, sound))
+                } else {
+                    mac::notify(title, body, tag, sound)
+                }
             }
             "badge" => mac::set_badge(arg.to_string()),
             _ => mac::request_attention(),
@@ -4179,8 +4252,25 @@ mod mac {
                     let request = get(notification, sel(b"request\0"));
                     let content = get(request, sel(b"content\0"));
                     let info = get(content, sel(b"userInfo\0"));
-                    let tag = user_info_tag(info);
-                    super::push_event("notification", 0, &tag);
+                    let id = user_info_tag(info);
+                    // M442: la acción pulsada (vacía = la notificación misma), el texto escrito y los
+                    // datos del programa viajan en el tag (`notify.event_tap`).
+                    let data = user_info_key(info, "data");
+                    let utf8: MsgCStr = std::mem::transmute(msg_send());
+                    let text_of = |o: Id| -> String {
+                        if o.is_null() {
+                            return String::new();
+                        }
+                        let c = utf8(o, sel(b"UTF8String\0"));
+                        if c.is_null() { String::new() } else { std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned() }
+                    };
+                    let mut action = text_of(get(response, sel(b"actionIdentifier\0")));
+                    if action == "com.apple.UNNotificationDefaultActionIdentifier" {
+                        action.clear();
+                    }
+                    let responds: MsgBoolSel = std::mem::transmute(msg_send());
+                    let text = if responds(response, sel(b"respondsToSelector:\0"), sel(b"userText\0")) != 0 { text_of(get(response, sel(b"userText\0"))) } else { String::new() };
+                    super::push_event("notification", 0, &crate::notify::tap_tag(&id, &action, &text, &data));
                     if !handler.is_null() {
                         let invoke: unsafe extern "C" fn(*const BlockLiteral) = std::mem::transmute((*handler).invoke);
                         invoke(handler);
@@ -4213,13 +4303,17 @@ mod mac {
             }
             /// `userInfo["tag"]` como String ("" si no hay).
             unsafe fn user_info_tag(info: Id) -> String {
+                unsafe { user_info_key(info, "tag") }
+            }
+            /// `userInfo[key]` como String ("" si no hay).
+            unsafe fn user_info_key(info: Id, key: &str) -> String {
                 unsafe {
                     if info.is_null() {
                         return String::new();
                     }
                     let obj_for: MsgIdId = std::mem::transmute(msg_send());
                     let utf8: MsgCStr = std::mem::transmute(msg_send());
-                    let v = obj_for(info, sel(b"objectForKey:\0"), nsstring("tag"));
+                    let v = obj_for(info, sel(b"objectForKey:\0"), nsstring(key));
                     if v.is_null() {
                         return String::new();
                     }
@@ -4686,34 +4780,11 @@ mod mac {
     }
     unsafe impl Sync for BlockLiteral {}
     unsafe impl Send for BlockLiteral {}
-    const BLOCK_IS_GLOBAL: i32 = 1 << 28;
-    static BLOCK_DESCRIPTOR: BlockDescriptor = BlockDescriptor { reserved: 0, size: std::mem::size_of::<BlockLiteral>() as u64 };
-    unsafe impl Sync for BlockDescriptor {}
-    unsafe extern "C" {
-        static _NSConcreteGlobalBlock: [u8; 0];
-        fn dlopen(path: *const std::ffi::c_char, flags: i32) -> *mut c_void;
-    }
-    /// Un bloque GLOBAL (sin capturas, vive para siempre) con el `invoke` dado.
-    fn global_block(invoke: *const c_void) -> &'static BlockLiteral {
-        static BLOCKS: std::sync::Mutex<Vec<&'static BlockLiteral>> = std::sync::Mutex::new(Vec::new());
-        let mut v = BLOCKS.lock().unwrap();
-        if let Some(b) = v.iter().find(|b| b.invoke == invoke) {
-            return b;
-        }
-        let b: &'static BlockLiteral = Box::leak(Box::new(BlockLiteral {
-            isa: std::ptr::addr_of!(_NSConcreteGlobalBlock) as *const c_void,
-            flags: BLOCK_IS_GLOBAL,
-            reserved: 0,
-            invoke,
-            descriptor: &BLOCK_DESCRIPTOR,
-        }));
-        v.push(b);
-        b
-    }
+    // (M442: los bloques globales nuestros y la carga del framework viven ahora en `notify.rs`.)
 
     /// ¿Corre dentro de un `.app` con identificador? Solo entonces existe UNUserNotificationCenter
     /// (`currentNotificationCenter` aborta sin bundle).
-    fn bundled() -> bool {
+    pub(super) fn bundled() -> bool {
         // SAFETY: NSBundle es seguro de consultar en cualquier hilo.
         unsafe {
             let get: MsgId = std::mem::transmute(msg_send());
@@ -4730,42 +4801,6 @@ mod mac {
         }
     }
 
-    /// Autorización de UNUserNotificationCenter: -1 sin pedir, 0 denegada, 1 concedida.
-    static UN_AUTH: std::sync::atomic::AtomicI8 = std::sync::atomic::AtomicI8::new(-1);
-    /// Peticiones encoladas mientras se espera la autorización (se añaden al concederla).
-    static UN_PENDING: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
-
-    extern "C" fn un_auth_done(_block: *const BlockLiteral, granted: u8, _error: Id) {
-        UN_AUTH.store(if granted != 0 { 1 } else { 0 }, std::sync::atomic::Ordering::SeqCst);
-        let pending: Vec<usize> = std::mem::take(&mut *UN_PENDING.lock().unwrap());
-        if granted != 0 {
-            for req in pending {
-                un_add(req as Id);
-            }
-        } else if super::ui_trace() {
-            eprintln!("[ui] notify: the user did not authorize notifications ({} dropped)", pending.len());
-        }
-    }
-
-    fn un_center() -> Id {
-        // SAFETY: carga del framework (idempotente) + mensaje de clase.
-        unsafe {
-            dlopen(c"/System/Library/Frameworks/UserNotifications.framework/UserNotifications".as_ptr(), 2 /* RTLD_NOW */);
-            let get: MsgId = std::mem::transmute(msg_send());
-            let c = cls(b"UNUserNotificationCenter\0");
-            if c.is_null() { std::ptr::null_mut() } else { get(c, sel(b"currentNotificationCenter\0")) }
-        }
-    }
-
-    fn un_add(request: Id) {
-        // SAFETY: `addNotificationRequest:withCompletionHandler:` acepta handler nil.
-        unsafe {
-            type MsgVoidIdPtr = unsafe extern "C" fn(Id, Sel, Id, *const c_void);
-            let add: MsgVoidIdPtr = std::mem::transmute(msg_send());
-            add(un_center(), sel(b"addNotificationRequest:withCompletionHandler:\0"), request, std::ptr::null());
-        }
-    }
-
     /// `@{ "tag": tag }` (autoreleased; el contenido lo retiene al asignarlo).
     unsafe fn tag_info(tag: &str) -> Id {
         unsafe {
@@ -4775,52 +4810,8 @@ mod mac {
         }
     }
 
+    /// M371 sin bundle (M442: con bundle, `notify.rs` lleva UNUserNotificationCenter).
     pub(super) fn notify(title: String, body: String, tag: String, sound: bool) -> Result<(), String> {
-        if bundled() {
-            // SAFETY: mensajes documentados de UserNotifications; los objetos se retienen
-            // mientras el centro los necesita.
-            unsafe {
-                let center = un_center();
-                if center.is_null() {
-                    return Err("ui: notifications are not available (UserNotifications framework missing)".to_string());
-                }
-                let get: MsgId = std::mem::transmute(msg_send());
-                let set_id: MsgVoidId = std::mem::transmute(msg_send());
-                set_id(center, sel(b"setDelegate:\0"), menu_target());
-                let content = get(get(cls(b"UNMutableNotificationContent\0"), sel(b"alloc\0")), sel(b"init\0"));
-                set_id(content, sel(b"setTitle:\0"), nsstring(&title));
-                set_id(content, sel(b"setBody:\0"), nsstring(&body));
-                set_id(content, sel(b"setUserInfo:\0"), tag_info(&tag));
-                if sound {
-                    set_id(content, sel(b"setSound:\0"), get(cls(b"UNNotificationSound\0"), sel(b"defaultSound\0")));
-                }
-                type MsgReq = unsafe extern "C" fn(Id, Sel, Id, Id, Id) -> Id;
-                let make: MsgReq = std::mem::transmute(msg_send());
-                let ident = nsstring(&format!("ray-{}-{}", std::process::id(), super::EVENT_SEQ.load(std::sync::atomic::Ordering::SeqCst)));
-                let request = make(cls(b"UNNotificationRequest\0"), sel(b"requestWithIdentifier:content:trigger:\0"), ident, content, std::ptr::null_mut());
-                let retain: MsgId = std::mem::transmute(msg_send());
-                retain(request, sel(b"retain\0"));
-                match UN_AUTH.load(std::sync::atomic::Ordering::SeqCst) {
-                    1 => un_add(request),
-                    0 => return Err("ui: notifications are not authorized for this app (System Settings → Notifications)".to_string()),
-                    _ => {
-                        let first = {
-                            let mut p = UN_PENDING.lock().unwrap();
-                            p.push(request as usize);
-                            p.len() == 1
-                        };
-                        if first {
-                            const ALERT_SOUND_BADGE: u64 = 1 | 2 | 4;
-                            type MsgAuth = unsafe extern "C" fn(Id, Sel, u64, *const BlockLiteral);
-                            let ask: MsgAuth = std::mem::transmute(msg_send());
-                            let block = global_block(un_auth_done as extern "C" fn(*const BlockLiteral, u8, Id) as *const c_void);
-                            ask(center, sel(b"requestAuthorizationWithOptions:completionHandler:\0"), ALERT_SOUND_BADGE, block);
-                        }
-                    }
-                }
-            }
-            return Ok(());
-        }
         // Binario suelto (`ray run`, `ray build`): el centro clásico si el proceso tiene uno; si
         // no (lo normal sin bundle: `defaultUserNotificationCenter` es nil), la notificación sale
         // por `osascript` — se ve en desarrollo, con el icono de Script Editor y sin clic. La
@@ -4885,7 +4876,7 @@ mod mac {
         })
     }
 
-    unsafe fn menu_target() -> Id {
+    pub(super) unsafe fn menu_target() -> Id {
         static TARGET: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let mut target = TARGET.load(std::sync::atomic::Ordering::SeqCst) as Id;
         if target.is_null() {
@@ -8105,6 +8096,99 @@ mod shell {
         }
     }
 
+    // ── M442 (IDEAS §121): una PETICIÓN genérica al shell con respuesta — `std/notify` en Android
+    // (el Java hace el trabajo y contesta). El shell registra el handler tras `ray_ui_set_handlers`
+    // (uno anterior no lo hace: `Err` que dice cómo regenerarlo); la petición lleva un id y bloquea
+    // el hilo del programa hasta `ray_ui_request_result`, como el selector de archivos. ──
+    pub type RequestHandler = extern "C" fn(i64, *const c_char, *const c_char);
+    static REQUEST_HANDLER: OnceLock<RequestHandler> = OnceLock::new();
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    static REQUEST_SEQ: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+    struct RequestState {
+        pending: std::sync::Mutex<std::collections::HashMap<i64, Option<Result<String, String>>>>,
+        done: std::sync::Condvar,
+    }
+
+    fn request_state() -> &'static RequestState {
+        static STATE: OnceLock<RequestState> = OnceLock::new();
+        STATE.get_or_init(|| RequestState { pending: std::sync::Mutex::new(std::collections::HashMap::new()), done: std::sync::Condvar::new() })
+    }
+
+    /// El shell registra su atendedor de peticiones `(id, op, arg)`; debe copiar los strings,
+    /// despachar a su hilo principal y contestar con `ray_ui_request_result`.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ray_ui_set_request_handler(handler: RequestHandler) {
+        let _ = REQUEST_HANDLER.set(handler);
+    }
+
+    /// La respuesta del shell a una petición: `value` (NULL = vacío) o `err` (NULL = sin error).
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ray_ui_request_result(id: i64, value: *const c_char, err: *const c_char) {
+        let text = |p: *const c_char| {
+            if p.is_null() {
+                String::new()
+            } else {
+                // SAFETY: contrato del export — NUL-terminated, vivo durante la llamada; se copia.
+                unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned()
+            }
+        };
+        let result = if err.is_null() { Ok(text(value)) } else { Err(text(err)) };
+        let st = request_state();
+        let mut pending = st.pending.lock().unwrap();
+        if let Some(slot) = pending.get_mut(&id) {
+            *slot = Some(result);
+            st.done.notify_all();
+        }
+    }
+
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
+    pub(super) fn request(op: &str, arg: &str) -> Result<String, String> {
+        let Some(handler) = REQUEST_HANDLER.get() else {
+            return Err("ui: this shell predates std/notify (regenerate it with `ray bundle --ios` / `--android`, raylang 1.27.91 or newer)".to_string());
+        };
+        let id = REQUEST_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        let st = request_state();
+        st.pending.lock().unwrap().insert(id, None);
+        let op_c = CString::new(op.replace('\0', "")).unwrap();
+        let arg_c = CString::new(arg.replace('\0', "")).unwrap();
+        handler(id, op_c.as_ptr(), arg_c.as_ptr());
+        let mut pending = st.pending.lock().unwrap();
+        loop {
+            if let Some(Some(_)) = pending.get(&id) {
+                return pending.remove(&id).flatten().unwrap_or_else(|| Err("ui: the shell returned nothing".to_string()));
+            }
+            pending = st.done.wait(pending).unwrap();
+        }
+    }
+
+    #[cfg(test)]
+    mod request_tests {
+        /// M442: una petición viaja al shell y su respuesta (desde otro hilo) despierta al que espera.
+        extern "C" fn fake_shell(id: i64, op: *const std::ffi::c_char, arg: *const std::ffi::c_char) {
+            let s = |p: *const std::ffi::c_char| unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned();
+            let (op, arg) = (s(op), s(arg));
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                if op == "boom" {
+                    let e = std::ffi::CString::new("notify: no").unwrap();
+                    super::ray_ui_request_result(id, std::ptr::null(), e.as_ptr());
+                } else {
+                    let v = std::ffi::CString::new(format!("{op}:{arg}")).unwrap();
+                    super::ray_ui_request_result(id, v.as_ptr(), std::ptr::null());
+                }
+            });
+        }
+
+        #[test]
+        fn a_request_round_trips_through_the_shell() {
+            assert!(super::request("notify_status", "").unwrap_err().contains("predates std/notify"));
+            super::ray_ui_set_request_handler(fake_shell);
+            assert_eq!(super::request("notify_status", "x").unwrap(), "notify_status:x");
+            assert_eq!(super::request("boom", "").unwrap_err(), "notify: no");
+        }
+    }
+
     pub(super) fn open(title: &str, url: &str) {
         if let Some((open, _)) = HANDLERS.get() {
             let t = CString::new(title.replace('\0', "")).unwrap();
@@ -8358,6 +8442,7 @@ mod android {
     static MID_PICK: AtomicUsize = AtomicUsize::new(0); // M382: 0 = shell anterior, sin selector
     static MID_MEDIA: AtomicUsize = AtomicUsize::new(0); // M404: 0 = shell anterior, sin std/media
     static MID_OPEN_URL: AtomicUsize = AtomicUsize::new(0); // #263: 0 = shell anterior, sin open_url
+    static MID_REQUEST: AtomicUsize = AtomicUsize::new(0); // M442: 0 = shell anterior, sin std/notify
 
     /// JNI_OnLoad del cdylib emitido delega aquí: retiene el JavaVM y arma el relay
     /// stdout/stderr→logcat (en una app ambos van a /dev/null — sin esto, debugging a ciegas).
@@ -8411,10 +8496,39 @@ mod android {
             } else {
                 MID_OPEN_URL.store(open_url as usize, Ordering::SeqCst);
             }
+            // M442: `onRequest` existe desde 1.27.91 (std/notify en Android); misma limpieza.
+            let request = get_static(env, bridge, c"onRequest".as_ptr(), c"(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V".as_ptr());
+            if check(env) != 0 {
+                clear(env);
+            } else {
+                MID_REQUEST.store(request as usize, Ordering::SeqCst);
+            }
         }
         super::shell::ray_ui_set_handlers(open_handler, eval_handler);
         if MID_PICK.load(Ordering::SeqCst) != 0 {
             super::shell::ray_ui_set_pick_handler(pick_handler);
+        }
+        if MID_REQUEST.load(Ordering::SeqCst) != 0 {
+            super::shell::ray_ui_set_request_handler(request_handler);
+        }
+    }
+
+    /// M442: una petición genérica → `RayBridge.onRequest(id, op, arg)` (el id como texto: el relay
+    /// solo cruza Strings).
+    extern "C" fn request_handler(id: i64, op: *const c_char, arg: *const c_char) {
+        // SAFETY: contrato del handler — NUL-terminated, vivos durante la llamada; se copian.
+        let (op, arg) = unsafe { (std::ffi::CStr::from_ptr(op).to_string_lossy().into_owned(), std::ffi::CStr::from_ptr(arg).to_string_lossy().into_owned()) };
+        call_bridge(MID_REQUEST.load(Ordering::SeqCst), &[&id.to_string(), &op, &arg]);
+    }
+
+    /// M442: `RayBridge.requestResult(id, value, err)` delega aquí (jstrings, ambos anulables).
+    pub fn request_result(env: JniEnv, id: i64, value: JObject, err: JObject) {
+        let value_c = std::ffi::CString::new(jstring_to_string(env, value).replace('\0', "")).unwrap();
+        if err.is_null() {
+            super::shell::ray_ui_request_result(id, value_c.as_ptr(), std::ptr::null());
+        } else {
+            let err_c = std::ffi::CString::new(jstring_to_string(env, err).replace('\0', "")).unwrap();
+            super::shell::ray_ui_request_result(id, value_c.as_ptr(), err_c.as_ptr());
         }
     }
 
@@ -8738,6 +8852,11 @@ pub fn android_capabilities(caps: i32) {
 #[cfg(target_os = "android")]
 pub fn android_pick_result(env: *mut std::ffi::c_void, id: i64, paths: *mut std::ffi::c_void, err: *mut std::ffi::c_void) {
     android::pick_result(env as android::JniEnv, id, paths, err)
+}
+/// M442: `RayBridge.requestResult(id, value, err)` — la respuesta a una petición genérica (std/notify).
+#[cfg(target_os = "android")]
+pub fn android_request_result(env: *mut std::ffi::c_void, id: i64, value: *mut std::ffi::c_void, err: *mut std::ffi::c_void) {
+    android::request_result(env as android::JniEnv, id, value, err)
 }
 /// M330 D5: un `jstring` de JNI → `String` (para el `devLink` del shell de desarrollo, que vive
 /// en el cdylib generado y no puede leer strings de la JVM por su cuenta).

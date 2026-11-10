@@ -394,6 +394,13 @@ documentada:
   `AssignProcessToJobObject`/`TerminateJobObject` sobre handles propios), `GenerateConsoleCtrlEvent` al
   grupo del hijo, `WaitForSingleObject` sobre el handle que posee `Child`, y `PeekNamedPipe` sobre un
   pipe propio pidiendo solo el contador de octetos.
+- **`crates/ray-runtime/src/notify.rs`** (M442) — `std/notify` en macOS e iOS (`mod apple`): `objc_msgSend`
+  tipado por sitio sobre `UNUserNotificationCenter` (framework cargado con `dlopen`, ruta fija del
+  sistema), bloques globales (`_NSConcreteGlobalBlock`) para los manejadores de finalización y un
+  condvar que espera su respuesta; solo construye contenido, peticiones y disparadores y encola
+  eventos por `ui::push_event`; sin I/O. En **Android** no hay `unsafe` nuevo: cruza a Java por el
+  `call_bridge` de M382 (`RayBridge.onRequest`) y el shell contesta por `requestResult`
+  (`ui::shell::ray_ui_request_result`, la misma forma que `ray_ui_pick_result`).
 - **`crates/ray-runtime/src/media.rs`** (M403) — «Now Playing» y controles del sistema de `std/media` en
   macOS e iOS: `objc_msgSend` tipado por sitio sobre `MPNowPlayingInfoCenter`/`MPRemoteCommandCenter`
   (MediaPlayer.framework, enlazado; mismo patrón que `ui.rs`), una clase ObjC creada en caliente con un

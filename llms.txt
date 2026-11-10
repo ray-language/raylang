@@ -357,7 +357,7 @@ then `{% import site/model %}` for types of other modules (not `from … import`
 `{% if flag %}`/`{% for x in items %}`/`{{ x.name }}`/`{{& raw }}`; conditions must be `bool`
 (`items.len() > 0`, not the list); a sibling `page.ray` with the same name is ignored;
 `ray build --templates-only` writes the generated module to disk for inspection) std/protobuf std/uuid
-std/markdown std/inflate std/deflate std/zip (read-only, in memory, no ZIP64; the `zip` package reads and WRITES on disk, ZIP64, streaming) std/update std/huffman (only HPACK's static code, RFC 7541 — not for DEFLATE) std/image std/audio std/media std/ui std/embed
+std/markdown std/inflate std/deflate std/zip (read-only, in memory, no ZIP64; the `zip` package reads and WRITES on disk, ZIP64, streaming) std/update std/huffman (only HPACK's static code, RFC 7541 — not for DEFLATE) std/image std/audio std/media std/notify std/ui std/embed
 std/keychain std/bigint std/pem std/qr std/xml (basic parse/serialize, namespaces, no DTD) std/crypto/{md5,aes,des} (`md5.md5(b)` one pass in Rust; `md5.md5_init()` + `crypto.hash_update/hash_final` incremental) std/collections/{set,deque,stringbuilder,bytesbuilder,dict}
 std/ffi std/resilience`. Tier-2 packages (declared in `[dependencies]`): `net`, `web`, `rpc`, `db`,
 `oidc` (OpenID Connect CLIENT: `import oidc/provider;` then `provider.discover(issuer)`; `import oidc/login;`
@@ -474,6 +474,16 @@ then `media.now_playing(t)` with `var t = media.track(title, artist, album); t.d
 t.position_ms = …; t.playing = true; t.artwork = png_bytes;` on every change (new track, pause,
 seek — not every second), `media.clear()` at the end; the commands arrive as `"media"` events
 of `ui.next_event()` (`tag` "play"/"pause"/"toggle"/"next"/"previous"/"stop"/"seek:<ms>").
+System notifications, now or scheduled, phone and desktop alike: `import std/notify;`
+`notify.request_permission()` in context (waits; "granted"/"denied"/"provisional"; `notify.status()`
+without asking), `var n = notify.message(title, body); n.id = …; n.channel = …; n.data = …;
+n.actions = [notify.action("track", "Follow")];` then `notify.show(n)` or
+`notify.schedule(n, notify.Trigger.After(3600, false) | .At(unix) | .Daily(9, 0))` (`cancel(id)`,
+`pending()`, `set_badge(n)`); Android channels with `notify.create_channel(notify.Channel {…})`;
+a tap arrives as a `"notification"` event — `notify.event_tap(e)` gives `Tap { id, action, text,
+data }` (queued before `main` when the tap launches the app). iOS/macOS `.app`:
+UNUserNotificationCenter; Android: channels + AlarmManager (inexact unless `[android]
+exact_alarms = true`); Linux/bare macOS binary: immediate `show` only; Windows: `Err`.
 macOS, iOS (needs `[ios] background_audio = true`), Android (MediaSession, regenerate the shell with
 `ray bundle --android`), Linux (MPRIS over D-Bus, needs GLib) and Windows (System Media Transport Controls);
 `[app.plist]` values may be strings, booleans or string arrays; menus:

@@ -2582,7 +2582,7 @@ fn cmd_bundle(args: &[String]) {
         }
         let abis = abis.join(", ");
         if let Err(e) =
-            crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis, mipmaps.is_some(), devtools, manifest.as_ref().is_some_and(|m| m.android_background_audio), if dev { Some(app_id.as_str()) } else { None })
+            crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis, mipmaps.is_some(), devtools, manifest.as_ref().is_some_and(|m| m.android_background_audio), if dev { Some(app_id.as_str()) } else { None }, manifest.as_ref().is_some_and(|m| m.android_exact_alarms))
         {
             eprintln!("bundle: could not write the Gradle project: {e}");
             process::exit(74);
@@ -4381,6 +4381,15 @@ pub(crate) fn dev_lib_rust_source(android: bool) -> String {
             "pub extern \"C\" fn Java_org_raylang_shell_RayBridge_capabilities(_env: *mut std::ffi::c_void, _class: *mut std::ffi::c_void, caps: i32) {\n",
             "    ray_runtime::ui::android_capabilities(caps)\n",
             "}\n",
+            // M382: la respuesta del selector de archivos; M442: la de una petición genérica (std/notify).
+            "#[unsafe(no_mangle)]\n",
+            "pub extern \"C\" fn Java_org_raylang_shell_RayBridge_pickResult(env: *mut std::ffi::c_void, _class: *mut std::ffi::c_void, id: i64, paths: *mut std::ffi::c_void, err: *mut std::ffi::c_void) {\n",
+            "    ray_runtime::ui::android_pick_result(env, id, paths, err)\n",
+            "}\n",
+            "#[unsafe(no_mangle)]\n",
+            "pub extern \"C\" fn Java_org_raylang_shell_RayBridge_requestResult(env: *mut std::ffi::c_void, _class: *mut std::ffi::c_void, id: i64, value: *mut std::ffi::c_void, err: *mut std::ffi::c_void) {\n",
+            "    ray_runtime::ui::android_request_result(env, id, value, err)\n",
+            "}\n",
             // M330 D5: el enlace recibido por el esquema URL del shell de desarrollo (el QR).
             "#[unsafe(no_mangle)]\n",
             "pub extern \"C\" fn Java_org_raylang_shell_RayBridge_devLink(env: *mut std::ffi::c_void, _class: *mut std::ffi::c_void, url: *mut std::ffi::c_void) {\n",
@@ -4549,6 +4558,7 @@ const RT_KEYCHAIN_RS: &str = include_str!("../crates/ray-runtime/src/keychain.rs
 const RT_MD5_RS: &str = include_str!("../crates/ray-runtime/src/md5.rs"); // rayblob #282
 const RT_FLOAT_FMT_RS: &str = include_str!("../crates/ray-runtime/src/float_fmt.rs"); // raysql #299
 const RT_MEDIA_RS: &str = include_str!("../crates/ray-runtime/src/media.rs"); // M403
+const RT_NOTIFY_RS: &str = include_str!("../crates/ray-runtime/src/notify.rs"); // M442
 const RT_DEFLATE_RS: &str = include_str!("../crates/ray-runtime/src/deflate.rs"); // M253
 const RT_QR_RS: &str = include_str!("../crates/ray-runtime/src/qr.rs"); // M347
 const RT_RSA_KEYGEN_RS: &str = include_str!("../crates/ray-runtime/src/rsa_keygen.rs"); // M348
@@ -4688,6 +4698,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         ("ray-runtime/src/md5.rs", RT_MD5_RS),
         ("ray-runtime/src/float_fmt.rs", RT_FLOAT_FMT_RS),
         ("ray-runtime/src/media.rs", RT_MEDIA_RS),
+        ("ray-runtime/src/notify.rs", RT_NOTIFY_RS),
         ("ray-runtime/src/deflate.rs", RT_DEFLATE_RS),
         ("ray-runtime/src/qr.rs", RT_QR_RS),
         ("ray-runtime/src/rsa_keygen.rs", RT_RSA_KEYGEN_RS),
@@ -7166,10 +7177,13 @@ mod tests {
             "Java_org_raylang_shell_RayBridge_schemeClose",
             "Java_org_raylang_shell_RayBridge_capabilities",
             "Java_org_raylang_shell_RayBridge_devLink",
+            "Java_org_raylang_shell_RayBridge_pickResult",
+            "Java_org_raylang_shell_RayBridge_requestResult",
         ] {
             assert!(android.contains(&format!("fn {sym}(")), "Android dev lib lacks {sym}");
         }
-        assert_eq!(android.matches("#[unsafe(no_mangle)]").count(), 11);
+        // M442: + pickResult (faltaba en la lib de desarrollo) y requestResult (std/notify).
+        assert_eq!(android.matches("#[unsafe(no_mangle)]").count(), 13);
         let ios = super::dev_lib_rust_source(false);
         assert!(ios.contains("fn ray_start("));
         assert!(!ios.contains("JNI_OnLoad"));

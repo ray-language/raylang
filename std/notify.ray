@@ -1,0 +1,260 @@
+//! System notifications (M442, IDEAS §121): show one now, schedule one for later, know whether
+//! the user allowed them, and receive the tap as a `"notification"` event on the `std/ui` queue.
+//! The same program runs on the phone and on the desktop: `UNUserNotificationCenter` on iOS and
+//! inside a macOS `.app` (permission dialog the first time, scheduled triggers, actions, badge),
+//! `NotificationManager` + `AlarmManager` in the Android shell of `ray bundle --android`
+//! (channels, the `POST_NOTIFICATIONS` dialog on Android 13+, scheduled ones that survive a reboot;
+//! regenerate a shell older than 1.27.91), libnotify on Linux and the classic center or `osascript`
+//! for a bare macOS binary (immediate `show` only; the rest is `Ok` without effect or `Err`).
+//! Windows: not available yet (`Err`). Headless: `Ok` + trace (`RAY_UI_TRACE=1`), an in-memory
+//! pending list, `RAY_UI_NOTIFY_PERMISSION=denied` simulates the refusal and `RAY_UI_NOTIFY_CLICK=1`
+//! (or `=<action id>`) taps every notification as it is shown (tests).
+//!
+//! Ask for the permission in context — when the user enables the feature that needs it, not at
+//! launch — and check `status()` before relying on it: the user can revoke it in Settings at any
+//! time. `ui.notify`/`ui.notify_with` keep working everywhere as the one-liner.
+
+from std/ui import UiEvent;
+
+/// What to show. `message(title, body)` builds one with sane defaults; set the rest by field.
+/// `id` names it (empty = generated; showing another with the same id replaces it; `cancel(id)`
+/// removes a pending one); `subtitle` is a second line (iOS/macOS, Android's sub-text); `channel`
+/// is the Android channel (`"default"` exists always; others need `create_channel` first; ignored
+/// elsewhere); `group` threads related notifications together; `data` is any text the program
+/// wants back on tap (`event_tap`); `sound` plays the default sound; `badge` sets the app icon's
+/// number (`-1` = leave it); `interruption` is `"passive"` (no sound, no screen light-up),
+/// `"active"` (default), `"time_sensitive"` (breaks through Focus; needs the capability on iOS)
+/// or `"critical"` (needs Apple's entitlement); `actions` are buttons — their `id` comes back in
+/// the tap event, and all of them bring the app to the foreground (v1).
+pub struct Notification {
+    id: string,
+    title: string,
+    body: string,
+    subtitle: string,
+    channel: string,
+    group: string,
+    data: string,
+    sound: bool,
+    badge: int,
+    interruption: string,
+    actions: [Action],
+}
+
+/// A button on a notification: `id` is what `event_tap` reports, `title` what the user sees.
+pub struct Action {
+    id: string,
+    title: string,
+}
+
+/// An Android notification channel (Android 8+; the user controls each one in Settings). `id`
+/// is what `Notification.channel` names; `importance` is `"min"`, `"low"`, `"default"` or `"high"`
+/// (heads-up); it is fixed once created — change the id to change it. Ignored on iOS, macOS and
+/// Linux (`Ok`).
+pub struct Channel {
+    id: string,
+    name: string,
+    description: string,
+    importance: string,
+}
+
+/// When a scheduled notification fires. `After(seconds, repeat)` (a repeating one needs ≥ 60 s;
+/// on Android the system delivers it within a window of several minutes unless
+/// `[android] exact_alarms = true`), `At(unix_seconds)` (once), `Daily(hour, minute)` (local time,
+/// every day). iOS keeps at most 64 pending notifications per app; Android re-arms its pending
+/// ones after a reboot.
+pub enum Trigger {
+    After(int, bool),
+    At(int),
+    Daily(int, int),
+}
+
+/// A tap, decoded from a `"notification"` event by `event_tap`: the notification's `id`, the
+/// `action` pressed (empty = the notification itself), the `text` typed (reserved; empty in v1)
+/// and the `data` the program attached.
+pub struct Tap {
+    id: string,
+    action: string,
+    text: string,
+    data: string,
+}
+
+/// A notification with `title` and `body` and the defaults: generated id, channel `"default"`,
+/// sound on, badge untouched, `"active"` interruption, no actions. Set the other fields on a `var`.
+pub fn message(title: string, body: string) -> Notification {
+    Notification {
+        id: "",
+        title: title,
+        body: body,
+        subtitle: "",
+        channel: "default",
+        group: "",
+        data: "",
+        sound: true,
+        badge: -1,
+        interruption: "active",
+        actions: []
+    }
+}
+
+/// An `Action` by its two fields.
+pub fn action(id: string, title: string) -> Action {
+    Action { id: id, title: title }
+}
+
+// Separadores del túnel (ver ray_runtime::notify): campos `\x1f`, acciones `\x1e`, id/título `\x1d`.
+fn sep() -> string {
+    "\u{1f}"
+}
+
+fn tunnel(op: string, arg: string) -> Result<string, string> {
+    let r = __ui_window(0, op, arg);
+    let text = if (r.len() > 1) { r[1] } else { "" };
+    if (r[0] == "ok") { Result.Ok(text) } else { Result.Err(text) }
+}
+
+fn ok_unit(r: Result<string, string>) -> Result<int, string> {
+    match (r) {
+        Result.Ok(_) => Result.Ok(0),
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+/// Asks the user for permission with the usual options (alerts, sound, badge) and WAITS for the
+/// answer: `"granted"`, `"denied"` or (iOS) `"provisional"`. On Android 12 and older there is no
+/// dialog (`"granted"` unless the user turned the app's notifications off); on Linux and a bare
+/// macOS binary it is always `"granted"`. Ask once, in context; a denial is final until the user
+/// changes it in Settings (`status()` tells).
+pub fn request_permission() -> Result<string, string> {
+    request_permission_with(false, false)
+}
+
+/// `request_permission` with iOS options: `provisional` delivers quietly to the Notification
+/// Center WITHOUT a dialog (the user upgrades or mutes them from there; the answer is
+/// `"provisional"`); `time_sensitive` also asks for the Time Sensitive option (the app needs that
+/// capability in Xcode). Android ignores both.
+pub fn request_permission_with(provisional: bool, time_sensitive: bool) -> Result<string, string> {
+    let p = if (provisional) { "1" } else { "0" };
+    let t = if (time_sensitive) { "1" } else { "0" };
+    tunnel("notify_permission", p + "," + t)
+}
+
+/// The current authorization without asking: `"not_determined"` (never asked), `"denied"`,
+/// `"granted"`, `"provisional"` or `"ephemeral"` (iOS App Clips).
+pub fn status() -> Result<string, string> {
+    tunnel("notify_status", "")
+}
+
+/// Creates (or updates the name/description of) an Android channel; call it before showing on
+/// that channel — a notification on a channel that does not exist gets one with default
+/// importance. `Ok` without effect on the other systems.
+pub fn create_channel(c: Channel) -> Result<int, string> {
+    ok_unit(
+        tunnel(
+            "notify_channel",
+            c.id + sep() + c.name + sep() + c.description + sep() + c.importance
+        )
+    )
+}
+
+fn encode(trigger: string, n: Notification) -> string {
+    var acts: [string] = [];
+    for a in n.actions {
+        acts.push(a.id + "\u{1d}" + a.title);
+    }
+    trigger
+        + sep()
+        + n.id
+        + sep()
+        + n.title
+        + sep()
+        + n.body
+        + sep()
+        + n.subtitle
+        + sep()
+        + n.channel
+        + sep()
+        + n.group
+        + sep()
+        + n.data
+        + sep()
+        + if (n.sound) { "1" } else { "0" }
+        + sep()
+        + to_string(n.badge)
+        + sep()
+        + n.interruption
+        + sep()
+        + acts.join("\u{1e}")
+}
+
+/// Shows `n` now and returns its id (the given one, or the generated one). If the permission was
+/// never asked, iOS and macOS ask it here (without waiting: the notification goes out when the
+/// user allows, or is dropped); Android 13+ needs `request_permission` first (without it the
+/// system drops it silently). `Err` with the reason: no title nor body, unknown interruption
+/// level, permission denied, no backend.
+pub fn show(n: Notification) -> Result<string, string> {
+    tunnel("notify_show", encode("now", n))
+}
+
+/// Schedules `n` for `when` and returns its id; `cancel(id)` removes it before it fires. iOS and
+/// macOS `.app`: a native trigger; Android: `AlarmManager` + a receiver that shows it even with
+/// the app closed, re-armed after a reboot; Linux and a bare macOS binary: `Err`.
+pub fn schedule(n: Notification, when: Trigger) -> Result<string, string> {
+    let t = match (when) {
+        Trigger.After(secs, repeat) => "after:" + to_string(secs) + ":" + if (repeat) { "1" } else { "0" },
+        Trigger.At(unix) => "at:" + to_string(unix),
+        Trigger.Daily(h, m) => "daily:" + to_string(h) + ":" + to_string(m),
+    };
+    tunnel("notify_show", encode(t, n))
+}
+
+/// Removes a pending (scheduled) notification and, if it was already shown, takes it off the
+/// screen. Unknown ids are `Ok`.
+pub fn cancel(id: string) -> Result<int, string> {
+    ok_unit(tunnel("notify_cancel", id))
+}
+
+/// Removes every pending (scheduled) notification of the app.
+pub fn cancel_all() -> Result<int, string> {
+    ok_unit(tunnel("notify_cancel_all", ""))
+}
+
+/// The ids of the pending (scheduled, not yet fired) notifications.
+pub fn pending() -> Result<[string], string> {
+    match (tunnel("notify_pending", "")) {
+        Result.Ok(text) => {
+            var out: [string] = [];
+            for id in text.split("\n") {
+                if (id != "") {
+                    out.push(id);
+                }
+            }
+            Result.Ok(out)
+        },
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+/// Takes every delivered notification of the app off the Notification Center / shade.
+pub fn clear_delivered() -> Result<int, string> {
+    ok_unit(tunnel("notify_clear", ""))
+}
+
+/// Sets the number on the app icon (`0` clears it): iOS 16+, macOS (the Dock), Android launchers
+/// that show one (most do not; `Ok` without effect). Same as `ui.badge` with a number.
+pub fn set_badge(count: int) -> Result<int, string> {
+    ok_unit(tunnel("notify_badge", to_string(count)))
+}
+
+/// Decodes a `"notification"` event (`Option.None` for any other kind): the tapped
+/// notification's id, the action pressed (empty = the body), the typed text and the `data`. A
+/// tap that opens the app from scratch is queued before `main` runs, so read the events early.
+pub fn event_tap(e: UiEvent) -> Option<Tap> {
+    if (e.kind != "notification") {
+        return Option.None;
+    }
+    let f = e.tag.split("\t");
+    let at = fn(i: int) -> string {
+        if (i < f.len()) { f[i] } else { "" }
+    };
+    Option.Some(Tap { id: at(0), action: at(1), text: at(2), data: at(3) })
+}

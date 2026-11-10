@@ -6,6 +6,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Ronda pepa 1.27.90 (M445; hallazgos #321, #322, #323, #328, #331 y #332).** El compilador
+  **avisa** del resultado descartado de una función pura (`sort(xs);`, `xs.sort();`, `s.trim();`,
+  `xs.map(f);`… devuelven un valor nuevo y no tocan su argumento): `warning at L:C: …` en stderr
+  tras compilar, sin cambiar el código de salida, y severidad *Warning* en el LSP; `llms.txt` lo
+  dice junto a la lista de las que sí mutan. `@derive(ToJson)` admite campos `[T]`, `Option<T>`
+  (`null`) y `Map<string, T>`, anidados. `Map` gana `clear()`. El shell de iOS deja el webview a
+  pantalla completa (`contentInsetAdjustmentBehavior = Never`): con `viewport-fit=cover` el
+  viewport perdía las zonas seguras (93 pt en blanco bajo una barra inferior). `ui.haptic(kind)`
+  hace vibrar el teléfono (iOS por UIKit, Android por `HapticFeedbackConstants` en un shell
+  regenerado; macOS el trackpad; Linux/Windows no-op). Y `ray dev --device` dejaba de
+  sincronizar tras cambiar la versión de un paquete web (`104 changed, 4 removed` /
+  `4 changed, 104 removed` sin fin): el `node_modules/<paquete>` que el dispositivo enlazaba a
+  `.ray-deps/` entraba en su inventario por dos rutas y el borrado atravesaba el enlace; el
+  dispositivo ya no enlaza ni sigue enlaces, nunca borra a través de uno, y una conexión nueva del
+  mismo teléfono reemplaza a la anterior.
 - **`rusqlite` 0.32 → 0.41 (SQLite 3.54.1; RUSTSEC-2026-0459).** `cargo audit` señalaba
   `libsqlite3-sys` 0.30.1 por un CVE del SQLite embebido; la actualización lo cierra. Sin cambios
   de superficie: `db/sqlite` y `std/sqlite` se comportan igual en la VM y en nativo (el único

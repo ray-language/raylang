@@ -368,21 +368,57 @@ fn decode_hashes(buf: &[u8]) -> Option<std::collections::HashMap<String, u64>> {
     Some(out)
 }
 
-/// D4: lo que el dispositivo tiene en disco bajo `dir` (ruta relativa → hash), para pedir solo
-/// el delta al reconectar.
-fn hashes_on_disk(dir: &Path) -> std::collections::HashMap<String, u64> {
-    let mut out = std::collections::HashMap::new();
+/// M445 (pepa #332): los archivos PROPIOS del proyecto en el dispositivo — los que el anfitrión
+/// pudo mandar. Nunca sigue un enlace simbólico ni entra en `node_modules/` o `target/`: el
+/// `node_modules/<paquete>` que `configure_embed` enlazaba a `.ray-deps/<dep>/web` hacía que el
+/// inventario reportara los mismos archivos por DOS rutas; el anfitrión no conocía la segunda, la
+/// mandaba borrar, y el borrado atravesaba el enlace y destruía los archivos reales del paquete
+/// (un vaivén «104 changed, 4 removed / 4 changed, 104 removed» que solo arreglaba reinstalar).
+fn project_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
     let mut pending = vec![dir.to_path_buf()];
     while let Some(d) = pending.pop() {
         let Ok(entries) = std::fs::read_dir(&d) else { continue };
         for e in entries.flatten() {
             let p = e.path();
-            if p.is_dir() {
-                pending.push(p);
-            } else if let Ok(data) = std::fs::read(&p) {
-                let rel = p.strip_prefix(dir).unwrap_or(&p).to_string_lossy().replace('\\', "/");
-                out.insert(rel, content_hash(&data));
+            let Ok(meta) = std::fs::symlink_metadata(&p) else { continue };
+            if meta.file_type().is_symlink() {
+                continue;
             }
+            if meta.is_dir() {
+                let name = e.file_name();
+                if name != "node_modules" && name != "target" {
+                    pending.push(p);
+                }
+            } else if meta.is_file() {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
+/// M445: ¿`rel` (relativa a `dir`) pasa por un enlace simbólico? Un borrado o una escritura a
+/// través de un enlace tocaría archivos que no son los suyos.
+fn crosses_link(dir: &Path, rel: &str) -> bool {
+    let mut cur = dir.to_path_buf();
+    for comp in rel.split('/') {
+        cur.push(comp);
+        if std::fs::symlink_metadata(&cur).map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+            return true;
+        }
+    }
+    false
+}
+
+/// D4: lo que el dispositivo tiene en disco bajo `dir` (ruta relativa → hash), para pedir solo
+/// el delta al reconectar.
+fn hashes_on_disk(dir: &Path) -> std::collections::HashMap<String, u64> {
+    let mut out = std::collections::HashMap::new();
+    for p in project_files(dir) {
+        if let Ok(data) = std::fs::read(&p) {
+            let rel = p.strip_prefix(dir).unwrap_or(&p).to_string_lossy().replace('\\', "/");
+            out.insert(rel, content_hash(&data));
         }
     }
     out
@@ -394,11 +430,18 @@ fn apply_delta(dir: &Path, removed: &[String], changed: &[(String, Vec<u8>)]) ->
         if rel.starts_with('/') || rel.split('/').any(|c| c == "..") {
             return Err(format!("refusing a delta path outside the project: {rel}"));
         }
+        // M445: un enlace nunca se atraviesa (ni el propio enlace se borra: no es del snapshot).
+        if crosses_link(dir, rel) {
+            continue;
+        }
         let _ = std::fs::remove_file(dir.join(rel));
     }
     for (rel, data) in changed {
         if rel.starts_with('/') || rel.split('/').any(|c| c == "..") {
             return Err(format!("refusing a delta path outside the project: {rel}"));
+        }
+        if crosses_link(dir, rel) {
+            return Err(format!("refusing to write through a link: {rel}"));
         }
         let path = dir.join(rel);
         if let Some(parent) = path.parent() {
@@ -441,6 +484,9 @@ fn apply_snapshot(dir: &Path, files: &[(String, Vec<u8>)]) -> Result<(), String>
         if rel.starts_with('/') || rel.split('/').any(|c| c == "..") {
             return Err(format!("refusing a snapshot path outside the project: {rel}"));
         }
+        if crosses_link(dir, rel) {
+            return Err(format!("refusing to write through a link: {rel}"));
+        }
         let path = dir.join(rel);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
@@ -448,17 +494,11 @@ fn apply_snapshot(dir: &Path, files: &[(String, Vec<u8>)]) -> Result<(), String>
         std::fs::write(&path, data).map_err(|e| format!("{}: {e}", path.display()))?;
         keep.insert(path);
     }
-    // Barrido de sobrantes (archivos; los directorios vacíos no molestan).
-    let mut pending = vec![dir.to_path_buf()];
-    while let Some(d) = pending.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else { continue };
-        for e in entries.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                pending.push(p);
-            } else if !keep.contains(&p) {
-                let _ = std::fs::remove_file(&p);
-            }
+    // Barrido de sobrantes (archivos; los directorios vacíos no molestan). M445: el mismo
+    // inventario que `hashes_on_disk` — sin seguir enlaces ni entrar en `node_modules/`.
+    for p in project_files(dir) {
+        if !keep.contains(&p) {
+            let _ = std::fs::remove_file(&p);
         }
     }
     Ok(())
@@ -620,6 +660,10 @@ fn serve_device(mut stream: TcpStream, token: &str, own_scheme: &str, devices: A
     let _ = stream.set_read_timeout(None);
     let Ok(writer) = stream.try_clone() else { return };
     let mut device = Device { name: name.clone(), stream: writer, have };
+    // M445 (pepa #332): una conexión nueva del MISMO dispositivo (nombre + IP) reemplaza a la
+    // anterior — el shell relanzado con `--payload-url` abría dos a la vez y el estado de una
+    // contaminaba a la otra. Cerrar el socket viejo termina su hilo lector.
+    devices.lock().unwrap().retain(|d| !(d.name == name && d.stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default() == peer));
     if let Some(files) = latest.lock().unwrap().as_ref() {
         match send_update(&mut device, files) {
             Ok(n) => eprintln!("[dev] {name}: sent {n} file(s) to catch up"),
@@ -844,8 +888,10 @@ impl Runner {
                 // fallaba en el teléfono y la página salía «not found». La config se fija una vez
                 // por proceso: la raíz del snapshot no cambia entre recargas, y los archivos se
                 // leen en vivo de ella.
+                // M445: sin enlazar `node_modules/` (es para el editor, y en el dispositivo un
+                // enlace dentro del snapshot confundía la sincronización, pepa #332).
                 if let Ok(Some(m)) = crate::manifest::Manifest::load(&project) {
-                    crate::cli::configure_embed(&m.entry_path().to_string_lossy());
+                    crate::cli::configure_embed_with(&m.entry_path().to_string_lossy(), false);
                 }
                 match load_and_compile(&project) {
                     Err(e) => {
@@ -1263,6 +1309,31 @@ mod tests {
         assert_eq!(std::fs::read(dir.join("src/main.ray")).unwrap(), b"3");
         assert!(!dir.join("src/old.ray").exists());
         assert!(apply_snapshot(&dir, &[("../x".into(), vec![])]).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// M445 (pepa #332): el inventario del dispositivo no sigue enlaces ni entra en `node_modules/`,
+    /// y ni el barrido ni un delta borran a través de un enlace.
+    #[cfg(unix)]
+    #[test]
+    fn the_device_inventory_and_deletes_never_cross_a_link() {
+        let dir = std::env::temp_dir().join(format!("ray-devlink-{}-{}", std::process::id(), crate::builtins::random_int(1 << 30)));
+        std::fs::create_dir_all(dir.join(".ray-deps/elements/web")).unwrap();
+        std::fs::create_dir_all(dir.join("node_modules/@raylang")).unwrap();
+        std::fs::write(dir.join(".ray-deps/elements/web/core.js"), b"js").unwrap();
+        std::os::unix::fs::symlink(dir.join(".ray-deps/elements/web"), dir.join("node_modules/@raylang/elements")).unwrap();
+        std::os::unix::fs::symlink(dir.join(".ray-deps/elements/web"), dir.join("web-link")).unwrap();
+        let mut have: Vec<String> = hashes_on_disk(&dir).into_keys().collect();
+        have.sort();
+        assert_eq!(have, vec![".ray-deps/elements/web/core.js"]);
+        // Un delta que pide borrar por la ruta del enlace no toca el archivo real.
+        apply_delta(&dir, &["node_modules/@raylang/elements/core.js".into(), "web-link/core.js".into()], &[]).unwrap();
+        assert!(dir.join(".ray-deps/elements/web/core.js").exists());
+        assert!(apply_delta(&dir, &[], &[("web-link/x.js".into(), b"1".to_vec())]).is_err());
+        // El barrido de un snapshot tampoco (el enlace queda, el archivo real sigue).
+        apply_snapshot(&dir, &[(".ray-deps/elements/web/core.js".into(), b"js2".to_vec())]).unwrap();
+        assert_eq!(std::fs::read(dir.join(".ray-deps/elements/web/core.js")).unwrap(), b"js2");
+        assert!(dir.join("node_modules/@raylang/elements").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

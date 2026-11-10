@@ -859,7 +859,8 @@ struct Par { a: int, b: int }
 // Eq     → habilita == y assert_eq
 // Show   → habilita print/to_string ("Par { a: 1, b: 2 }")
 // Hash   → habilita usarlo como elemento de Set (o clave de Dict)
-// ToJson → genera to_json(self) -> string (respuestas JSON tipadas del framework web)
+// ToJson → genera to_json(self) -> string (respuestas JSON tipadas del framework web);
+//          campos primitivos, structs/enums con ToJson, [T], Option<T> (null) y Map<string, T>
 ```
 
 Son las **cinco** derivables. `Ord` no lo es: se implementa a mano (`fn less(self, other: Self)
@@ -1162,7 +1163,8 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    Una app de escritorio (`std/ui`) habla con el sistema sin rodeos: `platform()` en la
    prelude dice en qué SO corre (`"macos"`/`"linux"`/`"windows"`), `ui.open_path(p)` abre un
    archivo con su aplicación, `ui.open_url(u)` abre una web `http(s)` o un `mailto:` en el
-   navegador del sistema (el inicio de sesión OAuth de una app), `ui.reveal(p)` lo muestra en el gestor de archivos y
+   navegador del sistema (el inicio de sesión OAuth de una app), `ui.haptic("success")` hace vibrar
+   el teléfono (y el trackpad Force Touch en macOS; en Linux/Windows no hace nada), `ui.reveal(p)` lo muestra en el gestor de archivos y
    `ui.clipboard_write`/`clipboard_read` mueven texto por el portapapeles (también desde una
    app de terminal en macOS y Windows). Nada de eso pasa por una shell. Una ventana se abre
    donde se le pida, sin saltar después: `ui.place_at(ui.options(800, 600), x, y)` o

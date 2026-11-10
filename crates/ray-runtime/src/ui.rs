@@ -781,6 +781,7 @@ pub fn desktop(kind: &str, arg: &str) -> Result<(), String> {
         "open_path" => open_path(arg),
         "reveal" => reveal_path(arg),
         "open_url" => open_url(arg),
+        "haptic" => haptic(arg),
         other => Err(format!("ui: unknown desktop action '{other}'")),
     }
 }
@@ -829,6 +830,128 @@ fn url_spawn(url: &str) -> Result<(), String> {
 fn url_spawn(url: &str) -> Result<(), String> {
     ios_url::open(url);
     Ok(())
+}
+
+/// M445 (pepa #331): `ui.haptic(kind)` — una vibración corta del sistema. `light`/`medium`/
+/// `heavy`/`soft`/`rigid` son impactos, `selection` el tic de un selector, y `success`/`warning`/
+/// `error` los patrones de notificación. iOS: los generadores de UIKit, desde el runtime (sin
+/// shell); Android: `HapticFeedbackConstants` sobre la vista de la página, vía `RayBridge.onHaptic`
+/// (un shell anterior → Err con el remedio); macOS: el trackpad (`NSHapticFeedbackManager`, solo
+/// con hardware Force Touch); Linux/Windows: no-op Ok. Headless: traza `[ui] haptic <kind>`.
+pub fn haptic(kind: &str) -> Result<(), String> {
+    const KINDS: &[&str] = &["light", "medium", "heavy", "soft", "rigid", "selection", "success", "warning", "error"];
+    if !KINDS.contains(&kind) {
+        return Err(format!("ui: unknown haptic '{kind}' (light, medium, heavy, soft, rigid, selection, success, warning or error)"));
+    }
+    if headless() {
+        if ui_trace() {
+            eprintln!("[ui] haptic {kind}");
+        }
+        return Ok(());
+    }
+    haptic_platform(kind)
+}
+
+#[cfg(target_os = "ios")]
+fn haptic_platform(kind: &str) -> Result<(), String> {
+    ios_haptic::play(kind);
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+fn haptic_platform(kind: &str) -> Result<(), String> {
+    if android::haptic(kind) {
+        Ok(())
+    } else {
+        Err("ui: this Android shell predates ui.haptic; regenerate it with `ray bundle --android`".to_string())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn haptic_platform(kind: &str) -> Result<(), String> {
+    mac::haptic(kind);
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "ios", target_os = "android", target_os = "macos")))]
+fn haptic_platform(_kind: &str) -> Result<(), String> {
+    Ok(())
+}
+
+/// M445 (pepa #331): los generadores de feedback de UIKit, en la cola principal. El generador se
+/// deja en el autorelease pool del bloque: vive hasta que el pool se drena, después del disparo.
+#[cfg(target_os = "ios")]
+mod ios_haptic {
+    use std::ffi::c_void;
+    type Id = *mut c_void;
+    type Sel = *const c_void;
+    #[repr(C)]
+    struct DispatchQueue {
+        _opaque: [u8; 0],
+    }
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn objc_getClass(name: *const u8) -> Id;
+        fn sel_registerName(name: *const u8) -> Sel;
+        fn objc_msgSend();
+        static _dispatch_main_q: DispatchQueue;
+        fn dispatch_async_f(queue: *const DispatchQueue, ctx: *mut c_void, work: extern "C" fn(*mut c_void));
+    }
+
+    extern "C" fn work(ctx: *mut c_void) {
+        // SAFETY: `ctx` es el Box<String> de `play`; mensajes estándar de UIKit en el hilo principal.
+        unsafe {
+            let kind: Box<String> = Box::from_raw(ctx as *mut String);
+            let send = objc_msgSend as *const ();
+            let msg: unsafe extern "C" fn(Id, Sel) -> Id = std::mem::transmute(send);
+            let msg_int: unsafe extern "C" fn(Id, Sel, i64) -> Id = std::mem::transmute(send);
+            let sel = |n: &[u8]| sel_registerName(n.as_ptr());
+            let (class, style): (&[u8], Option<i64>) = match kind.as_str() {
+                "light" => (b"UIImpactFeedbackGenerator\0", Some(0)),
+                "medium" => (b"UIImpactFeedbackGenerator\0", Some(1)),
+                "heavy" => (b"UIImpactFeedbackGenerator\0", Some(2)),
+                "soft" => (b"UIImpactFeedbackGenerator\0", Some(3)),
+                "rigid" => (b"UIImpactFeedbackGenerator\0", Some(4)),
+                "selection" => (b"UISelectionFeedbackGenerator\0", None),
+                _ => (b"UINotificationFeedbackGenerator\0", None),
+            };
+            let obj = msg(objc_getClass(class.as_ptr()), sel(b"alloc\0"));
+            if obj.is_null() {
+                return;
+            }
+            let generator = match style {
+                Some(st) => msg_int(obj, sel(b"initWithStyle:\0"), st),
+                None => msg(obj, sel(b"init\0")),
+            };
+            if generator.is_null() {
+                return;
+            }
+            msg(generator, sel(b"autorelease\0"));
+            msg(generator, sel(b"prepare\0"));
+            match kind.as_str() {
+                "light" | "medium" | "heavy" | "soft" | "rigid" => {
+                    msg(generator, sel(b"impactOccurred\0"));
+                }
+                "selection" => {
+                    msg(generator, sel(b"selectionChanged\0"));
+                }
+                other => {
+                    let code = match other {
+                        "success" => 0,
+                        "warning" => 1,
+                        _ => 2,
+                    };
+                    msg_int(generator, sel(b"notificationOccurred:\0"), code);
+                }
+            }
+        }
+    }
+
+    pub(super) fn play(kind: &str) {
+        let boxed = Box::new(kind.to_string());
+        // SAFETY: la cola principal es un static exportado de libdispatch; `work` libera el Box.
+        unsafe { dispatch_async_f(&_dispatch_main_q, Box::into_raw(boxed) as *mut c_void, work) };
+    }
 }
 
 /// rayreq #263: `openURL:options:completionHandler:` de UIApplication, en la cola principal (UIKit
@@ -3820,6 +3943,28 @@ mod mac {
         unsafe {
             dispatch_async_f(&_dispatch_main_q, Box::into_raw(boxed) as *mut c_void, trampoline);
         }
+    }
+
+    /// M445 (pepa #331): `NSHapticFeedbackManager` — el trackpad Force Touch. Impactos →
+    /// `Generic` (0), `selection` → `Alignment` (1), notificaciones → `LevelChange` (2); con
+    /// `NSHapticFeedbackPerformanceTimeNow` (1). Sin hardware háptico el sistema lo ignora.
+    pub(super) fn haptic(kind: &str) {
+        let pattern: i64 = match kind {
+            "selection" => 1,
+            "success" | "warning" | "error" => 2,
+            _ => 0,
+        };
+        on_main(move || {
+            // SAFETY: mensajes estándar de AppKit en el hilo principal.
+            unsafe {
+                let msg: MsgId = std::mem::transmute(msg_send());
+                let perform: unsafe extern "C" fn(Id, Sel, i64, u64) = std::mem::transmute(msg_send());
+                let performer = msg(cls(b"NSHapticFeedbackManager\0"), sel(b"defaultPerformer\0"));
+                if !performer.is_null() {
+                    perform(performer, sel(b"performFeedbackPattern:performanceTime:\0"), pattern, 1);
+                }
+            }
+        });
     }
 
     /// Despacha `f` al hilo principal y ESPERA su resultado (con plazo: si el run loop no
@@ -8443,6 +8588,7 @@ mod android {
     static MID_MEDIA: AtomicUsize = AtomicUsize::new(0); // M404: 0 = shell anterior, sin std/media
     static MID_OPEN_URL: AtomicUsize = AtomicUsize::new(0); // #263: 0 = shell anterior, sin open_url
     static MID_REQUEST: AtomicUsize = AtomicUsize::new(0); // M442: 0 = shell anterior, sin std/notify
+    static MID_HAPTIC: AtomicUsize = AtomicUsize::new(0); // M445 (pepa #331): 0 = shell anterior, sin haptic
 
     /// JNI_OnLoad del cdylib emitido delega aquí: retiene el JavaVM y arma el relay
     /// stdout/stderr→logcat (en una app ambos van a /dev/null — sin esto, debugging a ciegas).
@@ -8502,6 +8648,13 @@ mod android {
                 clear(env);
             } else {
                 MID_REQUEST.store(request as usize, Ordering::SeqCst);
+            }
+            // M445 (pepa #331): `onHaptic` existe desde 1.27.91; misma limpieza.
+            let haptic = get_static(env, bridge, c"onHaptic".as_ptr(), c"(Ljava/lang/String;)V".as_ptr());
+            if check(env) != 0 {
+                clear(env);
+            } else {
+                MID_HAPTIC.store(haptic as usize, Ordering::SeqCst);
             }
         }
         super::shell::ray_ui_set_handlers(open_handler, eval_handler);
@@ -8624,6 +8777,17 @@ mod android {
             return false;
         }
         call_bridge(mid, &[url]);
+        true
+    }
+
+    /// M445 (pepa #331): `ui.haptic` → `RayBridge.onHaptic(kind)`. `false` si el shell es anterior
+    /// a 1.27.91 (sin `onHaptic`).
+    pub(super) fn haptic(kind: &str) -> bool {
+        let mid = MID_HAPTIC.load(Ordering::SeqCst);
+        if mid == 0 {
+            return false;
+        }
+        call_bridge(mid, &[kind]);
         true
     }
 

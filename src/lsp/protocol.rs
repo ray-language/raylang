@@ -87,11 +87,14 @@ pub(super) fn pos_params(msg: &Json) -> Option<(String, usize, usize)> {
 /// Un diagnóstico del front-end: posición **1-basada** (como reportan las fases), la
 /// extensión del error en caracteres (M33a; `1` si la fase no la conoce) y el mensaje,
 /// que es el `Display` del error (la misma cabecera que muestra el terminal).
+#[derive(Debug, Clone, PartialEq)]
 pub struct Diag {
     pub line: usize,
     pub col: usize,
     pub len: usize,
     pub message: String,
+    /// LSP DiagnosticSeverity: 1 = Error, 2 = Warning (M445).
+    pub severity: u8,
 }
 
 /// Corre el front-end **sin ejecutar** y devuelve TODOS los errores (M33c, hasta el tope
@@ -100,7 +103,7 @@ pub struct Diag {
 /// pasa al checker (`check_all`) — los errores de tipos sobre un AST parcial serían
 /// cascada basura. Es lo que publica `publishDiagnostics`.
 pub fn analyze_all(src: &str) -> Vec<Diag> {
-    let diag = |line: usize, col: usize, len: usize, message: String| Diag { line, col, len, message };
+    let diag = |line: usize, col: usize, len: usize, message: String| Diag { line, col, len, message, severity: 1 };
     let tokens = match lexer::lex(src) {
         Ok(t) => t,
         Err(e) => return vec![diag(e.line, e.col, e.len, e.to_string())],
@@ -112,10 +115,14 @@ pub fn analyze_all(src: &str) -> Vec<Diag> {
     // `check_all_modulo`: sin exigir `main`. Un buffer sin guardar puede ser un archivo de módulo
     // (sin entrada); que le falte `main` es asunto de proyecto (lo cazan `ray build`/`ray run`), no
     // un diagnóstico de este archivo. Así un módulo suelto muestra sus errores reales, no ese ruido.
-    checker::check_all_modulo(&mut program)
+    let warnings = checker::discarded_results(&program);
+    let mut out: Vec<Diag> = checker::check_all_modulo(&mut program)
         .into_iter()
         .map(|e| diag(e.line, e.col, e.len, e.to_string()))
-        .collect()
+        .collect();
+    // M445: los avisos (resultado descartado) tras los errores, con severidad Warning.
+    out.extend(warnings.into_iter().map(|w| Diag { line: w.line, col: w.col, len: w.len, message: w.to_string(), severity: 2 }));
+    out
 }
 
 /// Corre el front-end (lexer → parser → checker) **sin ejecutar** y devuelve el primer
@@ -123,14 +130,14 @@ pub fn analyze_all(src: &str) -> Vec<Diag> {
 pub fn analyze(src: &str) -> Option<Diag> {
     let tokens = match lexer::lex(src) {
         Ok(t) => t,
-        Err(e) => return Some(Diag { line: e.line, col: e.col, len: e.len, message: e.to_string() }),
+        Err(e) => return Some(Diag { line: e.line, col: e.col, len: e.len, message: e.to_string(), severity: 1 }),
     };
     let mut program = match parser::parse(tokens) {
         Ok(p) => p,
-        Err(e) => return Some(Diag { line: e.line, col: e.col, len: e.len, message: e.to_string() }),
+        Err(e) => return Some(Diag { line: e.line, col: e.col, len: e.len, message: e.to_string(), severity: 1 }),
     };
     if let Err(e) = checker::check(&mut program) {
-        return Some(Diag { line: e.line, col: e.col, len: e.len, message: e.to_string() });
+        return Some(Diag { line: e.line, col: e.col, len: e.len, message: e.to_string(), severity: 1 });
     }
     None
 }
@@ -222,7 +229,7 @@ pub(super) fn template_diagnostics(uri: &str, src: &str) -> Json {
     let dir = path.as_deref().and_then(|p| p.parent().map(|d| d.to_path_buf()));
     let (code, map) = match crate::templ::generate_with_map_at(src, &name, dir.as_deref()) {
         Err(e) => {
-            let d = Diag { line: e.line, col: 1, len: usize::MAX, message: format!("template: {}", e.msg) };
+            let d = Diag { line: e.line, col: 1, len: usize::MAX, message: format!("template: {}", e.msg), severity: 1 };
             return publish(uri, vec![diagnostic_json(src, &d)]);
         }
         Ok(x) => x,
@@ -236,9 +243,9 @@ pub(super) fn template_diagnostics(uri: &str, src: &str) -> Json {
             analyze_modular(&path_to_uri(&gen_path), &code).unwrap_or_else(|| analyze_all(&code))
         }
         None => match crate::lexer::lex(&code) {
-            Err(e) => vec![Diag { line: e.line, col: 1, len: usize::MAX, message: e.to_string() }],
+            Err(e) => vec![Diag { line: e.line, col: 1, len: usize::MAX, message: e.to_string(), severity: 1 }],
             Ok(tokens) => match crate::parser::parse(tokens) {
-                Err(e) => vec![Diag { line: e.line, col: 1, len: usize::MAX, message: e.to_string() }],
+                Err(e) => vec![Diag { line: e.line, col: 1, len: usize::MAX, message: e.to_string(), severity: 1 }],
                 Ok(_) => vec![],
             },
         },
@@ -247,7 +254,7 @@ pub(super) fn template_diagnostics(uri: &str, src: &str) -> Json {
         .iter()
         .map(|d| {
             let tpl_line = map.get(d.line.saturating_sub(1)).copied().unwrap_or(1).max(1);
-            let td = Diag { line: tpl_line, col: 1, len: usize::MAX, message: format!("template: {}", d.message) };
+            let td = Diag { line: tpl_line, col: 1, len: usize::MAX, message: format!("template: {}", d.message), severity: d.severity };
             diagnostic_json(src, &td)
         })
         .collect();
@@ -267,6 +274,7 @@ pub(super) fn analyze_modular(uri: &str, src: &str) -> Option<Vec<Diag>> {
             // global). Solo publicamos SUS errores: los de otros módulos pertenecen a sus URIs.
             let entry_start = loaded.modules.iter().map(|m| m.start_line).min().unwrap_or(1);
             let mut program = loaded.program;
+            let warnings = checker::discarded_results(&program);
             // `check_all_modulo`: el archivo abierto puede ser un **submódulo sin `main`** (legítimo);
             // no exigimos la entrada para no marcar "falta la función de entrada 'main'" en cada módulo.
             let diags = checker::check_all_modulo(&mut program)
@@ -278,9 +286,16 @@ pub(super) fn analyze_modular(uri: &str, src: &str) -> Option<Vec<Diag>> {
                         col: e.col,
                         len: e.len,
                         message: e.to_string(),
+                        severity: 1,
                     })
                 })
                 .collect();
+            // M445: los avisos del módulo de entrada, tras los errores (severidad Warning).
+            let mut diags: Vec<Diag> = diags;
+            diags.extend(warnings.into_iter().filter_map(|w| {
+                let m = loaded.modules.iter().rev().find(|m| m.start_line <= w.line)?;
+                (m.start_line == entry_start).then(|| Diag { line: w.line - m.start_line + 1, col: w.col, len: w.len, message: w.to_string(), severity: 2 })
+            }));
             Some(diags)
         }
         Err(e) => {
@@ -288,7 +303,7 @@ pub(super) fn analyze_modular(uri: &str, src: &str) -> Option<Vec<Diag>> {
             // (módulo ausente, cápsula violada, dependencia que no parsea) → un diagnóstico al
             // inicio. Si no parsea, `None` para que el fallback dé los errores de sintaxis precisos.
             let entry_parses = lexer::lex(src).ok().and_then(|t| parser::parse(t).ok()).is_some();
-            entry_parses.then(|| vec![Diag { line: 1, col: 1, len: 1, message: e.message }])
+            entry_parses.then(|| vec![Diag { line: 1, col: 1, len: 1, message: e.message, severity: 1 }])
         }
     }
 }
@@ -406,7 +421,7 @@ pub(super) fn publish(uri: &str, diags: Vec<Json>) -> Json {
     ])
 }
 
-/// Traduce un `Diag` (1-basado) a un diagnóstico LSP (rango 0-basado, severidad Error).
+/// Traduce un `Diag` (1-basado) a un diagnóstico LSP (rango 0-basado, con su severidad).
 pub(super) fn diagnostic_json(src: &str, d: &Diag) -> Json {
     // 1-basado (nuestras fases) → 0-basado (LSP).
     let line0 = d.line.saturating_sub(1);
@@ -431,7 +446,7 @@ pub(super) fn diagnostic_json(src: &str, d: &Diag) -> Json {
     let pos = |ch: usize| obj(vec![("line", num(line0 as i64)), ("character", num(ch as i64))]);
     obj(vec![
         ("range", obj(vec![("start", pos(start_char)), ("end", pos(end_char))])),
-        ("severity", num(1)), // 1 = Error
+        ("severity", num(d.severity as i64)), // 1 = Error, 2 = Warning (M445)
         ("source", text("raylang")),
         ("message", Json::Str(d.message.clone())),
     ])

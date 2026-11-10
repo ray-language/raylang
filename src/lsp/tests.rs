@@ -1362,6 +1362,21 @@ fn diagnostic_uses_0_based_coordinates() {
     assert_eq!(dj.get("severity"), Some(&Json::Num(1.0))); // Error
 }
 
+/// M445 (pepa #321): un resultado descartado se publica como Warning (severidad 2), tras los errores.
+#[test]
+fn a_discarded_result_is_published_as_a_warning() {
+    let src = "fn main() -> int {\n    let xs = [2, 1];\n    sort(xs);\n    0\n}\n";
+    let diags = analyze_all(src);
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!((diags[0].line, diags[0].severity), (3, 2));
+    assert!(diags[0].message.starts_with("warning at 3:5: the result of `sort(…)` is discarded"), "{}", diags[0].message);
+    let dj = diagnostic_json(src, &diags[0]);
+    assert_eq!(dj.get("severity"), Some(&Json::Num(2.0)));
+    // Con un error de tipos, el error va primero y el aviso sigue ahí.
+    let diags = analyze_all("fn main() -> int {\n    let xs = [2, 1];\n    sort(xs);\n    1 + true\n}\n");
+    assert_eq!(diags.iter().map(|d| d.severity).collect::<Vec<_>>(), vec![1, 2], "{diags:?}");
+}
+
 /// Enmarca un cuerpo JSON con su cabecera `Content-Length`, como un cliente real.
 fn frame(body: &str) -> String {
     format!("Content-Length: {}\r\n\r\n{}", body.len(), body)

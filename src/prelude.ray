@@ -176,6 +176,8 @@ trait MapOps<K, V> {
     fn keys(self) -> [K];
     /// The values, in the same order as `keys()`.
     fn values(self) -> [V];
+    /// Removes every entry, in place (pepa #323).
+    fn clear(self);
 }
 
 impl<K, V> MapOps<K, V> for Map<K, V> {
@@ -186,6 +188,12 @@ impl<K, V> MapOps<K, V> for Map<K, V> {
     fn keys(self) -> [K] { __keys(self) }
 
     fn values(self) -> [V] { __values(self) }
+
+    fn clear(self) {
+        for k in __keys(self) {
+            __map_remove(self, k);
+        }
+    }
 }
 
 // Operaciones de string (M48.4d): un solo impl (`string`). Durante la coexistencia los cuerpos llaman

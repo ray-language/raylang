@@ -1970,6 +1970,12 @@ impl Transpiler {
                 self.emit_expr(out, eff[2])?;
                 out.push_str("; __rt_m.borrow_mut().insert(__rt_k, __rt_v); }");
             }
+            // M445 (pepa #323): clear(m) → vacía en el sitio (unit, como `insert`).
+            "clear" => {
+                out.push_str("{ let __rt_m = ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("; __rt_m.borrow_mut().clear(); }");
+            }
             // add_to(m, k, delta): `*m.entry(k).or_insert(0) += delta` (upsert acumulativo, como la VM).
             "add_to" => {
                 let zero = match self.type_of(eff[0])? {
@@ -3686,6 +3692,7 @@ impl Transpiler {
                         other => return Err(format!("remove_at on {:?} is not supported", other)),
                     },
                     "insert_at" => Type::Unit,
+                    "clear" => Type::Unit, // M445 (pepa #323)
                     "position" => opt_of(Type::Int),
                     // (Cripto/TLS/SQLite/UDP: sus sitios llegan con el nombre primitivo `__sha256`/… y
                     // los tipa la tabla en el fast-path de arriba.)

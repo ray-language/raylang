@@ -305,7 +305,7 @@ pub fn assoc_for_type(type_name: &str) -> impl Iterator<Item = &'static AssocFn>
 pub fn method_takes_args(name: &str) -> bool {
     const NO_ARGS: &[&str] = &[
         "len", "trim", "chars", "reverse", "keys", "values", "to_upper", "to_lower", "to_string",
-        "to_bytes",
+        "to_bytes", "clear",
     ];
     !NO_ARGS.contains(&name)
 }
@@ -331,7 +331,7 @@ pub fn methods_for(category: &str) -> &'static [&'static str] {
         "char" => &["char_code", "to_string"],
         "int" | "float" | "bool" => &["to_string"],
         "array" => &["len", "push", "reverse", "contains", "join"],
-        "map" => &["len", "insert", "add_to", "contains_key", "keys", "values"],
+        "map" => &["len", "insert", "add_to", "contains_key", "keys", "values", "clear"],
         _ => &[],
     }
 }
@@ -381,6 +381,7 @@ pub fn signature(name: &str) -> Option<(Vec<&'static str>, &'static str)> {
         "contains_key" => (vec!["m: Map<K, V>", "key: K"], "bool"),
         "keys" => (vec!["m: Map<K, V>"], "[K]"),
         "values" => (vec!["m: Map<K, V>"], "[V]"),
+        "clear" => (vec!["m: Map<K, V>"], "unit"),
         _ => return None,
     })
 }
@@ -436,6 +437,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "contains_key" => "Whether the Map contains the given key.",
         "keys" => "Returns the keys of a Map as a sorted array (deterministic order).",
         "values" => "Returns the values of a Map, in the same order as `keys()`.",
+        "clear" => "Removes every entry of a Map, in place.",
         // --- Matemáticas ---
         "sqrt" => "Square root of a float.",
         "sin" => "Sine of a float (radians).",

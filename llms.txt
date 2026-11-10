@@ -117,7 +117,8 @@ let f = fn(x: int) -> int { x * 2 };             // anonymous fn (closure, captu
 [1, 2, 3].map(f).filter(fn(x: int) -> bool { x > 2 });
 
 @derive(Eq, Show)                                // also Hash, ToJson, Clone (shallow copy) — NOT Ord (impl it);
-                                                 // ToJson needs `from std/json import ToJson;` in the file
+                                                 // ToJson needs `from std/json import ToJson;` in the file;
+                                                 // fields: primitives, ToJson structs/enums, [T], Option<T> (null), Map<string, T>
 struct User { id: int, name: string, }
 
 @test
@@ -169,6 +170,10 @@ but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
 - Strings are immutable, indexed BY CHARACTER: `s[i]` yields `char`; `s[i] = c` is an
   error; `s.len()` counts characters; `s.to_bytes()` for raw UTF-8 octets.
 - No char arithmetic: `'a' + 1` is an error → `char_code(c)` / `char_from_code(n)`.
+- `sort`/`sort_by`/`sort_by_key` RETURN a new sorted array and leave `xs` as it was — `sort(xs);`
+  or `xs.sort();` as a statement does nothing (the compiler warns: `warning at L:C: the result
+  of … is discarded`); write `xs = sort(xs)`. Same for `reverse`, `map`, `filter`, `slice`, `trim`,
+  `replace`, `to_upper`…; the in-place ones are `push pop remove_at insert_at insert remove clear add_to`.
 - `sort_by(xs, less)`: the comparator returns `bool` ("a goes before b"), NOT a three-way int.
 - Builtins as values (1.27.14): `xs.map(to_string)` works wherever a function type is expected
   (a `let` with a function-type annotation, a function parameter); `let g = to_string` alone
@@ -299,7 +304,7 @@ captured by `spawn`. Rule of thumb: what crosses a fiber boundary is data or a n
    xs.push(v) xs.pop() xs.remove_at(i) -> T xs.insert_at(i, v) xs.reverse() xs.contains(v) xs.position(v) xs.map(f)
    xs.filter(f) xs.fold(z, f) xs.iter()` (and `a + b` concatenates) · `Map<K,V>`
    `Map.new()` then `m.insert(k, v) m.remove(k) m.contains_key(k) m.keys()
-   m.values()`; reading is `m.get(k) -> Option<V>` (also the free `get(m, k)`) and
+   m.values() m.clear() m.len()`; reading is `m.get(k) -> Option<V>` (also the free `get(m, k)`) and
    `m.get_or(k, default) -> V` · bytes `b[i] -> int` (octet 0–255, O(1) — THE primitive of every
    binary parser; never `from_utf8(b.sub_bytes(i, i+1))`), `b.len() b.sub_bytes(i, j) -> bytes
    b.index_of(needle) -> Option<int> b.starts_with(prefix) -> bool` (octet index, no allocation);
@@ -547,7 +552,9 @@ stays `hidden`, rAF never fires and WebKit throttles timers to ~1 s; automate wi
 `MessageChannel`, or launch from the session); desktop:
 `ui.open_path(p)` (a file or directory that exists), `ui.open_url(url)` (an `http`/`https`/
 `mailto` URL in the system browser or mail client — the OAuth sign-in of a native app; also in
-the mobile shells: iOS `UIApplication`, Android an `ACTION_VIEW` intent from a shell ≥ 1.27.81), `ui.reveal(p)`, `ui.clipboard_write(s)`/`ui.clipboard_read()`. Under
+the mobile shells: iOS `UIApplication`, Android an `ACTION_VIEW` intent from a shell ≥ 1.27.81), `ui.haptic(kind)`
+(`light|medium|heavy|soft|rigid|selection|success|warning|error`: UIKit generators on iOS, `HapticFeedbackConstants`
+on Android from a shell ≥ 1.27.91, the Force Touch trackpad on macOS, no-op elsewhere), `ui.reveal(p)`, `ui.clipboard_write(s)`/`ui.clipboard_read()`. Under
 `ray dev` the window live-reloads on asset changes and the webview devtools are on; otherwise they
 are off (`ray run --devtools`, or a native/bundled build with `--devtools`, turns them on): no
 "Inspect Element". The webview's own context menu (Look Up, Translate, Services…) still appears on

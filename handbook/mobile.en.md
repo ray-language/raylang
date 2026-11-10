@@ -482,6 +482,8 @@ The same `main` runs in all three places, but the system underneath does not beh
 | Inspecting the page | `ray dev`, or `ray run --devtools` | Safari, Develop menu, with `--devtools` | `chrome://inspect`, with `--devtools` |
 | Light/dark mode | `prefers-color-scheme` follows the system | follows the system | follows the system, system bar icons included (shell from 1.27.64 on; regenerate an older shell) |
 | Notifications (`std/notify`) | the notification center (in a `.app`) or libnotify | `UNUserNotificationCenter`: permission, scheduled, actions, badge | channels, the Android 13+ permission, scheduled ones that survive a reboot (shell from 1.27.91 on) |
+| `ui.haptic(kind)` | the Force Touch trackpad on macOS; a no-op on Linux/Windows | the UIKit feedback generators | `HapticFeedbackConstants` on the view, following the "touch feedback" setting (shell from 1.27.91 on) |
+| Safe areas | — | the webview fills the screen; the page reserves them with `env(safe-area-inset-*)` and `viewport-fit=cover` (shell from 1.27.91 on) | the page reserves them the same way |
 
 What that forces you to do:
 
@@ -549,4 +551,5 @@ And what is declared in `ray.toml`:
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:37bf61344fc8 -->
+<!-- sync: sha256:d06c7fe09dc3 -->
+<!-- sync: sha256:d06c7fe09dc3 -->

@@ -19745,3 +19745,49 @@ pulsación con acción y datos, negativa); unidades del protocolo, de la petici�
 shell falso en otro hilo), de los manifiestos y de las plantillas; compilación cruzada del runtime
 en `aarch64-apple-ios-sim` y `aarch64-linux-android`; iOS en el simulador y Android en el AVD con
 el programa de humo.
+
+## 418. M445 — la ronda de pepa 1.27.90 (nov 2026)
+
+pepa, una agenda de medicamentos (ray-apps), trajo seis hallazgos de lenguaje en su revisión con
+1.27.90, además de las notificaciones (#319/#320, M442). El más caro de entender fue **#332**:
+`ray dev --device` entraba en un vaivén tras cambiar la versión de un paquete web —
+`sent 104 … 104 changed, 4 removed`, `sent 4 … 4 changed, 104 removed`, sin fin, y solo
+reinstalar la app de desarrollo lo arreglaba. Reproducido en el escritorio con `ray dev-client`
+y una copia de pepa (elements `=0.14.0` → `=0.14.1`), y con una traza del delta, la causa quedó
+a la vista: el runner del dispositivo llamaba a `configure_embed`, que (M369) enlaza
+`node_modules/@raylang/elements` → `.ray-deps/elements/web` para el editor; el inventario de
+disco del dispositivo (`hashes_on_disk`) seguía el enlace y reportaba los 108 archivos del
+paquete **por dos rutas**; el anfitrión no conocía la segunda, la mandaba borrar, y
+`remove_file` a través del enlace destruía los archivos reales. Tres cambios: el dispositivo ya
+no enlaza `node_modules/` (`configure_embed_with(entry, false)`: no hay editor en un teléfono);
+el inventario y el barrido del snapshot comparten un recorrido que **nunca sigue enlaces** ni
+entra en `node_modules/`/`target/`; y ni un delta ni un snapshot borran o escriben a través de un
+enlace (`crosses_link`). Además, una conexión nueva del mismo dispositivo (nombre + IP) reemplaza
+a la anterior, que es lo que el shell relanzado con `--payload-url` provocaba.
+
+**#321** era un bug de pepa con raíz en la ergonomía: `sort_by(out, …);` como sentencia no hace
+nada (devuelve un arreglo nuevo) y nadie avisó. El checker gana **avisos** (`checker::warnings`,
+`warning at L:C: msg`): una pasada sobre el programa del usuario, *antes* del check (así ve sus
+propias funciones, sin el prelude inyectado ni UFCS bajado), que marca una sentencia-expresión
+que llama a una función pura del prelude (`sort`, `sort_by`, `sort_by_key`, `reverse`, `map`,
+`filter`, `slice`, `fold`, `trim`, `replace`, `to_upper`, `to_lower`, `substring`, `repeat`,
+`split`, `chars`, `join`, `to_bytes`), en forma libre o de método, salvo que el usuario haya
+definido una función con ese nombre o un struct tenga un campo-closure que se llame así. Nunca
+cambia el código de salida; `ray run`/`ray check`/`ray build` lo imprimen tras una compilación
+correcta, y el LSP lo publica con severidad *Warning* (el `Diag` gana `severity`). No es parte
+del contrato de errores, así que el espejo selfhost no lo replica. `llms.txt` dice además
+explícitamente qué funciones devuelven copia y cuáles mutan.
+
+**#322**: `@derive(ToJson)` genera ahora código para `[T]`, `Option<T>` (→ `null`) y
+`Map<string, T>` (objeto con las claves en orden), recursivo; el cuerpo usa bucles `for` (y
+`for (k, v) in m`) con temporales numerados por profundidad, sin funciones del prelude que el
+usuario pueda haber sobrescrito ni primitivos sin rama nativa (`__map_get` no la tiene). Una
+clave que no sea `string` es error con el motivo. **#323**: `Map.clear()` en `MapOps` (recorre
+`__keys` y quita) con su rama nativa (`borrow_mut().clear()`). **#328**: el shell de iOS fija
+`contentInsetAdjustmentBehavior = Never` en el webview — UIKit ajustaba los insets del scroll por
+las zonas seguras y WebKit encogía el viewport 93 pt; la página ya las reserva con `env()`.
+**#331**: `ui.haptic(kind)` — iOS desde el runtime (los generadores de UIKit en la cola
+principal, en autorelease), Android por un método opcional `RayBridge.onHaptic` resuelto como
+`onOpenUrl` (shell anterior → `Err` con el remedio), macOS `NSHapticFeedbackManager`, resto
+no-op. Los sonidos del sistema (`RingtoneManager`) que pedía el mismo hallazgo quedan fuera: iOS
+no deja leerlos, y para un aviso el `sound` de `std/notify` (M442) cubre el caso.

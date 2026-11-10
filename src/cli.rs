@@ -2582,7 +2582,7 @@ fn cmd_bundle(args: &[String]) {
         }
         let abis = abis.join(", ");
         if let Err(e) =
-            crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis, mipmaps.is_some(), devtools, manifest.as_ref().is_some_and(|m| m.android_background_audio), if dev { Some(app_id.as_str()) } else { None }, manifest.as_ref().is_some_and(|m| m.android_exact_alarms))
+            crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis, mipmaps.is_some(), devtools, manifest.as_ref().is_some_and(|m| m.android_background_audio), if dev { Some(app_id.as_str()) } else { None }, manifest.as_ref().is_some_and(|m| m.android_exact_alarms), dev || uses_module(&path, "std/alarm"))
         {
             eprintln!("bundle: could not write the Gradle project: {e}");
             process::exit(74);
@@ -2883,6 +2883,13 @@ fn cmd_bundle(args: &[String]) {
 /// válida la firma que el linker de arm64 aplicó, tras mover el binario).
 /// M209: ¿el programa importa la red (`std/net`, `std/udp` o el paquete `net`, directa o
 /// transitivamente)? Se mira la lista de módulos cargados, que ya incluye las dependencias.
+/// M448: ¿el programa (o alguna dependencia) importa el módulo `name` (`std/alarm`)? El shell
+/// Android declara los permisos de alarma solo entonces.
+fn uses_module(entry: &str, name: &str) -> bool {
+    let Ok(loaded) = loader::load_with_deps(Path::new(entry), &dependency_roots()) else { return false };
+    loaded.modules.iter().any(|m| m.name.replace("::", "/") == name)
+}
+
 fn uses_network(entry: &str) -> bool {
     let Ok(loaded) = loader::load_with_deps(Path::new(entry), &dependency_roots()) else { return false };
     loaded.modules.iter().any(|m| {
@@ -4640,6 +4647,7 @@ const RT_MD5_RS: &str = include_str!("../crates/ray-runtime/src/md5.rs"); // ray
 const RT_FLOAT_FMT_RS: &str = include_str!("../crates/ray-runtime/src/float_fmt.rs"); // raysql #299
 const RT_MEDIA_RS: &str = include_str!("../crates/ray-runtime/src/media.rs"); // M403
 const RT_NOTIFY_RS: &str = include_str!("../crates/ray-runtime/src/notify.rs"); // M442
+const RT_ALARM_RS: &str = include_str!("../crates/ray-runtime/src/alarm.rs"); // M448
 const RT_DEFLATE_RS: &str = include_str!("../crates/ray-runtime/src/deflate.rs"); // M253
 const RT_QR_RS: &str = include_str!("../crates/ray-runtime/src/qr.rs"); // M347
 const RT_RSA_KEYGEN_RS: &str = include_str!("../crates/ray-runtime/src/rsa_keygen.rs"); // M348
@@ -4781,6 +4789,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         ("ray-runtime/src/float_fmt.rs", RT_FLOAT_FMT_RS),
         ("ray-runtime/src/media.rs", RT_MEDIA_RS),
         ("ray-runtime/src/notify.rs", RT_NOTIFY_RS),
+        ("ray-runtime/src/alarm.rs", RT_ALARM_RS),
         ("ray-runtime/src/deflate.rs", RT_DEFLATE_RS),
         ("ray-runtime/src/qr.rs", RT_QR_RS),
         ("ray-runtime/src/rsa_keygen.rs", RT_RSA_KEYGEN_RS),

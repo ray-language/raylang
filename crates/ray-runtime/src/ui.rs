@@ -306,6 +306,11 @@ pub(crate) fn push_notification_event(tag: &str) {
     push_event("notification", 0, tag);
 }
 
+/// M448: la respuesta a una alarma de `std/alarm` (`tag` = `id\taction\tdata`) → evento `"alarm"`.
+pub(crate) fn push_alarm_event(tag: &str) {
+    push_event("alarm", 0, tag);
+}
+
 /// M442: ¿backend headless? (lo consulta `notify`, que vive en otro módulo).
 pub(crate) fn is_headless() -> bool {
     headless()

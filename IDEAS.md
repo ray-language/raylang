@@ -4578,7 +4578,7 @@ antes con una `.p8` real** que ring acepta su PKCS#8 (ring exige la clave públi
 (`ProgressStyle`), alertas críticas (entitlement de Apple), Notification Service Extension
 (`mutable-content`), UnifiedPush, modo FID de FCM, AlarmKit (iOS 26), notificaciones en Windows.
 
-## 122. `std/alarm`: alarmas de verdad con la app cerrada (nov 2026) — PROPUESTO como M448
+## 122. `std/alarm`: alarmas de verdad con la app cerrada (nov 2026) — fase a (Android + contrato) ✅ EJECUTADA como M448 (DESIGN §421); fase b (iOS 26, AlarmKit) pendiente
 
 **Hecho.** pepa (#341, re-medido con 1.27.91 en un iPhone 12): a la hora de la toma, la
 notificación programada de `std/notify` llega y suena **una vez**, con el tono por defecto o

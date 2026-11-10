@@ -42,7 +42,7 @@ android.useAndroidX=true
 /// acotado por la network security config. `configChanges`: la rotación no recrea la Activity.
 /// M160: `android:icon` SOLO cuando los PNG multi-densidad se generaron de verdad — el
 /// atributo con los mipmaps ausentes rompe el build en aapt (generar-primero-decidir-después).
-fn android_manifest(icon: bool, background_audio: bool, url_scheme: Option<&str>, exact_alarms: bool) -> String {
+fn android_manifest(icon: bool, background_audio: bool, url_scheme: Option<&str>, exact_alarms: bool, alarm: bool) -> String {
     let icon_attr = if icon { "\n      android:icon=\"@mipmap/ic_launcher\"" } else { "" };
     // M330 D5: el shell de desarrollo abre las URLs de su propio esquema (el QR del enlace);
     // `singleTask` para que un enlace con la app abierta llegue a `onNewIntent` de la actividad
@@ -68,13 +68,29 @@ fn android_manifest(icon: bool, background_audio: bool, url_scheme: Option<&str>
     // desde el programa, nunca al arrancar) y RECEIVE_BOOT_COMPLETED (normal, sin diálogo) para
     // rearmar las programadas tras reiniciar; el receiver nace deshabilitado y RayNotify lo
     // enciende mientras haya alguna pendiente. `[android] exact_alarms` añade SCHEDULE_EXACT_ALARM.
-    let exact_perm = if exact_alarms { "\n  <uses-permission android:name=\"android.permission.SCHEDULE_EXACT_ALARM\" />" } else { "" };
+    let exact_perm = if exact_alarms && !alarm { "\n  <uses-permission android:name=\"android.permission.SCHEDULE_EXACT_ALARM\" />" } else { "" };
+    // M448 (IDEAS §122): std/alarm — SOLO si el programa lo importa (Google Play reserva estos
+    // permisos a apps de alarma/calendario). `USE_EXACT_ALARM` (API 33+, sin diálogo) y
+    // `SCHEDULE_EXACT_ALARM` hasta la 32 (concedido por defecto ahí); el full-screen intent de la
+    // pantalla de alarma; el servicio en primer plano que suena; y sus tres componentes.
+    let (alarm_perms, alarm_components) = if alarm {
+        (
+            format!(
+                "\n  <uses-permission android:name=\"android.permission.USE_EXACT_ALARM\" />\n  <uses-permission android:name=\"android.permission.SCHEDULE_EXACT_ALARM\"{} />\n  <uses-permission android:name=\"android.permission.USE_FULL_SCREEN_INTENT\" />{}",
+                if exact_alarms { "" } else { " android:maxSdkVersion=\"32\"" },
+                if background_audio { "" } else { "\n  <uses-permission android:name=\"android.permission.FOREGROUND_SERVICE\" />\n  <uses-permission android:name=\"android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK\" />" }
+            ),
+            "\n    <activity\n        android:name=\".RayAlarmActivity\"\n        android:exported=\"false\"\n        android:showWhenLocked=\"true\"\n        android:turnScreenOn=\"true\"\n        android:excludeFromRecents=\"true\"\n        android:launchMode=\"singleInstance\"\n        android:taskAffinity=\"\"\n        android:theme=\"@style/RayTheme\" />\n    <service\n        android:name=\".RayAlarmService\"\n        android:exported=\"false\"\n        android:foregroundServiceType=\"mediaPlayback\" />\n    <receiver\n        android:name=\".RayAlarmReceiver\"\n        android:exported=\"false\" />",
+        )
+    } else {
+        (String::new(), "")
+    };
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />{exact_perm}{audio_perms}
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />{exact_perm}{alarm_perms}{audio_perms}
   <application
       android:label="@string/app_name"{icon_attr}
       android:networkSecurityConfig="@xml/network_security_config"
@@ -87,7 +103,7 @@ fn android_manifest(icon: bool, background_audio: bool, url_scheme: Option<&str>
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
       </intent-filter>{url_filter}
-    </activity>{audio_service}
+    </activity>{audio_service}{alarm_components}
     <receiver
         android:name=".RayNotifyReceiver"
         android:exported="false"
@@ -405,6 +421,7 @@ public class MainActivity extends Activity {
             web.loadUrl(RayBridge.lastUrl); // recreación: el programa sigue vivo, recargar
         }
         RayBridge.startOnce();
+        RayAlarm.deliverPending(getApplicationContext()); // M448: alarmas respondidas con la app cerrada
         rayNotificationIntent(getIntent()); // M442: la app arrancó por una notificación pulsada
         /*RAY_DEV_LINK_ONCREATE*/
     }
@@ -753,6 +770,11 @@ public final class RayBridge {
         webView = w;
     }
 
+    // M448: ¿corre ya el programa raylang? (RayAlarm guarda la respuesta de una alarma si no).
+    static boolean isStarted() {
+        return started;
+    }
+
     static void startOnce() {
         if (!started) {
             started = true;
@@ -865,7 +887,11 @@ public final class RayBridge {
                 requestResult(Long.parseLong(id), null, "notify: the shell has no context yet");
                 return;
             }
-            RayNotify.apply(c, Long.parseLong(id), op, arg);
+            if (op.startsWith("alarm_")) { // M448: std/alarm
+                RayAlarm.apply(c, Long.parseLong(id), op, arg);
+            } else {
+                RayNotify.apply(c, Long.parseLong(id), op, arg);
+            }
         });
     }
 
@@ -1162,7 +1188,7 @@ public final class RayNotify {
         am.cancel(firePending(c, id));
         prefs(c).edit().remove(id).apply();
         manager(c).cancel(id, 0);
-        if (prefs(c).getAll().isEmpty()) { bootReceiver(c, false); }
+        syncBootReceiver(c);
     }
 
     // Un disparo (desde el receiver): mostrar y, si repite, rearmar la siguiente.
@@ -1181,7 +1207,7 @@ public final class RayNotify {
             arm(c, id, next);
         } else {
             prefs(c).edit().remove(id).apply();
-            if (prefs(c).getAll().isEmpty()) { bootReceiver(c, false); }
+            syncBootReceiver(c);
         }
     }
 
@@ -1195,11 +1221,518 @@ public final class RayNotify {
         }
     }
 
+    // M448: el receiver de arranque sigue encendido mientras quede algo que rearmar — una
+    // notificación programada o una alarma de std/alarm.
+    static void syncBootReceiver(Context c) {
+        bootReceiver(c, !prefs(c).getAll().isEmpty() || !RayAlarm.prefs(c).getAll().isEmpty());
+    }
+
     static void bootReceiver(Context c, boolean on) {
         c.getPackageManager().setComponentEnabledSetting(
             new ComponentName(c, RayNotifyReceiver.class),
             on ? PackageManager.COMPONENT_ENABLED_STATE_ENABLED : PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
             PackageManager.DONT_KILL_APP);
+    }
+}
+"#;
+
+/// M448 (IDEAS §122, pepa #341): `std/alarm` en Android. `RayAlarm` programa con
+/// `AlarmManager.setAlarmClock` (exacta, visible en la barra de estado, exenta de Doze), guarda
+/// cada alarma en `SharedPreferences` (se rearma tras reiniciar por `RayNotifyReceiver`) y, al
+/// vencer, `RayAlarmReceiver` arranca `RayAlarmService`: un servicio en primer plano que
+/// reproduce el sonido en bucle con el volumen de ALARMA y publica la notificación con el
+/// full-screen intent a `RayAlarmActivity`. La respuesta («stop», «snooze», «timeout») va al
+/// programa como evento `"alarm"`; si el programa no está corriendo (app cerrada), se guarda y
+/// se entrega en el siguiente arranque.
+const RAY_ALARM_JAVA: &str = r#"package org.raylang.shell;
+
+import android.app.AlarmManager;
+import android.app.PendingIntent;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.os.Build;
+import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Map;
+import java.util.TreeMap;
+
+public final class RayAlarm {
+    static final boolean ENABLED = /*RAY_ALARM*/false;
+    static final String PREFS = "ray_alarm";
+    static final String RESPONSES = "ray_alarm_responses";
+    static final String ACTION_FIRE = "org.raylang.shell.ALARM_FIRE";
+    static final String ACTION_STOP = "org.raylang.shell.ALARM_STOP";
+    static final String ACTION_SNOOZE = "org.raylang.shell.ALARM_SNOOZE";
+    static final String ACTION_DONE = "org.raylang.shell.ALARM_DONE";
+    static final String SEP = "\u001f";
+    static final String SNOOZE = "|snooze"; // un id no puede llevar `|`: la clave de la posposición no choca
+
+    // Una petición de std/alarm (RayBridge.onRequest), en el main thread. Los campos de una
+    // alarma: trigger, id, title, sound, snooze_minutes, stop_label, data, max_minutes (ver
+    // ray_runtime::alarm).
+    static void apply(Context c, long id, String op, String arg) {
+        try {
+            if (!ENABLED) {
+                if (op.equals("alarm_status")) {
+                    RayBridge.requestResult(id, "unsupported", null);
+                } else {
+                    RayBridge.requestResult(id, null, "alarm: this shell was bundled without std/alarm (the program did not import it); regenerate it with `ray bundle --android`");
+                }
+                return;
+            }
+            switch (op) {
+                case "alarm_permission":
+                    if (RayNotify.granted(c)) { RayBridge.requestResult(id, status(c), null); } else { RayNotify.permission(c, id); }
+                    return;
+                case "alarm_status":
+                    RayBridge.requestResult(id, status(c), null);
+                    return;
+                case "alarm_schedule": {
+                    String[] f = arg.split(SEP, -1);
+                    schedule(c, f);
+                    RayBridge.requestResult(id, f[1], null);
+                    return;
+                }
+                case "alarm_cancel":
+                    cancel(c, arg.trim());
+                    RayBridge.requestResult(id, "", null);
+                    return;
+                case "alarm_cancel_all":
+                    for (String k : pending(c)) { cancel(c, k); }
+                    RayBridge.requestResult(id, "", null);
+                    return;
+                case "alarm_pending":
+                    RayBridge.requestResult(id, String.join("\n", pending(c)), null);
+                    return;
+                default:
+                    RayBridge.requestResult(id, null, "alarm: unknown op '" + op + "'");
+            }
+        } catch (Exception e) {
+            RayBridge.requestResult(id, null, "alarm: " + e.getMessage());
+        }
+    }
+
+    static SharedPreferences prefs(Context c) {
+        return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    static ArrayList<String> pending(Context c) {
+        ArrayList<String> ids = new ArrayList<>();
+        for (String k : prefs(c).getAll().keySet()) {
+            if (!k.endsWith(SNOOZE)) { ids.add(k); }
+        }
+        java.util.Collections.sort(ids);
+        return ids;
+    }
+
+    static boolean canExact(Context c) {
+        AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
+        return Build.VERSION.SDK_INT < 31 || am.canScheduleExactAlarms();
+    }
+
+    static String status(Context c) {
+        return canExact(c) ? RayNotify.status(c) : "denied";
+    }
+
+    // El siguiente instante (ms) de `at:unix`, `daily:h:m` o `weekly:d,d:h:m` (días ISO: 1 = lunes).
+    static long next(String trigger, long now) {
+        String[] p = trigger.split(":", -1);
+        if (p[0].equals("at")) { return Long.parseLong(p[1]) * 1000; }
+        boolean weekly = p[0].equals("weekly");
+        int hour = Integer.parseInt(p[weekly ? 2 : 1]);
+        int minute = Integer.parseInt(p[weekly ? 3 : 2]);
+        String days = weekly ? "," + p[1] + "," : null;
+        for (int offset = 0; offset <= 7; offset++) {
+            Calendar cal = Calendar.getInstance();
+            cal.setTimeInMillis(now);
+            cal.add(Calendar.DAY_OF_YEAR, offset);
+            cal.set(Calendar.HOUR_OF_DAY, hour);
+            cal.set(Calendar.MINUTE, minute);
+            cal.set(Calendar.SECOND, 0);
+            cal.set(Calendar.MILLISECOND, 0);
+            if (cal.getTimeInMillis() <= now) { continue; }
+            int iso = (cal.get(Calendar.DAY_OF_WEEK) + 5) % 7 + 1; // Calendar: domingo = 1 → ISO 7
+            if (days == null || days.contains("," + iso + ",")) { return cal.getTimeInMillis(); }
+        }
+        throw new IllegalArgumentException("no next time for '" + trigger + "'");
+    }
+
+    static void schedule(Context c, String[] f) {
+        if (!canExact(c)) {
+            throw new IllegalStateException("exact alarms are not allowed for this app (Settings > Alarms & reminders)");
+        }
+        String id = f[1];
+        long at = next(f[0], System.currentTimeMillis());
+        AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
+        am.cancel(firePending(c, id + SNOOZE)); // una posposición en curso de la anterior
+        prefs(c).edit().putString(id, at + "|" + String.join(SEP, f)).remove(id + SNOOZE).apply();
+        arm(c, id, at);
+    }
+
+    static PendingIntent firePending(Context c, String key) {
+        Intent i = new Intent(c, RayAlarmReceiver.class);
+        i.setAction(ACTION_FIRE);
+        i.setData(android.net.Uri.parse("rayalarm://" + android.net.Uri.encode(key))); // un PendingIntent por clave
+        i.putExtra("key", key);
+        return PendingIntent.getBroadcast(c, key.hashCode(), i, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    static void arm(Context c, String key, long at) {
+        RayNotify.bootReceiver(c, true);
+        AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
+        PendingIntent show = PendingIntent.getActivity(c, 0, new Intent(c, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
+        am.setAlarmClock(new AlarmManager.AlarmClockInfo(at, show), firePending(c, key));
+    }
+
+    static void cancel(Context c, String id) {
+        AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
+        am.cancel(firePending(c, id));
+        am.cancel(firePending(c, id + SNOOZE));
+        prefs(c).edit().remove(id).remove(id + SNOOZE).apply();
+        RayAlarmService.stopIfRinging(c, id);
+        RayNotify.syncBootReceiver(c);
+    }
+
+    // Un disparo (desde el receiver; `key` = el id, o `id#snooze` para una posposición): rearmar
+    // la siguiente si repite y hacer sonar.
+    static void fire(Context c, String key) {
+        String rec = prefs(c).getString(key, null);
+        if (rec == null) { return; }
+        String[] f = rec.split("\\|", 2)[1].split(SEP, -1);
+        if (!key.endsWith(SNOOZE) && !f[0].startsWith("at:")) {
+            long at = next(f[0], System.currentTimeMillis());
+            prefs(c).edit().putString(key, at + "|" + String.join(SEP, f)).apply();
+            arm(c, key, at);
+        } else {
+            prefs(c).edit().remove(key).apply();
+        }
+        RayNotify.syncBootReceiver(c);
+        RayAlarmService.ring(c, f);
+    }
+
+    static String snoozeLabel(String[] f) {
+        return f.length > 8 && !f[8].isEmpty() ? f[8] : "Snooze";
+    }
+
+    static void snooze(Context c, String[] f) {
+        int minutes = 0;
+        try { minutes = Integer.parseInt(f[4].trim()); } catch (NumberFormatException ignored) { }
+        if (minutes <= 0) { return; }
+        String key = f[1] + SNOOZE;
+        long at = System.currentTimeMillis() + minutes * 60000L;
+        prefs(c).edit().putString(key, at + "|" + String.join(SEP, f)).apply();
+        arm(c, key, at);
+    }
+
+    // Tras reiniciar: lo vencido suena ya, lo demás se rearma.
+    static void rearm(Context c) {
+        if (!ENABLED) { return; }
+        long now = System.currentTimeMillis();
+        for (Map.Entry<String, ?> e : new java.util.HashMap<>(prefs(c).getAll()).entrySet()) {
+            long at = Long.parseLong(String.valueOf(e.getValue()).split("\\|", 2)[0]);
+            if (at <= now) { fire(c, e.getKey()); } else { arm(c, e.getKey(), at); }
+        }
+    }
+
+    // La respuesta del usuario → evento "alarm" (`id\taction\tdata`). Con el programa corriendo,
+    // ya; si no (la alarma sonó con la app cerrada), se guarda para el siguiente arranque.
+    static void respond(Context c, String id, String action, String data) {
+        String tag = id + "\t" + action + "\t" + data;
+        if (RayBridge.isStarted()) {
+            RayBridge.pushEvent("alarm", 0, tag);
+        } else {
+            SharedPreferences p = c.getSharedPreferences(RESPONSES, Context.MODE_PRIVATE);
+            p.edit().putString(String.format(java.util.Locale.ROOT, "%020d-%03d", System.currentTimeMillis(), p.getAll().size()), tag).apply();
+        }
+    }
+
+    // Al arrancar el programa (MainActivity.onCreate, tras startOnce): las respuestas guardadas, en orden.
+    static void deliverPending(Context c) {
+        SharedPreferences p = c.getSharedPreferences(RESPONSES, Context.MODE_PRIVATE);
+        if (p.getAll().isEmpty()) { return; }
+        for (Map.Entry<String, ?> e : new TreeMap<>(p.getAll()).entrySet()) {
+            RayBridge.pushEvent("alarm", 0, String.valueOf(e.getValue()));
+        }
+        p.edit().clear().apply();
+    }
+}
+"#;
+
+/// M448: la alarma vencida (un `setAlarmClock` de `RayAlarm`).
+const RAY_ALARM_RECEIVER_JAVA: &str = r#"package org.raylang.shell;
+
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+
+public class RayAlarmReceiver extends BroadcastReceiver {
+    @Override
+    public void onReceive(Context c, Intent intent) {
+        if (RayAlarm.ACTION_FIRE.equals(intent.getAction())) {
+            String key = intent.getStringExtra("key");
+            if (key != null) { RayAlarm.fire(c, key); }
+        }
+    }
+}
+"#;
+
+/// M448: el servicio que SUENA. Primer plano (`mediaPlayback`), `MediaPlayer` en bucle con
+/// `USAGE_ALARM` (el volumen de alarma: suena con el teléfono en silencio), notificación
+/// `CATEGORY_ALARM` con full-screen intent y los botones; se calla al responder, al cancelar la
+/// alarma o a los `max_minutes` (60 como tope).
+const RAY_ALARM_SERVICE_JAVA: &str = r#"package org.raylang.shell;
+
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
+import android.app.Service;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.ServiceInfo;
+import android.media.AudioAttributes;
+import android.media.MediaPlayer;
+import android.media.RingtoneManager;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Handler;
+import android.os.IBinder;
+import android.os.Looper;
+
+public class RayAlarmService extends Service {
+    static final String CHANNEL = "ray_alarm";
+    static final int NOTIFICATION_ID = 7448;
+    static String[] current = null; // la alarma que está sonando (campos de RayAlarm)
+    private MediaPlayer player;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable timeout = () -> finishWith("timeout");
+
+    static void ring(Context c, String[] f) {
+        Intent i = new Intent(c, RayAlarmService.class);
+        i.setAction(RayAlarm.ACTION_FIRE);
+        i.putExtra("rec", String.join(RayAlarm.SEP, f));
+        if (Build.VERSION.SDK_INT >= 26) { c.startForegroundService(i); } else { c.startService(i); }
+    }
+
+    static void stopIfRinging(Context c, String id) {
+        if (current != null && current[1].equals(id)) {
+            c.stopService(new Intent(c, RayAlarmService.class));
+        }
+    }
+
+    @Override
+    public int onStartCommand(Intent intent, int flags, int startId) {
+        String action = intent != null ? intent.getAction() : null;
+        if (RayAlarm.ACTION_FIRE.equals(action)) {
+            begin(intent.getStringExtra("rec").split(RayAlarm.SEP, -1));
+        } else if (RayAlarm.ACTION_STOP.equals(action)) {
+            finishWith("stop");
+        } else if (RayAlarm.ACTION_SNOOZE.equals(action)) {
+            finishWith("snooze");
+        } else if (current == null) {
+            stopSelf();
+        }
+        return START_NOT_STICKY;
+    }
+
+    private PendingIntent self(String action) {
+        Intent i = new Intent(this, RayAlarmService.class);
+        i.setAction(action);
+        return PendingIntent.getService(this, action.hashCode(), i, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+    }
+
+    private void begin(String[] f) {
+        silence(); // otra que estuviera sonando cede
+        current = f;
+        int snooze = 0;
+        int max = 0;
+        try { snooze = Integer.parseInt(f[4].trim()); } catch (NumberFormatException ignored) { }
+        try { max = Integer.parseInt(f[7].trim()); } catch (NumberFormatException ignored) { }
+        String stop = f[5].isEmpty() ? "Stop" : f[5];
+        NotificationManager nm = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        Notification.Builder b;
+        if (Build.VERSION.SDK_INT >= 26) {
+            // Canal propio y mudo: el sonido lo pone el MediaPlayer con el volumen de alarma.
+            NotificationChannel ch = new NotificationChannel(CHANNEL, "Alarms", NotificationManager.IMPORTANCE_HIGH);
+            ch.setSound(null, null);
+            ch.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+            nm.createNotificationChannel(ch);
+            b = new Notification.Builder(this, CHANNEL);
+        } else {
+            b = new Notification.Builder(this);
+        }
+        Intent screen = new Intent(this, RayAlarmActivity.class);
+        screen.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_USER_ACTION);
+        PendingIntent full = PendingIntent.getActivity(this, 0, screen, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+        android.graphics.drawable.Icon icon = android.graphics.drawable.Icon.createWithResource(this, android.R.drawable.ic_lock_idle_alarm);
+        b.setContentTitle(f[2])
+            .setSmallIcon(android.R.drawable.ic_lock_idle_alarm)
+            .setCategory(Notification.CATEGORY_ALARM)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .setOngoing(true)
+            .setContentIntent(full)
+            .setFullScreenIntent(full, true)
+            .addAction(new Notification.Action.Builder(icon, stop, self(RayAlarm.ACTION_STOP)).build());
+        if (snooze > 0) {
+            b.addAction(new Notification.Action.Builder(icon, RayAlarm.snoozeLabel(f), self(RayAlarm.ACTION_SNOOZE)).build());
+        }
+        if (Build.VERSION.SDK_INT >= 34 && !nm.canUseFullScreenIntent()) {
+            android.util.Log.w("ray", "alarm: full-screen alarms are not allowed for this app (Settings > Apps > Special app access > Full screen intents); it rings with a notification");
+        }
+        Notification n = b.build();
+        if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(NOTIFICATION_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
+        } else {
+            startForeground(NOTIFICATION_ID, n);
+        }
+        play(f[3]);
+        handler.postDelayed(timeout, (max > 0 ? max : 60) * 60000L);
+    }
+
+    private void play(String sound) {
+        try {
+            Uri uri = RayNotify.soundUri(this, sound);
+            if (uri == null) { uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM); }
+            if (uri == null) { uri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE); }
+            if (uri == null) { return; }
+            player = new MediaPlayer();
+            player.setAudioAttributes(new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_ALARM)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
+            player.setDataSource(this, uri);
+            player.setLooping(true);
+            player.prepare();
+            player.start();
+        } catch (Exception e) {
+            android.util.Log.w("ray", "alarm: could not play the sound: " + e);
+        }
+    }
+
+    private void silence() {
+        handler.removeCallbacks(timeout);
+        if (player != null) {
+            try { player.stop(); } catch (IllegalStateException ignored) { }
+            player.release();
+            player = null;
+        }
+    }
+
+    private void finishWith(String action) {
+        String[] f = current;
+        silence();
+        current = null;
+        if (f != null) {
+            if (action.equals("snooze")) { RayAlarm.snooze(this, f); }
+            RayAlarm.respond(this, f[1], action, f[6]);
+        }
+        stopForeground(Service.STOP_FOREGROUND_REMOVE);
+        stopSelf();
+    }
+
+    @Override
+    public void onDestroy() {
+        silence();
+        current = null;
+        sendBroadcast(new Intent(RayAlarm.ACTION_DONE).setPackage(getPackageName()));
+        super.onDestroy();
+    }
+
+    @Override
+    public IBinder onBind(Intent intent) {
+        return null;
+    }
+}
+"#;
+
+/// M448: la pantalla de la alarma, sobre el bloqueo (full-screen intent de `RayAlarmService`):
+/// el título y los botones; se cierra sola cuando la alarma deja de sonar.
+const RAY_ALARM_ACTIVITY_JAVA: &str = r#"package org.raylang.shell;
+
+import android.app.Activity;
+import android.content.BroadcastReceiver;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.os.Build;
+import android.os.Bundle;
+import android.view.Gravity;
+import android.view.WindowManager;
+import android.widget.Button;
+import android.widget.LinearLayout;
+import android.widget.TextView;
+
+public class RayAlarmActivity extends Activity {
+    private BroadcastReceiver done;
+
+    @Override
+    @SuppressWarnings("deprecation")
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        if (Build.VERSION.SDK_INT >= 27) {
+            setShowWhenLocked(true);
+            setTurnScreenOn(true);
+        } else {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED | WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
+        }
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        String[] f = RayAlarmService.current;
+        if (f == null) { // la alarma ya no suena (respondida desde la notificación)
+            finish();
+            return;
+        }
+        int snooze = 0;
+        try { snooze = Integer.parseInt(f[4].trim()); } catch (NumberFormatException ignored) { }
+        float d = getResources().getDisplayMetrics().density;
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setGravity(Gravity.CENTER);
+        box.setPadding((int) (32 * d), (int) (48 * d), (int) (32 * d), (int) (48 * d));
+        TextView title = new TextView(this);
+        title.setText(f[2]);
+        title.setTextSize(28);
+        title.setGravity(Gravity.CENTER);
+        box.addView(title, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
+        Button stop = new Button(this);
+        stop.setText(f[5].isEmpty() ? "Stop" : f[5]);
+        stop.setTextSize(20);
+        stop.setAllCaps(false);
+        stop.setOnClickListener(v -> answer(RayAlarm.ACTION_STOP));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (int) (64 * d));
+        lp.topMargin = (int) (12 * d);
+        box.addView(stop, lp);
+        if (snooze > 0) {
+            Button later = new Button(this);
+            later.setText(RayAlarm.snoozeLabel(f) + " (" + snooze + " min)");
+            later.setTextSize(18);
+            later.setAllCaps(false);
+            later.setOnClickListener(v -> answer(RayAlarm.ACTION_SNOOZE));
+            LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (int) (56 * d));
+            lp2.topMargin = (int) (12 * d);
+            box.addView(later, lp2);
+        }
+        setContentView(box);
+        done = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context c, Intent i) { finish(); }
+        };
+        IntentFilter filter = new IntentFilter(RayAlarm.ACTION_DONE);
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(done, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(done, filter);
+        }
+    }
+
+    private void answer(String action) {
+        startService(new Intent(this, RayAlarmService.class).setAction(action));
+        finish();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (done != null) { unregisterReceiver(done); }
+        super.onDestroy();
     }
 }
 "#;
@@ -1217,6 +1750,7 @@ public class RayNotifyReceiver extends BroadcastReceiver {
         String action = intent.getAction();
         if (Intent.ACTION_BOOT_COMPLETED.equals(action)) {
             RayNotify.rearm(c);
+            RayAlarm.rearm(c); // M448: las alarmas de std/alarm
         } else if (RayNotify.ACTION_FIRE.equals(action)) {
             String id = intent.getStringExtra("id");
             if (id != null) { RayNotify.fire(c, id); }
@@ -1488,7 +2022,7 @@ mod devtools_tests {
         let base = std::env::temp_dir().join(format!("ray_android_devtools_{}", std::process::id()));
         for (devtools, want) in [(true, true), (false, false)] {
             let _ = std::fs::remove_dir_all(&base);
-            super::write_project(&base, "App", "org.example.app", "1.0.0", "arm64-v8a", false, devtools, false, None, false).unwrap();
+            super::write_project(&base, "App", "org.example.app", "1.0.0", "arm64-v8a", false, devtools, false, None, false, false).unwrap();
             let src = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
             assert_eq!(src.contains("setWebContentsDebuggingEnabled(true)"), want, "devtools={devtools}");
             assert!(!src.contains("/*RAY_DEVTOOLS*/"), "el marcador no queda en el proyecto");
@@ -1508,6 +2042,7 @@ pub fn write_project(
     background_audio: bool,
     url_scheme: Option<&str>,
     exact_alarms: bool,
+    alarm: bool,
 ) -> Result<(), String> {
     let write = |rel: &str, content: &str| -> Result<(), String> {
         let p = dir.join(rel);
@@ -1519,7 +2054,7 @@ pub fn write_project(
     write("settings.gradle", &settings_gradle(name))?;
     write("gradle.properties", GRADLE_PROPERTIES)?;
     write("app/build.gradle", &app_build_gradle(app_id, version, abis))?;
-    write("app/src/main/AndroidManifest.xml", &android_manifest(icon, background_audio, url_scheme, exact_alarms))?;
+    write("app/src/main/AndroidManifest.xml", &android_manifest(icon, background_audio, url_scheme, exact_alarms, alarm))?;
     write("app/src/main/res/xml/network_security_config.xml", NETWORK_SECURITY_XML)?;
     write("app/src/main/res/values/strings.xml", &strings_xml(name))?;
     write("app/src/main/res/values/styles.xml", STYLES_XML)?;
@@ -1560,6 +2095,12 @@ pub fn write_project(
     let exact = if exact_alarms { "true" } else { "false" };
     write("app/src/main/java/org/raylang/shell/RayNotify.java", &RAY_NOTIFY_JAVA.replace("/*RAY_EXACT_ALARMS*/false", exact))?;
     write("app/src/main/java/org/raylang/shell/RayNotifyReceiver.java", RAY_NOTIFY_RECEIVER_JAVA)?;
+    // M448 (IDEAS §122): std/alarm — las clases siempre (RayBridge/MainActivity las referencian);
+    // la constante y el manifiesto solo las activan si el programa importa std/alarm.
+    write("app/src/main/java/org/raylang/shell/RayAlarm.java", &RAY_ALARM_JAVA.replace("/*RAY_ALARM*/false", if alarm { "true" } else { "false" }))?;
+    write("app/src/main/java/org/raylang/shell/RayAlarmReceiver.java", RAY_ALARM_RECEIVER_JAVA)?;
+    write("app/src/main/java/org/raylang/shell/RayAlarmService.java", RAY_ALARM_SERVICE_JAVA)?;
+    write("app/src/main/java/org/raylang/shell/RayAlarmActivity.java", RAY_ALARM_ACTIVITY_JAVA)?;
     write("README.md", README)?;
     Ok(())
 }
@@ -1587,10 +2128,10 @@ mod tests {
         assert!(MAIN_ACTIVITY_JAVA.contains("WebViewCompat.addDocumentStartJavaScript(web, RAY_SHIM, Collections.singleton(\"*\"))"));
         assert!(MAIN_ACTIVITY_JAVA.contains("if (!shimInjected) {\n                    v.evaluateJavascript(RAY_SHIM, null);"));
         assert!(app_build_gradle("org.raylang.demo", "1.0.0", "'arm64-v8a'").contains("implementation 'androidx.webkit:webkit:1.12.1'"));
-        assert!(android_manifest(false, false, None, false)
+        assert!(android_manifest(false, false, None, false, false)
             .contains("android:networkSecurityConfig=\"@xml/network_security_config\""));
         assert!(NETWORK_SECURITY_XML.contains("127.0.0.1"));
-        assert!(!android_manifest(false, false, None, false).contains("usesCleartextTraffic"));
+        assert!(!android_manifest(false, false, None, false, false).contains("usesCleartextTraffic"));
         let gradle = app_build_gradle("org.raylang.demo", "1.0.0", "'arm64-v8a'");
         assert!(gradle.contains("namespace 'org.raylang.shell'"), "{gradle}");
         assert!(gradle.contains("applicationId \"org.raylang.demo\""), "{gradle}");
@@ -1620,14 +2161,14 @@ mod tests {
         assert!(RAY_SCHEME_JAVA.contains("(\"ray\".equals(scheme) && \"app\".equals(host))"));
         // If-None-Match nunca viaja: WebResourceResponse no admite 304.
         assert!(RAY_SCHEME_JAVA.contains("RayBridge.schemeOpen(url, method == null ? \"GET\" : method, range, null)"));
-        assert!(!android_manifest(false, false, None, false).contains("app.ray.invalid"), "the alias needs no manifest entry");
+        assert!(!android_manifest(false, false, None, false, false).contains("app.ray.invalid"), "the alias needs no manifest entry");
     }
 
     #[test]
     fn the_manifest_only_declares_the_icon_when_the_mipmaps_exist() {
         // M160: el atributo sin los PNG rompe aapt — solo con icon=true.
-        assert!(android_manifest(true, false, None, false).contains("android:icon=\"@mipmap/ic_launcher\""));
-        assert!(!android_manifest(false, false, None, false).contains("android:icon"));
+        assert!(android_manifest(true, false, None, false, false).contains("android:icon=\"@mipmap/ic_launcher\""));
+        assert!(!android_manifest(false, false, None, false, false).contains("android:icon"));
     }
 
     /// M334: con targetSdk 35 Android dibuja de borde a borde; el shell reserva las barras del
@@ -1647,7 +2188,7 @@ mod tests {
     /// cambiar el modo; en API 29–32 el WebView recibe force dark «solo tema web».
     #[test]
     fn the_shell_theme_follows_the_system_dark_mode() {
-        let manifest = android_manifest(false, false, None, false);
+        let manifest = android_manifest(false, false, None, false, false);
         assert!(manifest.contains("android:theme=\"@style/RayTheme\""));
         assert!(!manifest.contains("Theme.Material.Light.NoActionBar"), "el tema claro fijo era la causa de #177");
         assert!(manifest.contains("|uiMode\""), "sin uiMode en configChanges el cambio de modo recrea la Activity y recarga la página");
@@ -1691,22 +2232,22 @@ mod tests {
     /// permisos, escribe la clase y enciende el flag de MainActivity; sin él, nada de eso existe.
     #[test]
     fn background_audio_adds_the_foreground_service_only_when_asked() {
-        let with = android_manifest(false, true, None, false);
+        let with = android_manifest(false, true, None, false, false);
         assert!(with.contains("android:name=\".RayPlaybackService\""), "{with}");
         assert!(with.contains("android:foregroundServiceType=\"mediaPlayback\""), "{with}");
         for perm in ["FOREGROUND_SERVICE", "FOREGROUND_SERVICE_MEDIA_PLAYBACK", "POST_NOTIFICATIONS"] {
             assert!(with.contains(&format!("android.permission.{perm}")), "{perm}");
         }
         // M442: POST_NOTIFICATIONS lo declara siempre std/notify (se pide en tiempo de ejecución).
-        assert!(android_manifest(false, false, None, false).contains("android.permission.POST_NOTIFICATIONS"));
-        let without = android_manifest(false, false, None, false);
+        assert!(android_manifest(false, false, None, false, false).contains("android.permission.POST_NOTIFICATIONS"));
+        let without = android_manifest(false, false, None, false, false);
         assert!(!without.contains("RayPlaybackService") && !without.contains("FOREGROUND_SERVICE"), "{without}");
         assert!(MAIN_ACTIVITY_JAVA.contains("if (RAY_BACKGROUND_AUDIO) { RayPlaybackService.start(this); }"));
         assert!(RAY_PLAYBACK_SERVICE_JAVA.contains("ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK"));
         let base = std::env::temp_dir().join(format!("ray_android_audio_{}", std::process::id()));
         for (bg, want) in [(true, true), (false, false)] {
             let _ = std::fs::remove_dir_all(&base);
-            write_project(&base, "App", "org.example.app", "1.0.0", "'arm64-v8a'", false, false, bg, None, false).unwrap();
+            write_project(&base, "App", "org.example.app", "1.0.0", "'arm64-v8a'", false, false, bg, None, false, false).unwrap();
             let main = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
             assert_eq!(main.contains("RAY_BACKGROUND_AUDIO = true;"), want, "bg={bg}");
             assert!(!main.contains("/*RAY_BACKGROUND_AUDIO*/"), "sin marcador");
@@ -1737,23 +2278,23 @@ mod tests {
     /// entrega a la librería; el shell normal no lleva nada de eso.
     #[test]
     fn the_dev_shell_registers_its_url_scheme_and_hands_links_to_the_library() {
-        let with = android_manifest(false, false, Some("org.example.app.dev"), false);
+        let with = android_manifest(false, false, Some("org.example.app.dev"), false, false);
         assert!(with.contains("<data android:scheme=\"org.example.app.dev\" />"));
         assert!(with.contains("android.intent.category.BROWSABLE"));
         assert!(with.contains("android:launchMode=\"singleTask\""));
-        assert!(!android_manifest(false, false, None, false).contains("launchMode"));
-        assert!(!android_manifest(false, false, None, false).contains("android.intent.action.VIEW"));
+        assert!(!android_manifest(false, false, None, false, false).contains("launchMode"));
+        assert!(!android_manifest(false, false, None, false, false).contains("android.intent.action.VIEW"));
         let base = std::env::temp_dir().join(format!("ray-android-devlink-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
-        write_project(&base, "App", "org.example.app.dev", "1.0.0", "'arm64-v8a'", false, true, false, Some("org.example.app.dev"), false).unwrap();
+        write_project(&base, "App", "org.example.app.dev", "1.0.0", "'arm64-v8a'", false, true, false, Some("org.example.app.dev"), false, false).unwrap();
         let main = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
         assert!(main.contains("rayDevLink(getIntent());"));
         assert!(main.contains("protected void onNewIntent(Intent intent)"));
         assert!(main.contains("\"org.example.app.dev\".equals(data.getScheme())"));
         let bridge = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/RayBridge.java")).unwrap();
         assert!(bridge.contains("public static native void devLink(String url);"));
-        write_project(&base, "App", "org.example.app", "1.0.0", "'arm64-v8a'", false, false, false, None, false).unwrap();
+        write_project(&base, "App", "org.example.app", "1.0.0", "'arm64-v8a'", false, false, false, None, false, false).unwrap();
         let main = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
         assert!(!main.contains("rayDevLink"));
         assert!(main.contains("protected void onNewIntent(Intent intent)"), "M442: onNewIntent existe siempre");
@@ -1764,15 +2305,64 @@ mod tests {
     /// (deshabilitado hasta que haya programadas), `exact_alarms` añade SCHEDULE_EXACT_ALARM y fija
     /// la constante de RayNotify, las pulsaciones entran por onCreate/onNewIntent, el diálogo de
     /// permisos no produce un `lifecycle` fantasma y RayBridge atiende las peticiones.
+    /// M448 (IDEAS §122): std/alarm — las clases van siempre, pero los permisos de alarma, el
+    /// servicio, la pantalla y el receiver solo entran al manifiesto (y `ENABLED` solo es true)
+    /// cuando el programa importa `std/alarm`.
+    #[test]
+    fn the_alarm_components_are_declared_only_when_the_program_uses_std_alarm() {
+        let with = android_manifest(false, false, None, false, true);
+        for needle in [
+            "android.permission.USE_EXACT_ALARM",
+            "android.permission.SCHEDULE_EXACT_ALARM\" android:maxSdkVersion=\"32\"",
+            "android.permission.USE_FULL_SCREEN_INTENT",
+            "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+            "android:name=\".RayAlarmActivity\"",
+            "android:showWhenLocked=\"true\"",
+            "android:name=\".RayAlarmService\"",
+            "android:name=\".RayAlarmReceiver\"",
+        ] {
+            assert!(with.contains(needle), "{needle}\n{with}");
+        }
+        let without = android_manifest(false, false, None, false, false);
+        for needle in ["USE_EXACT_ALARM", "USE_FULL_SCREEN_INTENT", "RayAlarm"] {
+            assert!(!without.contains(needle), "{needle}");
+        }
+        // Con background_audio los permisos del servicio no se duplican; con exact_alarms, SCHEDULE sin tope.
+        let both = android_manifest(false, true, None, true, true);
+        assert_eq!(both.matches("android.permission.FOREGROUND_SERVICE\"").count(), 1, "{both}");
+        assert_eq!(both.matches("android.permission.SCHEDULE_EXACT_ALARM").count(), 1, "{both}");
+        assert!(!both.contains("maxSdkVersion"), "{both}");
+        let base = std::env::temp_dir().join(format!("ray_android_alarm_{}", std::process::id()));
+        for alarm in [true, false] {
+            let _ = std::fs::remove_dir_all(&base);
+            write_project(&base, "App", "org.example.app", "1.0.0", "'arm64-v8a'", false, false, false, None, false, alarm).unwrap();
+            let java = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/RayAlarm.java")).unwrap();
+            assert_eq!(java.contains("static final boolean ENABLED = true;"), alarm);
+            for f in ["RayAlarmReceiver.java", "RayAlarmService.java", "RayAlarmActivity.java"] {
+                assert!(base.join("app/src/main/java/org/raylang/shell").join(f).is_file(), "{f}");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&base);
+        // El contrato de las piezas: alarma de reloj, volumen de alarma, pantalla completa, respuesta.
+        assert!(RAY_ALARM_JAVA.contains("am.setAlarmClock(new AlarmManager.AlarmClockInfo(at, show), firePending(c, key));"));
+        assert!(RAY_ALARM_JAVA.contains("RayBridge.pushEvent(\"alarm\", 0, tag);") && RAY_ALARM_JAVA.contains("static void deliverPending(Context c)"));
+        assert!(RAY_ALARM_SERVICE_JAVA.contains(".setUsage(AudioAttributes.USAGE_ALARM)") && RAY_ALARM_SERVICE_JAVA.contains(".setFullScreenIntent(full, true)"));
+        assert!(RAY_ALARM_SERVICE_JAVA.contains("ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK") && RAY_ALARM_SERVICE_JAVA.contains("finishWith(\"timeout\")"));
+        assert!(RAY_ALARM_ACTIVITY_JAVA.contains("setShowWhenLocked(true);") && RAY_ALARM_ACTIVITY_JAVA.contains("Context.RECEIVER_NOT_EXPORTED"));
+        assert!(RAY_BRIDGE_JAVA.contains("if (op.startsWith(\"alarm_\")) {") && RAY_BRIDGE_JAVA.contains("static boolean isStarted()"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("RayAlarm.deliverPending(getApplicationContext());"));
+        assert!(RAY_NOTIFY_RECEIVER_JAVA.contains("RayAlarm.rearm(c);") && RAY_NOTIFY_JAVA.contains("static void syncBootReceiver(Context c)"));
+    }
+
     #[test]
     fn the_shell_ships_the_notification_bridge_and_exact_alarms_are_opt_in() {
-        let plain = android_manifest(false, false, None, false);
+        let plain = android_manifest(false, false, None, false, false);
         assert!(plain.contains("android.permission.POST_NOTIFICATIONS"));
         assert!(plain.contains("android.permission.RECEIVE_BOOT_COMPLETED"));
         assert!(plain.contains("android:name=\".RayNotifyReceiver\"") && plain.contains("android:enabled=\"false\""), "{plain}");
         assert!(plain.contains("android.intent.action.BOOT_COMPLETED"));
         assert!(!plain.contains("SCHEDULE_EXACT_ALARM"));
-        assert!(android_manifest(false, false, None, true).contains("android.permission.SCHEDULE_EXACT_ALARM"));
+        assert!(android_manifest(false, false, None, true, false).contains("android.permission.SCHEDULE_EXACT_ALARM"));
         assert!(MAIN_ACTIVITY_JAVA.contains("rayNotificationIntent(getIntent());"));
         assert!(MAIN_ACTIVITY_JAVA.contains("if (raySuppressLifecycle) { return; }"));
         assert!(MAIN_ACTIVITY_JAVA.contains("RayNotify.permissionResult(this, grantResults)"));
@@ -1787,7 +2377,7 @@ mod tests {
         let base = std::env::temp_dir().join(format!("ray_android_notify_{}", std::process::id()));
         for (exact, want) in [(true, "EXACT_ALARMS = true;"), (false, "EXACT_ALARMS = false;")] {
             let _ = std::fs::remove_dir_all(&base);
-            write_project(&base, "App", "org.example.app", "1.0.0", "'arm64-v8a'", false, false, false, None, exact).unwrap();
+            write_project(&base, "App", "org.example.app", "1.0.0", "'arm64-v8a'", false, false, false, None, exact, false).unwrap();
             let notify = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/RayNotify.java")).unwrap();
             assert!(notify.contains(want) && !notify.contains("/*RAY_EXACT_ALARMS*/"), "exact={exact}");
             assert!(base.join("app/src/main/java/org/raylang/shell/RayNotifyReceiver.java").is_file());

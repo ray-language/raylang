@@ -121,6 +121,8 @@ extern const char *ray_ui_scheme_headers(long long h);
 extern long long ray_ui_scheme_read(long long h, unsigned char *buf, long long cap);
 extern void ray_ui_scheme_close(long long h);
 extern void ray_ui_shell_capabilities(int caps); // 1 = este shell sirve ray://app
+// M447 (pepa #334): el `WindowOptions.background` de la ventana que ray_open está recibiendo (NULL = sin fijar).
+extern const char *ray_ui_open_background(void);
 // M382: el selector de archivos del sistema (`ui.pick_file*`).
 extern void ray_ui_set_pick_handler(void (*pick)(long long, const char *, const char *, int,
                                                  const char *));
@@ -265,6 +267,7 @@ static NSString *const rayLogShim =
 
 static WKWebView *rayWebView = nil;
 static NSString *rayLastURL = nil;
+static UIColor *rayLastBackground = nil; // M447: el WindowOptions.background del programa (sobrevive a la escena)
 
 // M382: `ui.pick_file*` → UIDocumentPickerViewController en modo COPIA (`asCopy:YES`): el
 // sistema deja una copia en el tmp de la app y las rutas que vuelven se leen con std/fs sin
@@ -322,10 +325,24 @@ static void ray_pick(long long id, const char *kind, const char *title, int mult
     });
 }
 
+// M447 (pepa #334): `#rrggbb` → UIColor (nil si no es un color).
+static UIColor *rayColorFromHex(const char *hex) {
+    if (hex == NULL || strlen(hex) != 7 || hex[0] != '#') { return nil; }
+    unsigned int v = 0;
+    if (sscanf(hex + 1, "%06x", &v) != 1) { return nil; }
+    return [UIColor colorWithRed:((v >> 16) & 0xff) / 255.0 green:((v >> 8) & 0xff) / 255.0 blue:(v & 0xff) / 255.0 alpha:1.0];
+}
+
 static void ray_open(const char *title, const char *url) {
     NSString *u = [NSString stringWithUTF8String:url]; // copiar ANTES de despachar
+    UIColor *bg = rayColorFromHex(ray_ui_open_background()); // válido solo durante la llamada
     dispatch_async(dispatch_get_main_queue(), ^{
       rayLastURL = u;
+      if (bg != nil) { // pepa #334: lo que se ve hasta que la página pinta (y detrás de ella)
+        rayLastBackground = bg;
+        rayWebView.window.backgroundColor = bg;
+        rayWebView.window.rootViewController.view.backgroundColor = bg;
+      }
       [rayWebView loadRequest:[NSURLRequest requestWithURL:[NSURL URLWithString:u]]];
     });
 }
@@ -345,6 +362,13 @@ static void ray_eval(const char *js) {
     UIWindowScene *windowScene = (UIWindowScene *)scene;
     self.window = [[UIWindow alloc] initWithWindowScene:windowScene];
     UIViewController *vc = [UIViewController new];
+    // M447 (pepa #334): el color de arranque (`[ios] background`, catálogo LaunchBackground) sigue
+    // bajo la página hasta que esta pinta — sin él, el blanco del sistema.
+    // Prioridad: el fondo que pidió el programa (reconexión), el color de arranque, el del sistema
+    // (el webview es transparente: sin esto una app sin color vería negro donde antes había blanco).
+    UIColor *launch = rayLastBackground ?: ([UIColor colorNamed:@"LaunchBackground"] ?: UIColor.systemBackgroundColor);
+    self.window.backgroundColor = launch;
+    vc.view.backgroundColor = launch;
     // El puente se (re)instala EN CADA conexión de escena — el webview muere y renace
     // con ella (sceneDidDisconnect lo anula), así que esto va fuera del dispatch_once.
     WKWebViewConfiguration *cfg = [[WKWebViewConfiguration alloc] init];
@@ -364,6 +388,11 @@ static void ray_eval(const char *js) {
     // viewport (759 pt en vez de 852 con la isla dinámica): la página ya reserva las zonas con
     // env(safe-area-inset-*) y viewport-fit=cover, así que el webview ocupa la pantalla entera.
     rayWebView.scrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+    // pepa #334: el webview es transparente — el fondo lo pone la vista (color de arranque o el
+    // `WindowOptions.background` del programa), nunca el blanco por defecto de WebKit.
+    rayWebView.opaque = NO;
+    rayWebView.backgroundColor = UIColor.clearColor;
+    rayWebView.scrollView.backgroundColor = UIColor.clearColor;
     /*RAY_DEVTOOLS*/
     rayWebView.autoresizingMask =
         UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -505,6 +534,12 @@ pub struct ShellOptions {
     pub devtools: bool,
     pub icon: bool,
     pub background_audio: bool,
+    /// M447 (pepa #334): el catálogo trae el color `LaunchBackground` (`[ios] background`).
+    pub launch_color: bool,
+    /// M447 (pepa #336): `[ios] audio_session` — `"playback"` o `"playback_mix"` (MixWithOthers).
+    pub audio_session: Option<String>,
+    /// M447 (pepa #331): archivos de `[ios] sounds`, copiados a `Shell/` y a la fase Resources.
+    pub sounds: Vec<std::path::PathBuf>,
     /// M330 D5: el shell de DESARROLLO registra este esquema URL (su bundle id) y entrega a la
     /// librería de desarrollo (`ray_dev_link`) toda URL con él — el QR de `ray dev --device`
     /// escaneado con la cámara del sistema abre exactamente esta app.
@@ -513,7 +548,7 @@ pub struct ShellOptions {
 
 /// El xcconfig: TODO lo afinable vive aquí (el pbxproj solo lo referencia). La elección del
 /// `.a` por SDK es la pieza clave: dispositivo y simulador son ambos arm64.
-fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing, opts: ShellOptions) -> String {
+fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing, opts: &ShellOptions) -> String {
     let mut sign = String::new();
     if let Some(style) = &signing.style {
         sign.push_str(&format!("CODE_SIGN_STYLE = {style}\n"));
@@ -557,17 +592,29 @@ fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing, opts:
 /// todo lo que Xcode exige); objectVersion 56 (aceptado por Xcode 14+). M324 (ray808 #15): con
 /// icono, `Assets.xcassets` entra en el grupo Shell y en la fase Resources — antes el catálogo se
 /// escribía pero nada lo compilaba y la app salía con el icono genérico.
-fn pbxproj(name: &str, icon: bool) -> String {
-    let (res_file, res_build, res_child, res_files) = if icon {
+fn pbxproj(name: &str, assets: bool, sounds: &[String]) -> String {
+    let (mut res_file, mut res_build, mut res_child, mut res_files) = if assets {
         (
-            "\t\t0000000000000000000000F9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = \"<group>\"; };\n",
-            "\t\t0000000000000000000000B4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F9 /* Assets.xcassets */; };\n",
-            ", 0000000000000000000000F9",
-            "0000000000000000000000B4",
+            "\t\t0000000000000000000000F9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = \"<group>\"; };\n".to_string(),
+            "\t\t0000000000000000000000B4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 0000000000000000000000F9 /* Assets.xcassets */; };\n".to_string(),
+            ", 0000000000000000000000F9".to_string(),
+            "0000000000000000000000B4".to_string(),
         )
     } else {
-        ("", "", "", "")
+        (String::new(), String::new(), String::new(), String::new())
     };
+    // M447 (pepa #331): una referencia + un build file por sonido (ids fijos y únicos, como el resto).
+    for (i, file) in sounds.iter().enumerate() {
+        let fref = format!("00000000000000000000{:04X}", 0x5000 + i);
+        let bfile = format!("00000000000000000000{:04X}", 0x6000 + i);
+        res_file.push_str(&format!("\t\t{fref} /* {file} */ = {{isa = PBXFileReference; lastKnownFileType = audio; path = \"{file}\"; sourceTree = \"<group>\"; }};\n"));
+        res_build.push_str(&format!("\t\t{bfile} /* {file} in Resources */ = {{isa = PBXBuildFile; fileRef = {fref} /* {file} */; }};\n"));
+        res_child.push_str(&format!(", {fref}"));
+        if !res_files.is_empty() {
+            res_files.push_str(", ");
+        }
+        res_files.push_str(&bfile);
+    }
     format!(
         r##"// !$*UTF8*$!
 {{
@@ -674,7 +721,7 @@ pub fn write_project(
     opts: ShellOptions,
     plist_extra: &[(String, crate::manifest::PlistValue)],
 ) -> Result<(), String> {
-    let ShellOptions { devtools, icon, background_audio, ref url_scheme } = opts;
+    let ShellOptions { devtools, icon, background_audio, launch_color, ref audio_session, ref sounds, ref url_scheme } = opts;
     let write = |rel: &str, content: &str| -> Result<(), String> {
         let p = dir.join(rel);
         if let Some(parent) = p.parent() {
@@ -688,12 +735,22 @@ pub fn write_project(
     // arrancar — sin ella iOS corta el audio al pasar a segundo plano (categoría ambient por
     // defecto) y con el interruptor de silencio. El modo de fondo va en el Info.plist (el llamador
     // añade `UIBackgroundModes`).
-    let (audio_import, audio_session) = if background_audio {
+    // M447 (pepa #336): `[ios] audio_session = "playback_mix"` añade MixWithOthers — abrir la app no
+    // corta la música de otra; `"playback"` (o `background_audio` a secas) la interrumpe, como un
+    // reproductor. Sin ninguna, la sesión queda en la categoría por defecto (ambient, silencio).
+    let mix = audio_session.as_deref() == Some("playback_mix");
+    let (audio_import, audio_session) = if background_audio || audio_session.is_some() {
         (
             "#import <AVFoundation/AVFoundation.h>",
-            "AVAudioSession *session = [AVAudioSession sharedInstance]; // [ios] background_audio\n    \
-             [session setCategory:AVAudioSessionCategoryPlayback error:nil];\n    \
-             [session setActive:YES error:nil];",
+            if mix {
+                "AVAudioSession *session = [AVAudioSession sharedInstance]; // [ios] audio_session = playback_mix\n    \
+                 [session setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:nil];\n    \
+                 [session setActive:YES error:nil];"
+            } else {
+                "AVAudioSession *session = [AVAudioSession sharedInstance]; // [ios] background_audio / audio_session = playback\n    \
+                 [session setCategory:AVAudioSessionCategoryPlayback error:nil];\n    \
+                 [session setActive:YES error:nil];"
+            },
         )
     } else {
         ("", "")
@@ -721,6 +778,15 @@ pub fn write_project(
         };
         write("Shell/SceneDelegate.m", &SCENE_DELEGATE_M.replace("/*RAY_DEVTOOLS*/", devtools_line).replace("/*RAY_DEV_EXTERN*/", dev_extern).replace("/*RAY_DEV_LINK_CONNECT*/", dev_connect).replace("/*RAY_DEV_LINK_METHOD*/", dev_method))?;
     }
+    // M447 (pepa #334): la pantalla de arranque usa el color `LaunchBackground` del catálogo (con
+    // su variante oscura) en vez del blanco del sistema.
+    let launch_screen = |p: String| {
+        if launch_color {
+            p.replace("<key>UILaunchScreen</key><dict/>", "<key>UILaunchScreen</key><dict><key>UIColorName</key><string>LaunchBackground</string></dict>")
+        } else {
+            p
+        }
+    };
     // M330 D5: el shell de desarrollo registra su esquema URL (CFBundleURLTypes).
     let plist = match url_scheme {
         Some(scheme) => info_plist(plist_extra).replacen(
@@ -732,9 +798,17 @@ pub fn write_project(
         ),
         None => info_plist(plist_extra),
     };
+    let plist = launch_screen(plist);
     write("Shell/Info.plist", &plist)?;
-    write("App.xcconfig", &xcconfig(name, bundle_id, version, signing, opts))?;
-    write(&format!("{name}.xcodeproj/project.pbxproj"), &pbxproj(name, icon))?;
+    write("App.xcconfig", &xcconfig(name, bundle_id, version, signing, &opts))?;
+    // M447 (pepa #331): los sonidos van a Shell/ y a la fase Resources (cada uno con su referencia).
+    let mut sound_names = Vec::new();
+    for src in sounds {
+        let file = src.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
+        std::fs::copy(src, dir.join("Shell").join(&file)).map_err(|e| format!("could not copy the sound {}: {e}", src.display()))?;
+        sound_names.push(file);
+    }
+    write(&format!("{name}.xcodeproj/project.pbxproj"), &pbxproj(name, icon || launch_color, &sound_names))?;
     write("README.md", &readme(name))?;
     Ok(())
 }
@@ -820,17 +894,53 @@ mod tests {
     /// xcconfig nombra el AppIcon; sin icono, ni rastro (un catálogo referenciado y ausente rompe el build).
     #[test]
     fn the_icon_is_wired_into_the_project_only_when_present() {
-        let with = pbxproj("Demo", true);
+        let with = pbxproj("Demo", true, &[]);
         assert!(with.contains("PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (0000000000000000000000B4)"), "{with}");
         assert!(with.contains("path = Assets.xcassets; sourceTree"), "{with}");
         assert!(with.contains("0000000000000000000000F4, 0000000000000000000000F9); path = Shell"), "{with}");
         assert!(with.contains("buildPhases = (0000000000000000000000E2, 0000000000000000000000E1, 0000000000000000000000E3)"), "{with}");
-        let without = pbxproj("Demo", false);
+        let without = pbxproj("Demo", false, &[]);
         assert!(!without.contains("Assets.xcassets"), "{without}");
         assert!(without.contains("PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ()"), "{without}");
         let opts = ShellOptions { icon: true, ..Default::default() };
-        assert!(xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), opts).contains("ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon\n"));
-        assert!(!xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), ShellOptions::default()).contains("ASSETCATALOG"));
+        assert!(xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), &opts).contains("ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon\n"));
+        assert!(!xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), &ShellOptions::default()).contains("ASSETCATALOG"));
+    }
+
+    /// M447 (pepa #334/#336/#331): color de arranque en el plist y la escena, webview transparente
+    /// y fondo leído de `ray_ui_open_background`; `audio_session = "playback_mix"` añade
+    /// MixWithOthers; los sonidos entran en Shell/ y en la fase Resources.
+    #[test]
+    fn launch_color_audio_mix_and_sounds_reach_the_shell() {
+        let base = std::env::temp_dir().join(format!("ray_ios_m447_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let snd = base.join("alarm.caf");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::write(&snd, b"caff").unwrap();
+        let opts = ShellOptions { launch_color: true, audio_session: Some("playback_mix".to_string()), sounds: vec![snd.clone()], ..Default::default() };
+        write_project(&base, "App", "org.example.app", "1.0.0", &Signing::default(), opts, &[]).unwrap();
+        let plist = std::fs::read_to_string(base.join("Shell/Info.plist")).unwrap();
+        assert!(plist.contains("<key>UILaunchScreen</key><dict><key>UIColorName</key><string>LaunchBackground</string></dict>"), "{plist}");
+        let app = std::fs::read_to_string(base.join("Shell/AppDelegate.m")).unwrap();
+        assert!(app.contains("withOptions:AVAudioSessionCategoryOptionMixWithOthers error:nil]"), "{app}");
+        assert!(!app.contains("[session setCategory:AVAudioSessionCategoryPlayback error:nil];"));
+        let pbx = std::fs::read_to_string(base.join("App.xcodeproj/project.pbxproj")).unwrap();
+        assert!(pbx.contains("/* alarm.caf */ = {isa = PBXFileReference; lastKnownFileType = audio; path = \"alarm.caf\""), "{pbx}");
+        assert!(pbx.contains("/* alarm.caf in Resources */") && pbx.contains("/* Assets.xcassets in Resources */"), "{pbx}");
+        assert!(base.join("Shell/alarm.caf").exists());
+        // Sin color: el plist por defecto; con `playback`: la sesión sin mezcla.
+        let _ = std::fs::remove_dir_all(&base);
+        let opts = ShellOptions { audio_session: Some("playback".to_string()), ..Default::default() };
+        write_project(&base, "App", "org.example.app", "1.0.0", &Signing::default(), opts, &[]).unwrap();
+        assert!(std::fs::read_to_string(base.join("Shell/Info.plist")).unwrap().contains("<key>UILaunchScreen</key><dict/>"));
+        let app = std::fs::read_to_string(base.join("Shell/AppDelegate.m")).unwrap();
+        assert!(app.contains("[session setCategory:AVAudioSessionCategoryPlayback error:nil];") && !app.contains("MixWithOthers"));
+        assert!(!std::fs::read_to_string(base.join("App.xcodeproj/project.pbxproj")).unwrap().contains("Assets.xcassets"));
+        let _ = std::fs::remove_dir_all(&base);
+        // La escena: color de arranque, webview transparente y el fondo del programa al abrir.
+        for s in ["[UIColor colorNamed:@\"LaunchBackground\"] ?: UIColor.systemBackgroundColor", "rayWebView.opaque = NO;", "rayColorFromHex(ray_ui_open_background())", "extern const char *ray_ui_open_background(void);", "rayLastBackground = bg;", "UIColor *launch = rayLastBackground ?:"] {
+            assert!(SCENE_DELEGATE_M.contains(s), "{s}");
+        }
     }
 
     /// M324 (ray808 #18): `[ios] background_audio` activa la sesión `playback` en el AppDelegate y
@@ -864,20 +974,20 @@ mod tests {
         assert!(APP_DELEGATE_M.contains("didReceiveNotificationResponse:(UNNotificationResponse *)response"));
         assert!(APP_DELEGATE_M.contains("ray_ui_push_event(\"notification\", 0, tag.UTF8String);"));
         assert!(APP_DELEGATE_M.contains("UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionList"));
-        let cfg = xcconfig("App", "org.example.app", "1.0.0", &Signing::default(), ShellOptions::default());
+        let cfg = xcconfig("App", "org.example.app", "1.0.0", &Signing::default(), &ShellOptions::default());
         assert!(cfg.contains("-framework UserNotifications"), "{cfg}");
     }
 
     #[test]
     fn the_xcconfig_carries_the_resolved_signing() {
         let s = Signing { team: Some("ABC123".into()), style: Some("Automatic".into()) };
-        let text = xcconfig("Demo", "org.raylang.demo", "1.0.0", &s, ShellOptions::default());
+        let text = xcconfig("Demo", "org.raylang.demo", "1.0.0", &s, &ShellOptions::default());
         assert!(text.contains("DEVELOPMENT_TEAM = ABC123"), "{text}");
         assert!(text.contains("CODE_SIGN_STYLE = Automatic"), "{text}");
         // Y el round-trip: lo que el bundle escribe, la siguiente regeneración lo preserva.
         let back = Signing::from_xcconfig(&text);
         assert_eq!(back.team.as_deref(), Some("ABC123"));
-        let bare = xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), ShellOptions::default());
+        let bare = xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), &ShellOptions::default());
         assert!(!bare.contains("DEVELOPMENT_TEAM"), "{bare}");
     }
 

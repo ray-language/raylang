@@ -40,6 +40,9 @@ pub struct Note {
     pub group: String,
     pub data: String,
     pub sound: bool,
+    /// M447 (pepa #331): el nombre de un sonido propio (`alarm` o `alarm.caf`), de los archivos de
+    /// `[ios] sounds`; vacío = el sonido por defecto. En Android el sonido es del CANAL.
+    pub sound_name: String,
     /// −1 = no tocar el badge.
     pub badge: i64,
     /// `passive` | `active` | `time_sensitive` | `critical`.
@@ -119,7 +122,8 @@ pub fn trigger_text(t: &Trigger) -> String {
 }
 
 /// `trigger ␟ id ␟ title ␟ body ␟ subtitle ␟ channel ␟ group ␟ data ␟ sound ␟ badge ␟ interruption ␟
-/// actions` (acciones: `id␝título` separadas por `␞`). Valida y rellena el id si falta.
+/// actions [␟ sound_name]` (acciones: `id␝título` separadas por `␞`; el campo 13 es opcional, M447).
+/// Valida y rellena el id si falta.
 pub fn parse_note(arg: &str) -> Result<(Trigger, Note), String> {
     let f: Vec<&str> = arg.split(SEP).collect();
     if f.len() < 12 {
@@ -138,7 +142,11 @@ pub fn parse_note(arg: &str) -> Result<(Trigger, Note), String> {
         badge: f[9].trim().parse().unwrap_or(-1),
         interruption: f[10].trim().to_string(),
         actions: Vec::new(),
+        sound_name: f.get(12).map(|s| s.trim().to_string()).unwrap_or_default(),
     };
+    if n.sound_name.contains(['/', '\\']) {
+        return Err("notify: sound_name is a file name (from [ios] sounds / [android] sounds), not a path".to_string());
+    }
     for a in f[11].split(ACTION_SEP).filter(|a| !a.is_empty()) {
         let (id, title) = a.split_once(ACTION_FIELD).unwrap_or((a, a));
         if id.trim().is_empty() {
@@ -174,6 +182,9 @@ pub struct Channel {
     pub name: String,
     pub description: String,
     pub importance: String,
+    /// M447 (pepa #331): el sonido del canal (Android: un recurso de `[android] sounds`, sin
+    /// extensión); vacío = el del sistema. Fijo una vez creado el canal.
+    pub sound: String,
 }
 
 pub fn parse_channel(arg: &str) -> Result<Channel, String> {
@@ -186,6 +197,7 @@ pub fn parse_channel(arg: &str) -> Result<Channel, String> {
         name: f[1].trim().to_string(),
         description: f[2].to_string(),
         importance: if f[3].trim().is_empty() { "default".to_string() } else { f[3].trim().to_string() },
+        sound: f.get(4).map(|s| s.trim().to_string()).unwrap_or_default(),
     };
     if c.id.is_empty() || c.name.is_empty() {
         return Err("notify: a channel needs an id and a name".to_string());
@@ -295,14 +307,14 @@ mod headless {
             "notify_status" => Ok(status_text(false)),
             "notify_channel" => {
                 let c = parse_channel(arg)?;
-                trace(&format!("channel {:?} {:?} importance={}", c.id, c.name, c.importance));
+                trace(&format!("channel {:?} {:?} importance={}{}", c.id, c.name, c.importance, if c.sound.is_empty() { String::new() } else { format!(" sound={}", c.sound) }));
                 Ok(String::new())
             }
             "notify_show" => {
                 let (trigger, n) = parse_note(arg)?;
                 let acts: Vec<String> = n.actions.iter().map(|(i, t)| format!("{i}={t:?}")).collect();
                 trace(&format!(
-                    "show {} {:?} {:?} channel={} group={:?} interruption={} badge={} sound={} actions=[{}] trigger={}",
+                    "show {} {:?} {:?} channel={} group={:?} interruption={} badge={} sound={}{} actions=[{}] trigger={}",
                     n.id,
                     n.title,
                     n.body,
@@ -311,6 +323,7 @@ mod headless {
                     n.interruption,
                     n.badge,
                     n.sound,
+                    if n.sound_name.is_empty() { String::new() } else { format!(" sound_name={}", n.sound_name) },
                     acts.join(","),
                     trigger_text(&trigger)
                 ));
@@ -409,6 +422,7 @@ mod apple {
     type MsgVoidId = unsafe extern "C" fn(Id, Sel, Id);
     type MsgVoidI64 = unsafe extern "C" fn(Id, Sel, i64);
     type MsgIdIdId = unsafe extern "C" fn(Id, Sel, Id, Id) -> Id;
+    type MsgIdId = unsafe extern "C" fn(Id, Sel, Id) -> Id; // M447: soundNamed:
     type MsgIdI64 = unsafe extern "C" fn(Id, Sel, i64) -> Id;
     type MsgI64 = unsafe extern "C" fn(Id, Sel) -> i64;
     type MsgU64 = unsafe extern "C" fn(Id, Sel) -> u64;
@@ -724,6 +738,28 @@ mod apple {
         }
     }
 
+    /// M447: `nombre[.ext]` → `nombre.ext` si el archivo está en el bundle principal (probando las
+    /// extensiones que UserNotifications acepta cuando no viene ninguna).
+    fn bundled_sound(name: &str) -> Option<String> {
+        let (stem, exts): (&str, Vec<&str>) = match name.rsplit_once('.') {
+            Some((s, e)) if !s.is_empty() => (s, vec![e]),
+            _ => (name, vec!["caf", "aiff", "aif", "wav", "m4a", "mp3"]),
+        };
+        // SAFETY: mensajes documentados de Foundation; los NSString son autoreleased.
+        unsafe {
+            let get: MsgId = std::mem::transmute(msg_send());
+            let path_for: MsgIdIdId = std::mem::transmute(msg_send());
+            let bundle = get(cls(b"NSBundle\0"), sel(b"mainBundle\0"));
+            for ext in exts {
+                let p = path_for(bundle, sel(b"pathForResource:ofType:\0"), nsstring(stem), nsstring(ext));
+                if !p.is_null() {
+                    return Some(format!("{stem}.{ext}"));
+                }
+            }
+        }
+        None
+    }
+
     unsafe fn make_trigger(trigger: &Trigger) -> Result<Id, String> {
         unsafe {
             Ok(match trigger {
@@ -775,7 +811,22 @@ mod apple {
                 set_id(content, sel(b"setThreadIdentifier:\0"), nsstring(&n.group));
             }
             if n.sound {
-                let snd = if n.interruption == "critical" && responds(cls(b"UNNotificationSound\0"), sel(b"defaultCriticalSound\0")) {
+                let custom = if n.sound_name.is_empty() { None } else { bundled_sound(&n.sound_name) };
+                if !n.sound_name.is_empty() && custom.is_none() {
+                    // M447 (pepa #331): en iOS el archivo viene de `[ios] sounds` y su ausencia es un error
+                    // de empaquetado; en macOS no hay forma de meterlo en el bundle → el sonido por defecto.
+                    if cfg!(target_os = "ios") {
+                        return Err(format!("notify: sound '{}' is not in the app bundle (list the file in [ios] sounds of ray.toml and regenerate the shell)", n.sound_name));
+                    }
+                    if crate::ui::ui_trace() {
+                        eprintln!("[ui] notify: sound '{}' is not in the bundle; using the default sound", n.sound_name);
+                    }
+                }
+                let snd = if let Some(file) = custom {
+                    // caf/aiff/wav de ≤ 30 s del bundle principal.
+                    let named: MsgIdId = std::mem::transmute(msg_send());
+                    named(cls(b"UNNotificationSound\0"), sel(b"soundNamed:\0"), nsstring(&file))
+                } else if n.interruption == "critical" && responds(cls(b"UNNotificationSound\0"), sel(b"defaultCriticalSound\0")) {
                     get(cls(b"UNNotificationSound\0"), sel(b"defaultCriticalSound\0"))
                 } else {
                     get(cls(b"UNNotificationSound\0"), sel(b"defaultSound\0"))
@@ -1011,7 +1062,7 @@ mod backend {
         ask("notify_status", "")
     }
     pub(super) fn channel(c: super::Channel) -> Result<(), String> {
-        ask("notify_channel", &format!("{}{SEP}{}{SEP}{}{SEP}{}", c.id, c.name, c.description, c.importance)).map(|_| ())
+        ask("notify_channel", &format!("{}{SEP}{}{SEP}{}{SEP}{}{SEP}{}", c.id, c.name, c.description, c.importance, c.sound)).map(|_| ())
     }
     pub(super) fn show(trigger: Trigger, n: Note) -> Result<String, String> {
         let actions: Vec<String> = n.actions.iter().map(|(i, t)| format!("{i}{}{t}", super::ACTION_FIELD)).collect();
@@ -1028,6 +1079,7 @@ mod backend {
             n.badge.to_string(),
             n.interruption,
             actions.join(&super::ACTION_SEP.to_string()),
+            n.sound_name,
         ]
         .join(&SEP.to_string());
         ask("notify_show", &arg).map(|_| n.id)

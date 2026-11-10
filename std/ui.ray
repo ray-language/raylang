@@ -254,7 +254,7 @@ pub fn eval_js(h: int, js: string) -> Result<int, string> {
 /// The next UI event, waiting as long as it takes (the fiber parks — the process sleeps, it
 /// does not poll). The queue is process-wide: events from every window arrive here.
 pub fn next_event() -> Result<UiEvent, string> {
-    let r = __ui_next_event(0);
+    let r = __ui_next_event(-1);
     if (r[0] == "ok") {
         match (parse_int(r[2])) {
             Option.Some(w) => Result.Ok(UiEvent { kind: r[1], window: w, tag: r[3] }),
@@ -265,8 +265,18 @@ pub fn next_event() -> Result<UiEvent, string> {
     }
 }
 
+/// The next UI event if one is already queued, without waiting (pepa #342); `None` when the
+/// queue is empty or there is no window backend.
+pub fn try_next_event() -> Option<UiEvent> {
+    match (next_event_timeout(0)) {
+        Result.Ok(e) => e,
+        Result.Err(e) => Option.None,
+    }
+}
+
 /// The next UI event with a deadline: `Ok(Some(event))`, or `Ok(None)` if `timeout_ms` elapsed
-/// with no event.
+/// with no event. `0` does not wait (pepa #342: a look at the queue, like `select_timeout(chs, 0)`);
+/// a negative value waits without a deadline, like `next_event`.
 pub fn next_event_timeout(timeout_ms: int) -> Result<Option<UiEvent>, string> {
     let r = __ui_next_event(timeout_ms);
     if (r[0] == "ok") {

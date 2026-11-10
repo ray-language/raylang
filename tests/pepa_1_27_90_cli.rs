@@ -141,3 +141,16 @@ fn ui_haptic_traces_headless_and_rejects_unknown_kinds() {
         "[ui] haptic success\n[ui] haptic light\n",
     );
 }
+
+/// pepa #342: `ui.next_event_timeout(0)` no espera (antes, 0 = sin plazo y el bucle se colgaba);
+/// `try_next_event` tampoco; un valor positivo sigue esperando su plazo.
+#[test]
+fn a_zero_event_timeout_does_not_wait() {
+    let d = tmp("poll");
+    std::fs::write(
+        d.join("prog.ray"),
+        "import std/ui;\nfn main() -> int {\n    let w = ui.open(\"t\", \"about:blank\", 300, 200).unwrap();\n    print(ui.next_event_timeout(0));\n    print(ui.try_next_event());\n    print(ui.next_event_timeout(20));\n    0\n}\n",
+    )
+    .unwrap();
+    three_engines(&d, "Result.Ok(Option.None)\nOption.None\nResult.Ok(Option.None)\n", "");
+}

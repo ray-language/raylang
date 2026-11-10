@@ -937,7 +937,7 @@ public final class RayNotify {
                     return;
                 case "notify_channel": {
                     String[] f = arg.split(SEP, -1);
-                    channel(c, f[0], f[1], f[2], f[3]);
+                    channel(c, f[0], f[1], f[2], f[3], f.length > 4 ? f[4] : "");
                     RayBridge.requestResult(id, "", null);
                     return;
                 }
@@ -1026,7 +1026,20 @@ public final class RayNotify {
         RayBridge.requestResult(id, ok ? "granted" : "denied", null);
     }
 
-    static void channel(Context c, String id, String name, String description, String importance) {
+    // M447 (pepa #331): un sonido de `[android] sounds` (res/raw/<nombre>) como URI de recurso.
+    static android.net.Uri soundUri(Context c, String sound) {
+        if (sound.isEmpty()) { return null; }
+        int dot = sound.lastIndexOf('.');
+        if (dot > 0) { sound = sound.substring(0, dot); } // "alarm.caf" (forma de iOS) → recurso "alarm"
+        int res = c.getResources().getIdentifier(sound.toLowerCase(), "raw", c.getPackageName());
+        if (res == 0) {
+            android.util.Log.w("ray", "notify: sound '" + sound + "' is not in res/raw (list the file in [android] sounds of ray.toml)");
+            return null;
+        }
+        return android.net.Uri.parse("android.resource://" + c.getPackageName() + "/" + res);
+    }
+
+    static void channel(Context c, String id, String name, String description, String importance, String sound) {
         if (Build.VERSION.SDK_INT < 26) { return; }
         int imp = importance.equals("min") ? NotificationManager.IMPORTANCE_MIN
             : importance.equals("low") ? NotificationManager.IMPORTANCE_LOW
@@ -1034,12 +1047,19 @@ public final class RayNotify {
             : NotificationManager.IMPORTANCE_DEFAULT;
         NotificationChannel ch = new NotificationChannel(id, name, imp);
         if (!description.isEmpty()) { ch.setDescription(description); }
+        android.net.Uri uri = soundUri(c, sound);
+        if (uri != null) {
+            // El sonido del canal es fijo una vez creado (como la importancia): el usuario lo cambia en Ajustes.
+            ch.setSound(uri, new android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build());
+        }
         manager(c).createNotificationChannel(ch); // existente: actualiza nombre y descripción
     }
 
     static void ensureChannel(Context c, String id) {
         if (Build.VERSION.SDK_INT >= 26 && manager(c).getNotificationChannel(id) == null) {
-            channel(c, id, id.equals("default") ? "Notifications" : id, "", "default");
+            channel(c, id, id.equals("default") ? "Notifications" : id, "", "default", "");
         }
     }
 
@@ -1062,7 +1082,8 @@ public final class RayNotify {
         try { badge = Integer.parseInt(f[9].trim()); } catch (NumberFormatException ignored) { }
         if (badge >= 0) { b.setNumber(badge); }
         if (Build.VERSION.SDK_INT < 26) {
-            if (f[8].equals("1")) { b.setDefaults(Notification.DEFAULT_SOUND); }
+            android.net.Uri custom = f.length > 12 ? soundUri(c, f[12]) : null;
+            if (custom != null) { b.setSound(custom); } else if (f[8].equals("1")) { b.setDefaults(Notification.DEFAULT_SOUND); }
             b.setPriority(f[10].equals("passive") ? Notification.PRIORITY_LOW : f[10].equals("active") ? Notification.PRIORITY_DEFAULT : Notification.PRIORITY_HIGH);
         }
         b.setContentIntent(tapIntent(c, id, "", f[7]));
@@ -1759,6 +1780,8 @@ mod tests {
         assert!(RAY_BRIDGE_JAVA.contains("public static native void requestResult(long id, String value, String err);"));
         assert!(RAY_BRIDGE_JAVA.contains("public static void onRequest(String id, String op, String arg)"));
         assert!(RAY_NOTIFY_JAVA.contains("a.requestPermissions(new String[] { POST }, PERMISSION_REQUEST);"));
+        // M447 (pepa #331): el sonido del canal viene de res/raw (`[android] sounds`).
+        assert!(RAY_NOTIFY_JAVA.contains("ch.setSound(uri, new android.media.AudioAttributes.Builder()") && RAY_NOTIFY_JAVA.contains("getIdentifier(sound.toLowerCase(), \"raw\""));
         assert!(RAY_NOTIFY_JAVA.contains("setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP"));
         assert!(RAY_NOTIFY_RECEIVER_JAVA.contains("Intent.ACTION_BOOT_COMPLETED.equals(action)"));
         let base = std::env::temp_dir().join(format!("ray_android_notify_{}", std::process::id()));

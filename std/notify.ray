@@ -35,6 +35,12 @@ pub struct Notification {
     group: string,
     data: string,
     sound: bool,
+    /// A custom sound (pepa #331): the name of a file listed in `[ios] sounds` of `ray.toml`
+    /// (`"alarm"` or `"alarm.caf"`; caf/aiff/wav, 30 s at most). Empty = the default sound. A
+    /// macOS `.app` has no way to bundle it: the default sound plays instead. On Android 8+ the
+    /// sound belongs to the CHANNEL (`Channel.sound`) and this field is ignored; before 8 it is
+    /// looked up in `[android] sounds` (extension dropped).
+    sound_name: string,
     badge: int,
     interruption: string,
     actions: [Action],
@@ -55,6 +61,16 @@ pub struct Channel {
     name: string,
     description: string,
     importance: string,
+    /// A custom sound for every notification of the channel (pepa #331): the name of a file
+    /// listed in `[android] sounds` of `ray.toml`, without extension (`"alarm"`); empty = the
+    /// system sound. Like the importance, it is fixed once the channel exists.
+    sound: string,
+}
+
+/// A channel with the usual values (`description` empty, `"default"` importance, system sound);
+/// set the other fields on a `var`.
+pub fn channel(id: string, name: string) -> Channel {
+    Channel { id: id, name: name, description: "", importance: "default", sound: "" }
 }
 
 /// When a scheduled notification fires. `After(seconds, repeat)` (a repeating one needs ≥ 60 s;
@@ -90,6 +106,7 @@ pub fn message(title: string, body: string) -> Notification {
         group: "",
         data: "",
         sound: true,
+        sound_name: "",
         badge: -1,
         interruption: "active",
         actions: []
@@ -151,7 +168,7 @@ pub fn create_channel(c: Channel) -> Result<int, string> {
     ok_unit(
         tunnel(
             "notify_channel",
-            c.id + sep() + c.name + sep() + c.description + sep() + c.importance
+            c.id + sep() + c.name + sep() + c.description + sep() + c.importance + sep() + c.sound
         )
     )
 }
@@ -184,6 +201,8 @@ fn encode(trigger: string, n: Notification) -> string {
         + n.interruption
         + sep()
         + acts.join("\u{1e}")
+        + sep()
+        + n.sound_name
 }
 
 /// Shows `n` now and returns its id (the given one, or the generated one). If the permission was

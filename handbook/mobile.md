@@ -528,9 +528,13 @@ Y lo que se declara en el `ray.toml`:
 | `[app] icon` | un PNG: el icono de la app en los dos sistemas |
 | `[app.plist]` | claves que van tal cual al `Info.plist` de iOS, por ejemplo el texto de un permiso |
 | `[ios] development_team` | el equipo de desarrollo, para instalar en un iPhone real |
-| `[ios] background_audio` | el audio sigue sonando con la app en segundo plano |
+| `[ios] background_audio` | el audio sigue sonando con la app en segundo plano (sesión `playback`: abrir la app corta la música de otras) |
+| `[ios] audio_session` | `"playback"` o `"playback_mix"` (la app suena con el interruptor de silencio y SIN cortar la música de otras apps), sin el modo en segundo plano |
+| `[ios] background` / `background_dark` | el color (`#rrggbb`) de la pantalla de arranque y de la vista bajo la página: sin destello blanco; `background_dark` para el modo oscuro |
+| `[ios] sounds` | archivos (caf/aiff/wav, ≤ 30 s) copiados al bundle para `Notification.sound_name` de `std/notify` |
 | `[android] application_id` | un application id distinto del de `[app] id` |
 | `[android] background_audio` | lo mismo en Android, con un servicio en primer plano |
+| `[android] sounds` | archivos (ogg/wav/mp3) copiados a `res/raw/` para `Channel.sound` de `std/notify` (el nombre, en minúsculas y sin extensión) |
 | `[android] exact_alarms` | las notificaciones programadas con `std/notify` usan alarmas exactas (permiso «Alarmas y recordatorios»); sin la clave, inexactas, con minutos de margen |
 | `[frontend]` | los comandos y la carpeta del frontend (sección 2) |
 

@@ -19831,3 +19831,45 @@ función de módulo con ese nombre, y recorre solo el módulo de entrada (un paq
 avisar en cada ejecución). En M446: la posición del octeto malformado ignoraba los octetos
 leídos después de la secuencia (`read - len - extra`). El noveno (el mensaje de «sin feature»
 copiado en tres sitios) queda como está.
+
+## 420. M447 — la shell de iOS: fondo de arranque, sesión de audio y sonidos propios (nov 2026)
+
+La re-medición de pepa con 1.27.91 dejó tres cosas en la shell de iOS, todas comprobadas por el
+tester en un iPhone 12 con un parche a mano sobre el proyecto generado — la clase de parche que
+no debería hacer falta. **#334**: cada arranque mostraba un destello blanco aunque la app fijara
+`ui.Options.background`, porque el handler `ray_open(title, url)` no recibía el fondo, el
+`WKWebView` era opaco y `UILaunchScreen` era un `<dict/>` vacío (la pantalla de arranque
+blanca del sistema). Ahora hay dos capas: `[ios] background` (y `background_dark`) genera el
+color `LaunchBackground` en el catálogo de assets — `UILaunchScreen` lo usa y la escena pinta
+con él la ventana y la vista bajo el webview, que pasa a ser transparente —, y el runtime
+exporta `ray_ui_open_background()`, que la shell lee dentro de su handler de `open` (válido
+solo durante la llamada, como el resto del ABI) para pintar con el fondo que el programa pidió.
+Nada cambia en la firma del handler: una shell anterior no llama al símbolo nuevo, y la
+comprobación de la librería preservada (M324) lo lista. De paso, el parser del manifiesto
+cortaba en `#` sin mirar las comillas, con lo que `"#f1f3f5"` era ilegible.
+
+**#336**: `[ios] background_audio = true` activaba una sesión `Playback` sin opciones al
+arrancar, y eso interrumpe la música de cualquier otra app aunque la nuestra no vaya a sonar;
+además arrastra `UIBackgroundModes = audio`, que una agenda no necesita. `[ios] audio_session =
+"playback" | "playback_mix"` separa la categoría del modo en segundo plano; `playback_mix` es
+`MixWithOthers`: la app suena con el interruptor de silencio y la música sigue. Un reproductor
+(rayplay) conserva `background_audio` tal cual.
+
+**#331**, la parte pendiente: `Notification.sound` era un bool y una alarma no podía sonar con
+la melodía de pepa. iOS solo reproduce el sonido por defecto o un archivo del bundle
+(`UNNotificationSound soundNamed:`), y Android desde la API 26 solo el sonido del CANAL — dos
+modelos distintos que no conviene disfrazar. Así que `Notification.sound_name` (iOS: un archivo
+de `[ios] sounds`, copiado a `Shell/` con su referencia en la fase Resources del pbxproj;
+caf/aiff/wav de ≤ 30 s; ausente → `Err` con el remedio) y `Channel.sound` (Android: un archivo
+de `[android] sounds`, copiado a `res/raw/` con el nombre normalizado, resuelto por
+`getIdentifier` y puesto en el canal al crearlo con los atributos de notificación). El wire
+format gana un campo opcional al final en ambos mensajes, así una shell anterior sigue
+entendiendo los nuevos. `notify.channel(id, name)` evita escribir el literal entero; el campo
+nuevo de `Channel` es el único cambio incompatible, un día después de publicar el struct.
+
+Y un bug que pepa cazó en la misma ronda (**#342**): `ui.next_event_timeout(0)` esperaba sin
+límite porque el primitivo trataba `ms <= 0` como «sin plazo», y un bucle que mira la cola
+antes de atender su tick (`next_event_timeout(next_tick - now)`, con 0 cuando ya toca) se
+quedaba colgado. `0` pasa a ser «sin esperar» en los tres motores (la VM responde `timeout` sin
+aparcar la fibra; el intérprete y el nativo consultan `try_next_event`), `next_event` pide
+`-1`, y `ui.try_next_event()` lo dice por su nombre.

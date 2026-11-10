@@ -2587,6 +2587,25 @@ fn cmd_bundle(args: &[String]) {
             eprintln!("bundle: could not write the Gradle project: {e}");
             process::exit(74);
         }
+        // M447 (pepa #331): `[android] sounds` → res/raw/<nombre>.<ext> (el nombre de recurso va en
+        // minúsculas, [a-z0-9_]; `Channel.sound` lo nombra sin extensión).
+        for src in resolve_sound_files(manifest.as_ref().map(|m| (&m.root, m.android_sounds.as_slice())), "[android] sounds") {
+            let stem = src.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+            let ext = src.extension().map(|e| format!(".{}", e.to_string_lossy().to_lowercase())).unwrap_or_default();
+            let mut name: String = stem.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+            if name.chars().next().is_none_or(|c| !c.is_ascii_alphabetic()) {
+                name.insert(0, 's');
+            }
+            if name != stem {
+                eprintln!("[bundle] note: the sound '{}' is the resource '{name}' (Channel.sound = \"{name}\")", src.display());
+            }
+            let dir = proj.join("app/src/main/res/raw");
+            let r = fs::create_dir_all(&dir).and_then(|_| fs::copy(&src, dir.join(format!("{name}{ext}"))).map(|_| ()));
+            if let Err(e) = r {
+                eprintln!("bundle: could not place the sound {}: {e}", src.display());
+                process::exit(74);
+            }
+        }
         // M160: los PNG multi-densidad a res/mipmap-<d>/ic_launcher.png (el manifest ya los
         // declara — write_project recibió icon=true solo con los 5 logrados).
         if let Some(pngs) = &mipmaps {
@@ -2772,7 +2791,14 @@ fn cmd_bundle(args: &[String]) {
         // M324 (ray808 #15): el icono se genera ANTES del proyecto, que solo lo cablea si existe.
         let icon_ok = icon.as_deref().is_some_and(|i| write_ios_appicon(&proj, Path::new(i)));
         // M330 D5: el shell de desarrollo registra su bundle id como esquema URL (el QR del enlace).
-        let opts = crate::bundle_ios::ShellOptions { devtools, icon: icon_ok, background_audio, url_scheme: dev.then(|| bundle_id.clone()) };
+        // M447 (pepa #334/#336/#331): color de arranque, sesión de audio y sonidos del manifiesto.
+        let launch_color = manifest
+            .as_ref()
+            .and_then(|m| m.ios_background.as_deref().map(|l| (l.to_string(), m.ios_background_dark.clone())))
+            .is_some_and(|(l, d)| write_ios_launch_color(&proj, &l, d.as_deref()));
+        let audio_session = manifest.as_ref().and_then(|m| m.ios_audio_session.clone());
+        let sounds = resolve_sound_files(manifest.as_ref().map(|m| (&m.root, m.ios_sounds.as_slice())), "[ios] sounds");
+        let opts = crate::bundle_ios::ShellOptions { devtools, icon: icon_ok, background_audio, launch_color, audio_session, sounds, url_scheme: dev.then(|| bundle_id.clone()) };
         if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing, opts, &ios_plist) {
             eprintln!("bundle: could not write the Xcode project: {e}");
             process::exit(74);
@@ -3327,13 +3353,67 @@ fn linux_install_script(name: &str) -> String {
 /// Devuelve el primero ausente; `None` si están todos o si `nm` no está (no se puede saber → callar).
 fn preserved_lib_missing_symbol(lib: &Path) -> Option<&'static str> {
     // Los símbolos del runtime que el shell iOS referencia, del más reciente al más antiguo.
-    const SHELL_SYMBOLS: &[&str] = &["ray_ui_will_terminate", "ray_ui_shell_capabilities", "ray_ui_scheme_open", "ray_ui_push_event", "ray_ui_set_handlers", "ray_start"];
+    const SHELL_SYMBOLS: &[&str] = &["ray_ui_open_background", "ray_ui_will_terminate", "ray_ui_shell_capabilities", "ray_ui_scheme_open", "ray_ui_push_event", "ray_ui_set_handlers", "ray_start"];
     let out = process::Command::new("nm").arg("-gU").arg(lib).output().ok()?;
     if !out.status.success() {
         return None;
     }
     let text = String::from_utf8_lossy(&out.stdout);
     SHELL_SYMBOLS.iter().copied().find(|sym| !text.contains(&format!(" T _{sym}")))
+}
+
+/// M447 (pepa #334): el color `LaunchBackground` del catálogo (`[ios] background`, con la variante
+/// oscura de `background_dark` si la hay): la pantalla de arranque y la vista bajo la página.
+/// `true` si quedó escrito (el proyecto cablea el catálogo).
+fn write_ios_launch_color(proj: &Path, light: &str, dark: Option<&str>) -> bool {
+    let comps = |hex: &str| {
+        let h = &hex[1..];
+        format!(
+            "\"color-space\": \"srgb\", \"components\": {{ \"alpha\": \"1.000\", \"red\": \"0x{}\", \"green\": \"0x{}\", \"blue\": \"0x{}\" }}",
+            &h[0..2].to_uppercase(),
+            &h[2..4].to_uppercase(),
+            &h[4..6].to_uppercase()
+        )
+    };
+    let mut colors = format!("    {{ \"idiom\": \"universal\", \"color\": {{ {} }} }}", comps(light));
+    if let Some(d) = dark {
+        colors.push_str(&format!(
+            ",\n    {{ \"idiom\": \"universal\", \"appearances\": [{{ \"appearance\": \"luminosity\", \"value\": \"dark\" }}], \"color\": {{ {} }} }}",
+            comps(d)
+        ));
+    }
+    let set = proj.join("Shell/Assets.xcassets/LaunchBackground.colorset");
+    let ok = fs::create_dir_all(&set).is_ok()
+        && fs::write(set.join("Contents.json"), format!("{{\n  \"colors\": [\n{colors}\n  ],\n  \"info\": {{ \"author\": \"xcode\", \"version\": 1 }}\n}}\n")).is_ok()
+        && fs::write(proj.join("Shell/Assets.xcassets/Contents.json"), "{\n  \"info\": { \"author\": \"xcode\", \"version\": 1 }\n}\n").is_ok();
+    if !ok {
+        eprintln!("bundle: warning: could not write the launch color; continuing without it");
+    }
+    ok
+}
+
+/// M447 (pepa #331): los archivos de `[ios] sounds` / `[android] sounds` resueltos contra la raíz
+/// del proyecto; uno que no exista es error (un sonido ausente se descubriría en el teléfono).
+fn resolve_sound_files(spec: Option<(&PathBuf, &[String])>, key: &str) -> Vec<PathBuf> {
+    let Some((root, list)) = spec else { return Vec::new() };
+    let mut stems: Vec<String> = Vec::new();
+    list.iter()
+        .map(|s| {
+            let p = root.join(s);
+            if !p.is_file() {
+                eprintln!("bundle: {key}: '{s}' is not a file (relative to the project root)");
+                process::exit(66);
+            }
+            // Dos archivos con el mismo nombre (sin extensión) serían el mismo recurso: error aquí, no en aapt/Xcode.
+            let stem = p.file_stem().map(|f| f.to_string_lossy().to_lowercase()).unwrap_or_default();
+            if stems.contains(&stem) {
+                eprintln!("bundle: {key}: two sounds named '{stem}' (the name without extension must be unique)");
+                process::exit(66);
+            }
+            stems.push(stem);
+            p
+        })
+        .collect()
 }
 
 /// `true` si el catálogo quedó escrito (y el proyecto puede cablearlo).

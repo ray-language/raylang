@@ -15,6 +15,8 @@ pub mod keychain;
 pub mod md5;
 pub mod float_fmt;
 pub mod media;
+#[cfg(all(feature = "ui", any(unix, windows)))]
+pub mod notify;
 pub mod deflate;
 pub mod qr;
 pub mod rsa_keygen;

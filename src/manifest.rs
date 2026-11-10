@@ -152,6 +152,11 @@ pub struct Manifest {
     /// arranca un *foreground service* de reproducción (notificación mientras dura) para que el
     /// sistema no mate el proceso; lo para al volver.
     pub android_background_audio: bool,
+    /// M442 (IDEAS §121): `[android] exact_alarms = true` — el shell declara `SCHEDULE_EXACT_ALARM`
+    /// y las notificaciones programadas con `std/notify` usan alarmas exactas cuando el usuario lo
+    /// permite («Alarmas y recordatorios» en Ajustes); sin la clave, alarmas inexactas (ventana de
+    /// minutos, sin permiso especial). Solo para apps cuya función lo exige (política de Play).
+    pub android_exact_alarms: bool,
 }
 
 impl Manifest {
@@ -238,6 +243,7 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut ios_development_team = None;
     let mut ios_background_audio = false;
     let mut android_background_audio = false;
+    let mut android_exact_alarms = false;
     let mut app_copyright = None;
     let mut app_name = None;
     let mut app_icon = None;
@@ -389,6 +395,8 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "application_id" => android_application_id = Some(as_string()?),
                 // M324 (ray808 #18): foreground service de reproducción en segundo plano.
                 "background_audio" => android_background_audio = as_bool()?,
+                // M442: alarmas exactas para las notificaciones programadas de std/notify.
+                "exact_alarms" => android_exact_alarms = as_bool()?,
                 _ => {} // otras claves de [android] se ignoran por ahora (extensibilidad)
             },
             "ios" => match key {
@@ -448,6 +456,7 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         ios_development_team,
         ios_background_audio,
         android_background_audio,
+        android_exact_alarms,
         android_application_id,
         app_copyright,
         app_name,
@@ -662,6 +671,10 @@ mod tests {
         );
         assert!(m.ios_background_audio && !m.android_background_audio);
         assert!(bare.app_plist.is_empty() && !bare.ios_background_audio && !bare.android_background_audio);
+        // M442 (IDEAS §121): `[android] exact_alarms` para las programadas de std/notify.
+        assert!(!m.android_exact_alarms && !bare.android_exact_alarms);
+        let exact = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[android]\nexact_alarms = true\n").unwrap();
+        assert!(exact.android_exact_alarms);
         let bad = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[ios]\nbackground_audio = \"yes\"\n");
         assert!(bad.unwrap_err().contains("must be true or false"));
     }

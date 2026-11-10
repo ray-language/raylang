@@ -4,6 +4,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`std/notify`: notificaciones del sistema, locales y programadas (M442, IDEAS §121; pepa #319 y #320).** El mismo
+  programa muestra una notificación ahora o la programa (`After`, `At`, `Daily`) en iOS, Android,
+  macOS y Linux: `request_permission()` pide el permiso en contexto y espera la respuesta,
+  `status()` lo consulta, `create_channel` crea los canales de Android, `show`/`schedule` devuelven
+  el id, `cancel`/`pending`/`clear_delivered`/`set_badge` completan el ciclo y la pulsación (la
+  notificación o uno de sus botones `actions`) llega como evento `"notification"` que
+  `event_tap(e)` convierte en `Tap { id, action, text, data }`, también cuando la pulsación arranca
+  la app. iOS y un `.app` de macOS usan `UNUserNotificationCenter`; el shell Android nuevo
+  (`ray bundle --android`) lleva canales, el diálogo `POST_NOTIFICATIONS` sin `lifecycle` fantasma y
+  programadas con `AlarmManager` que se muestran con la app cerrada y sobreviven al reinicio,
+  inexactas salvo `[android] exact_alarms = true`. `ui.notify`/`ui.badge` dejan de fallar en móvil.
+  Windows sigue sin notificaciones.
+
 ## 1.27.90 — 2026-11-08
 
 Firma por plataforma en el manifiesto (M440) y `std/ui` con apariencia clara/oscura, evento `frame` y pantallas (M441).

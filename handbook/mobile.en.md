@@ -481,6 +481,7 @@ The same `main` runs in all three places, but the system underneath does not beh
 | Page errors and `console.error` | the inspector (`--devtools`) | the same console, prefixed `[page]` (shell from 1.27.65 on) | `adb logcat -s ray` |
 | Inspecting the page | `ray dev`, or `ray run --devtools` | Safari, Develop menu, with `--devtools` | `chrome://inspect`, with `--devtools` |
 | Light/dark mode | `prefers-color-scheme` follows the system | follows the system | follows the system, system bar icons included (shell from 1.27.64 on; regenerate an older shell) |
+| Notifications (`std/notify`) | the notification center (in a `.app`) or libnotify | `UNUserNotificationCenter`: permission, scheduled, actions, badge | channels, the Android 13+ permission, scheduled ones that survive a reboot (shell from 1.27.91 on) |
 
 What that forces you to do:
 
@@ -494,6 +495,12 @@ What that forces you to do:
 - **Do not write absolute URLs by hand.** On Android the page loads through
   `https://app.ray.invalid/…`, an alias of `ray://app/` that never reaches the network. Relative
   URLs and `fetch("/api/x")` work the same in all three places.
+- **Ask for notifications in context.** `notify.request_permission()` opens the system dialog
+  (iOS, Android 13+) and waits for the answer: call it when the user turns on what needs them,
+  never at launch, and check `notify.status()` before relying on them. Whatever you schedule
+  with `notify.schedule` shows with the app closed; a tap that opens it arrives as a
+  `"notification"` event queued before `main` (`notify.event_tap`). Schedule with `std/notify`,
+  not with the page's timers: they freeze in the background.
 
 ## 12. Options and configuration
 
@@ -521,6 +528,7 @@ And what is declared in `ray.toml`:
 | `[ios] background_audio` | audio keeps playing with the app in the background |
 | `[android] application_id` | an application id different from `[app] id` |
 | `[android] background_audio` | the same on Android, with a foreground service |
+| `[android] exact_alarms` | notifications scheduled with `std/notify` use exact alarms (the "Alarms & reminders" permission); without the key, inexact ones with minutes of slack |
 | `[frontend]` | the frontend's commands and folder (section 2) |
 
 ## 13. Common problems
@@ -541,4 +549,4 @@ And what is declared in `ray.toml`:
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:5230c239fe4b -->
+<!-- sync: sha256:37bf61344fc8 -->

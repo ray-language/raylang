@@ -4,7 +4,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.93 — 2026-11-10
+
+`std/alarm`: alarmas del sistema que suenan con la app cerrada, en Android (M448, fase a).
 
 - **`std/alarm`: alarmas del sistema que suenan con la app cerrada (M448, fase Android; pepa #341).**
   Una alarma suena en bucle, con el volumen de alarma, hasta que el usuario responde, también con

@@ -42,7 +42,8 @@ mod real {
         let (result, read) = decoder.decode_to_string_without_replacement(data, &mut out, true);
         match result {
             DecoderResult::InputEmpty => Ok(out.into_bytes()),
-            DecoderResult::Malformed(len, _) => Err(format!("malformed {} sequence at byte {}", enc.name(), read.saturating_sub(len as usize))),
+            // La secuencia empieza en `read - len - extra` (`extra` = octetos leídos después de ella).
+            DecoderResult::Malformed(len, extra) => Err(format!("malformed {} sequence at byte {}", enc.name(), read.saturating_sub(len as usize + extra as usize))),
             DecoderResult::OutputFull => Err("decoder output buffer too small (internal)".to_string()),
         }
     }
@@ -102,6 +103,7 @@ mod real {
             assert_eq!(encode("a€b", "iso-8859-1").unwrap(), vec![0x61, 0x80, 0x62]);
             assert_eq!(encode("a日b", "latin1").unwrap_err(), "'日' (U+65E5) cannot be encoded in windows-1252 at char index 1");
             assert_eq!(decode(&[0x41, 0x82], "shift_jis").unwrap_err(), "malformed Shift_JIS sequence at byte 1");
+            assert_eq!(decode(b"\x1b(Z", "iso-2022-jp").unwrap_err(), "malformed ISO-2022-JP sequence at byte 0");
             assert!(decode(b"\xFF", "utf-8").unwrap_err().starts_with("malformed UTF-8 sequence at byte 0"));
             assert!(encode("x", "klingon").unwrap_err().starts_with("unknown charset 'klingon'"));
             assert!(encode("x", "utf-16le").unwrap_err().contains("has no encoder"));

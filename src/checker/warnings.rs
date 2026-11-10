@@ -55,13 +55,20 @@ const PURE: &[(&str, &str)] = &[
 /// Los avisos de resultado descartado del programa, **antes** de `check` (con solo las funciones
 /// del usuario en `program.functions`, sin el prelude inyectado ni las bajadas de UFCS).
 pub fn discarded_results(program: &Program) -> Vec<Warning> {
-    let overridden = |name: &str| program.functions.iter().any(|f| f.name == name);
+    // Revisión 1.27.91: también un método de `impl` del usuario (`impl Sorter for Tree { fn sort }`) o
+    // una función de un módulo (`pool::join`, que se llama `pool.join()`) con ese nombre.
+    let overridden = |name: &str| {
+        program.functions.iter().any(|f| f.name == name || f.name.rsplit("::").next() == Some(name))
+            || program.impls.iter().any(|i| i.methods.iter().any(|m| m.name == name))
+    };
     // Un campo de tipo función con ese nombre (`h.sort(1)` llama al closure del campo).
     let is_field = |name: &str| program.structs.iter().any(|s| s.fields.iter().any(|(f, ty)| f == name && matches!(ty, crate::ast::Type::Fn(..))));
     let mut out = Vec::new();
     {
         let mut visit = Visitor { out: &mut out, overridden: &overridden, is_field: &is_field };
-        for f in &program.functions {
+        // Solo el módulo de entrada (los nombres sin `::`): un paquete que el usuario no puede editar
+        // no debe avisar en cada ejecución.
+        for f in program.functions.iter().filter(|f| !f.name.contains("::")) {
             visit.block(&f.body);
         }
         for imp in &program.impls {
@@ -256,5 +263,11 @@ mod tests {
         assert!(w[0].contains("`xs.reverse()`") && w[1].contains("`xs.map(…)`"), "{w:?}");
         assert!(warnings_of("fn sort(xs: [int]) -> [int] { xs }\nfn main() -> int { let xs = [1]; sort(xs); xs.sort(); 0 }\n").is_empty());
         assert!(warnings_of("struct H { sort: fn(int) -> int }\nfn main() -> int { let h = H { sort: fn(n: int) -> int { n } }; h.sort(1); 0 }\n").is_empty());
+        // Revisión 1.27.91: un método de impl del usuario y una función de módulo (`pool::join`) también callan.
+        assert!(warnings_of("struct T { n: int }\ntrait Sorter { fn sort(self); }\nimpl Sorter for T { fn sort(self) { print(self.n); } }\nfn main() -> int { let t = T { n: 1 }; t.sort(); 0 }\n").is_empty());
+        let toks = crate::lexer::lex("fn main() -> int { let p = 1; pool.join(); 0 }").unwrap();
+        let mut program = crate::parser::parse(toks).unwrap();
+        program.functions.push(crate::ast::Function { name: "pool::join".to_string(), ..program.functions[0].clone() });
+        assert!(discarded_results(&program).is_empty());
     }
 }

@@ -663,7 +663,14 @@ fn serve_device(mut stream: TcpStream, token: &str, own_scheme: &str, devices: A
     // M445 (pepa #332): una conexión nueva del MISMO dispositivo (nombre + IP) reemplaza a la
     // anterior — el shell relanzado con `--payload-url` abría dos a la vez y el estado de una
     // contaminaba a la otra. Cerrar el socket viejo termina su hilo lector.
-    devices.lock().unwrap().retain(|d| !(d.name == name && d.stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default() == peer));
+    devices.lock().unwrap().retain(|d| {
+        let same = d.name == name && d.stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default() == peer;
+        if same {
+            // El socket está duplicado (`try_clone`): soltar la copia no cierra el hilo lector; `shutdown` sí.
+            let _ = d.stream.shutdown(std::net::Shutdown::Both);
+        }
+        !same
+    });
     if let Some(files) = latest.lock().unwrap().as_ref() {
         match send_update(&mut device, files) {
             Ok(n) => eprintln!("[dev] {name}: sent {n} file(s) to catch up"),

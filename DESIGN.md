@@ -19814,3 +19814,20 @@ carácter sin representación y su índice, que es lo que un editor muestra al g
 WHATWG las codifica como UTF-8 en silencio; aquí es `Err` con el consejo). El BOM no se olfatea:
 la etiqueta manda. Y una sorpresa documentada: por el estándar, `latin1`/`iso-8859-1` SON
 `windows-1252` (el `€` entra como 0x80).
+
+**La revisión previa a la release** (`/code-review high` sobre `v1.27.90..`) trajo nueve
+hallazgos; ocho se corrigen en la misma PR del bump. En `std/notify` (M442): la autorización que
+lanza `show` sin esperar entregaba su respuesta en el slot compartido de las llamadas
+bloqueantes (`pending()` podía recibir «granted» como lista de ids) — ahora solo entrega si la
+espera `permission()`; `cancel(id)` vaciaba TODA la cola de peticiones retenidas (y nadie las
+soltaba); la categoría de acciones se registraba solo por ids, con lo que dos notificaciones con
+los mismos ids y botones distintos compartían títulos; `At` en el pasado solo lo rechazaba
+Apple (Android lo disparaba al instante) y pasa al parser compartido; y la petición al shell
+gana un plazo de 10 minutos y la Activity de Android que muere con el diálogo abierto contesta
+con `Err`. En M445: el reemplazo de una conexión del mismo dispositivo soltaba un `try_clone`
+del socket, que no cierra el hilo lector (`shutdown` sí); y el aviso de resultado descartado
+callaba solo ante funciones libres del usuario — ahora también ante un método de `impl` o una
+función de módulo con ese nombre, y recorre solo el módulo de entrada (un paquete no debe
+avisar en cada ejecución). En M446: la posición del octeto malformado ignoraba los octetos
+leídos después de la secuencia (`read - len - extra`). El noveno (el mensaje de «sin feature»
+copiado en tres sitios) queda como está.

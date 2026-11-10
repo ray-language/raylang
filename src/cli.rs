@@ -7177,10 +7177,13 @@ mod tests {
             "Java_org_raylang_shell_RayBridge_schemeClose",
             "Java_org_raylang_shell_RayBridge_capabilities",
             "Java_org_raylang_shell_RayBridge_devLink",
+            "Java_org_raylang_shell_RayBridge_pickResult",
+            "Java_org_raylang_shell_RayBridge_requestResult",
         ] {
             assert!(android.contains(&format!("fn {sym}(")), "Android dev lib lacks {sym}");
         }
-        assert_eq!(android.matches("#[unsafe(no_mangle)]").count(), 11);
+        // M442: + pickResult (faltaba en la lib de desarrollo) y requestResult (std/notify).
+        assert_eq!(android.matches("#[unsafe(no_mangle)]").count(), 13);
         let ios = super::dev_lib_rust_source(false);
         assert!(ios.contains("fn ray_start("));
         assert!(!ios.contains("JNI_OnLoad"));

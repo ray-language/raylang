@@ -5782,7 +5782,7 @@ static BUILTINS: &[Builtin] = &[
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __watch_next(h, ms) -> [string] (M115.4): ["ok", kind, path] / ["timeout"] / ["err", msg].
-    // ms <= 0 = sin plazo. En la VM APARCA la fibra (self-pipe del watcher, patrón StdinRead).
+    // ms < 0 = sin plazo; ms == 0 = sin esperar (pepa #342). En la VM APARCA la fibra (self-pipe del watcher, patrón StdinRead).
     Builtin { name: "__watch_next", opcode: OpCode::WatchNext, check: |a| {
         arity(a, 2, "__watch_next", " (handle, timeout ms)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__watch_next expects an int (the handle), not {}", a[0]))); }
@@ -6084,7 +6084,7 @@ static BUILTINS: &[Builtin] = &[
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __ui_next_event(ms) -> [string] (M146/M148): ["ok", kind, window, tag] / ["timeout"] / ["err", msg].
-    // ms <= 0 = sin plazo. En la VM APARCA la fibra (self-pipe de la cola global, patrón
+    // ms < 0 = sin plazo; ms == 0 = sin esperar (pepa #342). En la VM APARCA la fibra (self-pipe de la cola global, patrón
     // WatchNext); la cola es DEL PROCESO (los eventos de todas las ventanas llegan aquí).
     Builtin { name: "__ui_next_event", opcode: OpCode::UiNext, check: |a| {
         arity(a, 1, "__ui_next_event", " (timeout ms)")?;

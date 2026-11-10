@@ -19866,3 +19866,10 @@ de `[android] sounds`, copiado a `res/raw/` con el nombre normalizado, resuelto 
 format gana un campo opcional al final en ambos mensajes, así una shell anterior sigue
 entendiendo los nuevos. `notify.channel(id, name)` evita escribir el literal entero; el campo
 nuevo de `Channel` es el único cambio incompatible, un día después de publicar el struct.
+
+Y un bug que pepa cazó en la misma ronda (**#342**): `ui.next_event_timeout(0)` esperaba sin
+límite porque el primitivo trataba `ms <= 0` como «sin plazo», y un bucle que mira la cola
+antes de atender su tick (`next_event_timeout(next_tick - now)`, con 0 cuando ya toca) se
+quedaba colgado. `0` pasa a ser «sin esperar» en los tres motores (la VM responde `timeout` sin
+aparcar la fibra; el intérprete y el nativo consultan `try_next_event`), `next_event` pide
+`-1`, y `ui.try_next_event()` lo dice por su nombre.

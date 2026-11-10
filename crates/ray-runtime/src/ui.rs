@@ -417,8 +417,12 @@ pub fn try_next_event() -> Option<(String, i64, String)> {
 }
 
 /// El siguiente evento BLOQUEANDO el hilo (el intérprete, oráculo secuencial): espera en la
-/// condvar de la cola — sin sondeo. `ms <= 0` = sin plazo; `Ok(None)` = plazo vencido.
+/// condvar de la cola — sin sondeo. `ms < 0` = sin plazo; `ms == 0` = sin esperar (pepa #342:
+/// «mirar» la cola, como `select_timeout(chs, 0)`); `None` = plazo vencido.
 pub fn next_event_blocking(ms: i64) -> Option<(String, i64, String)> {
+    if ms == 0 {
+        return try_next_event();
+    }
     headless_inject_open_once();
     let ev = events();
     let deadline = if ms > 0 {

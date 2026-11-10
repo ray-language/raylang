@@ -1205,6 +1205,8 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "    }))\n}\n",
                         "fn __ray_ui_next_event(ms: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let tag = |parts: Vec<String>| Rc::new(std::cell::RefCell::new(parts.into_iter().map(Rc::<str>::from).collect::<Vec<Rc<str>>>()));\n",
+            // pepa #342: 0 = sin esperar (mirar la cola y volver).
+            "    if ms == 0 { return match ray_runtime::ui::try_next_event() { Some((kind, win, mtag)) => tag(vec![\"ok\".to_string(), kind, win.to_string(), mtag]), None => tag(vec![\"timeout\".to_string()]) }; }\n",
         ));
         if t.fibers {
             out.push_str(concat!(

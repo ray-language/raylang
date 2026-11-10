@@ -4272,6 +4272,11 @@ impl<'a> Vm<'a> {
                         ];
                         let h = self.cur.heap.allocate(Obj::Array(elems));
                         self.push(HeapValue::Obj(h));
+                    } else if ms == 0 {
+                        // pepa #342: 0 = sin esperar — la cola está vacía, «timeout» ya.
+                        let elems = vec![HeapValue::Str("timeout".to_string().into())];
+                        let h = self.cur.heap.allocate(Obj::Array(elems));
+                        self.push(HeapValue::Obj(h));
                     } else {
                         match crate::builtins::ui_event_fd() {
                             Err(e) => {

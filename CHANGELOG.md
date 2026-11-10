@@ -6,7 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## 1.27.92 — 2026-11-10
 
-Shell de iOS: fondo de arranque y de ventana, sesión de audio configurable y sonidos propios en `std/notify` (M447).
+Shell de iOS: fondo de arranque y de ventana, sesión de audio configurable y sonidos propios en `std/notify` (M447); `ui.next_event_timeout(0)` ya no espera (pepa #342).
+
+- **`ui.next_event_timeout(0)` vuelve enseguida (pepa #342).** `0` significaba «sin plazo» y un bucle
+  que «mira» la cola antes de su tick se quedaba esperando para siempre. Ahora `0` = sin esperar
+  (como `select_timeout(chs, 0)`), un valor negativo = sin plazo, y `ui.try_next_event() ->
+  Option<UiEvent>` da el evento ya encolado sin bloquear. Igual en VM, intérprete y nativo.
 
 - **Shell de iOS: fondo, sesión de audio y sonidos propios (M447; pepa #334, #336 y #331).**
   `[ios] background = "#rrggbb"` (y `background_dark`) pintan la pantalla de arranque y la vista

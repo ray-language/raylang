@@ -2100,6 +2100,21 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::CharsetOp => {
+                    // M446: pop en orden inverso (data, label, op).
+                    let data = self.pop();
+                    let label = self.pop();
+                    let op = self.pop();
+                    let elems = match (&op, &label, &data) {
+                        (HeapValue::Str(op), HeapValue::Str(label), HeapValue::Bytes(data)) => match crate::builtins::charset_op(op, label, data) {
+                            Ok(r) => vec![HeapValue::bytes(b"ok".to_vec()), HeapValue::bytes(r)],
+                            Err(e) => vec![HeapValue::bytes(b"err".to_vec()), HeapValue::bytes(e.into_bytes())],
+                        },
+                        _ => unreachable!("the checker guarantees (string, string, bytes)"),
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::BigIntOp => {
                     // M195: pop en orden inverso (c, b, a, op).
                     let c = self.pop();

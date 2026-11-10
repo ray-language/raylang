@@ -149,7 +149,7 @@ Project:
   dev-client <url> <dir>  desktop client of `ray dev --device`: connects to the printed `<shell>.dev://ip:port/token` link and runs each pushed program in its own VM
   dev-lib --target T -o F  build the mobile development library (what `bundle --dev` links; targets: aarch64-apple-ios, aarch64-apple-ios-sim, aarch64-linux-android, x86_64-linux-android)
   check [file | dir] alias of build: type-check without running (0 ok / 65 error)
-  build [file | dir] check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--cpu name (target-cpu; `native` = this machine, default portable)] [--no-stubs | --allow-stubs] [--target triple] [--without crypto,tls,sqlite,regex,bigint,qr,deflate,keychain,unicode,watch,audio,ui,process,mimalloc,ahash,fibers] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
+  build [file | dir] check and compile without running (0 ok / 65 error) [--native [-o out] [--release] [--fast] [--cpu name (target-cpu; `native` = this machine, default portable)] [--no-stubs | --allow-stubs] [--target triple] [--without crypto,tls,sqlite,regex,bigint,qr,deflate,keychain,unicode,charset,watch,audio,ui,process,mimalloc,ahash,fibers] [--embed dirs] [--lib] [--devtools]] [--templates-only [path...]]
   bundle [file]     package an app (name/icon/id from [app] of ray.toml, flags override; unknown flags are errors; --help): --release native build + .app (macOS) / dir + .desktop (Linux) / dir + .exe with icon, version info and a .lnk shortcut (Windows; no console window); --ios generates an Xcode project instead (WKWebView shell + device/simulator static libs; excludes process; [ios] background_audio = true keeps std/audio playing in the background; --ios-target device|sim|both picks which libs to build — both by default, the other side's lib is preserved and checked against the new shell); --android generates a Gradle project (Java shell + WebView, the program as libray_app.so; --android-abi arm64|x86_64|all, arm64 by default); --dev (with --ios/--android) builds the DEVELOPMENT shell `<app>-dev` for `ray dev --device`; --entitlements plist / [app] entitlements for macOS signing [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list]. NOTE: a bundled app launches with cwd=/ — embed its assets ([native] embed). Signing: --sign IDENTITY / [app] sign / RAY_SIGN_IDENTITY → macOS codesign with hardened runtime + timestamp (Windows: signtool), --notary PROFILE / [app] notary → notarytool submit --wait + stapler; without them the .app is ad-hoc signed and macOS 15+ asks for approval
   test [file | dir] run the project's @test functions (entry modules + tests/*.ray) [filter] [--watch] [--native [--release] [--no-stubs | --allow-stubs]]
   fmt <file | dir>... print the canonical version to stdout (--write / -w: rewrite in place; a directory = every .ray under it, and without --write it only lists what would change, exit 1)
@@ -3310,7 +3310,7 @@ fn bundle_linux(out_dir: &Path, name: &str, icon: Option<&str>, opens: &[String]
 /// Los subsistemas que `--without` (CLI y `[native] without` del ray.toml) acepta. M396 (rayplay #169):
 /// UNA lista, la misma en la validación, en `ray build --help` y en la fila de REFERENCE (lo vigila
 /// `without_list_is_the_same_in_help_and_reference`).
-pub(crate) const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "regex", "bigint", "qr", "deflate", "keychain", "unicode", "watch", "audio", "ui", "process", "mimalloc", "ahash", "fibers"];
+pub(crate) const RT_SUBSYSTEMS: &[&str] = &["crypto", "tls", "sqlite", "regex", "bigint", "qr", "deflate", "keychain", "unicode", "charset", "watch", "audio", "ui", "process", "mimalloc", "ahash", "fibers"];
 
 /// #119 (ray-sublime): el `install.sh` del bundle de Linux — reescribe `Exec=`/`Icon=` del `.desktop` a
 /// la ubicación real y lo registra en `~/.local/share/applications`. M393 (medido en la VM): el `sed`
@@ -4424,7 +4424,7 @@ fn build_dev_lib_from_source(repo: &Path, target: &str, out: &Path) {
         &format!(
             "[package]\nname = \"ray_dev_lib\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n\
              [lib]\nname = \"ray_dev\"\ncrate-type = [\"{crate_type}\"]\n\n\
-             [dependencies]\nraylang = {{ path = \"{repo_toml}\", default-features = false, features = [\"sqlite\", \"net-tls\", \"regex\", \"watch\", \"unicode\", \"audio\", \"ui\", \"bigint\", \"deflate\", \"keychain\"] }}\n\
+             [dependencies]\nraylang = {{ path = \"{repo_toml}\", default-features = false, features = [\"sqlite\", \"net-tls\", \"regex\", \"watch\", \"unicode\", \"audio\", \"ui\", \"bigint\", \"deflate\", \"keychain\", \"charset\"] }}\n\
              ray-runtime = {{ path = \"{runtime_toml}\", default-features = false, features = [\"process\", \"ui\"] }}\n\n\
              [profile.release]\nopt-level = 3\ndebug = false\nstrip = true\n"
         ),
@@ -4553,6 +4553,7 @@ const RT_CARGO_TOML: &str = include_str!("../crates/ray-runtime/Cargo.toml");
 const RT_LIB_RS: &str = include_str!("../crates/ray-runtime/src/lib.rs");
 const RT_CRYPTO_RS: &str = include_str!("../crates/ray-runtime/src/crypto.rs");
 const RT_BIGINT_RS: &str = include_str!("../crates/ray-runtime/src/bigint.rs"); // M195
+const RT_CHARSET_RS: &str = include_str!("../crates/ray-runtime/src/charset.rs"); // M446
 const RT_B64_RS: &str = include_str!("../crates/ray-runtime/src/b64.rs"); // M380
 const RT_KEYCHAIN_RS: &str = include_str!("../crates/ray-runtime/src/keychain.rs"); // M266
 const RT_MD5_RS: &str = include_str!("../crates/ray-runtime/src/md5.rs"); // rayblob #282
@@ -4693,6 +4694,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         ("ray-runtime/src/unicode.rs", RT_UNICODE_RS),
         ("ray-runtime/src/crypto.rs", RT_CRYPTO_RS),
         ("ray-runtime/src/bigint.rs", RT_BIGINT_RS),
+        ("ray-runtime/src/charset.rs", RT_CHARSET_RS),
         ("ray-runtime/src/b64.rs", RT_B64_RS),
         ("ray-runtime/src/keychain.rs", RT_KEYCHAIN_RS),
         ("ray-runtime/src/md5.rs", RT_MD5_RS),

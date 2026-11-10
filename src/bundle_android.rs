@@ -437,6 +437,14 @@ public class MainActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == RayNotify.PERMISSION_REQUEST) { RayNotify.permissionResult(this, grantResults); }
     }
+
+    // Revisión 1.27.91: si la Activity muere con el diálogo de permiso abierto, la petición del
+    // programa recibe su Err en vez de esperar para siempre (y la siguiente no ve «already open»).
+    @Override
+    public void onDestroy() {
+        RayNotify.activityGone();
+        super.onDestroy();
+    }
     /*RAY_DEV_LINK_METHOD*/
 
     @Override
@@ -1002,6 +1010,12 @@ public final class RayNotify {
         c.getSharedPreferences(STATE, Context.MODE_PRIVATE).edit().putBoolean("asked", true).apply();
         a.raySuppressLifecycle = true;
         a.requestPermissions(new String[] { POST }, PERMISSION_REQUEST);
+    }
+
+    static void activityGone() {
+        long id = pendingPermission;
+        pendingPermission = 0;
+        if (id != 0) { RayBridge.requestResult(id, null, "notify: the activity was destroyed before the user answered"); }
     }
 
     static void permissionResult(Context c, int[] grantResults) {
@@ -1741,6 +1755,7 @@ mod tests {
         assert!(MAIN_ACTIVITY_JAVA.contains("rayNotificationIntent(getIntent());"));
         assert!(MAIN_ACTIVITY_JAVA.contains("if (raySuppressLifecycle) { return; }"));
         assert!(MAIN_ACTIVITY_JAVA.contains("RayNotify.permissionResult(this, grantResults)"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("RayNotify.activityGone();") && RAY_NOTIFY_JAVA.contains("static void activityGone()"));
         assert!(RAY_BRIDGE_JAVA.contains("public static native void requestResult(long id, String value, String err);"));
         assert!(RAY_BRIDGE_JAVA.contains("public static void onRequest(String id, String op, String arg)"));
         assert!(RAY_NOTIFY_JAVA.contains("a.requestPermissions(new String[] { POST }, PERMISSION_REQUEST);"));

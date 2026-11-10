@@ -35,6 +35,10 @@ x509 = ["dep:x509-parser"]
 # `num-bigint` — ya estaba en el árbol vía x509-parser. NO es de tiempo constante (vale para el DH/RSA
 # de un cliente, no para claves de servidor bajo ataque de temporización; SECURITY.md).
 bigint = ["dep:num-bigint", "dep:num-traits", "dep:num-integer"]
+# M446 (ray-sublime #317) — codificaciones heredadas (`std/charset`) sobre `encoding_rs` (el motor de Firefox y de
+# TextDecoder/TextEncoder; las tablas del WHATWG Encoding Standard). Determinista → oráculo VM↔nativo. Sin feature,
+# `Err` claro.
+charset = ["dep:encoding_rs"]
 # M266 (ray-sublime §96) — secretos en el LLAVERO DEL SISTEMA (`std/keychain`): Keychain Services en macOS
 # (Security.framework), Secret Service por libsecret (dlopen en runtime) en Linux, Credential Manager
 # (advapi32) en Windows. Cero crates, sin headers de build; `RAY_KEYCHAIN_FILE` = archivo plano para tests.
@@ -114,6 +118,9 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 x509-parser = { version = "0.17", optional = true }
 # M195 — std/bigint (feature `bigint`).
 num-bigint = { version = "0.4", optional = true }
+# M446 — encoding_rs 0.8: las tablas del WHATWG Encoding Standard (Windows-125x, ISO-8859-x, Shift_JIS, GBK, Big5…),
+# Rust puro, sin dependencias de runtime (`cfg-if`); lo usan Firefox, Servo y Deno.
+encoding_rs = { version = "0.8", optional = true }
 # M253 — miniz_oxide 0.8: DEFLATE/INFLATE en Rust puro (el backend de flate2), determinista → oráculo VM↔nativo.
 miniz_oxide = { version = "0.8", optional = true }
 # M347 — qrcode 0.14 sin features (sin `image`): solo la matriz de módulos; el render es de std/qr.

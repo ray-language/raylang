@@ -1,0 +1,61 @@
+// std/charset — codificaciones heredadas (M446, ray-sublime #317): Windows-1252, ISO-8859-x,
+// KOI8-R, Shift_JIS, EUC-JP, EUC-KR, GBK, GB18030, Big5… por las tablas del WHATWG Encoding
+// Standard (encoding_rs en el runtime, el motor de TextDecoder/TextEncoder). Las etiquetas son
+// las del estándar, sin distinguir mayúsculas y con sus alias (`latin1`, `cp1252`, `sjis`…).
+// Un octeto malformado al decodificar o un carácter sin representación al codificar es `Err`
+// con la posición: nada de U+FFFD ni `?` silenciosos. Sin la feature `charset` (build slim,
+// `--without charset`) todo devuelve `Err`.
+
+//! Legacy charset conversion (Windows-1252, ISO-8859-x, KOI8-R, Shift_JIS, EUC-JP, EUC-KR, GBK,
+//! GB18030, Big5, UTF-16…) with the WHATWG Encoding Standard tables: `decode(data, label)`,
+//! `encode(text, label)` and `labels()`. Labels are case-insensitive and accept the standard's
+//! aliases (`latin1`, `cp1252`, `sjis`, `ascii`…). Errors carry the position of the offending
+//! byte or character.
+
+fn call(op: string, label: string, data: bytes) -> Result<bytes, string> {
+    let r = __charset_op(op, label, data);
+    if (r.len() == 2 && r[0] == b"ok") {
+        Result.Ok(r[1])
+    } else if (r.len() == 2) {
+        match (from_utf8(r[1])) {
+            Result.Ok(msg) => Result.Err("charset: " + msg),
+            Result.Err(e) => Result.Err("charset: error"),
+        }
+    } else {
+        Result.Err("charset: internal error")
+    }
+}
+
+/// Decodes `data` with the charset `label` (`"windows-1252"`, `"latin1"`, `"shift_jis"`,
+/// `"euc-kr"`, `"gbk"`, `"big5"`, `"utf-16le"`…) into a string. The label decides: a BOM is
+/// not sniffed. `Err` for an unknown label, or a malformed sequence (with its byte offset).
+pub fn decode(data: bytes, label: string) -> Result<string, string> {
+    match (call("decode", label, data)) {
+        Result.Ok(utf8) => match (from_utf8(utf8)) {
+            Result.Ok(s) => Result.Ok(s),
+            Result.Err(e) => Result.Err("charset: " + e),
+        },
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+/// Encodes `text` with the charset `label`. `Err` for an unknown label, a charset without an
+/// encoder (`replacement`, `utf-16be`/`utf-16le`: the standard encodes those as UTF-8), or a
+/// character the charset cannot represent (with the character and its index) — what an editor
+/// reports when saving.
+pub fn encode(text: string, label: string) -> Result<bytes, string> {
+    call("encode", label, text.to_bytes())
+}
+
+/// The canonical names of the known charsets, in the order of the WHATWG Encoding Standard
+/// (`"UTF-8"`, `"IBM866"`, `"ISO-8859-2"`, …, `"windows-1252"`, …, `"Shift_JIS"`, …). Any of
+/// their aliases is accepted by `decode`/`encode`. Empty when the build has no charset support.
+pub fn labels() -> [string] {
+    match (call("labels", "", b"")) {
+        Result.Ok(b) => match (from_utf8(b)) {
+            Result.Ok(s) => s.split("\n"),
+            Result.Err(e) => [],
+        },
+        Result.Err(e) => [],
+    }
+}

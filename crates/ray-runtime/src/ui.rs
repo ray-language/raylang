@@ -8299,11 +8299,19 @@ mod shell {
         let arg_c = CString::new(arg.replace('\0', "")).unwrap();
         handler(id, op_c.as_ptr(), arg_c.as_ptr());
         let mut pending = st.pending.lock().unwrap();
+        // Revisión 1.27.91: con plazo — si el shell nunca contesta (la Activity murió con el diálogo
+        // abierto) la fibra no se queda colgada para siempre.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
         loop {
             if let Some(Some(_)) = pending.get(&id) {
                 return pending.remove(&id).flatten().unwrap_or_else(|| Err("ui: the shell returned nothing".to_string()));
             }
-            pending = st.done.wait(pending).unwrap();
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                pending.remove(&id);
+                return Err(format!("ui: the shell did not answer the '{op}' request in 10 minutes"));
+            }
+            pending = st.done.wait_timeout(pending, deadline - now).unwrap().0;
         }
     }
 

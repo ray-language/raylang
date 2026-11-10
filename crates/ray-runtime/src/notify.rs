@@ -87,7 +87,15 @@ pub fn parse_trigger(s: &str) -> Result<Trigger, String> {
             }
             Ok(Trigger::After { secs, repeat })
         }
-        "at" => Ok(Trigger::At(num(it.next(), "the time")?)),
+        "at" => {
+            let unix = num(it.next(), "the time")?;
+            // Revisión 1.27.91: validado aquí, no solo en Apple — Android armaba y disparaba al instante.
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+            if unix <= now {
+                return Err("notify: At(…) is in the past".to_string());
+            }
+            Ok(Trigger::At(unix))
+        }
         "daily" => {
             let hour = num(it.next(), "the hour")?;
             let minute = num(it.next(), "the minute")?;
@@ -543,10 +551,23 @@ mod apple {
 
     /// −1 sin saber, 0 denegada, 1 concedida, 2 provisional.
     static AUTH: AtomicI8 = AtomicI8::new(-1);
-    /// Peticiones retenidas a la espera de la autorización (se añaden al concederla).
-    static WAITING: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+    /// Peticiones retenidas a la espera de la autorización (se añaden al concederla): (id, puntero).
+    static WAITING: Mutex<Vec<(String, usize)>> = Mutex::new(Vec::new());
+
+    /// Suelta una petición retenida que ya no se va a añadir.
+    fn release_request(request: usize) {
+        // SAFETY: el puntero vino de `retain` en `show`; un `release` por retención.
+        unsafe {
+            let rel: MsgVoid = std::mem::transmute(msg_send());
+            rel(request as Id, sel(b"release\0"));
+        }
+    }
     /// ¿Hay una petición de autorización en vuelo (lanzada por `show`, sin esperar)?
     static ASKING: Mutex<bool> = Mutex::new(false);
+    /// Revisión 1.27.91: ¿la autorización en vuelo la espera `permission()` en el slot de respuestas?
+    /// La que lanza `show` (sin esperar) NO debe entregar ahí: pisaría la respuesta de otra llamada
+    /// (`pending()` recibía "granted" como lista de ids).
+    static AUTH_AWAITED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
     const OPT_BADGE: u64 = 1;
     const OPT_SOUND: u64 = 2;
@@ -559,16 +580,23 @@ mod apple {
         // `granted` es YES también con `provisional`; el estado fino lo da `status`.
         AUTH.store(if granted != 0 { 1 } else { 0 }, Ordering::SeqCst);
         *ASKING.lock().unwrap() = false;
-        let waiting: Vec<usize> = std::mem::take(&mut *WAITING.lock().unwrap());
+        let waiting: Vec<(String, usize)> = std::mem::take(&mut *WAITING.lock().unwrap());
         if granted != 0 {
-            for req in waiting {
+            for (_, req) in waiting {
                 add_request(req as Id);
             }
-        } else if crate::ui::ui_trace() {
-            eprintln!("[ui] notify: the user did not authorize notifications ({} dropped)", waiting.len());
+        } else {
+            if crate::ui::ui_trace() {
+                eprintln!("[ui] notify: the user did not authorize notifications ({} dropped)", waiting.len());
+            }
+            for (_, req) in waiting {
+                release_request(req);
+            }
         }
         let _ = was_provisional;
-        deliver(Ok(if granted != 0 { "granted".to_string() } else { "denied".to_string() }));
+        if AUTH_AWAITED.swap(false, Ordering::SeqCst) {
+            deliver(Ok(if granted != 0 { "granted".to_string() } else { "denied".to_string() }));
+        }
     }
 
     fn request_authorization(opts: u64) -> Result<(), String> {
@@ -590,7 +618,10 @@ mod apple {
         if time_sensitive {
             opts |= OPT_TIME_SENSITIVE;
         }
-        let r = blocking(|| request_authorization(opts))?;
+        let r = blocking(|| {
+            AUTH_AWAITED.store(true, Ordering::SeqCst);
+            request_authorization(opts).inspect_err(|_| AUTH_AWAITED.store(false, Ordering::SeqCst))
+        })?;
         // Con `provisional` el sistema concede sin diálogo: el estado real lo cuenta `status`.
         if provisional && r == "granted" { status() } else { Ok(r) }
     }
@@ -664,7 +695,9 @@ mod apple {
 
     unsafe fn register_category(center: Id, actions: &[(String, String)]) -> Id {
         unsafe {
-            let cat_id = format!("ray:{}", actions.iter().map(|(i, _)| i.as_str()).collect::<Vec<_>>().join(","));
+            // Revisión 1.27.91: la clave lleva también los títulos — dos notificaciones con los mismos ids
+            // y botones distintos tenían una sola categoría (la segunda mostraba los títulos de la primera).
+            let cat_id = format!("ray:{}", actions.iter().map(|(i, t)| format!("{i}={t}")).collect::<Vec<_>>().join(","));
             let mut all = categories().lock().unwrap();
             if !all.iter().any(|(id, _)| *id == cat_id) {
                 all.push((cat_id.clone(), actions.to_vec()));
@@ -789,7 +822,7 @@ mod apple {
                 // Sin saber aún: se pide (sin esperar, como M371) y la petición espera al permiso.
                 let first = {
                     let mut w = WAITING.lock().unwrap();
-                    w.push(request as usize);
+                    w.push((n.id.clone(), request as usize));
                     w.len() == 1
                 };
                 if first {
@@ -816,7 +849,16 @@ mod apple {
             add(center, sel(b"removePendingNotificationRequestsWithIdentifiers:\0"), arr);
             add(center, sel(b"removeDeliveredNotificationsWithIdentifiers:\0"), arr);
         }
-        WAITING.lock().unwrap().clear();
+        // Revisión 1.27.91: solo la retenida con ESE id (antes vaciaba toda la cola de espera).
+        let dropped: Vec<usize> = {
+            let mut w = WAITING.lock().unwrap();
+            let (gone, keep): (Vec<_>, Vec<_>) = std::mem::take(&mut *w).into_iter().partition(|(i, _)| i == id);
+            *w = keep;
+            gone.into_iter().map(|(_, p)| p).collect()
+        };
+        for p in dropped {
+            release_request(p);
+        }
         Ok(())
     }
 
@@ -827,7 +869,9 @@ mod apple {
             let call: MsgVoid = std::mem::transmute(msg_send());
             call(center, sel(b"removeAllPendingNotificationRequests\0"));
         }
-        WAITING.lock().unwrap().clear();
+        for (_, p) in std::mem::take(&mut *WAITING.lock().unwrap()) {
+            release_request(p);
+        }
         Ok(())
     }
 

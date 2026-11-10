@@ -317,6 +317,8 @@ pub enum OpCode {
     /// M126: hasher incremental (new -> update* -> final; final consume el handle).
     /// M195: `__bigint_op(op, a, b, c)` → `[bytes]` (`["ok", r]` / `["err", msg]`). Solo VM.
     BigIntOp,
+    /// M446: `__charset_op(op, label, data)` → `[bytes]` (`["ok", r]` / `["err", msg]`). Solo VM.
+    CharsetOp,
     /// M253: `__deflate_op(op, data, n)` → `[bytes]` (`[r]` / `[]` = no disponible). Solo VM.
     DeflateOp,
     /// M347 (rayauth R23): `__qr_matrix(text, ecl)` → `[string]` (filas de '1'/'0'; vacío si no cabe).

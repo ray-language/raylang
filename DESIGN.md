@@ -19791,3 +19791,43 @@ principal, en autorelease), Android por un método opcional `RayBridge.onHaptic`
 `onOpenUrl` (shell anterior → `Err` con el remedio), macOS `NSHapticFeedbackManager`, resto
 no-op. Los sonidos del sistema (`RingtoneManager`) que pedía el mismo hallazgo quedan fuera: iOS
 no deja leerlos, y para un aviso el `sound` de `std/notify` (M442) cubre el caso.
+
+## 419. M446 — `std/charset`: codificaciones heredadas (nov 2026)
+
+ray-sublime (#317) quería leer y escribir archivos en Windows-1252, Shift-JIS, EUC-JP, GBK,
+Big5 o KOI8-R — las codificaciones que ofrece un editor — y raylang solo tenía `from_utf8`. Las
+de un byte se pueden escribir en la app (la propia ray-sublime trae Latin-1 y Windows-1252),
+pero las multibyte son tablas de miles de entradas, y la solución de lanzar el `iconv` del
+sistema no existe en Windows. La decisión sigue la política de M131 (unicode-normalization): un
+dato que no se transcribe a mano se trae de quien lo genera. `encoding_rs` es el motor de
+Firefox y de `TextDecoder`/`TextEncoder`, implementa exactamente el **WHATWG Encoding Standard**
+(las 40 codificaciones y sus alias) y es Rust puro sin dependencias de runtime.
+
+La forma es la de `std/bigint`: un primitivo `__charset_op(op, label, data) -> [bytes]`
+(`["ok", r]`/`["err", msg]`) en `ray-runtime/charset.rs`, compartido por la VM (feature
+`charset`, por defecto) y el binario transpilado (que la activa por uso, con `--without
+charset` → el `Err` del build slim), y `std/charset.ray` lo envuelve en `decode`, `encode` y
+`labels`. Dos decisiones de contrato: los errores **llevan posición** — `decode` usa el
+decodificador *sin reemplazo* y devuelve el octeto malformado en vez de un U+FFFD, `encode` el
+carácter sin representación y su índice, que es lo que un editor muestra al guardar —, y
+`encode` **rechaza** las codificaciones que el estándar no sabe emitir (`replacement`, UTF-16:
+WHATWG las codifica como UTF-8 en silencio; aquí es `Err` con el consejo). El BOM no se olfatea:
+la etiqueta manda. Y una sorpresa documentada: por el estándar, `latin1`/`iso-8859-1` SON
+`windows-1252` (el `€` entra como 0x80).
+
+**La revisión previa a la release** (`/code-review high` sobre `v1.27.90..`) trajo nueve
+hallazgos; ocho se corrigen en la misma PR del bump. En `std/notify` (M442): la autorización que
+lanza `show` sin esperar entregaba su respuesta en el slot compartido de las llamadas
+bloqueantes (`pending()` podía recibir «granted» como lista de ids) — ahora solo entrega si la
+espera `permission()`; `cancel(id)` vaciaba TODA la cola de peticiones retenidas (y nadie las
+soltaba); la categoría de acciones se registraba solo por ids, con lo que dos notificaciones con
+los mismos ids y botones distintos compartían títulos; `At` en el pasado solo lo rechazaba
+Apple (Android lo disparaba al instante) y pasa al parser compartido; y la petición al shell
+gana un plazo de 10 minutos y la Activity de Android que muere con el diálogo abierto contesta
+con `Err`. En M445: el reemplazo de una conexión del mismo dispositivo soltaba un `try_clone`
+del socket, que no cierra el hilo lector (`shutdown` sí); y el aviso de resultado descartado
+callaba solo ante funciones libres del usuario — ahora también ante un método de `impl` o una
+función de módulo con ese nombre, y recorre solo el módulo de entrada (un paquete no debe
+avisar en cada ejecución). En M446: la posición del octeto malformado ignoraba los octetos
+leídos después de la secuencia (`read - len - extra`). El noveno (el mensaje de «sin feature»
+copiado en tres sitios) queda como está.

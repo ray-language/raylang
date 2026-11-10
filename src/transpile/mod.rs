@@ -168,6 +168,8 @@ struct Transpiler {
     pub(super) needs_rt_unicode: bool,
     /// M195: el programa usa `std/bigint` (`__bigint_op`) → feature `bigint` de ray-runtime.
     pub(super) needs_rt_bigint: bool,
+    /// M446: el programa usa `std/charset` (`__charset_op`) → feature `charset` de ray-runtime.
+    pub(super) needs_rt_charset: bool,
     /// M266: el programa usa `std/keychain` (`__keychain`) → feature `keychain` de ray-runtime.
     pub(super) needs_rt_keychain: bool,
     /// M253: el programa usa `__deflate_op` (std/deflate, std/inflate) → feature `deflate` de ray-runtime.
@@ -449,6 +451,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         needs_format_float: false,
         needs_md5: false,
         needs_rt_bigint: false,
+        needs_rt_charset: false,
         needs_rt_keychain: false,
         needs_rt_deflate: false,
         needs_rt_qr: false,
@@ -920,6 +923,10 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     // M195: enteros grandes (detectado por USO de `__bigint_op`; `--without bigint` → Err-valor).
     if t.needs_rt_bigint {
         rt_features.push("bigint");
+    }
+    // M446: codificaciones heredadas (detectado por USO de `__charset_op`; `--without charset` → Err-valor).
+    if t.needs_rt_charset {
+        rt_features.push("charset");
     }
     // M266: llavero del sistema (detectado por USO de `__keychain`; `--without keychain` → Err-valor).
     if t.needs_rt_keychain {

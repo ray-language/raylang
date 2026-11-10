@@ -40,6 +40,7 @@ registra siempre).
 | `audio` | salida PCM de `std/audio` (backends a mano, cero crates) | `std/audio` → `Err` claro |
 | `ui` | ventana + webview de `std/ui` | `std/ui` → `Err` claro |
 | `bigint` | `std/bigint` (num-bigint) | → `Err` claro |
+| `charset` | `std/charset` (encoding_rs, tablas WHATWG) | → `Err` claro |
 | `deflate` | DEFLATE/INFLATE de producción (miniz_oxide) | `std/deflate`/`std/inflate` caen a su algoritmo en raylang (mismo resultado, más lento) |
 | `keychain` | el llavero del sistema (`std/keychain`, backends a mano) | → `Err` claro |
 | `qr` | `std/qr` (qrcode) | → `Err` claro |
@@ -163,6 +164,7 @@ wordcount/logparse **−40 %**, jsonserialize **−18 %**. Consecuencia: el buil
 defecto va por el **camino Cargo** (con la caché compartida, mimalloc se compila una vez por
 máquina); `--without mimalloc,ahash,fibers` recupera el `rustc` pelado (sin Cargo/red).
 `--without bigint` deja `std/bigint` devolviendo `Err` en vez de enlazar `num-bigint`.
+`--without charset` deja `std/charset` devolviendo `Err` en vez de enlazar `encoding_rs`.
 `--without keychain` deja `std/keychain` devolviendo `Err` (sin Security/libsecret/advapi32).
 El aviso "N function(s) not supported in the native subset — emitted as stubs" es solo eso, un
 aviso, en un build de desarrollo; en **`--release`** (y en todo `ray bundle`) es un **error** (65):
@@ -188,7 +190,7 @@ modelo antiguo levantaba un hilo por conexión (docs/diseno-concurrencia-nativa.
 Windows x86_64 el reactor es `WSAPoll`; en Windows ARM64 se apaga solo (corosensei no tiene
 backend para esa arquitectura).
 
-**Exclusión.** `--without crypto,tls,sqlite,regex,bigint,qr,deflate,keychain,unicode,watch,audio,ui,process,mimalloc,ahash,fibers` (la lista completa, la misma de `ray build --help` y de la fila `--without` de REFERENCE) — para los subsistemas de uso
+**Exclusión.** `--without crypto,tls,sqlite,regex,bigint,qr,deflate,keychain,unicode,charset,watch,audio,ui,process,mimalloc,ahash,fibers` (la lista completa, la misma de `ray build --help` y de la fila `--without` de REFERENCE) — para los subsistemas de uso
 (crypto/tls/sqlite) fuerza el *stub* que panica; `mimalloc`/`ahash` vuelven al malloc del
 sistema / al HashMap std (→ con todo excluido, vía rápida `rustc`); `[native] without =
 [...]` en el `ray.toml` fija la política estable del proyecto (la CLI se une a ella). Para

@@ -2739,6 +2739,17 @@ pub fn bigint_op(_name: &str, _a: &[u8], _b: &[u8], _c: &[u8]) -> Result<Vec<u8>
     Err("bigint is not available in this build (feature 'bigint')".to_string())
 }
 
+/// M446: la primitiva de `std/charset` (ver ray_runtime::charset): decode/encode/labels con las
+/// tablas WHATWG. Sin la feature (slim/wasm), `Err` claro.
+#[cfg(all(feature = "charset", not(target_arch = "wasm32")))]
+pub fn charset_op(op: &str, label: &str, data: &[u8]) -> Result<Vec<u8>, String> {
+    ray_runtime::charset::op(op, label, data)
+}
+#[cfg(any(not(feature = "charset"), target_arch = "wasm32"))]
+pub fn charset_op(_op: &str, _label: &str, _data: &[u8]) -> Result<Vec<u8>, String> {
+    Err("charset conversion is not available in this build (feature 'charset')".to_string())
+}
+
 /// M266: la primitiva de `std/keychain` (ver ray_runtime::keychain): `["ok", …]`/`["none"]`/`["err", msg]`.
 #[cfg(all(feature = "keychain", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn keychain_op(op: &str, service: &str, account: &str, secret: &str) -> Vec<String> {
@@ -4621,6 +4632,15 @@ static BUILTINS: &[Builtin] = &[
         for (i, t) in a.iter().enumerate().skip(1) {
             if *t != Type::Bytes { return Err((Some(i), format!("__bigint_op expects bytes, not {}", t))); }
         }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // M446 (ray-sublime #317): __charset_op(op, label, data) -> [bytes]: ["ok", resultado] | ["err", mensaje].
+    // Primitivo interno de std/charset: "decode" (octetos → UTF-8), "encode" (UTF-8 → octetos), "labels".
+    Builtin { name: "__charset_op", opcode: OpCode::CharsetOp, check: |a| {
+        arity(a, 3, "__charset_op", " (op, label, data)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__charset_op expects a string (the operation), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__charset_op expects a string (the charset label), not {}", a[1]))); }
+        if a[2] != Type::Bytes { return Err((Some(2), format!("__charset_op expects bytes, not {}", a[2]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     // M347 (rayauth R1): __pk_op(op, a, b, c) -> [bytes]: ["ok", resultado] | ["err", mensaje]. Clave

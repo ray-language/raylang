@@ -1144,6 +1144,7 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    ```rust
    import std/math;          // math.gcd(12, 18), math.PI, math.clamp(x, 0, 10)
    import std/text;          // text.capitalize("hola"), text.nfd("café") — normalización Unicode
+   import std/charset;       // charset.decode(b, "windows-1252"), encode(s, "shift_jis"), labels() — tablas WHATWG
    import std/sort;          // sort.binary_search(xs, 42), sort.dedup(xs)
    import std/fs;            // fs.read_file("x.txt") -> Result<string, string>, fs.copy_all(src, dst)
    import std/json;          // json.parse(s) -> Result<Json, string>, json.stringify(j)

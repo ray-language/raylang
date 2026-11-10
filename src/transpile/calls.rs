@@ -2636,6 +2636,22 @@ impl Transpiler {
                     out.push_str(") { Ok(__rt_r) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(__rt_r)])), Err(__rt_e) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(__rt_e.into_bytes())])) } }");
                 }
             }
+            // M446: __charset_op(op, label, data) -> [bytes] (["ok", r] | ["err", msg]); con `--without charset`,
+            // el Err-valor del build slim.
+            "charset_op" if name.starts_with("__") => {
+                if self.exclude.contains("charset") {
+                    out.push_str("Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(&b\"charset conversion is not available in this build (feature 'charset')\"[..])]))");
+                } else {
+                    self.needs_rt_charset = true;
+                    out.push_str("{ match ray_runtime::charset::op(&");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(", &");
+                    self.emit_expr(out, eff[1])?;
+                    out.push_str(", &");
+                    self.emit_expr(out, eff[2])?;
+                    out.push_str(") { Ok(__rt_r) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(__rt_r)])), Err(__rt_e) => Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(__rt_e.into_bytes())])) } }");
+                }
+            }
             "bigint_op" if name.starts_with("__") => {
                 if self.exclude.contains("bigint") {
                     out.push_str("Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(&b\"bigint is not available in this build (feature 'bigint')\"[..])]))");

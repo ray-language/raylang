@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/charset`: codificaciones heredadas (M446, ray-sublime #317).** `decode(bytes, label)`,
+  `encode(text, label)` y `labels()` con las tablas del WHATWG Encoding Standard (`encoding_rs`):
+  Windows-125x, ISO-8859-x, KOI8-R/U, Shift_JIS, EUC-JP, EUC-KR, GBK, GB18030, Big5, UTF-16… Las
+  etiquetas admiten los alias del estándar (`latin1`, `cp1252`, `sjis`); un octeto malformado o
+  un carácter sin representación es `Err` con su posición. Idéntico en VM y nativo; feature
+  `charset` (por defecto; `--without charset` → `Err`).
 - **Ronda pepa 1.27.90 (M445; hallazgos #321, #322, #323, #328, #331 y #332).** El compilador
   **avisa** del resultado descartado de una función pura (`sort(xs);`, `xs.sort();`, `s.trim();`,
   `xs.map(f);`… devuelven un valor nuevo y no tocan su argumento): `warning at L:C: …` en stderr

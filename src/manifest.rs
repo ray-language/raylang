@@ -148,6 +148,18 @@ pub struct Manifest {
     /// `playback` al arrancar y el Info.plist declara `UIBackgroundModes = ["audio"]`: el programa
     /// (y su `std/audio`) sigue sonando con la app en segundo plano y con el interruptor de silencio.
     pub ios_background_audio: bool,
+    /// M447 (pepa #334): `[ios] background = "#rrggbb"` (y `background_dark`) — el color de la
+    /// pantalla de arranque y de la vista bajo la página (catálogo `LaunchBackground`).
+    pub ios_background: Option<String>,
+    pub ios_background_dark: Option<String>,
+    /// M447 (pepa #336): `[ios] audio_session = "playback" | "playback_mix"` — la categoría de la
+    /// sesión de audio que el shell activa al arrancar, separada del modo en segundo plano.
+    pub ios_audio_session: Option<String>,
+    /// M447 (pepa #331): `[ios] sounds = ["assets/alarm.caf"]` — archivos de sonido copiados al
+    /// bundle, para `Notification.sound_name` de std/notify.
+    pub ios_sounds: Vec<String>,
+    /// M447 (pepa #331): `[android] sounds = ["assets/alarm.ogg"]` — a `res/raw/`, para `Channel.sound`.
+    pub android_sounds: Vec<String>,
     /// M324 (ray808 #18): `[android] background_audio = true` — al pasar a segundo plano el shell
     /// arranca un *foreground service* de reproducción (notificación mientras dura) para que el
     /// sistema no mate el proceso; lo para al volver.
@@ -244,6 +256,11 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut ios_background_audio = false;
     let mut android_background_audio = false;
     let mut android_exact_alarms = false;
+    let mut ios_background = None;
+    let mut ios_background_dark = None;
+    let mut ios_audio_session = None;
+    let mut ios_sounds = Vec::new();
+    let mut android_sounds = Vec::new();
     let mut app_copyright = None;
     let mut app_name = None;
     let mut app_icon = None;
@@ -264,12 +281,9 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
 
     for (i, raw_line) in src.lines().enumerate() {
         let num = i + 1;
-        // Quitar comentario (`#`) y espacios. No hay `#` dentro de las cadenas de un manifiesto.
-        let line = match raw_line.split_once('#') {
-            Some((before, _)) => before,
-            None => raw_line,
-        }
-        .trim();
+        // Quitar comentario (`#`) y espacios — un `#` DENTRO de comillas no lo es (M447: los
+        // colores `"#f1f3f5"` de `[ios] background`).
+        let line = strip_comment(raw_line).trim();
         if line.is_empty() {
             continue;
         }
@@ -397,6 +411,8 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "background_audio" => android_background_audio = as_bool()?,
                 // M442: alarmas exactas para las notificaciones programadas de std/notify.
                 "exact_alarms" => android_exact_alarms = as_bool()?,
+                // M447 (pepa #331): sonidos de notificación → res/raw/.
+                "sounds" => android_sounds = parse_string_array(value_raw).ok_or_else(|| err(num, "sounds must be an array of paths"))?,
                 _ => {} // otras claves de [android] se ignoran por ahora (extensibilidad)
             },
             "ios" => match key {
@@ -404,6 +420,24 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "development_team" => ios_development_team = Some(as_string()?),
                 // M324 (ray808 #18): sesión `playback` + UIBackgroundModes audio en el shell.
                 "background_audio" => ios_background_audio = as_bool()?,
+                // M447 (pepa #334): el color de arranque (y su variante oscura).
+                "background" | "background_dark" => {
+                    let c = as_string()?;
+                    if !(c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|ch| ch.is_ascii_hexdigit())) {
+                        return Err(err(num, "the color must be #rrggbb"));
+                    }
+                    if key == "background" { ios_background = Some(c) } else { ios_background_dark = Some(c) }
+                }
+                // M447 (pepa #336): la categoría de la sesión de audio.
+                "audio_session" => {
+                    let v = as_string()?;
+                    if v != "playback" && v != "playback_mix" {
+                        return Err(err(num, "audio_session must be \"playback\" or \"playback_mix\""));
+                    }
+                    ios_audio_session = Some(v);
+                }
+                // M447 (pepa #331): sonidos de notificación copiados al bundle.
+                "sounds" => ios_sounds = parse_string_array(value_raw).ok_or_else(|| err(num, "sounds must be an array of paths"))?,
                 _ => {} // otras claves de [ios] se ignoran por ahora (extensibilidad)
             },
             // M440 (rayreq #309): firma por plataforma.
@@ -455,6 +489,11 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         frontend,
         ios_development_team,
         ios_background_audio,
+        ios_background,
+        ios_background_dark,
+        ios_audio_session,
+        ios_sounds,
+        android_sounds,
         android_background_audio,
         android_exact_alarms,
         android_application_id,
@@ -480,6 +519,19 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
 /// Parsea un array TOML simple de cadenas en una línea: `["a", "b", "c"]` → `["a","b","c"]`; `[]` → vacío.
 /// `None` si no tiene la forma `[ … ]` o algún elemento no está entre comillas. (No admite arrays
 /// multilínea ni comas finales — suficiente para `[native] without`, que es una lista corta y plana.)
+/// El texto de la línea sin su comentario: el primer `#` fuera de una cadena entre comillas.
+fn strip_comment(line: &str) -> &str {
+    let mut quoted = false;
+    for (i, c) in line.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            '#' if !quoted => return &line[..i],
+            _ => {}
+        }
+    }
+    line
+}
+
 fn parse_string_array(s: &str) -> Option<Vec<String>> {
     let inner = s.strip_prefix('[')?.strip_suffix(']')?.trim();
     if inner.is_empty() {
@@ -694,6 +746,23 @@ mod tests {
         assert_eq!(m.app_windows_sign.as_deref(), Some("CN=Rayala"));
         let bare = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n").unwrap();
         assert!(bare.app_macos_sign.is_none() && bare.app_windows_sign.is_none());
+    }
+
+    #[test]
+    /// M447 (pepa #334/#336/#331): las claves nuevas de `[ios]` y `[android]`, con su validación.
+    #[test]
+    fn ios_launch_background_audio_session_and_sounds_are_parsed() {
+        let m = parse_src(
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[ios]\nbackground = \"#f1f3f5\"\nbackground_dark = \"#141414\"\naudio_session = \"playback_mix\"\nsounds = [\"assets/alarm.caf\", \"assets/ding.wav\"]\n\n[android]\nsounds = [\"assets/alarm.ogg\"]\n",
+        )
+        .unwrap();
+        assert_eq!((m.ios_background.as_deref(), m.ios_background_dark.as_deref(), m.ios_audio_session.as_deref()), (Some("#f1f3f5"), Some("#141414"), Some("playback_mix")));
+        assert_eq!(m.ios_sounds, vec!["assets/alarm.caf", "assets/ding.wav"]);
+        assert_eq!(m.android_sounds, vec!["assets/alarm.ogg"]);
+        let bare = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n").unwrap();
+        assert!(bare.ios_background.is_none() && bare.ios_audio_session.is_none() && bare.ios_sounds.is_empty() && bare.android_sounds.is_empty());
+        assert!(parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[ios]\nbackground = \"red\"\n").unwrap_err().contains("#rrggbb"));
+        assert!(parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[ios]\naudio_session = \"ambient\"\n").unwrap_err().contains("playback_mix"));
     }
 
     #[test]

@@ -1470,7 +1470,9 @@ import std/notify;
 if (notify.status()? != "granted") {
     print(notify.request_permission()?);          // "granted" | "denied" | "provisional"; espera al usuario
 }
-notify.create_channel(notify.Channel { id: "orders", name: "Pedidos", description: "", importance: "high" })?; // Android; Ok en los demás
+notify.create_channel(notify.Channel { id: "orders", name: "Pedidos", description: "", importance: "high", sound: "" })?; // Android; Ok en los demás
+// Sonido propio: `n.sound_name = "alarm"` (iOS, un archivo de `[ios] sounds`) o `sound: "alarm"` en el canal
+// (Android, un archivo de `[android] sounds`, sin extensión).
 var n = notify.message("Pedido enviado", "Llega el viernes");
 n.id = "order-42";                                 // repetir el id sustituye la anterior
 n.channel = "orders";

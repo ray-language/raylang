@@ -4,6 +4,20 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Shell de iOS: fondo, sesión de audio y sonidos propios (M447; pepa #334, #336 y #331).**
+  `[ios] background = "#rrggbb"` (y `background_dark`) pintan la pantalla de arranque y la vista
+  bajo la página, el webview es transparente y `ui.Options.background` también llega a la shell:
+  se acabó el destello blanco al abrir. `[ios] audio_session = "playback" | "playback_mix"` elige
+  la categoría de la sesión sin el modo en segundo plano; `playback_mix` añade `MixWithOthers`
+  (la app suena con el interruptor de silencio sin cortar la música de otras). `std/notify`:
+  `Notification.sound_name` (iOS, un archivo de `[ios] sounds`) y `Channel.sound` (Android, un
+  archivo de `[android] sounds` en `res/raw`, por canal) para un sonido propio; `notify.channel(id,
+  name)` construye un canal con los valores por defecto. **Cambio**: `Channel` gana el campo
+  `sound` (un literal de struct debe darlo, `sound: ""`). El manifiesto ya no corta en un `#`
+  dentro de comillas.
+
 ## 1.27.91 — 2026-11-10
 
 Notificaciones locales y programadas (`std/notify`, M442), la ronda de pepa 1.27.90 (M445: avisos del compilador, `@derive(ToJson)` con contenedores, `Map.clear`, viewport iOS, `ui.haptic`, `ray dev --device`) y `std/charset` (M446), más la actualización de SQLite por `cargo audit`.

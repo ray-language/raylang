@@ -12,8 +12,8 @@ fn main() {
     print(notify.status());
     print(notify.request_permission());
     print(notify.request_permission_with(true, false));
-    print(notify.create_channel(notify.Channel { id: "orders", name: "Pedidos", description: "", importance: "high" }));
-    print(notify.create_channel(notify.Channel { id: "x", name: "X", description: "", importance: "loud" }));
+    print(notify.create_channel(notify.Channel { id: "orders", name: "Pedidos", description: "", importance: "high", sound: "" }));
+    print(notify.create_channel(notify.Channel { id: "x", name: "X", description: "", importance: "loud", sound: "" }));
     var n = notify.message("Pedido enviado", "Llega el viernes");
     n.id = "order-42";
     n.channel = "orders";

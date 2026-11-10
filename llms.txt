@@ -467,7 +467,7 @@ only loads `http://127.0.0.1:<port>` from the embedded server — use `web.liste
 `local_limits` there — and `ui.reply_json` needs a shell ≥ 1.12.1: regenerate with
 `ray bundle --ios/--android`); sound on the phone: `std/audio` plays on iOS too (AudioQueue,
 1.27.19) and `ray bundle --ios` no longer excludes it; to keep playing in the background put
-`[ios] background_audio = true` (AVAudioSession playback + UIBackgroundModes) and/or
+`[ios] background_audio = true` (AVAudioSession playback + UIBackgroundModes; it interrupts other apps' audio — a reminder app wants `[ios] audio_session = "playback_mix"` instead: silent switch ignored, music of other apps keeps playing, no background mode) and/or
 `[android] background_audio = true` (foreground service) in ray.toml — the webview's JS timers
 freeze in the background, so a sequencer belongs in the raylang program, not in the page;
 `audio.flush(h)` (seek/pause without overlap) cuts with the anti-click ramp ONLY on CoreAudio
@@ -484,7 +484,7 @@ System notifications, now or scheduled, phone and desktop alike: `import std/not
 without asking), `var n = notify.message(title, body); n.id = …; n.channel = …; n.data = …;
 n.actions = [notify.action("track", "Follow")];` then `notify.show(n)` or
 `notify.schedule(n, notify.Trigger.After(3600, false) | .At(unix) | .Daily(9, 0))` (`cancel(id)`,
-`pending()`, `set_badge(n)`); Android channels with `notify.create_channel(notify.Channel {…})`;
+`pending()`, `set_badge(n)`); Android channels with `notify.create_channel(notify.Channel {…})` or `notify.channel(id, name)`; a custom sound: `n.sound_name = "alarm"` (iOS, a file of `[ios] sounds` in ray.toml) and `Channel.sound = "alarm"` (Android, a file of `[android] sounds`, per CHANNEL and fixed once created); no white flash on launch: `[ios] background = "#f1f3f5"` (+ `background_dark`) and `o.background` in `ui.open_with`;
 a tap arrives as a `"notification"` event — `notify.event_tap(e)` gives `Tap { id, action, text,
 data }` (queued before `main` when the tap launches the app). iOS/macOS `.app`:
 UNUserNotificationCenter; Android: channels + AlarmManager (inexact unless `[android]

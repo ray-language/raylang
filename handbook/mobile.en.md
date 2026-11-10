@@ -527,9 +527,13 @@ And what is declared in `ray.toml`:
 | `[app] icon` | a PNG: the app icon on both systems |
 | `[app.plist]` | keys that go as they are into the iOS `Info.plist`, for example the text of a permission |
 | `[ios] development_team` | the development team, to install on a real iPhone |
-| `[ios] background_audio` | audio keeps playing with the app in the background |
+| `[ios] background_audio` | audio keeps playing with the app in the background (`playback` session: opening the app stops other apps' music) |
+| `[ios] audio_session` | `"playback"` or `"playback_mix"` (the app sounds with the silent switch on WITHOUT stopping other apps' music), without the background mode |
+| `[ios] background` / `background_dark` | the color (`#rrggbb`) of the launch screen and of the view under the page: no white flash; `background_dark` for dark mode |
+| `[ios] sounds` | files (caf/aiff/wav, ≤ 30 s) copied into the bundle for `std/notify`'s `Notification.sound_name` |
 | `[android] application_id` | an application id different from `[app] id` |
 | `[android] background_audio` | the same on Android, with a foreground service |
+| `[android] sounds` | files (ogg/wav/mp3) copied to `res/raw/` for `std/notify`'s `Channel.sound` (the name, lowercase, without extension) |
 | `[android] exact_alarms` | notifications scheduled with `std/notify` use exact alarms (the "Alarms & reminders" permission); without the key, inexact ones with minutes of slack |
 | `[frontend]` | the frontend's commands and folder (section 2) |
 
@@ -551,5 +555,5 @@ And what is declared in `ray.toml`:
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:d06c7fe09dc3 -->
-<!-- sync: sha256:d06c7fe09dc3 -->
+<!-- sync: sha256:2900d11a7e87 -->
+<!-- sync: sha256:2900d11a7e87 -->

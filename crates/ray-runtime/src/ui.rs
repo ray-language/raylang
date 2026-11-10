@@ -2208,7 +2208,9 @@ fn open_placed(id: i64, title: &str, url: &str, opts: &WindowOptions) -> Result<
         if url.starts_with("ray://") && !shell::has_capability(shell::CAP_SCHEME) {
             return Err("ui: this app shell was generated with raylang < 1.27.17 and does not serve ray://app: regenerate it with `ray bundle --ios` / `--android`".to_string());
         }
+        shell::set_open_background(&opts.background);
         shell::open(title, url);
+        shell::set_open_background("");
         windows().lock().unwrap().insert(id, WinState { win: Win::Shell, closed: false, intercept_close: false });
         return Ok(());
     }
@@ -8065,6 +8067,20 @@ mod shell {
     type EvalHandler = extern "C" fn(*const c_char);
 
     static HANDLERS: OnceLock<(OpenHandler, EvalHandler)> = OnceLock::new();
+    /// M447 (pepa #334): el `WindowOptions.background` de la ventana que se está abriendo, para que
+    /// el shell lo lea (`ray_ui_open_background`) dentro de su handler de `open` y pinte la vista.
+    static OPEN_BACKGROUND: std::sync::Mutex<Option<CString>> = std::sync::Mutex::new(None);
+
+    pub(super) fn set_open_background(color: &str) {
+        *OPEN_BACKGROUND.lock().unwrap() = if color.is_empty() { None } else { CString::new(color.replace('\0', "")).ok() };
+    }
+
+    /// M447: el fondo (`#rrggbb`) de la ventana que el handler de `open` está recibiendo, o NULL
+    /// si el programa no lo fijó. Válido solo durante esa llamada: el shell lo copia.
+    #[unsafe(no_mangle)]
+    pub extern "C" fn ray_ui_open_background() -> *const c_char {
+        OPEN_BACKGROUND.lock().unwrap().as_ref().map_or(std::ptr::null(), |c| c.as_ptr())
+    }
 
     /// El shell registra sus handlers (UNA vez, antes de `ray_start`). Contrato de strings en
     /// ambos handlers: NUL-terminated, VÁLIDOS SOLO DURANTE LA LLAMADA — el shell debe copiar

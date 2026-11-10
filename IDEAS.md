@@ -4469,3 +4469,111 @@ disco.
 
 **Descartado.** Un tope configurable en bytes, LRU por tamaño, un demonio de limpieza, o quitar el
 hash de ruta del pkg (resuelve una carrera real; con la poda su coste desaparece).
+
+## 121. Notificaciones en móvil: locales, programadas y push (nov 2026)
+
+**Hecho.** Una app móvil nueva del usuario necesitará notificaciones y hoy `ui.notify`, `ui.badge`
+y `ui.request_attention` devuelven `Err("ui: notifications are not available in the mobile shell
+yet")` bajo el shell (ui.rs `app_op`). No hay entitlements en el bundle iOS, ni Firebase en el
+Android, ni ningún evento de notificación que llegue al programa en móvil. El hallazgo saldrá
+seguro; se investiga antes para que la primera versión sea la correcta.
+
+**Qué ofrece cada plataforma** (verificado contra la documentación oficial, nov 2026):
+
+| | iOS (UserNotifications, iOS 15+) | Android (NotificationManager, minSdk 24 / target 35) |
+|---|---|---|
+| Permiso | `requestAuthorization` con opciones `alert/sound/badge/provisional/timeSensitive/criticalAlert/providesAppNotificationSettings`; estados `notDetermined/denied/authorized/provisional/ephemeral`. `provisional` entrega en silencio sin diálogo. | `POST_NOTIFICATIONS` (API 33, en tiempo de ejecución); por debajo, sin permiso. `areNotificationsEnabled()`. Pedirlo en contexto, no al arrancar (M325: el diálogo pausa la Activity y produce un `lifecycle background` fantasma). |
+| Contenido | title/subtitle/body, `sound` (`default`, archivo, crítico con volumen), `badge`, `threadIdentifier` (agrupación), `categoryIdentifier` (acciones), `userInfo`, adjuntos (imagen/vídeo), `interruptionLevel` (`passive/active/timeSensitive/critical`), `relevanceScore`. | title/text/subText, `BigTextStyle`/`BigPictureStyle`/`InboxStyle`/`MessagingStyle`, `ProgressStyle` (API 36, Live Updates), icono pequeño obligatorio, color, `group` + summary, `tag`+`id`, acciones con `RemoteInput`, `setOngoing`, `setTimeoutAfter`, `setAutoCancel`. |
+| Importancia | Por notificación (`interruptionLevel`). `timeSensitive` requiere la capability; `critical` requiere entitlement concedido por Apple. | Por **canal** (`NotificationChannel`, API 26): `IMPORTANCE_MIN/LOW/DEFAULT/HIGH`, sonido, vibración, luces; el canal se crea una vez y el usuario lo controla en Ajustes. |
+| Programadas | `UNTimeIntervalNotificationTrigger` (≥ 60 s si repite), `UNCalendarNotificationTrigger` (componentes de fecha, repetible), `UNLocationNotificationTrigger`. **Límite: 64 pendientes por app.** | No hay API de notificación programada: `AlarmManager` + `BroadcastReceiver` que la muestra. Inexacta (`setAndAllowWhileIdle`, ventana ≥ 10 min en API 31+) sin permiso; exacta con `SCHEDULE_EXACT_ALARM` (el usuario la concede en Ajustes, no pre-concedida en API 33+) o `USE_EXACT_ALARM` (solo alarmas/calendarios, política de Play). Se pierden al reiniciar: `RECEIVE_BOOT_COMPLETED` + persistir. |
+| Primer plano | `willPresent` decide si se muestra el banner con la app delante. | Se muestra siempre; la app decide no emitirla. |
+| Pulsación | `didReceiveResponse`: identificador, acción, texto introducido; el sistema arranca la app si estaba cerrada. | `PendingIntent` a la Activity con extras; `onNewIntent` si ya estaba viva. |
+| Push | **APNs** directo: `registerForRemoteNotifications` → token en el `UIApplicationDelegate`; entitlement `aps-environment` (development/production, lo fija el perfil); `content-available` (push silencioso, ~30 s de fondo, `UIBackgroundModes remote-notification`); `mutable-content` requiere una Notification Service Extension (target aparte). | **FCM** (de facto; Play Services): SDK `firebase-messaging` + plugin `google-services` + `google-services.json`; `FirebaseMessagingService.onNewToken/onMessageReceived`; mensajes *notification* los muestra el sistema en segundo plano, *data* llegan siempre a la app. FCM está migrando de *registration tokens* a *Firebase Installation IDs* (modo opcional en 2026; los tokens siguen funcionando). Alternativa sin Google: UnifiedPush (distribuidor aparte, nicho F-Droid). |
+| Servidor | HTTP/2 **obligatorio**, `api.push.apple.com/3/device/<token>`, JWT **ES256** (clave `.p8` PKCS#8, `kid`+`iss`=team, renovar cada 20–60 min), cabeceras `apns-topic/push-type/priority/expiration/collapse-id`, 4 KB, `410 Unregistered`. | HTTP/1.1 `POST fcm.googleapis.com/v1/projects/<id>/messages:send`, OAuth2 con cuenta de servicio (JWT **RS256** → `oauth2.googleapis.com/token`, 1 h), recurso `Message` con bloques `android`/`apns`/`webpush`; el mismo envío llega a iOS vía APNs si se quiere un solo proveedor. |
+
+**Lo que raylang ya tiene y se reutiliza.** `mac::notify` (M371) con `UNUserNotificationCenter`,
+`un_did_receive_response` y `un_will_present` es el mismo framework que iOS: se comparte casi
+entero. El evento `"notification"` (tag al pulsar) y la cola de `std/ui` (`push_event`, ventana 0
+en móvil) ya existen. En el shell Android hay canal (`ray_playback`), `PendingIntent` y
+`RayBridge` con callbacks opcionales (`MID_*` con exception-clear: un shell viejo da un error
+«regenerate the shell», no un crash). Del lado servidor: `std/crypto.p256_sign` (ring, firma fija
+`r||s` = exactamente lo que ES256 necesita), `rsa_pkcs1_sign` (RS256), `tls.connect_h2` (ALPN h2)
+y el framing HTTP/2 + HPACK de `net/grpc_h2` (M321). Ninguna crate nueva.
+
+**Clasificación.** Stdlib + shells + bundle + paquete `net`. Sin tocar la SPEC. Impacto alto en
+producto (una app móvil seria sin notificaciones no existe) y medio en mantenimiento (dos shells,
+dos proveedores). Riesgo contenido si se hace por fases y con la misma forma que `std/media`
+(módulo propio, túnel `__ui_window(0, "notify_*", …)`, eventos en la cola de `std/ui`, headless
+con traza).
+
+**Propuesta: módulo `std/notify`** (`ui.notify`/`notify_with` quedan como atajos sobre él):
+
+```raylang
+import std/notify
+
+// Permiso (bloqueante como el picker: petición/respuesta por condvar; en Android se
+// silencian los eventos lifecycle mientras el diálogo del sistema está delante — M325).
+let st = notify.request_permission(notify.Options { provisional: false, time_sensitive: false })?
+// -> "granted" | "denied" | "provisional" | "not_determined"; notify.status() lo consulta sin pedir.
+
+// Canales (Android; iOS y escritorio los ignoran con Ok). Un canal "default" se crea solo.
+notify.channel(notify.Channel { id: "orders", name: "Pedidos", importance: "high", sound: "default" })?
+
+// Mostrar ahora
+let n = notify.message("Pedido enviado", "Llega el viernes")
+    .with_id("order-42").with_channel("orders").with_group("orders").with_data("{\"order\":42}")
+    .with_interruption("time_sensitive").with_actions([notify.action("track", "Seguir")])
+notify.show(n)?
+
+// Programar (iOS: trigger nativo, 64 pendientes; Android: AlarmManager inexacto + receiver,
+// persiste y se rearma al reiniciar; exacto solo con `[android] exact_alarms = true`)
+notify.schedule(n, notify.Trigger.After(3600, false))?          // segundos, repetir
+notify.schedule(n, notify.Trigger.Daily(9, 0))?                   // hora local
+notify.cancel("order-42")?; notify.cancel_all()?; notify.pending()?; notify.clear_delivered()?
+notify.set_badge(3)?                                              // = ui.badge en escritorio
+
+// Eventos en la cola de std/ui:
+//   ("notification", 0, "<id>\t<action>\t<text>")  → notify.event_tap(e) -> Option<Tap>
+//   ("push_token", 0, "<hex|fcm-token>")           → tras notify.register_push()
+//   ("push", 0, "<json>")                           → payload data (incl. push silencioso)
+// Si la app arranca por una pulsación, el evento se encola ANTES de arrancar (como "open").
+```
+
+**Push en el manifiesto** (el bundle genera lo que haga falta; sin la clave, nada cambia):
+
+```toml
+[ios]
+push = true                 # entitlement aps-environment (+ archivo .entitlements y
+                            # CODE_SIGN_ENTITLEMENTS en el xcconfig); AppDelegate con
+                            # didRegisterForRemoteNotifications… → ray_ui_push_token
+background_push = true      # UIBackgroundModes += remote-notification (content-available)
+
+[android]
+push = "fcm"                # plugin google-services + firebase-messaging (BoM), servicio
+google_services = "google-services.json"   # RayMessagingService, meta-data canal/icono por defecto
+exact_alarms = true         # SCHEDULE_EXACT_ALARM para Trigger exactos (opcional)
+```
+
+**Servidor (paquete `net`, release propia):** `net/apns` (`Client.new(team, key_id, p8_pkcs8,
+bundle_id, sandbox)`, `send(token, Payload, Headers) -> Result<Receipt, ApnsError>`, JWT ES256
+cacheado 50 min, conexión HTTP/2 reutilizada sobre `tls.connect_h2` + `grpc_h2` refactorizado en
+un `net/h2_client` genérico, errores tipados con `Unregistered`) y `net/fcm` (`Client.from_service_account(json)`,
+token OAuth2 cacheado, `send(Message)`); `net/jwt` gana `sign_es256`/`sign_rs256`. **Verificar
+antes con una `.p8` real** que ring acepta su PKCS#8 (ring exige la clave pública dentro del
+`ECPrivateKey`; las de Apple la traen, pero hay que probarlo).
+
+**Fases propuestas** (una PR y un M por fase; la app del usuario puede empezar con la 1):
+1. **M442 — locales**: `std/notify` completo salvo push en iOS, Android y escritorio (mac/gtk
+   sobre lo de M371; Windows sigue `Err`), permiso, canales, programación, eventos, badge, headless
+   con traza y `RAY_UI_NOTIFY_CLICK`. Test en simulador iPhone y AVD `rayavd`.
+2. **M443 — push en el cliente**: `[ios] push`, `[android] push = "fcm"`, `register_push`,
+   eventos `push_token`/`push`, push silencioso, arranque por notificación. Prueba iOS
+   extremo a extremo sin dispositivo con `xcrun simctl push <udid> <bundle> payload.apns`; Android
+   con una imagen de AVD con Google APIs.
+3. **M444 — `net/apns` y `net/fcm`** + ES256/RS256 en `net/jwt`, con un servidor APNs/FCM falso
+   en los tests (como el Postgres falso de `postgres_v2_cli`).
+
+**Fuera de la primera versión (apuntado, no descartado):** acciones con texto (`RemoteInput` /
+`UNTextInputNotificationAction`), adjuntos de imagen, Live Activities / Live Updates
+(`ProgressStyle`), alertas críticas (entitlement de Apple), Notification Service Extension
+(`mutable-content`), UnifiedPush, modo FID de FCM, AlarmKit (iOS 26), notificaciones en Windows.

@@ -4,7 +4,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.92 — 2026-11-10
+
+Shell de iOS: fondo de arranque y de ventana, sesión de audio configurable y sonidos propios en `std/notify` (M447).
 
 - **Shell de iOS: fondo, sesión de audio y sonidos propios (M447; pepa #334, #336 y #331).**
   `[ios] background = "#rrggbb"` (y `background_dark`) pintan la pantalla de arranque y la vista

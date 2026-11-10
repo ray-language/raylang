@@ -1832,6 +1832,10 @@ pub fn ui_window(h: i64, op: &str, arg: &str) -> Result<(), String> {
 /// `__ui_window` con su valor: `frame` (#245) devuelve `"x,y,ancho,alto"`; las demás, `""`.
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn ui_window_value(h: i64, op: &str, arg: &str) -> Result<String, String> {
+    // M442 (IDEAS §121): `notify_*` → std/notify (devuelve texto: estado, id, pendientes).
+    if op.starts_with("notify_") {
+        return ray_runtime::notify::op(op, arg);
+    }
     // M441 (rayreq #316): `screens` → "x,y,w,h;x,y,w,h" (la principal primero).
     if op == "screens" {
         let list = ray_runtime::ui::screens()?;

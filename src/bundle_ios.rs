@@ -37,16 +37,51 @@ const APP_DELEGATE_H: &str = r#"#import <UIKit/UIKit.h>
 /// Con `UIScene`, el AppDelegate queda en el arranque del proceso; la ventana, el webview y
 /// `ray_start` viven en el SceneDelegate (el ciclo real es didFinishLaunching → connect).
 const APP_DELEGATE_M: &str = r#"#import "AppDelegate.h"
+#import <UserNotifications/UserNotifications.h>
 /*RAY_AUDIO_IMPORT*/
 
 extern void ray_ui_will_terminate(void); // Apaga el audio con rampa antes de morir
+extern void ray_ui_push_event(const char *kind, long long window, const char *tag);
+
+// std/notify: el delegate del centro de notificaciones vive en el shell (debe existir antes de que
+// termine didFinishLaunching para recibir la pulsación que ARRANCA la app); el runtime raylang
+// crea y programa las notificaciones por su cuenta (UNUserNotificationCenter desde Rust).
+@interface AppDelegate () <UNUserNotificationCenterDelegate>
+@end
 
 @implementation AppDelegate
 
 - (BOOL)application:(UIApplication *)application
     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
+    [UNUserNotificationCenter currentNotificationCenter].delegate = self;
     /*RAY_AUDIO_SESSION*/
     return YES;
+}
+
+// Con la app delante la notificación se muestra igual (banner + lista + sonido).
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+       willPresentNotification:(UNNotification *)notification
+         withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
+    completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionList
+                      | UNNotificationPresentationOptionSound);
+}
+
+// Una pulsación (la notificación o una de sus acciones) → evento ("notification", 0, tag): el id a
+// secas, o `id\taction\ttext\tdata` (lo deshace notify.event_tap). Si la app arrancó por ella, el
+// evento queda encolado antes de que el programa empiece.
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+    didReceiveNotificationResponse:(UNNotificationResponse *)response
+             withCompletionHandler:(void (^)(void))completionHandler {
+    NSDictionary *info = response.notification.request.content.userInfo;
+    NSString *ident = [info[@"tag"] isKindOfClass:[NSString class]] ? info[@"tag"] : response.notification.request.identifier;
+    NSString *data = [info[@"data"] isKindOfClass:[NSString class]] ? info[@"data"] : @"";
+    NSString *action = [response.actionIdentifier isEqualToString:UNNotificationDefaultActionIdentifier] ? @"" : response.actionIdentifier;
+    NSString *text = [response isKindOfClass:[UNTextInputNotificationResponse class]] ? ((UNTextInputNotificationResponse *)response).userText : @"";
+    NSString *tag = (action.length == 0 && text.length == 0 && data.length == 0)
+        ? ident
+        : [NSString stringWithFormat:@"%@\t%@\t%@\t%@", ident, action, text, data];
+    ray_ui_push_event("notification", 0, tag.UTF8String);
+    completionHandler();
 }
 
 // Cerrar la app desde el selector con el audio sonando mataba el proceso con la
@@ -488,6 +523,7 @@ fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing, opts:
     }
     // M324 (ray808 #18): std/audio en iOS es AudioQueue (AudioToolbox); la sesión de fondo, AVFoundation.
     // M403 (rayplay #170): std/media es MPNowPlayingInfoCenter/MPRemoteCommandCenter (MediaPlayer), siempre.
+    // M442 (IDEAS §121): std/notify — el AppDelegate es el UNUserNotificationCenterDelegate (UserNotifications).
     let avf = if opts.background_audio { " -framework AVFoundation" } else { "" };
     format!(
         "// Generado por `ray bundle --ios` — ajusta aquí, no en el pbxproj.\n\
@@ -507,7 +543,7 @@ fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing, opts:
          // (dispositivo y simulador son ambos arm64 — jamás un lipo).\n\
          LIBRARY_SEARCH_PATHS[sdk=iphoneos*] = $(PROJECT_DIR)/libs\n\
          LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*] = $(PROJECT_DIR)/libs-sim\n\
-         OTHER_LDFLAGS = -lray_app -framework WebKit -framework AudioToolbox -framework MediaPlayer{avf} -lobjc\n\
+         OTHER_LDFLAGS = -lray_app -framework WebKit -framework AudioToolbox -framework MediaPlayer -framework UserNotifications{avf} -lobjc\n\
          {sign}"
     )
 }
@@ -811,6 +847,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
         let p = info_plist(&[("UIBackgroundModes".to_string(), crate::manifest::PlistValue::Array(vec!["audio".to_string()]))]);
         assert!(p.contains("<key>UIBackgroundModes</key><array><string>audio</string></array>"), "{p}");
+    }
+
+    /// M442 (IDEAS §121): el AppDelegate es el delegate del centro de notificaciones desde el
+    /// arranque (pulsación que abre la app incluida), reenvía las pulsaciones como evento
+    /// `"notification"` con el tag de `notify.event_tap`, y el xcconfig enlaza UserNotifications.
+    #[test]
+    fn the_shell_delegates_user_notifications_to_the_program() {
+        assert!(APP_DELEGATE_M.contains("[UNUserNotificationCenter currentNotificationCenter].delegate = self;"));
+        assert!(APP_DELEGATE_M.contains("didReceiveNotificationResponse:(UNNotificationResponse *)response"));
+        assert!(APP_DELEGATE_M.contains("ray_ui_push_event(\"notification\", 0, tag.UTF8String);"));
+        assert!(APP_DELEGATE_M.contains("UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionList"));
+        let cfg = xcconfig("App", "org.example.app", "1.0.0", &Signing::default(), ShellOptions::default());
+        assert!(cfg.contains("-framework UserNotifications"), "{cfg}");
     }
 
     #[test]

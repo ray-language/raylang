@@ -28,7 +28,9 @@ from std/json import Json;
 /// running; `window` is 0. On macOS it needs a `ray bundle` with `[app] opens`; a bare binary
 /// still gets its launch arguments in `args()`) or "notification" (M371: the user
 /// clicked a notification shown with `notify`/`notify_with`; `tag` is the notification's tag,
-/// `window` is 0) or "media" (M403: a system media command for a program that declared them
+/// `window` is 0 — M442: for one shown with `std/notify`, `tag` is its id, or
+/// `id\taction\ttext\tdata` when a button was pressed or it carried data; `notify.event_tap(e)`
+/// decodes it, also on iOS and Android) or "media" (M403: a system media command for a program that declared them
 /// with `media.controls` — `tag` is "play", "pause", "toggle", "next", "previous", "stop" or
 /// "seek:<ms>"; `window` is 0). In the iOS/Android shells of
 /// `ray bundle` there is one more kind, "lifecycle" (`tag` is "background" or "foreground"),
@@ -782,9 +784,13 @@ pub fn launch_paths() -> Result<[string], string> {
 /// the notification center (inside a `ray bundle` app it asks the user's permission the first
 /// time — a denied permission makes later calls `Err`; a bare `ray run` binary uses the classic
 /// center when there is one, `osascript` otherwise — visible, no own icon, no click). Linux:
-/// libnotify (`notify-send`). Windows: not available yet (`Err`). Headless:
-/// `Ok` + trace. Clicking the notification emits a `"notification"` event (`window` 0, `tag` ""):
-/// use `notify_with` to tell them apart.
+/// libnotify (`notify-send`). iOS and Android (M442, pepa #320): the system notification through
+/// `std/notify` — on iOS the first call asks the permission without waiting (the notification
+/// goes out when the user allows); on Android 13+ ask it first with `notify.request_permission`
+/// or the system drops it silently; `Err` with the reason when denied. Windows: not available yet
+/// (`Err`). Headless: `Ok` + trace. Clicking the notification emits a `"notification"` event
+/// (`window` 0, `tag` ""): use `notify_with` to tell them apart. Scheduling, channels, actions
+/// and the badge live in `std/notify`.
 pub fn notify(title: string, body: string) -> Result<int, string> {
     notify_with(title, body, "", true)
 }

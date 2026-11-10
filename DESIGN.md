@@ -19688,3 +19688,60 @@ funciones nuevas fallaban en todo binario de `ray build --native`/`ray bundle` �
 pidieron son nativas—; el test de `ui_frame_cli` corre ahora también el binario nativo. De paso,
 `std/ui` comparte un `parse_frame` entre `frame`, `event_frame` y `screens`, y MANUAL cuenta el
 flujo de recordar el marco y seguir el tema.
+
+## 417. M442 — `std/notify`: notificaciones locales y programadas en los cinco sistemas (nov 2026)
+
+IDEAS §121 recogió la investigación: una app móvil nueva del usuario iba a necesitar
+notificaciones y en el shell todo era `Err`. Los hallazgos llegaron antes de cerrar la PR: pepa,
+una agenda de medicamentos, pidió exactamente esto (#319: avisar con la app cerrada, repetición
+diaria, acciones «Tomada»/«Posponer»; #320: qué hace `ui.notify` en el teléfono). La primera fase, la de las locales, entra aquí; el
+push (M443) y los clientes de APNs/FCM del lado servidor (M444) quedan para las siguientes.
+
+**La forma.** Un módulo propio con la forma de `std/media`: `std/notify` habla con el runtime por
+el túnel `__ui_window(0, "notify_<op>", arg)`, los eventos salen por la cola de `std/ui` y el
+headless traza y simula (permiso, pendientes, pulsaciones inyectadas) para que el contrato se fije
+en un test de los tres motores. Las piezas de la notificación viajan como campos separados por
+`\x1f` (y las acciones por `\x1e`/`\x1d`): un cuerpo puede llevar saltos de línea, así que el
+separador por líneas de `media_now_playing` no servía; un JSON habría exigido un parser en el
+runtime para un intercambio interno. `ui.notify`/`ui.notify_with`/`ui.badge` (M371) siguen
+siendo la línea de una llamada: en móvil y dentro de un `.app` de macOS se enrutan por el módulo
+nuevo, de modo que `ui.notify` y `std/notify` comparten UN estado de autorización.
+
+**Apple.** `UNUserNotificationCenter` es el mismo framework en macOS e iOS, y el código Rust es
+el mismo (`notify.rs`, `mod apple`, patrón de `media.rs`: `objc_msgSend` tipado por sitio, el
+framework cargado con `dlopen` para no exigirlo en el enlace de un binario suelto). Lo que cambia
+es quién pone el **delegate**: en macOS es el de `ui.rs` (M371, ampliado para que la respuesta
+lleve la acción, el texto y los datos); en iOS lo pone el **AppDelegate del shell** en
+`didFinishLaunching`, porque la pulsación que ARRANCA la app solo llega si el delegate existe
+antes de que ese método vuelva, y el runtime raylang arranca después, en `willConnectToSession`.
+El shell reenvía por `ray_ui_push_event` ya existente: ningún símbolo nuevo en iOS. La
+autorización tiene dos caminos: `request_permission` espera (bloque de finalización + condvar,
+serializado), `show` sin permiso conocido lo pide sin esperar y retiene la petición hasta la
+respuesta (como M371). `badge` prefiere `setBadgeCount:` (iOS 16 / macOS 13) y cae al Dock.
+
+**Android.** TODO en Java (`RayNotify.java`), por una razón: una notificación programada tiene
+que mostrarse con el proceso raylang muerto. `AlarmManager` despierta a `RayNotifyReceiver`, que
+lee la notificación guardada en `SharedPreferences` y la pinta; tras un reinicio, BOOT_COMPLETED
+rearma las pendientes (el receiver nace deshabilitado y se enciende solo mientras haya alguna:
+lo que recomienda la plataforma). Las alarmas son inexactas (`setAndAllowWhileIdle`, minutos de
+margen, sin permiso especial) salvo `[android] exact_alarms = true`, que declara
+`SCHEDULE_EXACT_ALARM` y usa la exacta cuando el usuario la concede: Google Play la reserva a
+alarmas y calendarios, y el valor por defecto no debe meter a nadie en esa política. El runtime
+cruza al shell con una **petición genérica con respuesta** (`shell::request`, id + condvar, como
+el selector de archivos de M382) por un `onRequest` opcional de `RayBridge` —un shell anterior da
+el `Err` de «regenera el shell»— y un `requestResult` nativo nuevo, también en la librería de
+desarrollo. El permiso `POST_NOTIFICATIONS` se pide SOLO desde `request_permission` y
+MainActivity silencia el `lifecycle` fantasma del diálogo (findings #99: pedirlo al arrancar
+pausaba la Activity). Las pulsaciones entran como Intent (onNewIntent siempre, y onCreate si la
+app estaba cerrada) con el tag en un extra. No hay API de badge en AOSP: `Ok` sin efecto.
+
+**Lo que se deja fuera a propósito** (apuntado en IDEAS §121): acciones con texto, adjuntos,
+Live Activities / Live Updates, alertas críticas (entitlement de Apple), UnifiedPush, AlarmKit y
+las notificaciones en Windows. La presentación en primer plano es siempre «mostrar» (banner +
+lista + sonido): una opción por notificación es la clase de botón que nadie pidió.
+
+**Verificación.** Headless en los tres motores (`ui_notify_cli`: contrato, validación, pendientes,
+pulsación con acción y datos, negativa); unidades del protocolo, de la petición al shell (con un
+shell falso en otro hilo), de los manifiestos y de las plantillas; compilación cruzada del runtime
+en `aarch64-apple-ios-sim` y `aarch64-linux-android`; iOS en el simulador y Android en el AVD con
+el programa de humo.

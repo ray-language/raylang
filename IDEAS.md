@@ -4470,7 +4470,7 @@ disco.
 **Descartado.** Un tope configurable en bytes, LRU por tamaño, un demonio de limpieza, o quitar el
 hash de ruta del pkg (resuelve una carrera real; con la poda su coste desaparece).
 
-## 121. Notificaciones en móvil: locales, programadas y push (nov 2026)
+## 121. Notificaciones en móvil: locales, programadas y push (nov 2026) — fase 1 ✅ EJECUTADA como M442 (DESIGN §417); push (M443) y servidor (M444) pendientes
 
 **Hecho.** Una app móvil nueva del usuario necesitará notificaciones y hoy `ui.notify`, `ui.badge`
 y `ui.request_attention` devuelven `Err("ui: notifications are not available in the mobile shell

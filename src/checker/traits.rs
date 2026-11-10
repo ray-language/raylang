@@ -313,16 +313,53 @@ pub(super) fn enum_show_body(a: &Annotation, name: &str, variants: &[VariantDef]
 
 /// Cómo serializar un campo a JSON (M93.5): primitivos vía su `.to_json()` de std/json (char
 /// pasa por `to_string` — JSON no tiene char); struct/enum vía `.to_json()` recursivo (deben
-/// implementar ToJson, p. ej. con su propio derive). Arrays/Map/funciones no derivables aún.
+/// implementar ToJson, p. ej. con su propio derive). M445 (pepa #322): también `[T]` (array JSON),
+/// `Option<T>` (`null` si está vacío) y `Map<string, T>` (objeto con las claves en orden), anidados
+/// a cualquier profundidad — `depth` da nombres únicos a los temporales de cada nivel. Los
+/// contenedores se recorren con bucles `for` (`for (k, v) in m` va en orden de clave), sin
+/// funciones del prelude que el usuario pueda haber sobrescrito.
 pub(super) fn render_to_json(a: &Annotation, expr: &str, ty: &Type) -> Result<String, TypeError> {
-    match ty {
+    render_to_json_at(a, expr, ty, 0)
+}
+
+fn render_to_json_at(a: &Annotation, expr: &str, ty: &Type, depth: usize) -> Result<String, TypeError> {
+    // Los tipos de los campos llegan SIN normalizar (el derive corre antes del checker): `Map<K, V>`
+    // escrito por el usuario es un `Struct("Map", [K, V])` del parser.
+    let ty = match ty {
+        Type::Struct(name, args) if name == "Map" && args.len() == 2 => Type::Map(Box::new(args[0].clone()), Box::new(args[1].clone())),
+        other => other.clone(),
+    };
+    match &ty {
         Type::Int | Type::Float | Type::Bool | Type::String => Ok(format!("{expr}.to_json()")),
         Type::Char => Ok(format!("to_string({expr}).to_json()")),
         // M356: un entero sin signo es su número decimal (JSON no distingue anchos).
         Type::UInt(_) => Ok(format!("to_string({expr})")),
+        // `Option<T>` llega como Struct o Enum según se haya normalizado: `null` cuando no hay valor.
+        Type::Struct(name, args) | Type::Enum(name, args) if name == "Option" && args.len() == 1 => {
+            let inner = render_to_json_at(a, &format!("__v{depth}"), &args[0], depth + 1)?;
+            Ok(format!("(match ({expr}) {{ Option.Some(__v{depth}) => {inner}, Option.None => \"null\" }})"))
+        }
         Type::Struct(_, _) | Type::Enum(_, _) => Ok(format!("{expr}.to_json()")),
+        Type::Array(elem) => {
+            let item = render_to_json_at(a, &format!("__e{depth}"), elem, depth + 1)?;
+            Ok(format!(
+                "{{ var __s{depth} = \"[\"; var __i{depth} = 0; for __e{depth} in {expr} {{ if (__i{depth} > 0) {{ __s{depth} = __s{depth} + \",\"; }} __s{depth} = __s{depth} + {item}; __i{depth} = __i{depth} + 1; }} __s{depth} + \"]\" }}"
+            ))
+        }
+        Type::Map(key, val) if **key == Type::String => {
+            let item = render_to_json_at(a, &format!("__v{depth}"), val, depth + 1)?;
+            Ok(format!(
+                "{{ var __s{depth} = \"{{\"; var __i{depth} = 0; for (__k{depth}, __v{depth}) in {expr} {{ if (__i{depth} > 0) {{ __s{depth} = __s{depth} + \",\"; }} __s{depth} = __s{depth} + __k{depth}.to_json() + \":\" + {item}; __i{depth} = __i{depth} + 1; }} __s{depth} + \"}}\" }}"
+            ))
+        }
+        Type::Map(key, _) => Err(TypeError {
+            msg: format!("cannot derive ToJson for a field of type {} (a JSON object needs string keys, not {})", &ty, key),
+            line: a.line,
+            col: a.col,
+            len: 1,
+        }),
         other => Err(TypeError {
-            msg: format!("cannot derive ToJson for a field of type {} (for now primitives, struct and enum)", other),
+            msg: format!("cannot derive ToJson for a field of type {} (primitives, struct, enum, [T], Option<T> and Map<string, T>)", other),
             line: a.line,
             col: a.col,
             len: 1,

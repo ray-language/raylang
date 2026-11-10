@@ -129,7 +129,8 @@ anotaciones = { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] } ;
   mano); `Hash` genera
   `hash(self) -> int` combinando el `.hash()` de los campos (un campo `float`/array no es
   hashable) y `ToJson` genera `to_json(self) -> string` (su trait vive en `std/json` y debe estar
-  en ámbito para derivarlo). `Ord` **no** es derivable: se implementa a mano. Cualquier otra
+  en ámbito para derivarlo; campos: primitivos, structs/enums con `ToJson`, `[T]`, `Option<T>` →
+  `null` y `Map<string, T>`, anidados — M445). `Ord` **no** es derivable: se implementa a mano. Cualquier otra
   anotación es error.
 - **`main`** es obligatoria en el programa de entrada: sin parámetros, retorno `int` o `unit`.
   El código de salida del proceso es ese `int` (`& 0xFF`) o `0`. Excepción: si `print`/`eprint`
@@ -668,7 +669,7 @@ sobre el que se escriben las capas 1 y 2.
   `for (i, x) in it.enumerate() { … }`. No colisionan con el `map`/`filter`/`fold` **eager** de
   arreglos (`xs.map(f) -> [U]`): se desambigua por el tipo del receptor.
 - **Map** (`Map<K, V>`, claves primitivas: `int string char bool bytes`): `Map.new() insert get
-  get_or remove contains_key keys values len` — `keys()`/`values()` recorren en **orden de
+  get_or remove contains_key keys values clear len` — `keys()`/`values()` recorren en **orden de
   clave** (el almacén interno no expone su orden). Para claves de usuario, `std/collections/dict`.
 - **Handles**: `close(h)` cierra un archivo, socket o canal (el mismo nombre para los tres).
 - **Concurrencia**: §9 (`spawn join try_join scope channel send recv close select signals`).
@@ -726,6 +727,11 @@ distintas);
   siempre el mismo que en modo fail-fast.
 - Un **ICE** (bug del compilador) imprime "error interno del compilador (ICE): …" y pide
   reporte; **ningún programa de usuario debe provocarlo**.
+- **Avisos** (M445): `warning at L:C: msg`, mismo render que los errores, en stderr tras una
+  compilación correcta; **no invalidan el programa ni cambian el código de salida** y el LSP los
+  publica con severidad *Warning*. El primero: el resultado **descartado** de una función del
+  prelude que devuelve un valor nuevo sin tocar su argumento (`sort(xs);`, `xs.sort();`,
+  `s.trim();`, `xs.map(f);`…), salvo que el usuario la haya redefinido.
 - **Códigos de salida**: el `int` de `main` (`& 0xFF`, 0 si unit) · **64** uso incorrecto del
   CLI · **65** error de compilación (léxico/sintaxis/tipos/carga de módulos) · **66** archivo
   ilegible · **69** el binario no incluye el subsistema que el comando necesita (build *slim*) ·

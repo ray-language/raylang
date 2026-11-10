@@ -6709,9 +6709,21 @@ fn check_or_exit(program: &mut crate::ast::Program, locate: &Locate, multi: bool
 /// Como [`check_or_exit`]; con `require_main = false` (M270, `ray check` de un módulo sin `main`)
 /// verifica como módulo: los cuerpos se comprueban igual, solo no se exige la entrada.
 fn check_or_exit_mode(program: &mut crate::ast::Program, locate: &Locate, multi: bool, require_main: bool) {
+    // M445 (pepa #321): los avisos se calculan ANTES del check (sobre el programa del usuario, sin
+    // prelude ni bajadas) y se imprimen solo si compila — nunca cambian el código de salida.
+    let warnings = checker::discarded_results(program);
+    let print_warnings = || {
+        for w in &warnings {
+            let (source, name, local, col, len) = locate(w.line, w.col, w.len);
+            let w = checker::Warning { line: local, col, ..w.clone() };
+            let head = if multi { format!("[{}] {}", name, w) } else { w.to_string() };
+            eprintln!("{}", diagnostic::render(&source, local, col, len, &head));
+        }
+    };
     if !require_main {
         let errors = checker::check_all_modulo(program);
         if errors.is_empty() {
+            print_warnings();
             return;
         }
         for mut e in errors {
@@ -6735,6 +6747,7 @@ fn check_or_exit_mode(program: &mut crate::ast::Program, locate: &Locate, multi:
         }
         process::exit(65);
     }
+    print_warnings();
 }
 
 /// Carga, chequea y ejecuta un archivo (VM por defecto, `--interp` para el intérprete).
@@ -6742,6 +6755,13 @@ fn check_or_exit_mode(program: &mut crate::ast::Program, locate: &Locate, multi:
 /// ENTRY — no del cwd: `ray run otra/app/src/main.ray` resuelve contra SU raíz. Sin manifiesto
 /// o sin `[native] embed`, no se fija nada (std/embed responde Err de sin-config).
 pub(crate) fn configure_embed(entry: &str) {
+    configure_embed_with(entry, true)
+}
+
+/// Como [`configure_embed`]; `link_web = false` omite los enlaces `node_modules/` (M445: en el
+/// dispositivo de `ray dev --device` no hay editor y un enlace dentro del snapshot rompía la
+/// sincronización, pepa #332).
+pub(crate) fn configure_embed_with(entry: &str, link_web: bool) {
     // Canonicalizar primero: los ancestros de una ruta relativa terminan en "" (raíz vacía).
     let dir = match Path::new(entry).parent() {
         Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
@@ -6777,7 +6797,9 @@ pub(crate) fn configure_embed(entry: &str) {
             crate::builtins::set_embed_config(sources);
         }
         // M369: el paquete web de cada dependencia, enlazado en node_modules/ para el editor.
-        link_web_packages(&m, false);
+        if link_web {
+            link_web_packages(&m, false);
+        }
     }
 }
 

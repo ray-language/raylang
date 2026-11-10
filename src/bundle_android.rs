@@ -816,6 +816,32 @@ public final class RayBridge {
         });
     }
 
+    // M445 (pepa #331): `ui.haptic` — una vibración corta por HapticFeedbackConstants sobre la
+    // vista de la página (sigue el ajuste «respuesta táctil» del usuario), en el main thread.
+    public static void onHaptic(String kind) {
+        MAIN.post(() -> {
+            android.view.View v = webView;
+            if (v == null) {
+                return;
+            }
+            int api = android.os.Build.VERSION.SDK_INT;
+            int c;
+            switch (kind) {
+                case "light": case "soft": case "selection":
+                    c = android.view.HapticFeedbackConstants.CLOCK_TICK; break;
+                case "heavy": case "rigid":
+                    c = android.view.HapticFeedbackConstants.LONG_PRESS; break;
+                case "success":
+                    c = api >= 30 ? android.view.HapticFeedbackConstants.CONFIRM : android.view.HapticFeedbackConstants.CONTEXT_CLICK; break;
+                case "warning": case "error":
+                    c = api >= 30 ? android.view.HapticFeedbackConstants.REJECT : android.view.HapticFeedbackConstants.LONG_PRESS; break;
+                default:
+                    c = android.view.HapticFeedbackConstants.CONTEXT_CLICK; break;
+            }
+            v.performHapticFeedback(c);
+        });
+    }
+
     // M404: `std/media` — Now Playing y controles del sistema (MediaSession), en el main thread.
     public static void onMedia(String op, String arg) {
         MAIN.post(() -> RayMedia.apply(op, arg));
@@ -1612,6 +1638,9 @@ mod tests {
         assert!(RAY_BRIDGE_JAVA.contains("public static void onMedia(String op, String arg)"));
         // rayreq #263: `ui.open_url` entra al shell por `onOpenUrl` (Intent ACTION_VIEW).
         assert!(RAY_BRIDGE_JAVA.contains("public static void onOpenUrl(String url)"));
+        // M445 (pepa #331): `ui.haptic` entra por `onHaptic` (HapticFeedbackConstants sobre la vista).
+        assert!(RAY_BRIDGE_JAVA.contains("public static void onHaptic(String kind)"));
+        assert!(RAY_BRIDGE_JAVA.contains("v.performHapticFeedback(c)"));
         assert!(RAY_BRIDGE_JAVA.contains("RayMedia.apply(op, arg)"));
         assert!(RAY_MEDIA_JAVA.contains("new MediaSession(c, \"ray\")"));
         assert!(RAY_MEDIA_JAVA.contains("Notification.MediaStyle().setMediaSession"));

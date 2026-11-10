@@ -360,6 +360,10 @@ static void ray_eval(const char *js) {
                                              injectionTime:WKUserScriptInjectionTimeAtDocumentStart
                                           forMainFrameOnly:YES]];
     rayWebView = [[WKWebView alloc] initWithFrame:vc.view.bounds configuration:cfg];
+    // pepa #328: UIKit ajustaba los insets del scroll por las zonas seguras y WebKit encogía el
+    // viewport (759 pt en vez de 852 con la isla dinámica): la página ya reserva las zonas con
+    // env(safe-area-inset-*) y viewport-fit=cover, así que el webview ocupa la pantalla entera.
+    rayWebView.scrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
     /*RAY_DEVTOOLS*/
     rayWebView.autoresizingMask =
         UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
@@ -805,6 +809,8 @@ mod tests {
         }
         // Una tarea parada por WebKit no recibe más datos ni didFinish.
         assert!(SCENE_DELEGATE_M.contains("stopURLSchemeTask:"));
+        // pepa #328: el viewport mide la pantalla entera; las zonas seguras son de la página.
+        assert!(SCENE_DELEGATE_M.contains("rayWebView.scrollView.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;"));
         assert!(SCENE_DELEGATE_M.contains("ray_ui_shell_capabilities(1);\n      ray_start();"), "capabilities before ray_start");
         assert!(SCENE_DELEGATE_M.contains("setenv(\"RAY_DEV_APP_NAME\""), "M343: the app label reaches the dev library");
         assert!(SCENE_DELEGATE_M.contains("if (![self->_stopped containsObject:key]) {\n            [task didFinish];"));

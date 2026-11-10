@@ -483,6 +483,8 @@ El mismo `main` corre en los tres sitios, pero el sistema que hay debajo no se c
 | Inspeccionar la página | `ray dev`, o `ray run --devtools` | Safari, menú Develop, con `--devtools` | `chrome://inspect`, con `--devtools` |
 | Modo claro/oscuro | `prefers-color-scheme` sigue al sistema | sigue al sistema | sigue al sistema, iconos de las barras del sistema incluidos (shell de 1.27.64+; regenera el shell si es anterior) |
 | Notificaciones (`std/notify`) | el centro de notificaciones (en un `.app`) o libnotify | `UNUserNotificationCenter`: permiso, programadas, acciones, badge | canales, permiso de Android 13+, programadas que sobreviven al reinicio (shell de 1.27.91+) |
+| `ui.haptic(kind)` | el trackpad Force Touch en macOS; no-op en Linux/Windows | los generadores de UIKit | `HapticFeedbackConstants` sobre la vista, sigue el ajuste «respuesta táctil» (shell de 1.27.91+) |
+| Zonas seguras | — | el webview ocupa la pantalla entera; la página las reserva con `env(safe-area-inset-*)` y `viewport-fit=cover` (shell de 1.27.91+) | la página las reserva igual |
 
 Lo que eso obliga a hacer:
 

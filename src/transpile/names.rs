@@ -94,7 +94,7 @@ pub(super) fn is_prelude_impl(name: &str) -> bool {
             | "ends_with" | "to_upper" | "to_lower" | "substring" | "repeat" | "join" | "to_bytes"
             | "sub_bytes" | "char_code" | "to_string" | "insert" | "contains_key" | "keys" | "values"
             | "get" | "get_or" | "remove" | "add_to" | "index_of" | "last_index_of" | "position" | "pop"
-            | "remove_at" | "insert_at"
+            | "remove_at" | "insert_at" | "clear"
     );
     builtin_key && prelude_method
 }
@@ -194,7 +194,7 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
             | "remove" | "remove_at" | "insert_at" | "select_timeout" | "sort" | "try_join"
         // --- builtins públicos manejados en emit_call que NO son filas de la tabla (bajan a
         // primitivos `__len`/`__push`/… o son azúcar del prelude) ---
-            | "len" | "push" | "split" | "chars" | "contains_key" | "keys" | "values" | "insert"
+            | "len" | "push" | "split" | "chars" | "contains_key" | "keys" | "values" | "insert" | "clear"
             | "unwrap" | "unwrap_or"
     )
 }

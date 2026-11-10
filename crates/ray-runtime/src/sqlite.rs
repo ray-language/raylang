@@ -44,6 +44,9 @@ mod imp {
 
     /// rayreq #248: como [`exec_conn`] con parámetros que pueden ser `NULL` (`None`).
     pub fn exec_conn_opt(conn: &rusqlite::Connection, sql: &str, params: &[Option<String>]) -> Result<i64, String> {
+        // rusqlite 0.41: `Batch` itera por el trait `FallibleIterator` (re-exportado), ya no por un
+        // `next` propio.
+        use rusqlite::fallible_iterator::FallibleIterator;
         let mut batch = rusqlite::Batch::new(conn, sql);
         // Se cuenta por el delta de `total_changes`: `changes()` solo lo actualizan
         // INSERT/UPDATE/DELETE y tras un DDL conserva el valor anterior (se sumaría dos veces).

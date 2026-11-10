@@ -4,6 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`rusqlite` 0.32 → 0.41 (SQLite 3.54.1; RUSTSEC-2026-0459).** `cargo audit` señalaba
+  `libsqlite3-sys` 0.30.1 por un CVE del SQLite embebido; la actualización lo cierra. Sin cambios
+  de superficie: `db/sqlite` y `std/sqlite` se comportan igual en la VM y en nativo (el único
+  ajuste interno es la iteración de `Batch`, que pasó a `FallibleIterator`).
+
 ## 1.27.90 — 2026-11-08
 
 Firma por plataforma en el manifiesto (M440) y `std/ui` con apariencia clara/oscura, evento `frame` y pantallas (M441).

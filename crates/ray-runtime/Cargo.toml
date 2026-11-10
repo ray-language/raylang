@@ -122,8 +122,8 @@ num-traits = { version = "0.2", optional = true }
 num-integer = { version = "0.1", optional = true }
 webpki-roots = { version = "0.26", optional = true }
 rustls-pki-types = { version = "1", features = ["std"], optional = true }
-# M53.3 — rusqlite 0.32 con `bundled`: compila SQLite dentro del binario. Misma versión que el binario `ray`.
-rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+# M53.3 — rusqlite 0.41 (RUSTSEC-2026-0459, nov 2026; antes 0.32) con `bundled`: compila SQLite dentro del binario. Misma versión que el binario `ray`.
+rusqlite = { version = "0.41", features = ["bundled"], optional = true }
 # M115.4 — watcher de fs multiplataforma (FSEvents/inotify/kqueue detrás de un API único).
 notify = { version = "8", optional = true }
 # N1 — mimalloc 0.1: misma versión/crate que usa el binario `ray` (src/lib.rs) → mismo allocador en ambos.

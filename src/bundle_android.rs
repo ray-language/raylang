@@ -1269,7 +1269,8 @@ public final class RayAlarm {
     static final String ACTION_SNOOZE = "org.raylang.shell.ALARM_SNOOZE";
     static final String ACTION_DONE = "org.raylang.shell.ALARM_DONE";
     static final String SEP = "\u001f";
-    static final String SNOOZE = "|snooze"; // un id no puede llevar `|`: la clave de la posposición no choca
+    // La clave de la posposición: el separador de campos no puede ir en un id (pepa #347: `|` sí).
+    static final String SNOOZE = "\u001fsnooze";
 
     // Una petición de std/alarm (RayBridge.onRequest), en el main thread. Los campos de una
     // alarma: trigger, id, title, sound, snooze_minutes, stop_label, data, max_minutes (ver

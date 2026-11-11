@@ -27,7 +27,8 @@
 from std/ui import UiEvent;
 
 /// An alarm. `message(title)` builds one with the defaults; set the rest by field. `id` names
-/// it (empty = generated; scheduling another with the same id replaces it); `title` is what the
+/// it (empty = generated; scheduling another with the same id replaces it; any text without tabs
+/// or newlines, like an id of `std/notify`); `title` is what the
 /// alarm screen shows; `sound` is a file listed in `[android] sounds` / `[ios] sounds` of
 /// `ray.toml`, without extension (empty = the system alarm tone); `snooze_minutes` > 0 adds a
 /// "Snooze" button that rings again after that many minutes (0 = none, 120 at most);
@@ -117,8 +118,10 @@ pub fn status() -> Result<string, string> {
     tunnel("alarm_status", "")
 }
 
-/// Arms `a` for `when` and returns its id. `Err` with the reason: no title, a time in the past,
-/// a weekday out of 1–7, permission denied, or a platform without system alarms.
+/// Arms `a` for `when` and returns its id. `Err` with the reason: no title, an id with a tab or
+/// a newline, a sound given as a path, a time in the past, a weekday out of 1–7, permission
+/// denied, or a platform without system alarms — check `status()` to tell "no alarms here"
+/// from a rejected alarm.
 pub fn schedule(a: Alarm, when: Trigger) -> Result<string, string> {
     tunnel(
         "alarm_schedule",

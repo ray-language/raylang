@@ -138,8 +138,10 @@ pub fn parse_alarm(arg: &str) -> Result<(Trigger, Alarm), String> {
     if a.id.is_empty() {
         a.id = next_id();
     }
-    if a.id.contains(['\t', '\n', '|']) {
-        return Err("alarm: the id cannot contain tabs, newlines or '|'".to_string());
+    // pepa #347: los mismos caracteres que un id de std/notify (el evento es `id\taction\tdata`);
+    // el separador de campos del cable tampoco cabe.
+    if a.id.contains(['\t', '\n', '\u{1f}']) {
+        return Err("alarm: the id cannot contain tabs or newlines".to_string());
     }
     if a.sound.contains(['/', '\\']) {
         return Err("alarm: sound is a file name (from [android] sounds / [ios] sounds), not a path".to_string());
@@ -379,7 +381,10 @@ mod tests {
         assert!(generated.id.starts_with("alarm-"));
         let bad = |f: &[&str]| parse_alarm(&enc(f)).unwrap_err();
         assert!(bad(&["daily:8:0", "x", " ", "", "0", "", "", "0"]).contains("needs a title"));
-        assert!(bad(&["daily:8:0", "a|b", "T", "", "0", "", "", "0"]).contains("cannot contain"));
+        assert!(bad(&["daily:8:0", "a\tb", "T", "", "0", "", "", "0"]).contains("tabs or newlines"));
+        // pepa #347: un id con `|`, `#` o `:` vale, como en std/notify.
+        let (_, piped) = parse_alarm(&enc(&["daily:8:0", "pepa:plan:2026-11-11|d|m1|20:00#ab", "T", "", "0", "", "", "0"])).unwrap();
+        assert_eq!(piped.id, "pepa:plan:2026-11-11|d|m1|20:00#ab");
         assert!(bad(&["daily:8:0", "x", "T", "a/b.ogg", "0", "", "", "0"]).contains("not a path"));
         assert!(bad(&["daily:8:0", "x", "T", "", "500", "", "", "0"]).contains("snooze_minutes"));
         assert!(bad(&["daily:8:0", "x", "T", "", "0", "", "", "90"]).contains("max_minutes"));

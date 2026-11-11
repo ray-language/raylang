@@ -13,6 +13,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   o en un formato que iOS no reproduce. REFERENCE gana la tabla de claves de `ray.toml` para
   apps móviles (`audio_session` y cómo se combina con `background_audio`, `background`, `sounds`…).
 
+- **`std/alarm` en iOS 26+ (M448 fase b, pepa #341)**: la shell de `ray bundle --ios` arma las
+  alarmas con **AlarmKit** — la alerta la pinta y la hace sonar el sistema, en bucle, con la app
+  cerrada y atravesando silencio y Concentración, con «detener» y, si se pide, «posponer». La
+  respuesta llega como evento `"alarm"` (`"stop"` / `"snooze"`); con la app cerrada el sistema
+  la despierta en segundo plano y el programa la recibe ahí. `request_permission` muestra el
+  diálogo del sistema; `sound` es un archivo de `[ios] sounds`. El shell lleva una fuente Swift
+  (`RayAlarm.swift`) y `NSAlarmKitUsageDescription` solo si el programa importa `std/alarm`.
+  Antes de iOS 26 sigue siendo `"unsupported"`. Los botones requieren una app firmada con un
+  team (`[ios] development_team`).
+
 ## 1.27.93 — 2026-11-10
 
 `std/alarm`: alarmas del sistema que suenan con la app cerrada, en Android (M448, fase a).

@@ -2798,7 +2798,13 @@ fn cmd_bundle(args: &[String]) {
             .is_some_and(|(l, d)| write_ios_launch_color(&proj, &l, d.as_deref()));
         let audio_session = manifest.as_ref().and_then(|m| m.ios_audio_session.clone());
         let sounds = resolve_sound_files(manifest.as_ref().map(|m| (&m.root, m.ios_sounds.as_slice())), "[ios] sounds");
-        let opts = crate::bundle_ios::ShellOptions { devtools, icon: icon_ok, background_audio, launch_color, audio_session, sounds, url_scheme: dev.then(|| bundle_id.clone()) };
+        // M448b (IDEAS §122): std/alarm → RayAlarm.swift (AlarmKit) en el target, y la clave de uso que
+        // AlarmKit exige para pedir el permiso (una del usuario en `[app.plist]` manda).
+        let alarm = dev || uses_module(&path, "std/alarm");
+        if alarm && !ios_plist.iter().any(|(k, _)| k == "NSAlarmKitUsageDescription") {
+            ios_plist.push(("NSAlarmKitUsageDescription".to_string(), crate::manifest::PlistValue::Str(format!("{name} rings the alarms you set."))));
+        }
+        let opts = crate::bundle_ios::ShellOptions { devtools, icon: icon_ok, background_audio, launch_color, audio_session, sounds, alarm, url_scheme: dev.then(|| bundle_id.clone()) };
         if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing, opts, &ios_plist) {
             eprintln!("bundle: could not write the Xcode project: {e}");
             process::exit(74);

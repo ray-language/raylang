@@ -19969,3 +19969,34 @@ valores admite cada una y qué genera). `ray bundle --ios` avisa ahora de un son
 reproduciría —más de 30 s (leído de la cabecera del WAV, o con `afinfo` para caf/aiff) u otro
 formato— porque el sistema pone el sonido por defecto sin decir nada, y `sounds` admite `*` en
 el nombre del archivo, que es lo primero que pepa intentó.
+## 423. M448b — `std/alarm` en iOS: AlarmKit (nov 2026)
+
+La fase b de IDEAS §122 (pepa #341): el mismo contrato de §421 sobre **AlarmKit** (iOS 26).
+
+- **Una pieza Swift en un shell Objective-C.** AlarmKit no tiene API de Objective-C, así que el
+  proyecto generado gana `RayAlarm.swift` — solo cuando el programa importa `std/alarm` (o en
+  el shell `--dev`): sin el módulo, el shell sigue sin Swift ni la clave
+  `NSAlarmKitUsageDescription`. El puente es el canal genérico de peticiones de M442
+  (`ray_ui_set_request_handler` → `[RayAlarm handle:op:arg:]` → `ray_ui_request_result`); el
+  runtime trata iOS igual que Android (`shell_request`) y un shell sin el manejador responde
+  `"unsupported"`.
+- **El sistema pinta y hace sonar la alerta.** No hay pantalla propia como en Android: los
+  botones son dos `LiveActivityIntent` (detener y posponer). Posponer programa una alarma fija
+  nueva a `snooze_minutes` (el id de AlarmKit es un UUID; el del programa se guarda en
+  `UserDefaults` junto con los campos). `max_minutes` no aplica y el botón de detener lo rotula
+  el sistema.
+- **App cerrada.** Al tocar un botón el sistema lanza la app en segundo plano, con escena: el
+  programa arranca y recibe el evento en vivo. Si el intent corre antes de que el programa
+  arranque, la respuesta se guarda y se entrega tras `ray_start`; un cerrojo ordena ambas cosas
+  para que ninguna respuesta caiga entre la comprobación y el vaciado.
+- **Medido en el simulador (iPhone 17 Pro, iOS 26.5)**: permiso, programar, sonar con el tono
+  por defecto y con un sonido de `[ios] sounds`, posponer → vuelve a sonar → detener, y detener
+  con la app cerrada. Dos trampas encontradas: (1) pedir el permiso con la app inactiva falla
+  con `AuthorizationManagerError 1` — el shell devuelve el estado conocido o un error que pide
+  reintentar; (2) sin firma con team (`CODE_SIGNING_ALLOWED=NO`), `linkd` no identifica el
+  bundle («Unable to get teamId») y los intents no se resuelven: la alarma suena y se detiene,
+  pero el programa no recibe la respuesta. No es un fallo del shell — en dispositivo toda app
+  va firmada — y queda documentado. El destino mínimo de despliegue sigue en 15.0 (los tipos de
+  AlarmKit van tras `@available(iOS 26.0, *)`).
+- **Sin verificar en dispositivo físico**: el paso por el modo silencio/Concentración y el
+  volumen real de alarma no se pueden observar en el simulador.

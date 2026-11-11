@@ -20025,8 +20025,10 @@ contrato sino de un detalle del shell de Android: la posposición se guarda bajo
 `id|snooze`. Se cambia el sufijo por el separador de campos del cable (`U+001F` + `snooze`), que
 un id no puede llevar de todos modos, y el id queda con la misma regla que en `std/notify`: sin
 tabuladores ni saltos de línea (el evento es `id\taction\tdata`). Una posposición en curso
-guardada por un shell de 1.27.93/1.27.94 se lee tras actualizar como una alarma más y suena a
-su hora; no se migra. `schedule` enumera en su documentación todos los motivos de `Err` y
-recuerda consultar `status()` para distinguir «sin alarmas» de una alarma rechazada. Medido en
+guardada por un shell de 1.27.93/1.27.94 (clave `id|snooze`) se migra a la clave nueva la
+primera vez que el shell abre el almacén — sin ella quedaba fuera del alcance de `cancel(id)`
+y, en una alarma diaria, se rearmaba como alarma aparte (revisión previa a la release). Se
+reconoce sin ambigüedad: el id que guarda el registro no es su clave. `schedule` enumera en su
+documentación sus motivos de `Err` y recuerda consultar `status()` para distinguir «sin alarmas» de una alarma rechazada. Medido en
 el emulador (Android 15): programar, posponer y detener con el id
 `pepa:2026-11-11|d|m1|20:00#ab`. En iOS el almacén va por id y nunca tuvo la restricción.

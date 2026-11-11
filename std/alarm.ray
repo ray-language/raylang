@@ -118,10 +118,11 @@ pub fn status() -> Result<string, string> {
     tunnel("alarm_status", "")
 }
 
-/// Arms `a` for `when` and returns its id. `Err` with the reason: no title, an id with a tab or
-/// a newline, a sound given as a path, a time in the past, a weekday out of 1–7, permission
-/// denied, or a platform without system alarms — check `status()` to tell "no alarms here"
-/// from a rejected alarm.
+/// Arms `a` for `when` and returns its id. `Err` says why — among the reasons: no title, an id
+/// with a tab or a newline, a sound given as a path (or, on iOS, missing from the bundle),
+/// `snooze_minutes` out of 0–120 or `max_minutes` out of 0–60, a time in the past, an invalid
+/// time of day, a weekday out of 1–7, permission denied, or a platform without system alarms.
+/// An `Err` does not mean "no alarms here": ask `status()` for that.
 pub fn schedule(a: Alarm, when: Trigger) -> Result<string, string> {
     tunnel(
         "alarm_schedule",

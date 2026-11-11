@@ -138,9 +138,8 @@ pub fn parse_alarm(arg: &str) -> Result<(Trigger, Alarm), String> {
     if a.id.is_empty() {
         a.id = next_id();
     }
-    // pepa #347: los mismos caracteres que un id de std/notify (el evento es `id\taction\tdata`);
-    // el separador de campos del cable tampoco cabe.
-    if a.id.contains(['\t', '\n', '\u{1f}']) {
+    // pepa #347: los mismos caracteres que un id de std/notify (el evento es `id\taction\tdata`).
+    if a.id.contains(['\t', '\n']) {
         return Err("alarm: the id cannot contain tabs or newlines".to_string());
     }
     if a.sound.contains(['/', '\\']) {

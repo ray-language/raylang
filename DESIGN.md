@@ -19998,5 +19998,7 @@ La fase b de IDEAS §122 (pepa #341): el mismo contrato de §421 sobre **AlarmKi
   pero el programa no recibe la respuesta. No es un fallo del shell — en dispositivo toda app
   va firmada — y queda documentado. El destino mínimo de despliegue sigue en 15.0 (los tipos de
   AlarmKit van tras `@available(iOS 26.0, *)`).
-- **Sin verificar en dispositivo físico**: el paso por el modo silencio/Concentración y el
-  volumen real de alarma no se pueden observar en el simulador.
+- **Medido en dispositivo (iPhone 12, iOS 27.2, app firmada con team)**: permiso, sonido propio
+  de `[ios] sounds` en bucle, con el interruptor de silencio puesto y sobre la pantalla
+  bloqueada; posponer → cerrar la app → vuelve a sonar con la app cerrada → detener, con las
+  tres respuestas entregadas al programa. Sin probar: un modo de Concentración activo.

@@ -4,6 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.95 — 2026-11-11
+
+- **`std/alarm`: el id de una alarma admite `|` (pepa #347)**, y cualquier texto sin tabuladores
+  ni saltos de línea, igual que un id de `std/notify`. Antes `schedule` lo rechazaba sin que la
+  documentación lo dijera. `schedule` documenta ahora sus motivos de `Err`. Una posposición en
+  curso guardada por el shell de Android de 1.27.93/1.27.94 se migra al abrir la app.
+
 ## 1.27.94 — 2026-11-10
 
 - **`ray.toml`: arrays en varias líneas, y las claves móviles en la referencia (pepa #344 y #345).**

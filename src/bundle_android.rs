@@ -1269,7 +1269,8 @@ public final class RayAlarm {
     static final String ACTION_SNOOZE = "org.raylang.shell.ALARM_SNOOZE";
     static final String ACTION_DONE = "org.raylang.shell.ALARM_DONE";
     static final String SEP = "\u001f";
-    static final String SNOOZE = "|snooze"; // un id no puede llevar `|`: la clave de la posposición no choca
+    // La clave de la posposición: el separador de campos no puede ir en un id (pepa #347: `|` sí).
+    static final String SNOOZE = "\u001fsnooze";
 
     // Una petición de std/alarm (RayBridge.onRequest), en el main thread. Los campos de una
     // alarma: trigger, id, title, sound, snooze_minutes, stop_label, data, max_minutes (ver
@@ -1318,11 +1319,40 @@ public final class RayAlarm {
     }
 
     static SharedPreferences prefs(Context c) {
-        return c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        SharedPreferences p = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        if (!migrated) {
+            migrated = true;
+            migrate(c, p);
+        }
+        return p;
+    }
+
+    static volatile boolean migrated = false;
+
+    // Un shell de 1.27.93/1.27.94 guardaba la posposición de `id` bajo `id|snooze`. Se reconoce
+    // sin ambigüedad — el id del registro (f[1]) no es la clave — y se pasa a la clave nueva con
+    // su disparo: así `cancel(id)` y `schedule(id)` la alcanzan y no queda como alarma aparte.
+    static void migrate(Context c, SharedPreferences p) {
+        final String old = "|snooze";
+        for (Map.Entry<String, ?> e : new java.util.HashMap<>(p.getAll()).entrySet()) {
+            String key = e.getKey();
+            if (!key.endsWith(old)) { continue; }
+            try {
+                String rec = String.valueOf(e.getValue());
+                String[] head = rec.split("\\|", 2);
+                String[] f = head[1].split(SEP, -1);
+                if (!key.equals(f[1] + old)) { continue; } // un id que de verdad termina así
+                AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
+                am.cancel(firePending(c, key));
+                p.edit().remove(key).putString(f[1] + SNOOZE, rec).apply();
+                arm(c, f[1] + SNOOZE, Long.parseLong(head[0]));
+            } catch (RuntimeException ignored) { // un registro ilegible se deja como está
+            }
+        }
     }
 
     static ArrayList<String> pending(Context c) {
-        // Una alarma pospuesta sigue pendiente aunque solo quede su clave `id|snooze`.
+        // Una alarma pospuesta sigue pendiente aunque solo quede su clave de posposición (id + SNOOZE).
         java.util.TreeSet<String> ids = new java.util.TreeSet<>();
         for (String k : prefs(c).getAll().keySet()) {
             ids.add(k.endsWith(SNOOZE) ? k.substring(0, k.length() - SNOOZE.length()) : k);
@@ -1403,7 +1433,7 @@ public final class RayAlarm {
         RayNotify.syncBootReceiver(c);
     }
 
-    // Un disparo (desde el receiver; `key` = el id, o `id#snooze` para una posposición): rearmar
+    // Un disparo (desde el receiver; `key` = el id, o id + SNOOZE para una posposición): rearmar
     // la siguiente si repite y hacer sonar.
     static void fire(Context c, String key) {
         fire(c, key, true);
@@ -2421,6 +2451,10 @@ mod tests {
         assert!(RAY_ALARM_JAVA.contains("fire(c, e.getKey(), false)") && RAY_ALARM_JAVA.contains("respond(c, f[1], \"missed\", f[6]);"));
         assert!(RAY_ALARM_JAVA.contains("alarms are not authorized for this app (notifications: ") && RAY_ALARM_JAVA.contains("static void retime(Context c)"));
         assert!(RAY_ALARM_JAVA.contains("k.endsWith(SNOOZE) ? k.substring(0, k.length() - SNOOZE.length()) : k"));
+        // pepa #347: el sufijo de la posposición no es imprimible (un id puede llevar `|`), y la
+        // clave de un shell anterior se migra.
+        assert!(RAY_ALARM_JAVA.contains("static final String SNOOZE = \"\\u001fsnooze\";"));
+        assert!(RAY_ALARM_JAVA.contains("if (!key.equals(f[1] + old)) { continue; }"));
         assert!(with.contains("android.intent.action.TIMEZONE_CHANGED") && RAY_NOTIFY_RECEIVER_JAVA.contains("RayAlarm.retime(c);"));
         assert!(RAY_BRIDGE_JAVA.contains("if (op.startsWith(\"alarm_\")) {") && RAY_BRIDGE_JAVA.contains("static boolean isStarted()"));
         let (catch_up, deliver) = (MAIN_ACTIVITY_JAVA.find("RayAlarm.catchUp(getApplicationContext());").unwrap(), MAIN_ACTIVITY_JAVA.find("RayAlarm.deliverPending(getApplicationContext());").unwrap());

@@ -149,3 +149,22 @@ fn unsupported_and_denied_are_reported() {
         assert_eq!(out, "Result.Ok(denied)\nfalse\ntrue\nResult.Ok([])\n", "{name}");
     }
 }
+
+/// pepa #347: un id con `|` (y `#`, `:`) se programa, se lista y se cancela en los tres motores;
+/// un tabulador sigue rechazado, con su motivo.
+#[test]
+fn an_id_with_a_pipe_is_accepted_on_all_engines() {
+    let d = tmp("pipe_id");
+    std::fs::write(
+        d.join("prog.ray"),
+        "import std/ui;\nimport std/alarm;\nfn main() -> int {\n    let w = ui.open(\"t\", \"about:blank\", 300, 200).unwrap();\n    var a = alarm.message(\"x\");\n    a.id = \"pepa:2026-11-11|d|m1|20:00#ab\";\n    print(alarm.schedule(a, alarm.Trigger.Daily(8, 0)));\n    print(alarm.pending());\n    print(alarm.cancel(a.id));\n    print(alarm.pending());\n    a.id = \"a\\tb\";\n    print(alarm.schedule(a, alarm.Trigger.Daily(8, 0)));\n    0\n}\n",
+    )
+    .unwrap();
+    for (name, out, _err) in engines(&d, &[]) {
+        assert_eq!(
+            out,
+            "Result.Ok(pepa:2026-11-11|d|m1|20:00#ab)\nResult.Ok([pepa:2026-11-11|d|m1|20:00#ab])\nResult.Ok(0)\nResult.Ok([])\nResult.Err(alarm: the id cannot contain tabs or newlines)\n",
+            "{name}"
+        );
+    }
+}

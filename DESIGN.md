@@ -19969,6 +19969,7 @@ valores admite cada una y qué genera). `ray bundle --ios` avisa ahora de un son
 reproduciría —más de 30 s (leído de la cabecera del WAV, o con `afinfo` para caf/aiff) u otro
 formato— porque el sistema pone el sonido por defecto sin decir nada, y `sounds` admite `*` en
 el nombre del archivo, que es lo primero que pepa intentó.
+
 ## 423. M448b — `std/alarm` en iOS: AlarmKit (nov 2026)
 
 La fase b de IDEAS §122 (pepa #341): el mismo contrato de §421 sobre **AlarmKit** (iOS 26).
@@ -20001,4 +20002,16 @@ La fase b de IDEAS §122 (pepa #341): el mismo contrato de §421 sobre **AlarmKi
 - **Medido en dispositivo (iPhone 12, iOS 27.2, app firmada con team)**: permiso, sonido propio
   de `[ios] sounds` en bucle, con el interruptor de silencio puesto y sobre la pantalla
   bloqueada; posponer → cerrar la app → vuelve a sonar con la app cerrada → detener, con las
-  tres respuestas entregadas al programa. Sin probar: un modo de Concentración activo.
+  tres respuestas entregadas al programa; y sonó con «No molestar» activo.
+- **De la revisión previa a la release**: el almacén id→UUID se lee y escribe en un solo paso
+  bajo cerrojo (peticiones e intents corren a la vez, y nadie reescribe una foto tomada antes
+  de un `await`); reprogramar un id arma primero la alarma nueva y solo entonces cancela la
+  vieja; `pending()` no purga si el sistema no entrega su lista; un botón silencia la alarma
+  aunque su registro falte. La respuesta se guarda SIEMPRE antes de empujarse y se olvida dos
+  segundos después: despertada en segundo plano para un botón, la app puede ser suspendida y
+  descartada antes de que el programa lea su cola, y entonces la respuesta sigue ahí para el
+  próximo arranque (entrega «al menos una vez»: en ese caso límite puede llegar repetida).
+  La fuente Swift va tras `#if canImport(AlarmKit)` — el shell `--dev` la lleva siempre y debe
+  compilar con un Xcode anterior al SDK 26 — y sin alarmas de sistema `cancel`, `cancel_all` y
+  `pending` son `Ok`, como en el escritorio. El comodín de `sounds` (§422) ignora los archivos
+  ocultos y los que no son audio.

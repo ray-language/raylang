@@ -754,7 +754,7 @@ What `ray bundle --ios` / `--android` reads from the manifest (besides `[app] na
 | `[ios] background_audio` | `true` / `false` | an `AVAudioSession` `playback` session activated at launch + `UIBackgroundModes = ["audio"]`: `std/audio` keeps playing in the background and with the silent switch on. On its own it **interrupts** other apps' audio |
 | `[ios] audio_session` | `"playback"` / `"playback_mix"` | the session category, without the background mode: `"playback"` sounds with the silent switch on and interrupts the others; `"playback_mix"` adds `MixWithOthers` (another app's music keeps playing). It **combines** with `background_audio = true`: `playback_mix` + `background_audio` gives `MixWithOthers` AND `UIBackgroundModes = audio`. Without either key, the default session (it honors the silent switch) |
 | `[ios] background` / `background_dark` | `"#rrggbb"` | the catalog's `LaunchBackground` color: the launch screen (`UILaunchScreen`) and the view under the page (the webview is transparent). `background_dark` is the dark-mode variant and requires `background`. The program's `WindowOptions.background` takes over once it opens the window |
-| `[ios] sounds` | a list of paths relative to the project root; the file name accepts `*` (`"tones/*.wav"`) | files copied into the bundle for `std/notify`'s `Notification.sound_name` (and `Alarm.sound` once AlarmKit lands). Formats: `.caf`, `.aiff`, `.wav`, **30 s at most** — `ray bundle` warns about a longer one or another format, because iOS would play the default sound. The name without extension must be unique |
+| `[ios] sounds` | a list of paths relative to the project root; the file name accepts `*` (`"tones/*.wav"`) | files copied into the bundle for `std/notify`'s `Notification.sound_name` (and `Alarm.sound` of `std/alarm`). Formats: `.caf`, `.aiff`, `.wav`, **30 s at most** — `ray bundle` warns about a longer one or another format, because iOS would play the default sound. The name without extension must be unique |
 | `[android] application_id` | an application id | the APK's `applicationId`, when it differs from `[app] id` |
 | `[android] background_audio` | `true` / `false` | a `mediaPlayback` foreground service while the app is in the background |
 | `[android] exact_alarms` | `true` / `false` | `SCHEDULE_EXACT_ALARM`: `std/notify`'s scheduled notifications use exact alarms |
@@ -775,4 +775,4 @@ What `ray bundle --ios` / `--android` reads from the manifest (besides `[app] na
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:14fcd1b4f22d -->
+<!-- sync: sha256:e0cc03b37f3a -->

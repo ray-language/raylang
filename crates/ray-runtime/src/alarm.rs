@@ -306,14 +306,19 @@ mod backend {
     pub(super) fn schedule(trigger: Trigger, a: Alarm) -> Result<String, String> {
         ask("alarm_schedule", &super::alarm_text(&trigger, &a)).map(|_| a.id)
     }
+    /// Sin alarmas de sistema (un shell de iOS sin la pieza de alarmas) no hay nada que cancelar
+    /// ni que listar: `Ok`, como en el escritorio y como documenta `cancel`.
+    fn ask_quiet(op: &str, arg: &str) -> Result<String, String> {
+        ask(op, arg).or_else(|e| if status().as_deref() == Ok("unsupported") { Ok(String::new()) } else { Err(e) })
+    }
     pub(super) fn cancel(id: &str) -> Result<(), String> {
-        ask("alarm_cancel", id).map(|_| ())
+        ask_quiet("alarm_cancel", id).map(|_| ())
     }
     pub(super) fn cancel_all() -> Result<(), String> {
-        ask("alarm_cancel_all", "").map(|_| ())
+        ask_quiet("alarm_cancel_all", "").map(|_| ())
     }
     pub(super) fn pending() -> Result<Vec<String>, String> {
-        ask("alarm_pending", "").map(|t| t.split('\n').filter(|s| !s.is_empty()).map(String::from).collect())
+        ask_quiet("alarm_pending", "").map(|t| t.split('\n').filter(|s| !s.is_empty()).map(String::from).collect())
     }
 }
 

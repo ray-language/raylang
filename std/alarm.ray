@@ -161,7 +161,8 @@ pub fn pending() -> Result<[string], string> {
 }
 
 /// The answer carried by an `"alarm"` event of `ui.next_event` (`None` for any other event).
-/// When the alarm rang with the app closed, the event is waiting in the queue at the next launch.
+/// When the alarm rang with the app closed, the event is waiting in the queue at the next launch
+/// (delivery is at least once: treat a repeated answer to the same alarm as one).
 pub fn event_response(e: UiEvent) -> Option<Response> {
     if (e.kind != "alarm") {
         return Option.None;

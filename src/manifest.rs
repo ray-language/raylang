@@ -279,14 +279,8 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut android_application_id = None;
     let mut app_description = None;
 
-    for (i, raw_line) in src.lines().enumerate() {
-        let num = i + 1;
-        // Quitar comentario (`#`) y espacios — un `#` DENTRO de comillas no lo es (M447: los
-        // colores `"#f1f3f5"` de `[ios] background`).
-        let line = strip_comment(raw_line).trim();
-        if line.is_empty() {
-            continue;
-        }
+    for (num, line) in logical_lines(src) {
+        let line = line.as_str();
         // Cabecera de sección `[tabla]`.
         if let Some(rest) = line.strip_prefix('[') {
             let name = rest
@@ -541,10 +535,55 @@ fn strip_comment(line: &str) -> &str {
 
 fn parse_string_array(s: &str) -> Option<Vec<String>> {
     let inner = s.strip_prefix('[')?.strip_suffix(']')?.trim();
+    // pepa #344: TOML admite la coma final (`["a", "b",]`).
+    let inner = inner.strip_suffix(',').unwrap_or(inner).trim();
     if inner.is_empty() {
         return Some(Vec::new());
     }
     inner.split(',').map(|part| unquote_string(part.trim())).collect()
+}
+
+/// Las líneas LÓGICAS del manifiesto, sin comentarios ni blancos, con el número de la primera
+/// línea física de cada una. pepa #344: un array abierto (`clave = [` sin su `]`) sigue en las
+/// líneas siguientes, como en TOML — antes era «must be an array» sin decir por qué. Un `#`
+/// DENTRO de comillas no es comentario (M447: los colores `"#f1f3f5"`).
+fn logical_lines(src: &str) -> Vec<(usize, String)> {
+    // Corchetes abiertos menos cerrados, fuera de cadenas.
+    fn depth(text: &str) -> i32 {
+        let (mut d, mut quoted, mut escaped) = (0, false, false);
+        for c in text.chars() {
+            match c {
+                _ if escaped => escaped = false,
+                '\\' if quoted => escaped = true,
+                '"' => quoted = !quoted,
+                '[' if !quoted => d += 1,
+                ']' if !quoted => d -= 1,
+                _ => {}
+            }
+        }
+        d
+    }
+    let mut out: Vec<(usize, String)> = Vec::new();
+    let mut open: Option<(usize, String)> = None;
+    for (i, raw) in src.lines().enumerate() {
+        let line = strip_comment(raw).trim();
+        if line.is_empty() {
+            continue;
+        }
+        match open.take() {
+            Some((num, mut acc)) => {
+                acc.push(' ');
+                acc.push_str(line);
+                if depth(&acc) > 0 { open = Some((num, acc)) } else { out.push((num, acc)) }
+            }
+            // Solo un VALOR abre un array: una cabecera `[sección]` no lleva `=`.
+            None if line.split_once('=').is_some_and(|(_, v)| depth(v) > 0) => open = Some((i + 1, line.to_string())),
+            None => out.push((i + 1, line.to_string())),
+        }
+    }
+    // Un array que nunca cierra: se entrega tal cual y el lector de la clave da su error.
+    out.extend(open);
+    out
 }
 
 /// Inserta o actualiza `nombre = "<req>"` en la sección `[dependencies]` del fuente de un `ray.toml`
@@ -770,6 +809,12 @@ mod tests {
         assert!(parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[ios]\nbackground = \"red\"\n").unwrap_err().contains("#rrggbb"));
         assert!(parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[ios]\naudio_session = \"ambient\"\n").unwrap_err().contains("playback_mix"));
         assert!(parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[ios]\nbackground_dark = \"#141414\"\n").unwrap_err().contains("needs [ios] background"));
+        // pepa #344: un array en varias líneas, con comentarios y coma final, como en TOML.
+        let m = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[ios]\nsounds = [\n    \"sounds/a.wav\", \"sounds/b.wav\", # dos\n    \"sounds/c#1.wav\",\n]\nbackground = \"#101010\"\n\n[native]\nembed = [\n  \"www\"\n]\n").unwrap();
+        assert_eq!(m.ios_sounds, vec!["sounds/a.wav", "sounds/b.wav", "sounds/c#1.wav"]);
+        assert_eq!((m.ios_background.as_deref(), m.native_embed.len()), (Some("#101010"), 1));
+        let unclosed = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[ios]\nsounds = [\n  \"a.wav\"\n").unwrap_err();
+        assert!(unclosed.contains("ray.toml:6:") && unclosed.contains("sounds must be an array"), "{unclosed}");
         // Un `#` entre comillas (también tras una comilla escapada) no es comentario.
         let m = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\ndescription = \"say \\\"hi\\\" #1\" # real comment\n").unwrap();
         assert!(m.description.as_deref().is_some_and(|d| d.ends_with("#1")), "{:?}", m.description); // (las secuencias \\" se conservan tal cual, como siempre)

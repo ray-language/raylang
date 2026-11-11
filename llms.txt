@@ -467,7 +467,7 @@ only loads `http://127.0.0.1:<port>` from the embedded server — use `web.liste
 `local_limits` there — and `ui.reply_json` needs a shell ≥ 1.12.1: regenerate with
 `ray bundle --ios/--android`); sound on the phone: `std/audio` plays on iOS too (AudioQueue,
 1.27.19) and `ray bundle --ios` no longer excludes it; to keep playing in the background put
-`[ios] background_audio = true` (AVAudioSession playback + UIBackgroundModes; it interrupts other apps' audio — a reminder app wants `[ios] audio_session = "playback_mix"` instead: silent switch ignored, music of other apps keeps playing, no background mode) and/or
+`[ios] background_audio = true` (AVAudioSession playback + UIBackgroundModes; it interrupts other apps' audio — a reminder app adds `[ios] audio_session = "playback_mix"`: silent switch ignored and the music of other apps keeps playing; the two keys combine — `playback_mix` alone has no background mode, with `background_audio = true` it keeps `UIBackgroundModes = audio`; `[ios] sounds = ["tones/*.wav"]` is a list of project-relative paths (`*` allowed in the file name; caf/aiff/wav, 30 s at most — `ray bundle` warns), arrays in ray.toml may span lines) and/or
 `[android] background_audio = true` (foreground service) in ray.toml — the webview's JS timers
 freeze in the background, so a sequencer belongs in the raylang program, not in the page;
 `audio.flush(h)` (seek/pause without overlap) cuts with the anti-click ramp ONLY on CoreAudio

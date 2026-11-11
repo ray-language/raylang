@@ -19951,3 +19951,21 @@ La prueba del reinicio en el AVD destapó además que `BOOT_COMPLETED` puede tar
 y que nada más repasaba lo guardado: `MainActivity` llama ahora a `RayAlarm.catchUp` al abrir la
 app — lo vencido hace más de un minuto se informa como `missed`, lo recién vencido se arma para
 ya y lo futuro se rearma —, antes de entregar las respuestas pendientes.
+
+## 422. M449 — el manifiesto lee arrays en varias líneas; las claves móviles, a la referencia (nov 2026)
+
+Dos hallazgos de pepa al adoptar 1.27.93. **#344**: el lector de `ray.toml` es de línea en
+línea, y una lista larga escrita como en cualquier TOML —`sounds = [` y un elemento por línea—
+daba «sounds must be an array of paths», que además culpa al tipo y no al salto. El lector no
+se convierte en un parser de TOML: gana una pasada previa (`logical_lines`) que une las líneas
+de un valor cuyo corchete queda abierto (contando fuera de comillas, con los comentarios ya
+quitados) y conserva el número de la primera para los errores; `parse_string_array` acepta la
+coma final. Una cabecera `[sección]` no lleva `=`, así que no se confunde con un array.
+
+**#345** es de documentación y de un aviso que faltaba: `audio_session`, `background` y
+`sounds` solo estaban en `llms.txt`, de pasada, y nadie decía que `playback_mix` se combina con
+`background_audio`. REFERENCE §14 gana la tabla de claves de `ray.toml` para apps móviles (qué
+valores admite cada una y qué genera). `ray bundle --ios` avisa ahora de un sonido que iOS no
+reproduciría —más de 30 s (leído de la cabecera del WAV, o con `afinfo` para caf/aiff) u otro
+formato— porque el sistema pone el sonido por defecto sin decir nada, y `sounds` admite `*` en
+el nombre del archivo, que es lo primero que pepa intentó.

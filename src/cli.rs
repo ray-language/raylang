@@ -2798,7 +2798,13 @@ fn cmd_bundle(args: &[String]) {
             .is_some_and(|(l, d)| write_ios_launch_color(&proj, &l, d.as_deref()));
         let audio_session = manifest.as_ref().and_then(|m| m.ios_audio_session.clone());
         let sounds = resolve_sound_files(manifest.as_ref().map(|m| (&m.root, m.ios_sounds.as_slice())), "[ios] sounds");
-        let opts = crate::bundle_ios::ShellOptions { devtools, icon: icon_ok, background_audio, launch_color, audio_session, sounds, url_scheme: dev.then(|| bundle_id.clone()) };
+        // M448b (IDEAS §122): std/alarm → RayAlarm.swift (AlarmKit) en el target, y la clave de uso que
+        // AlarmKit exige para pedir el permiso (una del usuario en `[app.plist]` manda).
+        let alarm = dev || uses_module(&path, "std/alarm");
+        if alarm && !ios_plist.iter().any(|(k, _)| k == "NSAlarmKitUsageDescription") {
+            ios_plist.push(("NSAlarmKitUsageDescription".to_string(), crate::manifest::PlistValue::Str(format!("{name} rings the alarms you set."))));
+        }
+        let opts = crate::bundle_ios::ShellOptions { devtools, icon: icon_ok, background_audio, launch_color, audio_session, sounds, alarm, url_scheme: dev.then(|| bundle_id.clone()) };
         if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing, opts, &ios_plist) {
             eprintln!("bundle: could not write the Xcode project: {e}");
             process::exit(74);
@@ -3436,6 +3442,9 @@ fn resolve_sound_files(spec: Option<(&PathBuf, &[String])>, key: &str) -> Vec<Pa
 
 /// Una entrada de `sounds`: una ruta, o un patrón con `*` en el nombre del archivo (no en los
 /// directorios). Los resultados van ordenados; un patrón sin coincidencias es error.
+/// Las extensiones que un comodín de `sounds` toma por sonido (una ruta literal no se filtra).
+const SOUND_EXTENSIONS: &[&str] = &["caf", "aiff", "aif", "wav", "m4a", "mp3", "ogg"];
+
 fn expand_sound_pattern(root: &Path, entry: &str) -> Result<Vec<PathBuf>, String> {
     let rel = Path::new(entry);
     let name = rel.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -3452,6 +3461,12 @@ fn expand_sound_pattern(root: &Path, entry: &str) -> Result<Vec<PathBuf>, String
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.is_file() && p.file_name().is_some_and(|n| wildcard_match(&name, &n.to_string_lossy())))
+        // Un comodín recoge SONIDOS: ni ocultos (`.DS_Store`) ni un README que viva al lado.
+        .filter(|p| {
+            let hidden = p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'));
+            let audio = p.extension().is_some_and(|e| SOUND_EXTENSIONS.contains(&e.to_string_lossy().to_lowercase().as_str()));
+            !hidden && audio
+        })
         .collect();
     found.sort();
     if found.is_empty() { Err(format!("'{entry}' matches no file")) } else { Ok(found) }
@@ -7596,6 +7611,10 @@ mod tests {
         let names = |v: Vec<PathBuf>| v.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
         assert_eq!(names(super::expand_sound_pattern(&dir, "tones/*.wav").unwrap()), ["long.wav", "short.wav"]);
         assert_eq!(names(super::expand_sound_pattern(&dir, "tones/short.wav").unwrap()), ["short.wav"]);
+        // Un comodín amplio no arrastra ocultos ni lo que no es audio.
+        std::fs::write(dir.join("tones/.DS_Store"), b"x").unwrap();
+        std::fs::write(dir.join("tones/README.txt"), b"x").unwrap();
+        assert_eq!(names(super::expand_sound_pattern(&dir, "tones/*").unwrap()), ["long.wav", "short.wav", "song.mp3"]);
         assert!(super::expand_sound_pattern(&dir, "tones/*.caf").unwrap_err().contains("matches no file"));
         assert!(super::expand_sound_pattern(&dir, "tones/nope.wav").unwrap_err().contains("is not a file"));
         assert!(super::expand_sound_pattern(&dir, "*/a.wav").unwrap_err().contains("only allowed in the file name"));

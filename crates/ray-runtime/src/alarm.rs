@@ -2,7 +2,8 @@
 //! el usuario responde aunque la app esté cerrada. No es una notificación con otro sonido: en
 //! Android es `AlarmManager.setAlarmClock` + un servicio en primer plano que reproduce el sonido
 //! con el volumen de alarma + una Activity a pantalla completa sobre el bloqueo (todo en el
-//! shell, `RayAlarm.java`); en iOS será AlarmKit (iOS 26, fase M448b). Aquí vive el contrato:
+//! shell, `RayAlarm.java`); en iOS 26+ es AlarmKit (`RayAlarm.swift` en el shell, M448b: la
+//! alerta la pinta y la hace sonar el sistema). Aquí vive el contrato:
 //! el formato del túnel `__ui_window(0, "alarm_<op>", arg)`, la validación, el backend headless
 //! (traza + pendientes en memoria + respuesta inyectada) y el reparto por plataforma.
 //!
@@ -275,38 +276,54 @@ fn headless(op: &str, arg: &str) -> Result<String, String> {
 }
 
 /// Lo que responde una plataforma sin alarmas de sistema.
-pub const UNSUPPORTED: &str = "alarm: system alarms are not available on this platform (Android: a shell from `ray bundle --android`; iOS 26 AlarmKit comes in a later release) — std/notify with a custom sound rings once";
+pub const UNSUPPORTED: &str = "alarm: system alarms are not available on this platform (they need the Android shell of `ray bundle --android`, or iOS 26+ with the shell of `ray bundle --ios`) — std/notify with a custom sound rings once";
 
-// ── Android: el shell (RayAlarm.java) por la petición genérica de M442. ──
-#[cfg(target_os = "android")]
+// ── Android e iOS: el shell (RayAlarm.java / RayAlarm.swift sobre AlarmKit, iOS 26) por la
+// petición genérica de M442. Un shell de iOS sin la pieza de alarmas (el programa no importaba
+// std/alarm al empaquetar, o es anterior a 1.27.94) no registra el atendedor: `unsupported`. ──
+#[cfg(any(target_os = "android", target_os = "ios"))]
 mod backend {
     use super::{Alarm, Trigger};
 
     fn ask(op: &str, arg: &str) -> Result<String, String> {
-        crate::ui::shell_request(op, arg)
+        crate::ui::shell_request(op, arg).map_err(|e| {
+            if cfg!(target_os = "ios") && e.contains("predates") {
+                "alarm: this iOS shell has no alarm support (bundle a program that imports std/alarm with raylang 1.27.94 or newer)".to_string()
+            } else {
+                e
+            }
+        })
     }
     pub(super) fn permission() -> Result<String, String> {
         ask("alarm_permission", "")
     }
     pub(super) fn status() -> Result<String, String> {
+        if cfg!(target_os = "ios") {
+            return Ok(ask("alarm_status", "").unwrap_or_else(|_| "unsupported".to_string()));
+        }
         ask("alarm_status", "")
     }
     pub(super) fn schedule(trigger: Trigger, a: Alarm) -> Result<String, String> {
         ask("alarm_schedule", &super::alarm_text(&trigger, &a)).map(|_| a.id)
     }
+    /// Sin alarmas de sistema (un shell de iOS sin la pieza de alarmas) no hay nada que cancelar
+    /// ni que listar: `Ok`, como en el escritorio y como documenta `cancel`.
+    fn ask_quiet(op: &str, arg: &str) -> Result<String, String> {
+        ask(op, arg).or_else(|e| if status().as_deref() == Ok("unsupported") { Ok(String::new()) } else { Err(e) })
+    }
     pub(super) fn cancel(id: &str) -> Result<(), String> {
-        ask("alarm_cancel", id).map(|_| ())
+        ask_quiet("alarm_cancel", id).map(|_| ())
     }
     pub(super) fn cancel_all() -> Result<(), String> {
-        ask("alarm_cancel_all", "").map(|_| ())
+        ask_quiet("alarm_cancel_all", "").map(|_| ())
     }
     pub(super) fn pending() -> Result<Vec<String>, String> {
-        ask("alarm_pending", "").map(|t| t.split('\n').filter(|s| !s.is_empty()).map(String::from).collect())
+        ask_quiet("alarm_pending", "").map(|t| t.split('\n').filter(|s| !s.is_empty()).map(String::from).collect())
     }
 }
 
-// ── El resto (iOS hasta M448b, escritorio): no hay alarmas de sistema. ──
-#[cfg(not(target_os = "android"))]
+// ── El escritorio: no hay alarmas de sistema. ──
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod backend {
     use super::{Alarm, Trigger, UNSUPPORTED};
 

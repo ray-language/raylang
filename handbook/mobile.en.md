@@ -482,7 +482,7 @@ The same `main` runs in all three places, but the system underneath does not beh
 | Inspecting the page | `ray dev`, or `ray run --devtools` | Safari, Develop menu, with `--devtools` | `chrome://inspect`, with `--devtools` |
 | Light/dark mode | `prefers-color-scheme` follows the system | follows the system | follows the system, system bar icons included (shell from 1.27.64 on; regenerate an older shell) |
 | Notifications (`std/notify`) | the notification center (in a `.app`) or libnotify | `UNUserNotificationCenter`: permission, scheduled, actions, badge | channels, the Android 13+ permission, scheduled ones that survive a reboot (shell from 1.27.91 on) |
-| Alarms (`std/alarm`) | none (`"unsupported"`) | not yet (AlarmKit, iOS 26, in a later release) | ring in a loop with the app closed: `setAlarmClock`, a foreground service and an alarm screen over the lock screen (shell from 1.27.93 on) |
+| Alarms (`std/alarm`) | none (`"unsupported"`) | iOS 26+: AlarmKit, the system alert that breaks through silent mode and Focus (shell from 1.27.94 on); before iOS 26, `"unsupported"` | ring in a loop with the app closed: `setAlarmClock`, a foreground service and an alarm screen over the lock screen (shell from 1.27.93 on) |
 | `ui.haptic(kind)` | the Force Touch trackpad on macOS; a no-op on Linux/Windows | the UIKit feedback generators | `HapticFeedbackConstants` on the view, following the "touch feedback" setting (shell from 1.27.91 on) |
 | Safe areas | — | the webview fills the screen; the page reserves them with `env(safe-area-inset-*)` and `viewport-fit=cover` (shell from 1.27.91 on) | the page reserves them the same way |
 
@@ -496,8 +496,8 @@ What that forces you to do:
   when the app is not visible. An audio player plays from raylang, and
   `[ios] background_audio = true` and `[android] background_audio = true` keep it playing.
 - **An alarm is not a notification.** A `std/notify` notification sounds once; for something
-  that rings in a loop until the user answers, with the app closed, use `std/alarm` (Android
-  today). On iOS, until AlarmKit arrives, the workaround is keeping the program alive with
+  that rings in a loop until the user answers, with the app closed, use `std/alarm` (Android,
+  and iOS 26 or later). On an older iOS, the workaround is keeping the program alive with
   `[ios] background_audio = true` and a `std/audio` output open while the app is in the
   background, and playing the melody at its time: it does not survive closing the app, it
   drains the battery, and App Store review may question an audio session that only plays
@@ -563,5 +563,5 @@ And what is declared in `ray.toml`:
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:dd8de2473657 -->
-<!-- sync: sha256:dd8de2473657 -->
+<!-- sync: sha256:c4584cd1d7a7 -->
+<!-- sync: sha256:c4584cd1d7a7 -->

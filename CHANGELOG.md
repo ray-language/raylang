@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.94 — 2026-11-10
 
 - **`ray.toml`: arrays en varias líneas, y las claves móviles en la referencia (pepa #344 y #345).**
   Un array del manifiesto puede partirse en líneas y llevar coma final, como en TOML (antes era
@@ -12,6 +12,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   nombre del archivo (`"tones/*.wav"`), y `ray bundle --ios` avisa de un sonido de más de 30 s
   o en un formato que iOS no reproduce. REFERENCE gana la tabla de claves de `ray.toml` para
   apps móviles (`audio_session` y cómo se combina con `background_audio`, `background`, `sounds`…).
+
+- **`std/alarm` en iOS 26+ (M448 fase b, pepa #341)**: la shell de `ray bundle --ios` arma las
+  alarmas con **AlarmKit** — la alerta la pinta y la hace sonar el sistema, en bucle, con la app
+  cerrada y atravesando silencio y Concentración, con «detener» y, si se pide, «posponer». La
+  respuesta llega como evento `"alarm"` (`"stop"` / `"snooze"`); con la app cerrada el sistema
+  la despierta en segundo plano y el programa la recibe ahí. `request_permission` muestra el
+  diálogo del sistema; `sound` es un archivo de `[ios] sounds`. El shell lleva una fuente Swift
+  (`RayAlarm.swift`) y `NSAlarmKitUsageDescription` solo si el programa importa `std/alarm`.
+  Antes de iOS 26 sigue siendo `"unsupported"`. Los botones requieren una app firmada con un
+  team (`[ios] development_team`).
 
 ## 1.27.93 — 2026-11-10
 

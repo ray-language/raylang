@@ -514,9 +514,6 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     })
 }
 
-/// Parsea un array TOML simple de cadenas en una línea: `["a", "b", "c"]` → `["a","b","c"]`; `[]` → vacío.
-/// `None` si no tiene la forma `[ … ]` o algún elemento no está entre comillas. (No admite arrays
-/// multilínea ni comas finales — suficiente para `[native] without`, que es una lista corta y plana.)
 /// El texto de la línea sin su comentario: el primer `#` fuera de una cadena entre comillas.
 fn strip_comment(line: &str) -> &str {
     let mut quoted = false;
@@ -533,6 +530,9 @@ fn strip_comment(line: &str) -> &str {
     line
 }
 
+/// Parsea un array TOML de cadenas ya unido en una línea lógica (`logical_lines`): `["a", "b"]` →
+/// `["a","b"]`; `[]` → vacío; admite coma final. `None` si no tiene la forma `[ … ]` o algún
+/// elemento no está entre comillas.
 fn parse_string_array(s: &str) -> Option<Vec<String>> {
     let inner = s.strip_prefix('[')?.strip_suffix(']')?.trim();
     // pepa #344: TOML admite la coma final (`["a", "b",]`).

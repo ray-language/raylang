@@ -483,7 +483,7 @@ El mismo `main` corre en los tres sitios, pero el sistema que hay debajo no se c
 | Inspeccionar la página | `ray dev`, o `ray run --devtools` | Safari, menú Develop, con `--devtools` | `chrome://inspect`, con `--devtools` |
 | Modo claro/oscuro | `prefers-color-scheme` sigue al sistema | sigue al sistema | sigue al sistema, iconos de las barras del sistema incluidos (shell de 1.27.64+; regenera el shell si es anterior) |
 | Notificaciones (`std/notify`) | el centro de notificaciones (en un `.app`) o libnotify | `UNUserNotificationCenter`: permiso, programadas, acciones, badge | canales, permiso de Android 13+, programadas que sobreviven al reinicio (shell de 1.27.91+) |
-| Alarmas (`std/alarm`) | no hay (`"unsupported"`) | todavía no (AlarmKit, iOS 26, en una versión posterior) | suenan en bucle con la app cerrada: `setAlarmClock`, servicio en primer plano y pantalla de alarma sobre el bloqueo (shell de 1.27.93+) |
+| Alarmas (`std/alarm`) | no hay (`"unsupported"`) | iOS 26+: AlarmKit, la alerta del sistema que atraviesa silencio y Concentración (shell de 1.27.94+); antes de iOS 26, `"unsupported"` | suenan en bucle con la app cerrada: `setAlarmClock`, servicio en primer plano y pantalla de alarma sobre el bloqueo (shell de 1.27.93+) |
 | `ui.haptic(kind)` | el trackpad Force Touch en macOS; no-op en Linux/Windows | los generadores de UIKit | `HapticFeedbackConstants` sobre la vista, sigue el ajuste «respuesta táctil» (shell de 1.27.91+) |
 | Zonas seguras | — | el webview ocupa la pantalla entera; la página las reserva con `env(safe-area-inset-*)` y `viewport-fit=cover` (shell de 1.27.91+) | la página las reserva igual |
 
@@ -497,8 +497,8 @@ Lo que eso obliga a hacer:
   congelan cuando la app no está a la vista. Un reproductor de audio suena desde raylang, y
   `[ios] background_audio = true` y `[android] background_audio = true` lo mantienen sonando.
 - **Una alarma no es una notificación.** Una notificación de `std/notify` suena una vez; para que
-  algo suene en bucle hasta que el usuario responda, con la app cerrada, usa `std/alarm` (hoy en
-  Android). En iOS, mientras no llegue AlarmKit, el rodeo es mantener vivo el programa con
+  algo suene en bucle hasta que el usuario responda, con la app cerrada, usa `std/alarm` (Android,
+  e iOS 26 o posterior). En un iOS anterior, el rodeo es mantener vivo el programa con
   `[ios] background_audio = true` y una salida de `std/audio` abierta mientras la app está en
   segundo plano, y tocar la melodía a su hora: no sobrevive a cerrar la app, gasta batería, y la
   revisión de la App Store puede cuestionar una sesión de audio que solo reproduce silencio.

@@ -1537,10 +1537,19 @@ fn run() -> Result<int, string> {
   apps de alarma y calendario). En Android 14+ la pantalla completa sobre el bloqueo depende de
   que el sistema conceda el «full-screen intent»; si no, la alarma suena igual y se responde
   desde la notificación.
-- **iOS**: todavía no (hace falta AlarmKit, de iOS 26; llegará en una versión posterior).
-  `alarm.status()` devuelve `"unsupported"` y `schedule` un `Err`: comprueba el estado y cae a
-  `std/notify` con `sound_name`, que suena una vez.
-- **Mientras iOS no tenga alarmas**, el rodeo para que una melodía suene a su hora es mantener
+- **iOS 26 o posterior**: AlarmKit. La alerta la pinta y la hace sonar el sistema, también en
+  silencio y con un modo de concentración activo, con los botones de la alarma; el permiso es
+  un diálogo del sistema (`alarm.request_permission()`, con la app en primer plano) y su texto
+  sale de `NSAlarmKitUsageDescription` (`ray bundle` pone uno por defecto; el tuyo va en
+  `[app.plist]`). `sound` nombra un archivo de `[ios] sounds`. Las respuestas son `"stop"` y
+  `"snooze"`; `max_minutes` no aplica (lo decide el sistema). Si la alarma suena con la app
+  cerrada, el sistema la despierta en segundo plano al tocar un botón y el programa recibe el
+  evento ahí mismo. Los botones solo llegan al programa en una app **firmada con un team**
+  (`[ios] development_team`): un build de simulador sin firma (`CODE_SIGNING_ALLOWED=NO`)
+  suena y se detiene, pero no entrega la respuesta.
+- **iOS anterior a 26**: no hay alarmas de sistema. `alarm.status()` devuelve `"unsupported"` y
+  `schedule` un `Err`: comprueba el estado y cae a `std/notify` con `sound_name`, que suena una vez.
+- **En un iOS sin alarmas**, el rodeo para que una melodía suene a su hora es mantener
   vivo el programa: `[ios] background_audio = true` y una salida de `std/audio` abierta (aunque
   reproduzca silencio) mientras la app está en segundo plano, y tocar la melodía desde el
   programa. Límites: no sobrevive a que el usuario cierre la app desde el selector ni a que iOS

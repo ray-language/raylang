@@ -171,3 +171,63 @@ fn main() {
         false,
     );
 }
+
+/// Paso 3: enums de valor (datos escalares) junto a enums compartidos — derives, impl de trait,
+/// `Ord` propio y `sort`, campo de struct, patrones anidados y de tupla, recursión, canales
+/// (incluido un enum que lleva un canal) y `clone`.
+#[test]
+fn value_enums_behave_like_shared_ones() {
+    engines(
+        "enums",
+        r#"
+@derive(Eq, Show, Hash, Clone)
+enum Color { Red, Green, Rgb(int, int, int), }
+@derive(Eq, Show)
+enum Op { Push(int), Add, Jmp(int, bool), Scale(float), }
+enum Tree { Leaf(int), Node(Tree, Tree), }
+enum Msg { Ask(int, Channel<int>), Stop, }
+struct Pix { c: Color, n: int, }
+trait Cost { fn cost(self) -> int; }
+impl Cost for Op { fn cost(self) -> int { match (self) { Op.Push(v) => v, Op.Add => 1, Op.Jmp(t, c) => if (c) { t } else { 0 }, Op.Scale(f) => f as int, } } }
+impl Ord for Color { fn less(self, other: Color) -> bool { rank(self) < rank(other) } }
+fn rank(c: Color) -> int { match (c) { Color.Red => 0, Color.Green => 1, Color.Rgb(r, g, b) => 2 + r + g + b, } }
+fn sum(t: Tree) -> int { match (t) { Tree.Leaf(v) => v, Tree.Node(l, r) => sum(l) + sum(r), } }
+fn total<T: Cost>(xs: [T]) -> int { var t = 0; for x in xs { t = t + x.cost(); } t }
+fn pick(n: int) -> Option<Color> { if (n > 0) { Option.Some(Color.Rgb(n, 0, 0)) } else { Option.None } }
+fn actor(inbox: Channel<Msg>) {
+    while (true) { match (recv(inbox)) { Option.Some(m) => match (m) { Msg.Ask(x, reply) => send(reply, x * 2), Msg.Stop => break, }, Option.None => break, } }
+}
+fn main() {
+    let ops = [Op.Push(3), Op.Add, Op.Jmp(7, true), Op.Scale(2.5)];
+    print(total(ops));
+    print(ops[0] == Op.Push(3));
+    print(ops);
+    let p = Pix { c: Color.Rgb(1, 2, 3), n: 1 };
+    p.c = Color.Green;
+    print(p.c);
+    print([Color.Rgb(9, 0, 0), Color.Red, Color.Green].sort());
+    match (pick(4)) { Option.Some(Color.Rgb(r, _, _)) => print(r), Option.Some(_) => print(-1), Option.None => print(0), }
+    match ((Color.Red, Op.Add)) { (Color.Red, Op.Add) => print("ra"), (_, _) => print("other"), }
+    print(sum(Tree.Node(Tree.Leaf(1), Tree.Node(Tree.Leaf(2), Tree.Leaf(3)))));
+    let ch: Channel<Op> = Channel.new();
+    let t = spawn(fn() -> int { match (recv(ch)) { Option.Some(o) => o.cost(), Option.None => -1, } });
+    send(ch, Op.Jmp(42, true));
+    print(join(t));
+    let inbox: Channel<Msg> = Channel.new();
+    let a = spawn(fn() { actor(inbox); });
+    let reply: Channel<int> = Channel.bounded(1);
+    send(inbox, Msg.Ask(21, reply));
+    print(recv(reply).unwrap_or(0));
+    send(inbox, Msg.Stop);
+    join(a);
+    let c2 = Color.Rgb(5, 5, 5).clone();
+    print(c2);
+    var cur = Op.Add;
+    cur = Op.Push(9);
+    print(cur.cost());
+}
+"#,
+        "13\ntrue\n[Op.Push(3), Op.Add, Op.Jmp(7, true), Op.Scale(2.5)]\nColor.Green\n[Color.Red, Color.Green, Color.Rgb(9, 0, 0)]\n4\nra\n6\n42\n42\nColor.Rgb(5, 5, 5)\n9\n",
+        false,
+    );
+}

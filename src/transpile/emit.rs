@@ -1782,7 +1782,7 @@ impl Transpiler {
                 if native {
                     out.push_str(variant); // Some / None / Ok / Err
                 } else {
-                    write!(out, "Rc::new({}::{}", mangle(enum_name), mangle(variant)).unwrap();
+                    write!(out, "{}::new({}::{}", enum_box(enum_name), mangle(enum_name), mangle(variant)).unwrap();
                 }
                 if !args.is_empty() {
                     out.push('(');
@@ -1895,7 +1895,7 @@ impl Transpiler {
             let ty = mangle(&name);
             let less_fn = mangle(&less);
             // Un struct viaja como `Rc<RefCell<T>>` (semántica de referencia); un enum, como `Rc<T>`.
-            let wrap = if is_struct { "Rc::new(std::cell::RefCell::new(" } else { "Rc::new((" };
+            let wrap = if is_struct { "Rc::new(std::cell::RefCell::new(" } else if is_value_enum(&name) { "__RayVal::new((" } else { "Rc::new((" };
             if !derived_eq.contains(&name) {
                 writeln!(out, "impl PartialEq for {ty} {{ fn eq(&self, o: &Self) -> bool {{ self.cmp(o) == std::cmp::Ordering::Equal }} }}").unwrap();
             }
@@ -1972,7 +1972,7 @@ impl Transpiler {
             let sfx = type_args(&e.type_params);
             // Rust manglado; Display con el nombre COMPLETO (como el render default de `print` en la VM).
             let em = mangle(&e.name);
-            writeln!(out, "impl{} RayShow for Rc<{}{}> {{ fn ray_show(&self) -> String {{ match &**self {{", gens, em, sfx).unwrap();
+            writeln!(out, "impl{} RayShow for {}<{}{}> {{ fn ray_show(&self) -> String {{ match &**self {{", gens, enum_box(&em), em, sfx).unwrap();
             for v in &e.variants {
                 if v.payload.is_empty() {
                     // patrón Rust: variante manglada; display: nombre ORIGINAL (`E.loop`, no `E.r#loop`).

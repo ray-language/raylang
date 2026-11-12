@@ -188,6 +188,8 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // imprime el proceso al morir, en una segunda línea `  at …` que `ray test --native` muestra igual
     // que la de la VM.
     out.push_str("struct __RayErr(String, Option<String>);\n");
+    // Enums de valor (datos escalares): `Copy`, con la forma de uso de `Rc` (`::new`, `Deref`).
+    out.push_str("#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)] struct __RayVal<T>(T);\nimpl<T> __RayVal<T> { #[inline(always)] fn new(v: T) -> Self { __RayVal(v) } }\nimpl<T> std::ops::Deref for __RayVal<T> { type Target = T; #[inline(always)] fn deref(&self) -> &T { &self.0 } }\n");
     out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string(), None)) }\n");
     out.push_str("#[cold] fn __ray_rt_err_at(msg: &str, at: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string(), Some(at.to_string()))) }\n");
     // §101 #16→#14: el índice fuera de rango es un error de runtime de raylang con el texto de la VM

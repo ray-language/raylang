@@ -534,7 +534,8 @@ fn transpiles_struct_and_enum_match() {
     assert!(rust.contains("struct P {"), "{}", rust);
     assert!(rust.contains("enum Shape {"), "{}", rust);
     assert!(rust.contains("Rc::new(std::cell::RefCell::new(P {"), "{}", rust);
-    assert!(rust.contains("Rc::new(Shape::Circle(2.0f64))"), "{}", rust);
+    // `Shape` solo lleva escalares: enum de valor (`Copy`, sin `Rc`).
+    assert!(rust.contains("__RayVal::new(Shape::Circle(2.0f64))") && rust.contains("#[derive(Clone, Copy, PartialEq)]\nenum Shape {"), "{}", rust);
     assert!(rust.contains("match &*") && rust.contains("Shape::Circle(r)"), "{}", rust);
     assert!(rust.contains("RayShow for Rc<std::cell::RefCell<P>>"), "{}", rust);
 }
@@ -1994,4 +1995,19 @@ fn bound_dictionaries_are_monomorphized() {
     assert!(rust.contains("let __rt_a1 = P_HH_area; two("), "el impl va como ítem de función: {rust}");
     assert!(rust.contains("let __rt_a1 = T_HH_Sh_HH_area.clone(); one("), "el diccionario propio se reenvía: {rust}");
     assert!(rust.contains("mut T_HH_Show_HH_show: Rc<dyn Fn(T) -> Rc<str>>"), "la recursión polimórfica sigue por dyn: {rust}");
+}
+
+/// Arco de rendimiento (nov 2026): un enum sin parámetros de tipo cuyos datos son todos escalares
+/// (o no lleva datos) es un valor `Copy` (`__RayVal<E>`); con un string, otro enum o recursión
+/// sigue compartido por `Rc`.
+#[test]
+fn scalar_enums_are_values_and_the_rest_stay_shared() {
+    let rust = transpile_src(
+        "enum Op { Push(int), Add }\nenum Name { Of(string), Anon }\nenum Tree { Leaf(int), Node(Tree, Tree) }\n\
+         fn run(o: Op) -> int { match (o) { Op.Push(v) => v, Op.Add => 1 } }\n\
+         fn main() -> int { let n = Name.Of(\"x\"); let t = Tree.Leaf(1); run(Op.Push(2)) }",
+    );
+    assert!(rust.contains("fn run(mut o: __RayVal<Op>) -> i64") && rust.contains("__RayVal::new(Op::Push("), "{rust}");
+    assert!(rust.contains("impl RayShow for __RayVal<Op>"), "{rust}");
+    assert!(rust.contains("Rc::new(Name::Of(") && rust.contains("Rc::new(Tree::Leaf(") && rust.contains("#[derive(Clone, PartialEq)]\nenum Tree {"), "{rust}");
 }

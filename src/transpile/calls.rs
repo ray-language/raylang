@@ -523,7 +523,7 @@ impl Transpiler {
             self.tparams = e.type_params.iter().cloned().collect();
             let gens = generic_bound(&e.type_params, GENERIC_BOUND);
             let ename = mangle(&e.name);
-            let rty = format!("Rc<{}{}>", ename, type_args(&e.type_params));
+            let rty = format!("{}<{}{}>", enum_box(&ename), ename, type_args(&e.type_params));
             // Mismo orden de variantes (por nombre) que los conversores numerados: to y from cuadran.
             let mut variants: Vec<&crate::ast::VariantDef> = e.variants.iter().collect();
             variants.sort_by(|a, b| a.name.cmp(&b.name));
@@ -533,7 +533,7 @@ impl Transpiler {
                 for (vi, v) in variants.iter().enumerate() {
                     if v.payload.is_empty() {
                         to_arms.push(format!("{ename}::{} => __RaySend::E({vi}, vec![])", mangle(&v.name)));
-                        from_arms.push(format!("({vi}, _) => Rc::new({ename}::{})", mangle(&v.name)));
+                        from_arms.push(format!("({vi}, _) => {}::new({ename}::{})", enum_box(&ename), mangle(&v.name)));
                     } else {
                         let binds: Vec<String> = (0..v.payload.len()).map(|i| format!("__sp{i}")).collect();
                         let mut tos = Vec::new();
@@ -543,7 +543,7 @@ impl Transpiler {
                             froms.push(self.from_send_expr(pty, "__si.next().unwrap()")?);
                         }
                         to_arms.push(format!("{ename}::{}({}) => __RaySend::E({vi}, vec![{}])", mangle(&v.name), binds.join(", "), tos.join(", ")));
-                        from_arms.push(format!("({vi}, __sp) => {{ let mut __si = __sp.into_iter(); Rc::new({ename}::{}({})) }}", mangle(&v.name), froms.join(", ")));
+                        from_arms.push(format!("({vi}, __sp) => {{ let mut __si = __sp.into_iter(); {}::new({ename}::{}({})) }}", enum_box(&ename), mangle(&v.name), froms.join(", ")));
                     }
                 }
                 Ok(format!(
@@ -643,7 +643,7 @@ impl Transpiler {
                         let payload = &variants[vname];
                         if payload.is_empty() {
                             to_arms.push(format!("{}::{} => __RaySend::E({vi}, vec![])", ename, mangle(vname)));
-                            from_arms.push(format!("({vi}, _) => Rc::new({}::{})", ename, mangle(vname)));
+                            from_arms.push(format!("({vi}, _) => {}::new({}::{})", enum_box(&ename), ename, mangle(vname)));
                         } else {
                             let binds: Vec<String> = (0..payload.len()).map(|i| format!("__sp{i}")).collect();
                             let mut tos = Vec::new();
@@ -661,7 +661,8 @@ impl Transpiler {
                                 tos.join(", ")
                             ));
                             from_arms.push(format!(
-                                "({vi}, __sp) => {{ let mut __si = __sp.into_iter(); Rc::new({}::{}({})) }}",
+                                "({vi}, __sp) => {{ let mut __si = __sp.into_iter(); {}::new({}::{}({})) }}",
+                                enum_box(&ename),
                                 ename,
                                 mangle(vname),
                                 froms.join(", ")

@@ -408,6 +408,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
             trait_method_sigs.insert(m.name.clone(), (args, m.return_type.clone()));
         }
     }
+    set_value_enums(prog);
     let marks = spawn_fn_param_marks(prog);
     let dict_marks = analysis::dict_param_marks(prog, &marks);
     // M295: solo las funciones que pueden recurrir pagan el contador de profundidad; `--fast`
@@ -542,6 +543,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         }
         t.tparams = e.type_params.iter().cloned().collect();
         let eq = if eq_types.contains(&e.name) { ", PartialEq" } else { "" };
+        let eq = if is_value_enum(&e.name) { format!(", Copy{eq}") } else { eq.to_string() };
         writeln!(out, "#[derive(Clone{eq})]\nenum {}{} {{", mangle(&e.name), generic_decl(&e.type_params)).unwrap();
         for v in &e.variants {
             if v.payload.is_empty() {

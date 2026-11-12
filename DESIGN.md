@@ -20032,3 +20032,22 @@ reconoce sin ambigüedad: el id que guarda el registro no es su clave. `schedule
 documentación sus motivos de `Err` y recuerda consultar `status()` para distinguir «sin alarmas» de una alarma rechazada. Medido en
 el emulador (Android 15): programar, posponer y detener con el id
 `pepa:2026-11-11|d|m1|20:00#ab`. En iOS el almacén va por id y nunca tuvo la restricción.
+
+## 425. M451 — el coste de las abstracciones en el nativo, y dos fallos del camino (nov 2026)
+
+El detalle y las mediciones están en `PERFORMANCE.md` §26; aquí, lo que cambia de comportamiento
+o de contrato interno.
+
+- **Nada cambia para el programa.** Los cuatro pasos (literales de string, diccionarios de bound
+  monomorfizados, enums de valor, préstamos izados) son del código generado; el resultado es
+  byte-idéntico a la VM y lo sostienen `tests/native_perf_cli.rs`, el corpus nativo y el harness
+  diferencial. Dos decisiones merecen constancia: (1) un enum pasa a valor solo si TODOS sus datos
+  son escalares — con un string dentro, copiarlo costaría más que compartirlo —; (2) izar un
+  préstamo con escrituras o filas lleva siempre una guarda en ejecución y el bucle sin izar al
+  lado, porque dos variables pueden nombrar el mismo arreglo y eso no se sabe al compilar.
+- **Un tipo de usuario con nombre de tipo de Rust** (`Rc`, `Vec`, `String`, `Box`, `Send`…) tapaba
+  el que el código generado usa sin calificar. `mangle` le pone sufijo (`Rc_`); el nombre que se
+  muestra (`print`, errores) sigue siendo el del usuario.
+- **`join` son dos funciones** y el aviso de resultado descartado (M445) no las distinguía:
+  `join(t);` espera una tarea y se llama por su efecto. Con un solo operando no avisa.
+- **Banco de sondeo** (`benchmarks/probe/`): herramienta de sesión, como `poly/`; no va a CI.

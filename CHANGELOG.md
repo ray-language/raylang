@@ -4,6 +4,20 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Binarios nativos más rápidos en código con abstracciones (M451)**. Los literales de string ya
+  no se crean en cada uso (comparar con un literal, 12× más rápido; `contains` y las consultas a
+  un `Map` con clave literal, sin reserva); las funciones genéricas con bound (`fn f<T: Trait>`)
+  se especializan en vez de despachar dinámicamente; los enums cuyos datos son escalares viajan por
+  valor (crear uno y hacer `match`, 8× más rápido); y los bucles sobre arreglos con `if`,
+  escrituras o rejillas `g[y][x]` evitan trabajo repetido por elemento (una rejilla 2D, 1,5× más
+  rápida; rellenar un arreglo con `push`, casi 3×). El resultado de los programas no cambia.
+- **Un tipo llamado como un tipo de Rust compila a nativo**: `struct Rc`, `struct Vec`,
+  `struct String`, `enum Box`… rompían `ray build --native` con cientos de errores de rustc.
+- **El aviso de resultado descartado ya no salta con `join(tarea);`**: esperar una tarea se
+  llama por su efecto; el aviso queda para el `join` de strings.
+
 ## 1.27.95 — 2026-11-11
 
 - **`std/alarm`: el id de una alarma admite `|` (pepa #347)**, y cualquier texto sin tabuladores

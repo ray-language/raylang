@@ -6,6 +6,7 @@ Dos arneses con trabajos distintos — no se solapan y ninguno reemplaza al otro
 |---|---|---|
 | **este directorio** | raylang contra sí mismo (intérprete M1 vs VM M2, y VM contra un baseline commiteado) | **gate** de regresión: avisa si un cambio nos deja más lentos |
 | **`poly/`** | raylang contra node/go/rust/php/lua/python/ruby/perl, en tiempo Y memoria | **comparación** externa de CPU/memoria: las cifras de `PERFORMANCE.md` §1/§6 salen de aquí |
+| **`probe/`** | los rasgos del lenguaje que `poly/` no ejercita (clausuras, structs, enums, traits, strings, canales…) contra Go y Node, más `micro.ray` (ns por operación, nativo y VM) | **sondeo**: encontrar dónde está flojo el lenguaje; `./run.py --build`, `./run.py`, `./run.py --micro` (PERFORMANCE.md §26) |
 | **`web/`** | los servidores HTTP: `net/webserver` contra Rust hyper, Go `net/http` y `node:http` | **carga sostenida**: throughput bajo un SLO de p99, con `oha` |
 
 `poly/` es un arnés en python3 puro (`./bench.py`, o `./tui.py` interactivo) que necesita los

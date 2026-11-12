@@ -656,7 +656,8 @@ pub(super) fn tail_call_sites(body: &Block) -> std::collections::HashSet<(usize,
 ///
 /// Se excluyen, y siguen por `Rc<dyn Fn>`:
 /// - los params que ya cruzan un `spawn` (marcas de `spawn_fn_param_marks`: su bound es otro);
-/// - las funciones usadas como VALOR (su tipo de función debe ser cerrado);
+/// (Una función con bound no se puede usar como VALOR — el checker lo rechaza: «cannot use the
+/// generic function … as a value» —, así que su firma solo la ven sus llamadas directas.)
 /// - una función que puede recurrir y pasa a otra recursiva un diccionario que NO es uno de los
 ///   suyos reenviado tal cual (recursión polimórfica: `f<T>` llamando a `f<[T]>` con un diccionario
 ///   construido): rustc no terminaría de instanciar.
@@ -681,31 +682,6 @@ pub(super) fn dict_param_marks(prog: &Program, send_marks: &HashMap<String, std:
     }
     if marks.is_empty() {
         return marks;
-    }
-    // Usadas como valor: más menciones del nombre que llamadas directas a él (una local homónima
-    // cuenta como mención: conservador).
-    let mut mentions: HashMap<String, usize> = HashMap::new();
-    let mut direct_calls: HashMap<String, usize> = HashMap::new();
-    let mut count = |e: &Expr| match &e.kind {
-        ExprKind::Ident(n) if marks.contains_key(n) => *mentions.entry(n.clone()).or_default() += 1,
-        ExprKind::Call { callee, .. } => {
-            if let ExprKind::Ident(n) = &callee.kind {
-                if marks.contains_key(n) {
-                    *direct_calls.entry(n.clone()).or_default() += 1;
-                }
-            }
-        }
-        _ => {}
-    };
-    for f in &prog.functions {
-        visit_exprs_block(&f.body, &mut count);
-    }
-    for c in &prog.consts {
-        visit_exprs_expr(&c.value, &mut count);
-    }
-    let as_value: Vec<String> = mentions.iter().filter(|(n, m)| **m > direct_calls.get(*n).copied().unwrap_or(0)).map(|(n, _)| n.clone()).collect();
-    for n in as_value {
-        marks.remove(&n);
     }
     // Recursión polimórfica.
     let (recursive, _) = depth_checked_fns(prog);

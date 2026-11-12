@@ -2849,9 +2849,30 @@ campos de structs 5,25 → 4,05 (2,65).
 banco poliglota no cambia (sus programas no pasaban por estos caminos).
 
 **Lo que queda abierto.**
-- **Canales y `spawn` entre workers** (`chan` 4,7× Go): un mensaje entre dos workers cuesta 156 ns
-  contra 23 ns en el mismo worker; `spawn` + `join`, 1,1 µs contra 0,3. Es el despertar entre
-  hilos; va en un paso propio, con `bench_shard`/`bench_ask` como jueces.
+- **Canales y `spawn` entre workers** (`chan` 4,7× Go): un mensaje entre dos workers cuesta
+  ~140 ns contra 23 ns en el mismo worker; `spawn` + `join`, 1,1 µs contra 0,3. Diagnóstico
+  (12 nov, productor y consumidor en workers distintos, 10 M de mensajes):
+
+  | Canal | macOS M3 Pro | Linux aarch64 (VM, 4 vCPU) |
+  |---|---|---|
+  | `Channel.bounded(64)` | 137–144 ns/msg | 234–240 ns/msg |
+  | `Channel.bounded(4096)` | 44 ns/msg | — |
+  | `Channel.new()` (sin límite) | 41 ns/msg | — |
+  | cualquiera, `RAYLANG_THREADS=1` | 23 ns/msg | 31 ns/msg |
+
+  No es el receptor aparcando en vacío sino el **traspaso del cerrojo del canal** entre dos hilos
+  con un búfer pequeño: con 64 huecos el canal vive lleno, emisor y receptor se turnan mensaje a
+  mensaje y cada turno es un mutex disputado (en el perfil: `psynch_mutexwait`/`swtch_pri` en
+  ambos workers); con 4096 huecos el emisor aparca rara vez y cada lado trabaja a ráfagas sin
+  disputa. **Probado y descartado**: unas vueltas de espera activa en `recv` (canal vacío) y en
+  `send` (canal lleno) antes de aparcar, solo con la fibra sola en su worker — 137 → 136 ns, sin
+  efecto: la espera activa también pasa por el cerrojo disputado. La palanca real es otra cola
+  (camino rápido sin cerrojo, o entrega por lotes), que toca rendezvous, cancelación, `select` y
+  los contadores de cesión: arco propio, con `actor_ask`/`actor_shard` como jueces. Mientras
+  tanto, la guía práctica: **un canal entre dos fibras de mucho tráfico rinde 3× más con un búfer
+  grande o sin límite que con uno de 64**. En Linux, `spawn` + `join` secuencial salió a 35 µs en
+  la VM (0,43 µs con un worker): es el despertar de un worker dormido, y hay que repetirlo en
+  metal antes de darlo por bueno.
 - **Recursión y aritmética comprobada**: `fibrec` 28,6 ms, 14,1 con `--fast`, Go 16,2. El 2× es
   la comprobación de desbordamiento más el contador de profundidad.
 - **`dyn Trait`**: 12,7 ns cuando la conversión a `dyn` ocurre en cada llamada (reserva el objeto

@@ -50,6 +50,11 @@ struct Transpiler {
     /// M295: funciones que emiten el prólogo de profundidad (las que pueden recurrir, por
     /// `analysis::depth_checked_fns`); vacío con `--fast`.
     depth_fns: std::collections::HashSet<String>,
+    /// Arco de rendimiento (nov 2026): los literales de string del programa, sin repetir. Un literal
+    /// se emite como `__ray_lit(i)`: un `Rc<str>` que el hilo crea UNA vez y luego solo clona (un
+    /// incremento de contador), en vez de reservar y copiar el texto en cada uso.
+    str_lits: Vec<String>,
+    str_lit_index: HashMap<String, usize>,
     /// M295: ids de las closures (`FnExpr::id`) que emiten el prólogo (están en un ciclo de llamadas).
     depth_closures: std::collections::HashSet<usize>,
     /// M295: ¿el cuerpo que se está emitiendo lleva guard `_f`? (para soltarlo en las llamadas de
@@ -80,6 +85,13 @@ struct Transpiler {
     /// Nombres de los params marcados de la FUNCIÓN EN CURSO (para las capturas de spawn: se clonan,
     /// no se convierten — su bound ya garantiza Send).
     send_fn_params: std::collections::HashSet<String>,
+    /// Arco de rendimiento (nov 2026): función → índices de sus params DICCIONARIO (los ocultos
+    /// `T#Trait#metodo` del bound) que se emiten como genérico de Rust `__D{i}: Fn(…) + Clone`:
+    /// rustc monomorfiza la llamada al método del trait en vez de reservar un `Rc<dyn Fn>` por
+    /// llamada y despachar dinámicamente (`analysis::dict_param_marks`).
+    dict_marks: HashMap<String, std::collections::HashSet<usize>>,
+    /// Nombres de los params diccionario monomorfizados de la FUNCIÓN EN CURSO.
+    dict_params: std::collections::HashSet<String>,
     /// M313: structs genéricos con campo `__ray_ph: PhantomData` (ver `phantom_structs` al construir).
     phantom_structs: std::collections::HashSet<String>,
     /// M313 (findings #71): el tipo ESPERADO de la expresión en curso (anotación de `let`, campo de un
@@ -397,6 +409,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         }
     }
     let marks = spawn_fn_param_marks(prog);
+    let dict_marks = analysis::dict_param_marks(prog, &marks);
     // M295: solo las funciones que pueden recurrir pagan el contador de profundidad; `--fast`
     // (código propio y confiado, como la aritmética envolvente) lo quita del todo.
     let (mut depth_fns, depth_closures) = if fast { Default::default() } else { analysis::depth_checked_fns(prog) };
@@ -409,6 +422,8 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         funcs,
         prelude_values,
         depth_fns,
+        str_lits: Vec::new(),
+        str_lit_index: HashMap::new(),
         depth_closures,
         depth_active: false,
         tail_sites: std::collections::HashSet::new(),
@@ -422,6 +437,8 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         match_temp: 0,
         fn_marks: marks,
         send_fn_params: std::collections::HashSet::new(),
+        dict_marks,
+        dict_params: std::collections::HashSet::new(),
         phantom_structs,
         expected_ty: None,
         current_ret: None,
@@ -900,6 +917,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         t.needs_concurrency = true;
     }
     emit_runtime_features(&mut out, &mut t);
+    emit_str_lits(&mut out, &t.str_lits);
     // Features de `ray-runtime` a activar (bajo demanda). Vacío → `build_native` usa `rustc` pelado.
     let mut rt_features = Vec::new();
     if t.needs_rt_crypto {
@@ -1037,4 +1055,23 @@ fn eq_derivable_types(prog: &Program) -> std::collections::HashSet<String> {
             return ok;
         }
     }
+}
+
+/// La tabla de literales de string y su acceso. La tabla por hilo se llena a demanda (un hilo que
+/// no toca un literal no lo crea); las fibras no migran de worker, así que el `Rc` cacheado nunca
+/// cruza de hilo (lo que viaja por un canal se copia en el borde, como cualquier string).
+fn emit_str_lits(out: &mut String, lits: &[String]) {
+    use std::fmt::Write;
+    write!(out, "\nstatic __RAY_LITS: [&str; {}] = [", lits.len()).unwrap();
+    for s in lits {
+        write!(out, "{s:?}, ").unwrap();
+    }
+    out.push_str("];\n");
+    writeln!(
+        out,
+        "thread_local! {{ static __RAY_LIT_TAB: [std::cell::OnceCell<Rc<str>>; {n}] = const {{ [const {{ std::cell::OnceCell::new() }}; {n}] }}; }}\n\
+         #[allow(dead_code)] #[inline] fn __ray_lit(i: usize) -> Rc<str> {{ __RAY_LIT_TAB.with(|t| t[i].get_or_init(|| Rc::from(__RAY_LITS[i])).clone()) }}",
+        n = lits.len()
+    )
+    .unwrap();
 }

@@ -101,8 +101,9 @@ impl Transpiler {
     /// módulo — y el brazo genérico del final, nombres calificados `mod::fn`).
     pub(super) fn emit_user_call_hoisted(&mut self, out: &mut String, name: &str, eff: &[&Expr]) -> Result<(), String> {
         let marked = self.fn_marks.get(name).cloned().unwrap_or_default();
+        let dicts = self.dict_marks.get(name).cloned().unwrap_or_default();
         let expected = self.expected_ty.take(); // pertenece a ESTA llamada, no a sus argumentos
-        let turbofish = self.generic_turbofish(name, eff, expected.as_ref(), &marked)?;
+        let turbofish = self.generic_turbofish(name, eff, expected.as_ref(), marked.len() + dicts.len())?;
         if eff.is_empty() {
             out.push_str(&mangle(name));
             out.push_str(&turbofish);
@@ -117,6 +118,15 @@ impl Transpiler {
             // compartido (`NAME__shared()`, thread_local): la fibra ejecuta siempre en su worker de
             // origen (fibers.rs, FIJACIÓN), así que el `Rc` nunca cruza hilos.
             if self.readonly_params.contains(&(name.to_string(), i)) && self.emit_shared_const(out, a) {
+                out.push_str("; ");
+                continue;
+            }
+            if dicts.contains(&i) {
+                let arity = match sig_params.get(i).map(normalize_type) {
+                    Some(Type::Fn(ats, _)) => ats.len(),
+                    _ => 0,
+                };
+                self.emit_dict_arg(out, a, arity)?;
                 out.push_str("; ");
                 continue;
             }
@@ -146,7 +156,7 @@ impl Transpiler {
     /// usuario cuando alguno de sus parámetros de tipo NO se deduce de los argumentos (solo aparece en
     /// el retorno) pero sí del tipo esperado. Los genéricos `__F` de los params marcados van como `_`.
     /// Cadena vacía si no hace falta (o no se puede: sin esperado, o sin tipo cerrado).
-    fn generic_turbofish(&mut self, name: &str, eff: &[&Expr], expected: Option<&Type>, marked: &std::collections::HashSet<usize>) -> Result<String, String> {
+    fn generic_turbofish(&mut self, name: &str, eff: &[&Expr], expected: Option<&Type>, fn_generics: usize) -> Result<String, String> {
         let Some(sig) = self.funcs.get(name).cloned() else { return Ok(String::new()) };
         if sig.tparams.is_empty() {
             return Ok(String::new());
@@ -180,10 +190,34 @@ impl Transpiler {
             }
             args.push(rust_ty(&ty, &self.enums, &self.tparams)?);
         }
-        for _ in marked {
+        for _ in 0..fn_generics {
             args.push("_".into());
         }
         Ok(format!("::<{}>", args.join(", ")))
+    }
+
+    /// El argumento de un parámetro DICCIONARIO monomorfizado (`__D: Fn(…) + Clone`). El impl por
+    /// nombre va como ítem de función (tamaño cero, inlineable); un diccionario propio se reenvía
+    /// clonado; una closure literal va tal cual; cualquier otro valor función (un `Rc<dyn Fn>`, que
+    /// no implementa `Fn`) se envuelve en una closure que lo llama.
+    pub(super) fn emit_dict_arg(&mut self, out: &mut String, a: &Expr, arity: usize) -> Result<(), String> {
+        match &a.kind {
+            ExprKind::Ident(n) if self.dict_params.contains(n) => {
+                write!(out, "{}.clone()", mangle(n)).unwrap();
+                return Ok(());
+            }
+            ExprKind::Ident(n) if self.lookup(n).is_none() && !self.dict_marks.contains_key(n) && !self.fn_marks.contains_key(n) && self.funcs.get(n).is_some_and(|s| s.tparams.is_empty()) => {
+                out.push_str(&mangle(n));
+                return Ok(());
+            }
+            ExprKind::Func(fx) => return self.emit_func_literal(out, fx, false),
+            _ => {}
+        }
+        let params: Vec<String> = (0..arity).map(|i| format!("__d{i}")).collect();
+        out.push_str("{ let __rt_d = ");
+        self.emit_expr(out, a)?;
+        write!(out, "; move |{}| __rt_d({}) }}", params.join(", "), params.join(", ")).unwrap();
+        Ok(())
     }
 
     pub(super) fn emit_call_arg(&mut self, out: &mut String, a: &Expr, marked: bool) -> Result<(), String> {
@@ -1149,6 +1183,18 @@ impl Transpiler {
         self.emit_expr(out, e)
     }
 
+    /// La clave de una CONSULTA a un Map (`get`/`get_or`/`contains_key`), por referencia. Un literal
+    /// de string va como `&str` (el Map de claves `Rc<str>` se consulta por `str`): `m.get("k")` no
+    /// crea el string de la clave.
+    pub(super) fn emit_map_key_ref(&mut self, out: &mut String, key: &Expr) -> Result<(), String> {
+        if let ExprKind::Str(s) = &key.kind {
+            write!(out, "{:?}", s).unwrap();
+            return Ok(());
+        }
+        out.push('&');
+        self.emit_expr(out, key)
+    }
+
     pub(super) fn as_builtin_call<'a>(&self, e: &'a Expr, want: &str) -> Option<Vec<&'a Expr>> {
         let ExprKind::Call { callee, args } = &e.kind else { return None };
         let (name, recv) = resolve_callee(callee).ok()?;
@@ -1995,8 +2041,8 @@ impl Transpiler {
             // builtin → cae al fallback (evita el pánico por `eff[2]` inexistente).
             "get_or" if eff.len() == 3 => {
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().get(&");
-                self.emit_expr(out, eff[1])?;
+                out.push_str(".borrow().get(");
+                self.emit_map_key_ref(out, eff[1])?;
                 out.push_str(").cloned().unwrap_or(");
                 self.emit_expr(out, eff[2])?;
                 out.push(')');
@@ -2004,8 +2050,8 @@ impl Transpiler {
             // get(m, k) → Option<V> (Rust). Se usa fusionado con `.unwrap_or(d)` (nativo de Option).
             "get" => {
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().get(&");
-                self.emit_expr(out, eff[1])?;
+                out.push_str(".borrow().get(");
+                self.emit_map_key_ref(out, eff[1])?;
                 out.push_str(").cloned()");
             }
             // remove(m, k) → Option<V> (quita y devuelve). Fusionado con unwrap_or. La clave se iza
@@ -2021,8 +2067,8 @@ impl Transpiler {
             }
             "contains_key" => {
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().contains_key(&");
-                self.emit_expr(out, eff[1])?;
+                out.push_str(".borrow().contains_key(");
+                self.emit_map_key_ref(out, eff[1])?;
                 out.push(')');
             }
             "keys" => {
@@ -2063,7 +2109,14 @@ impl Transpiler {
                     Some(Type::Var(v)) => {
                         out.push_str("__ray_sort_by(&");
                         self.emit_expr(out, eff[0])?;
-                        out.push_str(&format!(", &{})", mangle(&format!("{v}#Ord#less"))));
+                        // Un diccionario monomorfizado (`__D: Fn`) se envuelve en el `Rc<dyn Fn>` que
+                        // espera `__ray_sort_by`: una reserva por ordenación, no por comparación.
+                        let dict = format!("{v}#Ord#less");
+                        if self.dict_params.contains(&dict) {
+                            out.push_str(&format!(", &(Rc::new({}.clone()) as Rc<dyn Fn({v}, {v}) -> bool>))", mangle(&dict)));
+                        } else {
+                            out.push_str(&format!(", &{})", mangle(&dict)));
+                        }
                     }
                     Some(Type::Float) => {
                         out.push_str("__ray_sort_float(&");
@@ -2148,8 +2201,8 @@ impl Transpiler {
             "contains" => match self.type_of(eff[0])? {
                 Type::String => {
                     self.emit_expr(out, eff[0])?;
-                    out.push_str(".contains(&*");
-                    self.emit_expr(out, eff[1])?;
+                    out.push_str(".contains(");
+                    self.emit_str_ref(out, eff[1])?;
                     out.push(')');
                 }
                 Type::Bytes => {

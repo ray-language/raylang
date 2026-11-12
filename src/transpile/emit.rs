@@ -37,6 +37,7 @@ impl Transpiler {
         let prev_tparams = std::mem::take(&mut self.tparams);
         let prev_cells = std::mem::take(&mut self.cells);
         let prev_marked = std::mem::take(&mut self.send_fn_params);
+        let prev_dicts = std::mem::take(&mut self.dict_params);
         let prev_ret = self.current_ret.replace(f.return_type.clone());
         let prev_expected = self.expected_ty.take();
         let r = self.emit_function_inner(out, rust_name, f);
@@ -44,6 +45,7 @@ impl Transpiler {
         self.tparams = prev_tparams;
         self.cells = prev_cells;
         self.send_fn_params = prev_marked;
+        self.dict_params = prev_dicts;
         self.current_ret = prev_ret;
         self.expected_ty = prev_expected;
         r
@@ -54,6 +56,7 @@ impl Transpiler {
     /// `__F{i}`) y deja los nombres marcados en `self.send_fn_params`.
     pub(super) fn fn_generics(&mut self, f: &Function) -> Result<(String, Vec<String>), String> {
         let marked = self.fn_marks.get(&f.name).cloned().unwrap_or_default();
+        let dicts = self.dict_marks.get(&f.name).cloned().unwrap_or_default();
         let mut gens: Vec<String> = f
             .type_params
             .iter()
@@ -61,8 +64,21 @@ impl Transpiler {
             .collect();
         let mut ptys = Vec::new();
         self.send_fn_params.clear();
+        self.dict_params.clear();
         for (i, p) in f.params.iter().enumerate() {
-            if marked.contains(&i) {
+            if dicts.contains(&i) {
+                // Diccionario de un bound: genérico monomorfizado (sin Send: no cruza fibras).
+                let Type::Fn(ats, rt) = normalize_type(&p.ty) else {
+                    return Err(format!("dictionary param {} of '{}' is not a fn type", i, f.name));
+                };
+                let mut sig = Vec::new();
+                for at in &ats {
+                    sig.push(rust_ty(at, &self.enums, &self.tparams)?);
+                }
+                gens.push(format!("__D{i}: Fn({}) -> {} + Clone + 'static", sig.join(", "), rust_ty(&rt, &self.enums, &self.tparams)?));
+                ptys.push(format!("__D{i}"));
+                self.dict_params.insert(p.name.clone());
+            } else if marked.contains(&i) {
                 let Type::Fn(ats, rt) = normalize_type(&p.ty) else {
                     return Err(format!("marked param {} of '{}' is not a fn type", i, f.name));
                 };
@@ -137,6 +153,7 @@ impl Transpiler {
         self.tparams = f.type_params.iter().cloned().collect();
         let (generics, ptys) = self.fn_generics(f)?;
         self.send_fn_params.clear(); // el stub no emite cuerpo: no hay capturas que mirar
+        self.dict_params.clear();
         let mut params = Vec::new();
         for (p, pty) in f.params.iter().zip(&ptys) {
             params.push(format!("mut {}: {}", mangle(&p.name), pty));
@@ -1222,7 +1239,18 @@ impl Transpiler {
             }
             ExprKind::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
             ExprKind::Char(c) => write!(out, "{:?}", c).unwrap(), // `{:?}` de char → literal Rust escapado
-            ExprKind::Str(s) => write!(out, "Rc::<str>::from({:?})", s).unwrap(),
+            ExprKind::Str(s) => {
+                let i = match self.str_lit_index.get(s) {
+                    Some(&i) => i,
+                    None => {
+                        let i = self.str_lits.len();
+                        self.str_lits.push(s.clone());
+                        self.str_lit_index.insert(s.clone(), i);
+                        i
+                    }
+                };
+                write!(out, "__ray_lit({i})").unwrap();
+            }
             // Literal de bytes `b"..."` → Rc<[u8]> desde un Vec de octetos.
             ExprKind::Bytes(b) => {
                 out.push_str("Rc::<[u8]>::from(vec![");
@@ -1283,7 +1311,7 @@ impl Transpiler {
                     // usado como VALOR (guardado en un mapa, devuelto, pasado a un param no marcado)
                     // necesita la coerción al `Rc<dyn Fn>` que espera el tipo raylang — sin ella
                     // rustc daba E0308 «expected Rc<dyn Fn(...)>, found type parameter __F1».
-                    let marked_fn = self.send_fn_params.contains(name)
+                    let marked_fn = (self.send_fn_params.contains(name) || self.dict_params.contains(name))
                         && matches!(normalize_type(ty), Type::Fn(..))
                         && rust_ty(ty, &self.enums, &self.tparams).is_ok();
                     if marked_fn {
@@ -1366,6 +1394,11 @@ impl Transpiler {
                     out.push_str(".borrow().clone(); __rt_v.extend(");
                     self.emit_expr(out, right)?;
                     out.push_str(".borrow().iter().cloned()); Rc::new(std::cell::RefCell::new(__rt_v)) }");
+                } else if let Some((other, lit)) = str_literal_comparison(op, left, right) {
+                    // `s == "lit"` / `"lit" != s`: se compara el TEXTO, sin crear el string del literal.
+                    out.push_str("(&*");
+                    self.emit_expr(out, other)?;
+                    write!(out, " {} {:?})", if matches!(op, BinaryOp::Eq) { "==" } else { "!=" }, lit).unwrap();
                 } else if matches!(op, BinaryOp::Shl | BinaryOp::Shr)
                     && matches!(self.type_of(left)?, Type::UInt(_))
                 {
@@ -2633,4 +2666,18 @@ pub(super) fn is_pure_literal(e: &Expr) -> bool {
 /// Un literal de arreglo iza sus elementos solo si hay 2+ y alguno NO es un literal puro.
 pub(super) fn needs_hoist(elems: &[Expr]) -> bool {
     elems.len() > 1 && elems.iter().any(|e| !is_pure_literal(e))
+}
+
+/// `x == "lit"` / `x != "lit"` (en cualquier orden) con UN solo lado literal: el otro lado y el
+/// texto. Un literal de string solo se compara con un string, así que el otro lado es `Rc<str>`.
+fn str_literal_comparison<'a>(op: &BinaryOp, left: &'a Expr, right: &'a Expr) -> Option<(&'a Expr, &'a str)> {
+    if !matches!(op, BinaryOp::Eq | BinaryOp::Ne) {
+        return None;
+    }
+    match (&left.kind, &right.kind) {
+        (ExprKind::Str(_), ExprKind::Str(_)) => None,
+        (_, ExprKind::Str(s)) => Some((left, s.as_str())),
+        (ExprKind::Str(s), _) => Some((right, s.as_str())),
+        _ => None,
+    }
 }

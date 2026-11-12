@@ -440,9 +440,11 @@ fn sort_on_a_generic_array_goes_through_the_less_dictionary() {
     let rust = transpile_src(
         "fn smallest<T: Ord>(a: [T]) -> [T] { sort(a) }\nfn main() {\n    print(smallest([3, 1, 2])[0]);\n    print(smallest([2.5, 1.5])[0]);\n}",
     );
-    assert!(rust.contains("fn smallest<T: Clone + RayShow + 'static + __RaySendConv>("), "{rust}");
+    // El diccionario del bound es un genérico monomorfizado (`__D1: Fn`); para `__ray_sort_by` se
+    // envuelve en el `Rc<dyn Fn>` que espera.
+    assert!(rust.contains("fn smallest<T: Clone + RayShow + 'static + __RaySendConv, __D1: Fn(T, T) -> bool + Clone + 'static>("), "{rust}");
     assert!(rust.contains("__ray_sort_by(&"), "{rust}");
-    assert!(rust.contains("&T_HH_Ord_HH_less)"), "{rust}");
+    assert!(rust.contains("&(Rc::new(T_HH_Ord_HH_less.clone()) as Rc<dyn Fn(T, T) -> bool>))"), "{rust}");
     assert!(!rust.contains("+ Ord>"), "{rust}");
 }
 
@@ -518,7 +520,7 @@ fn transpiles_map_add_to_get() {
     assert!(rust.contains("HashMap"), "{}", rust);
     assert!(rust.contains(".entry("), "{}", rust);
     assert!(rust.contains(".or_insert(0i64) += "), "{}", rust);
-    assert!(rust.contains(".get(&") && rust.contains(".unwrap_or("), "{}", rust);
+    assert!(rust.contains(".get(\"a\")") && rust.contains(".unwrap_or("), "la clave literal se consulta como &str: {}", rust);
 }
 
 #[test]
@@ -586,9 +588,10 @@ fn transpiles_generic_types() {
          fn main() -> int { let p = Par { a: 1, b: true }; extract(Box.Llena(9)) }",
     );
     assert!(rust.contains("struct Par<A: Clone"), "{}", rust);
-    assert!(rust.contains("enum Box<T: Clone"), "{}", rust);
-    assert!(rust.contains("Box::Llena(v)"), "{}", rust); // match de enum genérico
-    assert!(rust.contains("Rc::new(Box::Llena(9i64))"), "{}", rust);
+    // `Box` es un tipo de Rust que el código generado usa: el del usuario sale con sufijo.
+    assert!(rust.contains("enum Box_<T: Clone"), "{}", rust);
+    assert!(rust.contains("Box_::Llena(v)"), "{}", rust); // match de enum genérico
+    assert!(rust.contains("Rc::new(Box_::Llena(9i64))"), "{}", rust);
 }
 
 #[test]
@@ -1145,7 +1148,7 @@ fn transpiles_contains_and_parse_float() {
         "fn main() -> int { let ok = \"abc\".contains(\"b\"); let xs: [int] = [1, 2]; \
          let m = xs.contains(2); match (parse_float(\"1.5\")) { Option.Some(f) => { if (ok && m) { 1 } else { 0 } }, Option.None => 0 } }",
     );
-    assert!(rust.contains(".contains(&*"), "string contains: {}", rust);
+    assert!(rust.contains(".contains(\"b\")"), "string contains, la aguja literal como &str: {}", rust);
     assert!(rust.contains(".iter().any(|__e| *__e == __rt_x)"), "array contains: {}", rust);
     assert!(rust.contains(".parse::<f64>().ok()"), "parse_float: {}", rust);
 }
@@ -1939,7 +1942,7 @@ fn asserts_and_panics_carry_the_user_position() {
     let rust = transpile_src("fn main() { assert(1 == 2); assert_eq(1, 2); panic(\"boom\"); }");
     assert!(rust.contains("__ray_rt_err_at(\"assertion failed\", \"1:13\")"), "{rust}");
     assert!(rust.contains("__ray_rt_err_at(&format!(\"assert_eq failed: {} != {}\", __rt_a.ray_show(), __rt_b.ray_show()), \"1:29\")"), "{rust}");
-    assert!(rust.contains("__ray_rt_err_at(&*(Rc::<str>::from(\"boom\")), \"1:46\")"), "{rust}");
+    assert!(rust.contains("__ray_rt_err_at(&*(__ray_lit(") && rust.contains("), \"1:46\")") && rust.contains("static __RAY_LITS: [&str; "), "{rust}");
     assert!(rust.contains("fn __ray_rt_err_at(msg: &str, at: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string(), Some(at.to_string()))) }"), "{rust}");
     crate::transpile::set_position_bands(vec![(1, "m".into())]);
     let labeled = transpile_src("fn main() {\n    assert(1 == 2);\n}");
@@ -1959,4 +1962,36 @@ fn remove_at_and_insert_at_are_intercepted() {
     assert!(rust.contains("index {} out of range (length {})"), "{rust}");
     assert!(!transpile_src("fn main() -> int { 0 }").contains("mod __ray_float_fmt"), "solo si se usa");
     assert!(!transpile_src("fn main() -> int { 0 }").contains("mod __ray_md5"), "md5 solo si se usa");
+}
+
+/// Arco de rendimiento (nov 2026): un literal de string no reserva en cada uso — como valor sale
+/// de la tabla por hilo (`__ray_lit(i)`, sin repetir entradas) y donde basta el texto va como `&str`.
+#[test]
+fn string_literals_do_not_allocate_per_use() {
+    let rust = transpile_src(
+        "fn takes(s: string) -> int { s.len() }\n\
+         fn main() -> int { let line = \"alpha\"; var n = takes(\"delta\") + takes(\"delta\"); \
+         if (line == \"alpha\") { n = n + 1; } if (\"beta\" != line) { n = n + 1; } n }",
+    );
+    assert!(!rust.contains("Rc::<str>::from(\"delta\")") && !rust.contains("Rc::<str>::from(\"alpha\")"), "{rust}");
+    assert_eq!(rust.matches("\"delta\"").count(), 1, "una sola entrada en la tabla: {rust}");
+    assert!(rust.contains("(&*line.clone() == \"alpha\")") && rust.contains("(&*line.clone() != \"beta\")"), "{rust}");
+    assert!(rust.contains("fn __ray_lit(i: usize) -> Rc<str>"), "{rust}");
+}
+
+/// Arco de rendimiento (nov 2026): el diccionario de un bound (`T#Trait#metodo`) es un genérico de
+/// Rust — el impl viaja como ítem de función y se inlinea, sin `Rc<dyn Fn>` por llamada. Una
+/// función que recurre con un diccionario CONSTRUIDO (recursión polimórfica) sigue por `dyn`.
+#[test]
+fn bound_dictionaries_are_monomorphized() {
+    let rust = transpile_src(
+        "trait Sh { fn area(self) -> int; }\nstruct P { x: int }\nimpl Sh for P { fn area(self) -> int { self.x } }\n\
+         fn one<T: Sh>(s: T) -> int { s.area() }\nfn two<T: Sh>(s: T) -> int { one(s) + one(s) }\n\
+         fn deep<T: Show>(x: T, n: int) -> string { if (n == 0) { x.show() } else { deep([x], n - 1) } }\n\
+         fn main() -> int { two(P { x: 2 }) }",
+    );
+    assert!(rust.contains("fn one<T: Clone + RayShow + 'static + __RaySendConv, __D1: Fn(T) -> i64 + Clone + 'static>(mut s: T, mut T_HH_Sh_HH_area: __D1)"), "{rust}");
+    assert!(rust.contains("let __rt_a1 = P_HH_area; two("), "el impl va como ítem de función: {rust}");
+    assert!(rust.contains("let __rt_a1 = T_HH_Sh_HH_area.clone(); one("), "el diccionario propio se reenvía: {rust}");
+    assert!(rust.contains("mut T_HH_Show_HH_show: Rc<dyn Fn(T) -> Rc<str>>"), "la recursión polimórfica sigue por dyn: {rust}");
 }

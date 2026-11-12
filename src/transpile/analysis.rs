@@ -648,3 +648,96 @@ pub(super) fn tail_call_sites(body: &Block) -> std::collections::HashSet<(usize,
     out
 }
 
+
+/// Arco de rendimiento (nov 2026): los params DICCIONARIO que se monomorfizan. Un bound `T: Trait`
+/// llega del checker como un parámetro oculto de tipo función por método (`T#Trait#metodo`), y el
+/// llamador pasa el impl (`Tipo#metodo`). Emitido como `Rc<dyn Fn>` cuesta una reserva por llamada
+/// y un despacho dinámico; como genérico de Rust (`__D: Fn(…) + Clone`) el impl se inlinea.
+///
+/// Se excluyen, y siguen por `Rc<dyn Fn>`:
+/// - los params que ya cruzan un `spawn` (marcas de `spawn_fn_param_marks`: su bound es otro);
+/// - las funciones usadas como VALOR (su tipo de función debe ser cerrado);
+/// - una función que puede recurrir y pasa a otra recursiva un diccionario que NO es uno de los
+///   suyos reenviado tal cual (recursión polimórfica: `f<T>` llamando a `f<[T]>` con un diccionario
+///   construido): rustc no terminaría de instanciar.
+pub(super) fn dict_param_marks(prog: &Program, send_marks: &HashMap<String, std::collections::HashSet<usize>>) -> HashMap<String, std::collections::HashSet<usize>> {
+    use std::collections::HashSet;
+    let mut marks: HashMap<String, HashSet<usize>> = HashMap::new();
+    for f in &prog.functions {
+        if skip_fn_def(f) {
+            continue;
+        }
+        let sent = send_marks.get(&f.name);
+        let idx: HashSet<usize> = f
+            .params
+            .iter()
+            .enumerate()
+            .filter(|(i, p)| p.name.contains('#') && matches!(normalize_type(&p.ty), Type::Fn(..)) && !sent.is_some_and(|s| s.contains(i)))
+            .map(|(i, _)| i)
+            .collect();
+        if !idx.is_empty() {
+            marks.insert(f.name.clone(), idx);
+        }
+    }
+    if marks.is_empty() {
+        return marks;
+    }
+    // Usadas como valor: más menciones del nombre que llamadas directas a él (una local homónima
+    // cuenta como mención: conservador).
+    let mut mentions: HashMap<String, usize> = HashMap::new();
+    let mut direct_calls: HashMap<String, usize> = HashMap::new();
+    let mut count = |e: &Expr| match &e.kind {
+        ExprKind::Ident(n) if marks.contains_key(n) => *mentions.entry(n.clone()).or_default() += 1,
+        ExprKind::Call { callee, .. } => {
+            if let ExprKind::Ident(n) = &callee.kind {
+                if marks.contains_key(n) {
+                    *direct_calls.entry(n.clone()).or_default() += 1;
+                }
+            }
+        }
+        _ => {}
+    };
+    for f in &prog.functions {
+        visit_exprs_block(&f.body, &mut count);
+    }
+    for c in &prog.consts {
+        visit_exprs_expr(&c.value, &mut count);
+    }
+    let as_value: Vec<String> = mentions.iter().filter(|(n, m)| **m > direct_calls.get(*n).copied().unwrap_or(0)).map(|(n, _)| n.clone()).collect();
+    for n in as_value {
+        marks.remove(&n);
+    }
+    // Recursión polimórfica.
+    let (recursive, _) = depth_checked_fns(prog);
+    let mut unmark: Vec<String> = Vec::new();
+    for f in &prog.functions {
+        if !marks.contains_key(&f.name) || !recursive.contains(&f.name) {
+            continue;
+        }
+        let own: HashSet<&str> = f.params.iter().filter(|p| p.name.contains('#')).map(|p| p.name.as_str()).collect();
+        let mut forwards_only = true;
+        visit_exprs_block(&f.body, &mut |e: &Expr| {
+            let ExprKind::Call { callee, args } = &e.kind else { return };
+            let Ok((name, recv)) = resolve_callee(callee) else { return };
+            let Some(idx) = marks.get(name) else { return };
+            if !recursive.contains(name) {
+                return;
+            }
+            let shift = usize::from(recv.is_some());
+            for &i in idx {
+                let arg = if i < shift { recv } else { args.get(i - shift) };
+                let forwarded = matches!(arg.map(|a| &a.kind), Some(ExprKind::Ident(n)) if own.contains(n.as_str()));
+                if !forwarded {
+                    forwards_only = false;
+                }
+            }
+        });
+        if !forwards_only {
+            unmark.push(f.name.clone());
+        }
+    }
+    for n in unmark {
+        marks.remove(&n);
+    }
+    marks
+}

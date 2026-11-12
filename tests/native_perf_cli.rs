@@ -231,3 +231,54 @@ fn main() {
         false,
     );
 }
+
+/// Paso 4: préstamos izados fuera del bucle — escritura y lectura del mismo arreglo, `if`/`else`,
+/// `while` con `break`, dos nombres del MISMO arreglo, filas de un arreglo de arreglos (incluida
+/// una fila repetida en la rejilla) y bucles de cero vueltas con un índice de fila inválido.
+#[test]
+fn hoisted_borrows_keep_aliasing_and_bounds_behaviour() {
+    engines(
+        "hoist",
+        r#"fn fill(n: int, v: int) -> [int] { var xs: [int] = []; for i in 0..n { xs.push(v + i); } xs }
+fn main() {
+    // escritura + lectura del mismo arreglo, if/else, while anidado, break/continue
+    var a = fill(10, 0);
+    for i in 1..10 { if (a[i] % 2 == 0) { a[i] = a[i - 1] + 1; } else { continue; } }
+    print(a);
+    var i = 0;
+    while (i < 10) { a[i] = a[i] * 2; if (a[i] > 12) { break; } i = i + 1; }
+    print(a);
+    // dos nombres del MISMO arreglo: escribir por uno y leer por el otro
+    let b = a;
+    for k in 0..5 { b[k] = a[9 - k] + k; }
+    print(a);
+    // arreglos distintos, uno escrito
+    var c = fill(10, 100);
+    for k in 0..10 { c[k] = a[k] + c[k]; }
+    print(c);
+    // filas: dp, la misma fila dos veces, y una fila repetida en la rejilla (alias)
+    var g: [[int]] = [];
+    for y in 0..4 { g.push(fill(5, y * 10)); }
+    for y in 1..4 { for x in 1..5 { let up = g[y - 1][x]; let left = g[y][x - 1]; g[y][x] = g[y][x] + if (up < left) { up } else { left }; } }
+    print(g);
+    let shared = fill(3, 1);
+    var h: [[int]] = [shared, shared, fill(3, 7)];
+    for x in 0..3 { h[1][x] = h[0][x] + h[2][x]; }
+    print(h);
+    // floats y bools
+    var fs: [float] = [1.5, 2.5, 3.5];
+    var flags: [bool] = [false, false, false];
+    for k in 0..3 { fs[k] = fs[k] * 2.0; flags[k] = fs[k] > 4.0; }
+    print(fs);
+    print(flags);
+    // bucle de cero vueltas con un índice de fila inválido: no debe fallar
+    let y0 = 0;
+    for x in 0..0 { g[y0 - 1][x] = 1; }
+    for x in 3..1 { g[99][x] = 1; }
+    print("ok");
+}
+"#,
+        "[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]\n[0, 2, 4, 6, 8, 10, 12, 14, 8, 9]\n[9, 9, 16, 15, 14, 10, 12, 14, 8, 9]\n[109, 110, 118, 118, 118, 115, 118, 121, 116, 118]\n[[0, 1, 2, 3, 4], [10, 12, 14, 16, 18], [20, 33, 36, 39, 42], [30, 61, 68, 72, 76]]\n[[8, 10, 12], [8, 10, 12], [7, 8, 9]]\n[3, 5, 7]\n[false, true, true]\nok\n",
+        true,
+    );
+}

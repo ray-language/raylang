@@ -196,6 +196,9 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // (`index 3 out of range (length 0)`), no el bounds check de Rust. `__ray_idx` hace UNA comparación
     // sin signo (un índice negativo cae también) en el camino caliente y llama al emisor frío fuera.
     out.push_str("#[cold] #[inline(never)] fn __ray_index_err(i: i64, len: usize) -> ! { __ray_rt_err(&format!(\"index {i} out of range (length {len})\")) }\n");
+    // Fila `g[i]` de un arreglo de arreglos para izar su préstamo fuera de un bucle: `None` si el
+    // índice no existe (el bucle sin izar da entonces el error donde toca).
+    out.push_str("#[inline(always)] fn __ray_row<T>(a: &Rc<std::cell::RefCell<Vec<Rc<std::cell::RefCell<Vec<T>>>>>>, i: Option<i64>) -> Option<Rc<std::cell::RefCell<Vec<T>>>> { let i = i?; let b = a.borrow(); if (i as u64) < (b.len() as u64) { Some(b[i as usize].clone()) } else { None } }\n");
     out.push_str("#[inline(always)] fn __ray_idx(i: i64, len: usize) -> usize { if (i as u64) < (len as u64) { i as usize } else { __ray_index_err(i, len) } }\n");
     // M295: profundidad de llamadas raylang — el binario nativo corta la recursión en el MISMO
     // límite y con el MISMO mensaje que la VM (`RAYLANG_MAX_DEPTH`, 1024 por defecto), en vez de

@@ -1764,6 +1764,19 @@ impl Transpiler {
                 // Orden de la VM: arreglo, luego valor. Ambos a temporales ANTES del borrow_mut: si el
                 // valor lee del MISMO arreglo (p. ej. `w.push(w[i] + w[j])`, típico en cripto), evita el
                 // doble borrow del RefCell (panic). El receptor también se iza por si borrowea.
+                // Receptor = variable local (no celda, sin préstamo izado): leerla no tiene efectos,
+                // así que se presta directamente, sin clonar el `Rc` (un sube-y-baja del contador
+                // por elemento añadido).
+                if let ExprKind::Ident(name) = &eff[0].kind
+                    && !self.is_cell(name)
+                    && matches!(self.lookup(name), Some(Type::Array(_)))
+                    && !self.hoisted_borrows.contains_key(name)
+                {
+                    out.push_str("{ let __rt_v = ");
+                    self.emit_expr(out, eff[1])?;
+                    write!(out, "; {}.borrow_mut().push(__rt_v); }}", mangle(name)).unwrap();
+                    return Ok(());
+                }
                 out.push_str("{ let __rt_arr = ");
                 self.emit_expr(out, eff[0])?;
                 out.push_str("; let __rt_v = ");

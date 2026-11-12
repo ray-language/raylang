@@ -345,7 +345,7 @@ fn field_reads_close_their_borrow_guard_before_the_next_argument() {
     crate::checker::check(&mut prog).expect("check");
     let rust = super::transpile_full(&prog, &[], false, true).expect("transpile").source;
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(rust.matches("let __rt_p = ({ s.clone().borrow().p.clone() }); let __rt_d = { let __rt_a0 = s.clone(); data(__rt_a0) }; match std::fs::write(&*__rt_p, &*__rt_d)").count(), 1, "el campo en su bloque y los args una vez: {rust}");
+    assert_eq!(rust.matches("let __rt_p = ({ s.borrow().p.clone() }); let __rt_d = { let __rt_a0 = s.clone(); data(__rt_a0) }; match std::fs::write(&*__rt_p, &*__rt_d)").count(), 1, "el campo en su bloque y los args una vez: {rust}");
 }
 
 /// N-D4b: `let f = s.split(sep)` consumido SOLO por `f[const]` → extracción en una pasada, sin
@@ -2010,4 +2010,35 @@ fn scalar_enums_are_values_and_the_rest_stay_shared() {
     assert!(rust.contains("fn run(mut o: __RayVal<Op>) -> i64") && rust.contains("__RayVal::new(Op::Push("), "{rust}");
     assert!(rust.contains("impl RayShow for __RayVal<Op>"), "{rust}");
     assert!(rust.contains("Rc::new(Name::Of(") && rust.contains("Rc::new(Tree::Leaf(") && rust.contains("#[derive(Clone, PartialEq)]\nenum Tree {"), "{rust}");
+}
+
+/// Arco de rendimiento (nov 2026): el izado de préstamos cubre control de flujo, escrituras y filas
+/// invariantes de un arreglo de arreglos; con escrituras o filas hay una guarda en ejecución y un
+/// camino sin izar. Leer o escribir un campo, y `push`, sobre una variable local no clonan su `Rc`.
+#[test]
+fn loops_hoist_borrows_across_control_flow_stores_and_rows() {
+    let rust = transpile_src(
+        "struct P { x: int }\n\
+         fn main() -> int {\n\
+             var a: [int] = [1, 2, 3]; var b: [int] = [0, 0, 0]; var g: [[int]] = [[1, 2], [3, 4]];\n\
+             var n = 0;\n\
+             for i in 0..3 { if (a[i] > 1) { n = n + a[i]; } }\n\
+             for i in 0..3 { b[i] = a[i] + 1; }\n\
+             let y = 1;\n\
+             for x in 0..2 { g[y][x] = g[y - 1][x] + 1; }\n\
+             let p = P { x: 1 }; p.x = p.x + 1; a.push(4);\n\
+             n + p.x\n\
+         }",
+    );
+    // solo lectura: sin guarda de alias
+    assert!(rust.contains("{\n    let __rt_bh_0 = a.borrow();\n    for i in __rt_lo..__rt_hi"), "{rust}");
+    // escritura con dos arreglos: guarda de identidad y camino sin izar
+    assert!(rust.contains("if Rc::as_ptr(&b) as *const u8 != Rc::as_ptr(&a) as *const u8 {\n    let mut __rt_bh_0 = b.borrow_mut();\n    let __rt_bh_1 = a.borrow();"), "{rust}");
+    assert!(rust.contains(" else { for i in __rt_lo..__rt_hi "), "{rust}");
+    // filas: índice que no puede fallar, `None` = sin izar
+    assert!(rust.contains("let __rt_row_0 = __ray_row(&g, Some(y));") && rust.contains("__ray_row(&g, Some(y).and_then(|__a: i64| Some(1i64).and_then(|__b: i64| __a.checked_sub(__b))))"), "{rust}");
+    assert!(rust.contains("__rt_row_0.is_some() && __rt_row_1.is_some() && Rc::as_ptr(__rt_row_0.as_ref().unwrap()) as *const u8 != Rc::as_ptr(__rt_row_1.as_ref().unwrap()) as *const u8"), "{rust}");
+    // variable local: sin `Rc::clone` para un campo ni para `push`
+    assert!(rust.contains("{ let __rt_rhs = __ray_add(({ p.borrow().x.clone() }), 1i64); p.borrow_mut().x = __rt_rhs; }"), "{rust}");
+    assert!(rust.contains("{ let __rt_v = 4i64; a.borrow_mut().push(__rt_v); }"), "{rust}");
 }

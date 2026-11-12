@@ -366,95 +366,304 @@ impl Transpiler {
         }
     }
 
-    /// N6b: ¿el cuerpo de un `for` de rango es **puro-escalar**? Si lo es, devuelve los arreglos
-    /// (de elemento escalar) que indexa — candidatos a izar su `borrow()` fuera del loop, dejando
-    /// el cuerpo en aritmética pura que LLVM vectoriza (medido: el loop interno de matrixmul 5.5×).
+    /// N6b: ¿un bucle es **puro-escalar**? Si lo es, devuelve los arreglos (de elemento escalar) que
+    /// indexa — candidatos a izar su préstamo fuera del bucle, dejando el cuerpo en aritmética pura
+    /// que LLVM vectoriza (medido: el loop interno de matrixmul 5.5×).
     ///
-    /// El recorte es deliberadamente conservador, porque izar un préstamo compartido por encima de
-    /// un `borrow_mut` convertiría código válido en pánico. Se acepta SOLO: `let`/`var` de tipo
-    /// escalar, asignación a escalares, y expresiones de literales/variables/aritmética/casts/
-    /// lecturas `a[i]` con receptor variable-local-no-celda. Cualquier otro nodo — llamadas,
-    /// mutación de arreglos, strings, control de flujo, closures — devuelve `None` y el loop se
-    /// emite como siempre. Requiere la variable del loop ya declarada en el ámbito.
-    fn hoistable_arrays(&self, body: &crate::ast::Block) -> Option<Vec<String>> {
+    /// El recorte es deliberadamente conservador, porque izar un préstamo por encima de otro
+    /// incompatible convertiría código válido en pánico. Se acepta SOLO: `let`/`var` de tipo
+    /// escalar, asignación a escalares, expresiones de literales/variables/aritmética/casts y
+    /// lecturas `a[i]` con receptor variable-local-no-celda; y, desde el arco de rendimiento de
+    /// nov 2026, control de flujo local (`if`/`else`, `while` y `for` de rango anidados,
+    /// `break`/`continue`), la ESCRITURA `a[i] = v` sobre esos arreglos (préstamo izado como
+    /// `borrow_mut`) y las FILAS `g[e][i]` de un arreglo de arreglos cuando `e` no cambia en el
+    /// bucle. Cualquier otro nodo — llamadas, strings, closures, `return` — devuelve `None` y el
+    /// bucle se emite como siempre.
+    ///
+    /// `loop_var`: la variable de un `for` de rango (cambia en cada vuelta). `cond`: la condición
+    /// de un `while`. Con escrituras o filas el llamador comprueba EN EJECUCIÓN que lo izado son
+    /// objetos distintos y que cada fila existe; si no, corre el bucle sin izar (`open_hoisted`).
+    fn hoistable_arrays(&self, loop_var: Option<&str>, cond: Option<&Expr>, body: &crate::ast::Block) -> Option<Vec<Hoisted>> {
         fn is_scalar(t: &Type) -> bool {
             matches!(t, Type::Int | Type::Float | Type::Bool | Type::Char | Type::UInt(_))
         }
-        // Ámbito local del análisis: los `let` del cuerpo se registran aquí (el `lookup` de fuera
-        // sigue viendo el resto). Nota: un `let` del cuerpo solo puede ser escalar → no puede
-        // introducir (ni sombrear con) un arreglo.
-        let mut local: HashMap<String, Type> = HashMap::new();
-        let mut arrays: Vec<String> = Vec::new();
-
-        fn pure_expr(
-            t: &Transpiler,
-            local: &HashMap<String, Type>,
-            arrays: &mut Vec<String>,
-            e: &Expr,
-        ) -> Option<Type> {
-            match &e.kind {
-                ExprKind::Int(..) => Some(Type::Int),
-                ExprKind::Float(_) => Some(Type::Float),
-                ExprKind::Bool(_) => Some(Type::Bool),
-                ExprKind::Char(_) => Some(Type::Char),
-                ExprKind::Ident(n) => {
-                    let ty = local.get(n).or_else(|| t.lookup(n))?.clone();
-                    if is_scalar(&ty) { Some(ty) } else { None }
+        struct Ctx<'a> {
+            t: &'a Transpiler,
+            /// Los `let` del cuerpo (solo escalares: no pueden introducir ni sombrear un arreglo).
+            local: HashMap<String, Type>,
+            /// Nombres cuyo valor cambia dentro del bucle (variable del bucle, `let`, asignados).
+            mutated: std::collections::HashSet<String>,
+            found: Vec<Hoisted>,
+        }
+        impl Ctx<'_> {
+            fn note(&mut self, key: String, row: Option<(String, Expr)>, written: bool) {
+                match self.found.iter_mut().find(|h| h.key == key) {
+                    Some(h) => h.written |= written,
+                    None => self.found.push(Hoisted { key, written, row }),
                 }
-                ExprKind::Unary { expr, .. } => pure_expr(t, local, arrays, expr),
-                ExprKind::Binary { left, right, .. } => {
-                    let lt = pure_expr(t, local, arrays, left)?;
-                    pure_expr(t, local, arrays, right)?;
-                    // el tipo del binario escalar es el del operando (o bool en comparaciones;
-                    // para el análisis basta con que ambos lados sean escalares puros).
-                    Some(lt)
-                }
-                ExprKind::Cast { expr, ty } => {
-                    pure_expr(t, local, arrays, expr)?;
-                    if is_scalar(ty) { Some(ty.clone()) } else { None }
-                }
-                ExprKind::Index { array, index } => {
-                    // Solo `variable[idx]` con la variable un arreglo LOCAL de elemento escalar y
-                    // no-celda (una celda lleva otro RefCell por medio: fuera del recorte).
-                    let ExprKind::Ident(name) = &array.kind else { return None };
-                    if local.contains_key(name) || t.is_cell(name) {
-                        return None;
+            }
+            /// `a` (arreglo local de escalares) o `g[e]` (fila invariante de un arreglo local de
+            /// arreglos de escalares): su clave, o `None` si no es ninguna de las dos.
+            fn target(&mut self, array: &Expr, written: bool) -> Option<Type> {
+                match &array.kind {
+                    ExprKind::Ident(name) => {
+                        if self.local.contains_key(name) || self.t.is_cell(name) {
+                            return None;
+                        }
+                        let Some(Type::Array(elem)) = self.t.lookup(name) else { return None };
+                        if !is_scalar(elem) {
+                            return None;
+                        }
+                        let elem = (**elem).clone();
+                        self.note(name.clone(), None, written);
+                        Some(elem)
                     }
-                    let Some(Type::Array(elem)) = t.lookup(name) else { return None };
-                    if !is_scalar(elem) {
-                        return None;
+                    ExprKind::Index { array: base, index } => {
+                        let ExprKind::Ident(g) = &base.kind else { return None };
+                        if self.local.contains_key(g) || self.t.is_cell(g) {
+                            return None;
+                        }
+                        let Some(Type::Array(row)) = self.t.lookup(g) else { return None };
+                        let Type::Array(elem) = &**row else { return None };
+                        if !is_scalar(elem) || !self.invariant(index) {
+                            return None;
+                        }
+                        let elem = (**elem).clone();
+                        let key = row_key(g, index)?;
+                        self.note(key, Some((g.clone(), (**index).clone())), written);
+                        Some(elem)
                     }
-                    pure_expr(t, local, arrays, index)?;
-                    if !arrays.contains(name) {
-                        arrays.push(name.clone());
-                    }
-                    Some((**elem).clone())
+                    _ => None,
                 }
-                _ => None,
+            }
+            /// Sumas y restas de enteros sobre literales y variables que el bucle no cambia (lo
+            /// que `row_index_text` sabe evaluar SIN poder fallar).
+            fn invariant(&self, e: &Expr) -> bool {
+                match &e.kind {
+                    ExprKind::Int(..) => true,
+                    ExprKind::Ident(n) => !self.mutated.contains(n) && !self.local.contains_key(n) && !self.t.is_cell(n) && matches!(self.t.lookup(n), Some(Type::Int)),
+                    ExprKind::Binary { op: BinaryOp::Add | BinaryOp::Sub, left, right } => self.invariant(left) && self.invariant(right),
+                    _ => false,
+                }
+            }
+            fn expr(&mut self, e: &Expr) -> Option<Type> {
+                match &e.kind {
+                    ExprKind::Int(..) => Some(Type::Int),
+                    ExprKind::Float(_) => Some(Type::Float),
+                    ExprKind::Bool(_) => Some(Type::Bool),
+                    ExprKind::Char(_) => Some(Type::Char),
+                    ExprKind::Ident(n) => {
+                        let ty = self.local.get(n).or_else(|| self.t.lookup(n))?.clone();
+                        if is_scalar(&ty) { Some(ty) } else { None }
+                    }
+                    ExprKind::Unary { expr, .. } => self.expr(expr),
+                    ExprKind::Binary { left, right, .. } => {
+                        // el tipo del binario escalar es el del operando (o bool en comparaciones;
+                        // para el análisis basta con que ambos lados sean escalares puros).
+                        let lt = self.expr(left)?;
+                        self.expr(right)?;
+                        Some(lt)
+                    }
+                    ExprKind::Cast { expr, ty } => {
+                        self.expr(expr)?;
+                        if is_scalar(ty) { Some(ty.clone()) } else { None }
+                    }
+                    ExprKind::Index { array, index } => {
+                        let elem = self.target(array, false)?;
+                        self.expr(index)?;
+                        Some(elem)
+                    }
+                    // `if` con VALOR escalar (`let best = if (a < b) { a } else { b };`).
+                    ExprKind::If { cond, then_branch, else_branch: Some(eb) } => {
+                        self.expr(cond)?;
+                        let ty = self.value_block(then_branch)?;
+                        self.expr(eb)?;
+                        Some(ty)
+                    }
+                    ExprKind::Block(b) => self.value_block(b),
+                    _ => None,
+                }
+            }
+            /// Un bloque cuyo valor es su cola escalar.
+            fn value_block(&mut self, b: &crate::ast::Block) -> Option<Type> {
+                self.statements(b)?;
+                self.expr(b.tail.as_ref()?)
+            }
+            fn block(&mut self, b: &crate::ast::Block) -> Option<()> {
+                self.statements(b)?;
+                match &b.tail {
+                    Some(e) => self.stmt(e),
+                    None => Some(()),
+                }
+            }
+            fn statements(&mut self, b: &crate::ast::Block) -> Option<()> {
+                for s in &b.statements {
+                    match &s.kind {
+                        StmtKind::Let { name, value, .. } => {
+                            let ty = self.expr(value)?;
+                            self.local.insert(name.clone(), ty);
+                        }
+                        StmtKind::Assign { target, value } => match &target.kind {
+                            ExprKind::Ident(n) => {
+                                let tty = self.local.get(n).or_else(|| self.t.lookup(n))?.clone();
+                                if !is_scalar(&tty) {
+                                    return None;
+                                }
+                                self.expr(value)?;
+                            }
+                            ExprKind::Index { array, index } => {
+                                self.target(array, true)?;
+                                self.expr(index)?;
+                                self.expr(value)?;
+                            }
+                            _ => return None,
+                        },
+                        StmtKind::Expr(e) => self.stmt(e)?,
+                        StmtKind::Break { .. } | StmtKind::Continue { .. } => {}
+                        StmtKind::For { pat: ForPat::Single(var), iter: ForIter::Range { start, end }, body, .. } => {
+                            self.expr(start)?;
+                            self.expr(end)?;
+                            self.local.insert(var.clone(), Type::Int);
+                            self.block(body)?;
+                        }
+                        _ => return None,
+                    }
+                }
+                Some(())
+            }
+            /// Una expresión en posición de sentencia: solo control de flujo de valor unit.
+            fn stmt(&mut self, e: &Expr) -> Option<()> {
+                match &e.kind {
+                    ExprKind::If { cond, then_branch, else_branch } => {
+                        self.expr(cond)?;
+                        self.block(then_branch)?;
+                        match else_branch {
+                            Some(eb) => self.stmt(eb),
+                            None => Some(()),
+                        }
+                    }
+                    ExprKind::While { cond, body, .. } => {
+                        self.expr(cond)?;
+                        self.block(body)
+                    }
+                    ExprKind::Block(b) => self.block(b),
+                    _ => None,
+                }
+            }
+        }
+        // Lo que el bucle cambia: su variable, los `let` y lo asignado, a cualquier profundidad.
+        fn mutated_in(b: &crate::ast::Block, out: &mut std::collections::HashSet<String>) {
+            fn in_expr(e: &Expr, out: &mut std::collections::HashSet<String>) {
+                match &e.kind {
+                    ExprKind::If { then_branch, else_branch, .. } => {
+                        mutated_in(then_branch, out);
+                        if let Some(eb) = else_branch {
+                            in_expr(eb, out);
+                        }
+                    }
+                    ExprKind::While { body, .. } => mutated_in(body, out),
+                    ExprKind::Block(b) => mutated_in(b, out),
+                    _ => {}
+                }
+            }
+            for s in &b.statements {
+                match &s.kind {
+                    StmtKind::Let { name, .. } => {
+                        out.insert(name.clone());
+                    }
+                    StmtKind::Assign { target, .. } => {
+                        if let ExprKind::Ident(n) = &target.kind {
+                            out.insert(n.clone());
+                        }
+                    }
+                    StmtKind::Expr(e) => in_expr(e, out),
+                    StmtKind::For { pat: ForPat::Single(var), body, .. } => {
+                        out.insert(var.clone());
+                        mutated_in(body, out);
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(t) = &b.tail {
+                in_expr(t, out);
             }
         }
 
-        if body.tail.is_some() {
+        let mut mutated = std::collections::HashSet::new();
+        if let Some(v) = loop_var {
+            mutated.insert(v.to_string());
+        }
+        mutated_in(body, &mut mutated);
+        let mut cx = Ctx { t: self, local: HashMap::new(), mutated, found: Vec::new() };
+        if let Some(c) = cond {
+            cx.expr(c)?;
+        }
+        cx.block(body)?;
+        if cx.found.is_empty() { None } else { Some(cx.found) }
+    }
+
+    /// Abre el camino IZADO de un bucle: las filas, la guarda (si hace falta), el bloque y los
+    /// préstamos. Devuelve si emitió guarda (el llamador cierra con el camino sin izar).
+    fn open_hoisted(&mut self, out: &mut String, arrays: &[Hoisted]) -> Result<bool, String> {
+        // El `Rc` de cada cosa izada: la variable, o la fila (un `Option`: `None` si el índice no
+        // existe — entonces no se iza y el bucle normal da el error donde lo daría la VM).
+        let mut handle: Vec<String> = Vec::new();
+        let mut checks: Vec<String> = Vec::new();
+        for (i, h) in arrays.iter().enumerate() {
+            match &h.row {
+                Some((g, index)) => {
+                    write!(out, "let __rt_row_{i} = __ray_row(&{}, {}); ", mangle(g), row_index_text(index)?).unwrap();
+                    checks.push(format!("__rt_row_{i}.is_some()"));
+                    handle.push(format!("__rt_row_{i}.as_ref().unwrap()"));
+                }
+                None => handle.push(format!("&{}", mangle(&h.key))),
+            }
+        }
+        // Con una escritura, dos nombres del mismo objeto harían `borrow_mut` + `borrow` a la vez.
+        for (i, a) in arrays.iter().enumerate() {
+            for (j, b) in arrays.iter().enumerate().skip(i + 1) {
+                if a.written || b.written {
+                    checks.push(format!("Rc::as_ptr({}) as *const u8 != Rc::as_ptr({}) as *const u8", handle[i], handle[j]));
+                }
+            }
+        }
+        let guarded = !checks.is_empty();
+        if guarded {
+            write!(out, "if {} ", checks.join(" && ")).unwrap();
+        }
+        out.push_str("{\n");
+        for (i, h) in arrays.iter().enumerate() {
+            let guard = format!("__rt_bh_{i}");
+            let hd = handle[i].trim_start_matches('&');
+            if h.written {
+                writeln!(out, "    let mut {guard} = {hd}.borrow_mut();").unwrap();
+            } else {
+                writeln!(out, "    let {guard} = {hd}.borrow();").unwrap();
+            }
+            self.hoisted_borrows.insert(h.key.clone(), guard);
+        }
+        Ok(guarded)
+    }
+
+    fn close_hoisted(&mut self, arrays: &[Hoisted]) {
+        for h in arrays {
+            self.hoisted_borrows.remove(&h.key);
+        }
+    }
+
+    /// La guarda izada del receptor de un `x[i]`: `a` o la fila `g[e]` (ver `hoistable_arrays`).
+    fn hoisted_guard(&self, array: &Expr) -> Option<String> {
+        if self.hoisted_borrows.is_empty() {
             return None;
         }
-        for s in &body.statements {
-            match &s.kind {
-                StmtKind::Let { name, value, .. } => {
-                    let ty = pure_expr(self, &local, &mut arrays, value)?;
-                    local.insert(name.clone(), ty);
-                }
-                StmtKind::Assign { target, value } => {
-                    let ExprKind::Ident(n) = &target.kind else { return None };
-                    let tty = local.get(n).or_else(|| self.lookup(n))?.clone();
-                    if !is_scalar(&tty) {
-                        return None;
-                    }
-                    pure_expr(self, &local, &mut arrays, value)?;
-                }
-                _ => return None,
+        match &array.kind {
+            ExprKind::Ident(name) => self.hoisted_borrows.get(name).cloned(),
+            ExprKind::Index { array: base, index } => {
+                let ExprKind::Ident(g) = &base.kind else { return None };
+                self.hoisted_borrows.get(&row_key(g, index)?).cloned()
             }
+            _ => None,
         }
-        if arrays.is_empty() { None } else { Some(arrays) }
     }
 
     pub(super) fn declare(&mut self, name: &str, ty: Type) {
@@ -734,6 +943,16 @@ impl Transpiler {
                         // orden): izquierda→derecha. Los TRES van a temporales ANTES del borrow_mut: el
                         // índice o el valor pueden leer el MISMO arreglo (`a[a.len()-1] = a[0]`) →
                         // izarlos evita el doble borrow del RefCell (leer + mutar a la vez = panic).
+                        // Dentro de un bucle izado el arreglo ya está prestado (`borrow_mut`): se
+                        // escribe por su guarda. Índice y valor, a temporales antes, como siempre.
+                        if let Some(guard) = self.hoisted_guard(array) {
+                            out.push_str("{ let __rt_idx = ");
+                            self.emit_expr(out, index)?;
+                            out.push_str("; let __rt_rhs = ");
+                            self.emit_expr(out, value)?;
+                            writeln!(out, "; let __rt_k = __ray_idx(__rt_idx, {guard}.len()); {guard}[__rt_k] = __rt_rhs; }}").unwrap();
+                            return Ok(());
+                        }
                         out.push_str("{ let __rt_arr = ");
                         self.emit_expr(out, array)?;
                         out.push_str("; let __rt_idx = ");
@@ -746,6 +965,20 @@ impl Transpiler {
                         // Orden de la VM (SetField consume objeto, valor): objeto ANTES que el valor.
                         // Ambos a temporales antes del borrow_mut (el RHS puede leer el mismo campo,
                         // `p.x = p.x + 1`) → evita el doble borrow.
+                        // Objeto = variable local (no celda) y un valor sin bloques dentro (nada que
+                        // pueda reasignar esa variable entre medias): leerla no tiene efectos, así que
+                        // se presta directamente, sin clonar el `Rc` (un sube-y-baja del contador por
+                        // cada campo escrito).
+                        if let ExprKind::Ident(obj) = &object.kind
+                            && !self.is_cell(obj)
+                            && matches!(self.lookup(obj), Some(Type::Struct(..)))
+                            && !has_inline_block(value)
+                        {
+                            out.push_str("{ let __rt_rhs = ");
+                            self.emit_expr(out, value)?;
+                            write!(out, "; {}.borrow_mut().{} = __rt_rhs; }}\n", mangle(obj), mangle(name)).unwrap();
+                            return Ok(());
+                        }
                         out.push_str("{ let __rt_obj = ");
                         self.emit_expr(out, object)?;
                         out.push_str("; let __rt_rhs = ");
@@ -856,46 +1089,50 @@ impl Transpiler {
                         // que indexa fuera del loop → el cuerpo queda en aritmética pura (vectoriza).
                         // Los extremos del rango se evalúan a temporales ANTES de crear los guards
                         // (si mutaran un arreglo, sería antes de tomar el préstamo, no durante).
-                        let hoist = {
+                        // Dentro de un bucle ya izado no se vuelve a izar (sus préstamos siguen vivos).
+                        let hoist = if self.hoisted_borrows.is_empty() {
                             self.scopes.push(HashMap::new());
                             self.declare(&var, Type::Int);
-                            let h = self.hoistable_arrays(body);
+                            let h = self.hoistable_arrays(Some(&var), None, body);
                             self.scopes.pop();
                             h
-                        };
-                        if let Some(arrays) = &hoist {
-                            out.push_str("{ let __rt_lo: i64 = ");
-                            self.emit_expr(out, start)?;
-                            out.push_str("; let __rt_hi: i64 = ");
-                            self.emit_expr(out, end)?;
-                            out.push_str(";\n");
-                            for (i, name) in arrays.iter().enumerate() {
-                                let guard = format!("__rt_bh_{i}");
-                                writeln!(out, "    let {} = {}.borrow();", guard, mangle(name)).unwrap();
-                                self.hoisted_borrows.insert(name.clone(), guard);
-                            }
-                            write!(out, "    {}for {} in __rt_lo..__rt_hi ", lbl, mangle(&var)).unwrap();
                         } else {
-                            // M388 (rayplay #156): los extremos se evalúan a temporales ANTES del
-                            // `for`. En Rust, los temporales de la expresión del iterador viven
-                            // hasta el final del bucle, así que `for i in 0..s.borrow().len()`
-                            // retenía el `borrow()` de `s` durante todo el cuerpo y `s[i] = 0`
-                            // (`borrow_mut`) moría con «RefCell already borrowed» — solo en nativo
-                            // (la VM evalúa el rango una vez y lo suelta). Con el `let` el guard
-                            // muere al terminar la sentencia, como en la VM.
-                            out.push_str("{ let __rt_lo: i64 = ");
-                            self.emit_expr(out, start)?;
-                            out.push_str("; let __rt_hi: i64 = ");
-                            self.emit_expr(out, end)?;
-                            write!(out, "; {}for {} in __rt_lo..__rt_hi ", lbl, mangle(&var)).unwrap();
-                        }
-                        self.scopes.push(HashMap::new());
-                        self.declare(&var, Type::Int);
-                        self.emit_block(out, body)?;
-                        self.scopes.pop();
-                        if let Some(arrays) = &hoist {
-                            for name in arrays {
-                                self.hoisted_borrows.remove(name);
+                            None
+                        };
+                        // M388 (rayplay #156): los extremos se evalúan a temporales ANTES del `for`
+                        // (y antes de los préstamos izados): en Rust los temporales de la expresión
+                        // del iterador viven hasta el final del bucle, y `for i in 0..s.borrow().len()`
+                        // retenía el `borrow()` de `s` durante todo el cuerpo.
+                        out.push_str("{ let __rt_lo: i64 = ");
+                        self.emit_expr(out, start)?;
+                        out.push_str("; let __rt_hi: i64 = ");
+                        self.emit_expr(out, end)?;
+                        out.push_str("; ");
+                        let guarded = match &hoist {
+                            Some(arrays) => {
+                                let g = self.open_hoisted(out, arrays)?;
+                                write!(out, "    {}for {} in __rt_lo..__rt_hi ", lbl, mangle(&var)).unwrap();
+                                self.scopes.push(HashMap::new());
+                                self.declare(&var, Type::Int);
+                                self.emit_block(out, body)?;
+                                self.scopes.pop();
+                                self.close_hoisted(arrays);
+                                out.push_str("}\n");
+                                g
+                            }
+                            None => true,
+                        };
+                        if guarded {
+                            if hoist.is_some() {
+                                out.push_str(" else { ");
+                            }
+                            write!(out, "{}for {} in __rt_lo..__rt_hi ", lbl, mangle(&var)).unwrap();
+                            self.scopes.push(HashMap::new());
+                            self.declare(&var, Type::Int);
+                            self.emit_block(out, body)?;
+                            self.scopes.pop();
+                            if hoist.is_some() {
+                                out.push_str(" }");
                             }
                         }
                         out.push_str("}\n");
@@ -1478,21 +1715,55 @@ impl Transpiler {
                 }
             }
             ExprKind::While { cond, body, label } => {
-                // M308: etiqueta → `'ray_l: loop`/`'ray_l: while`.
-                if let Some(l) = label {
-                    write!(out, "'ray_{}: ", l).unwrap();
-                }
+                // M308: etiqueta → `'ray_l: loop`/`'ray_l: while` (va en `head`, pegada al bucle).
                 // M301 (IDEAS §97 #3): `while (true)` sin `break` DIVERGE para el checker (una
                 // función `-> Result` puede terminar en él); en Rust solo `loop` tiene tipo `!`
                 // (`while true` es `()` y no compila como cola de esa función).
-                if matches!(cond.kind, ExprKind::Bool(true)) {
-                    out.push_str("loop ");
-                } else {
-                    out.push_str("while ");
-                    self.emit_expr(out, cond)?;
-                    out.push(' ');
+                let is_loop = matches!(cond.kind, ExprKind::Bool(true));
+                // Arco de rendimiento: un `while` de cuerpo puro-escalar iza los préstamos de los
+                // arreglos que indexa (como el `for` de rango; ver `hoistable_arrays`).
+                let hoist = if self.hoisted_borrows.is_empty() && !is_loop { self.hoistable_arrays(None, Some(cond), body) } else { None };
+                let head = match label {
+                    Some(l) => format!("'ray_{l}: "),
+                    None => String::new(),
+                };
+                // Un bloque propio: las filas izadas se ligan con `let` antes de la guarda.
+                if hoist.is_some() {
+                    out.push_str("{ ");
                 }
-                self.emit_block(out, body)?;
+                let guarded = match &hoist {
+                    Some(arrays) => {
+                        let g = self.open_hoisted(out, arrays)?;
+                        write!(out, "    {head}while ").unwrap();
+                        self.emit_expr(out, cond)?;
+                        out.push(' ');
+                        self.emit_block(out, body)?;
+                        self.close_hoisted(arrays);
+                        out.push_str("\n}");
+                        g
+                    }
+                    None => true,
+                };
+                if guarded {
+                    if hoist.is_some() {
+                        out.push_str(" else { ");
+                    }
+                    out.push_str(&head);
+                    if is_loop {
+                        out.push_str("loop ");
+                    } else {
+                        out.push_str("while ");
+                        self.emit_expr(out, cond)?;
+                        out.push(' ');
+                    }
+                    self.emit_block(out, body)?;
+                    if hoist.is_some() {
+                        out.push_str(" }");
+                    }
+                }
+                if hoist.is_some() {
+                    out.push_str(" }");
+                }
             }
             ExprKind::Block(b) => self.emit_block(out, b)?,
             // Literal de arreglo → Rc<RefCell<Vec>>. Vacío: Vec::new() (Rust infiere el elemento del uso).
@@ -1611,8 +1882,8 @@ impl Transpiler {
                         match &array.kind {
                             // N6b: dentro de un loop puro-escalar el préstamo está IZADO → se indexa el
                             // guard directamente (sin borrow por elemento; LLVM puede vectorizar).
-                            ExprKind::Ident(name) if self.hoisted_borrows.contains_key(name) => {
-                                let guard = self.hoisted_borrows[name].clone();
+                            _ if self.hoisted_guard(array).is_some() => {
+                                let guard = self.hoisted_guard(array).unwrap_or_default();
                                 write!(out, "{guard}[__ray_idx(").unwrap();
                                 self.emit_expr(out, index)?;
                                 write!(out, ", {guard}.len())].clone()").unwrap();
@@ -1756,7 +2027,12 @@ impl Transpiler {
                     write!(out, ".{}", name).unwrap(); // índice numérico de tupla: NO manglar
                 } else {
                     out.push_str("({ ");
-                    self.emit_expr(out, object)?;
+                    // Objeto = variable local (no celda): se presta directamente; clonar el `Rc`
+                    // para leer un campo solo movía el contador (dos escrituras por lectura).
+                    match &object.kind {
+                        ExprKind::Ident(obj) if !self.is_cell(obj) && matches!(self.lookup(obj), Some(Type::Struct(..))) => out.push_str(&mangle(obj)),
+                        _ => self.emit_expr(out, object)?,
+                    }
                     write!(out, ".borrow().{}.clone() }})", mangle(name)).unwrap();
                 }
             }
@@ -2680,4 +2956,58 @@ fn str_literal_comparison<'a>(op: &BinaryOp, left: &'a Expr, right: &'a Expr) ->
         (ExprKind::Str(s), _) => Some((right, s.as_str())),
         _ => None,
     }
+}
+
+/// ¿Contiene `e` un bloque en línea (`{ … }`, `if`, `match`, `while`, una closure)? Solo ahí puede
+/// haber una sentencia — p. ej. una asignación a una variable local — dentro de una expresión.
+fn has_inline_block(e: &Expr) -> bool {
+    let mut found = false;
+    super::analysis::visit_exprs_expr(e, &mut |x: &Expr| {
+        if matches!(x.kind, ExprKind::Block(_) | ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::While { .. } | ExprKind::Func(_)) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Un préstamo izado fuera de un bucle puro-escalar (`Transpiler::hoistable_arrays`): un arreglo
+/// local (`key` = su nombre) o una fila `g[e]` (`key` = `row_key`; `row` = el arreglo y el índice).
+#[derive(Clone)]
+pub(super) struct Hoisted {
+    pub(super) key: String,
+    pub(super) written: bool,
+    pub(super) row: Option<(String, Expr)>,
+}
+
+/// El índice de una fila izada como `Option<i64>` que NO puede fallar: evaluarlo antes del bucle
+/// no debe adelantar un error de desbordamiento que el programa daría más tarde (o nunca, si el
+/// bucle no llega a ese acceso). `None` → la fila no se iza y el bucle normal decide.
+fn row_index_text(e: &Expr) -> Result<String, String> {
+    match &e.kind {
+        ExprKind::Int(n, _) => Ok(format!("Some({n}i64)")),
+        ExprKind::Ident(n) => Ok(format!("Some({})", mangle(n))),
+        ExprKind::Binary { op: op @ (BinaryOp::Add | BinaryOp::Sub), left, right } => Ok(format!(
+            "{}.and_then(|__a: i64| {}.and_then(|__b: i64| __a.{}(__b)))",
+            row_index_text(left)?,
+            row_index_text(right)?,
+            if matches!(op, BinaryOp::Add) { "checked_add" } else { "checked_sub" }
+        )),
+        _ => Err("row index outside the hoistable subset".into()),
+    }
+}
+
+/// La clave de la fila `g[index]` entre los préstamos izados: el nombre y el texto canónico del
+/// índice (dos apariciones del mismo índice dan la misma clave). `None` si el índice no es
+/// aritmética de enteros sobre literales y variables.
+pub(super) fn row_key(g: &str, index: &Expr) -> Option<String> {
+    fn text(e: &Expr) -> Option<String> {
+        match &e.kind {
+            ExprKind::Int(..) => Some(format!("{:?}", e.kind)),
+            ExprKind::Ident(n) => Some(n.clone()),
+            ExprKind::Unary { op, expr } => Some(format!("({op:?} {})", text(expr)?)),
+            ExprKind::Binary { op, left, right } => Some(format!("({} {op:?} {})", text(left)?, text(right)?)),
+            _ => None,
+        }
+    }
+    Some(format!("{g}[{}]", text(index)?))
 }

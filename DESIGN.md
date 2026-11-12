@@ -20032,3 +20032,13 @@ reconoce sin ambigüedad: el id que guarda el registro no es su clave. `schedule
 documentación sus motivos de `Err` y recuerda consultar `status()` para distinguir «sin alarmas» de una alarma rechazada. Medido en
 el emulador (Android 15): programar, posponer y detener con el id
 `pepa:2026-11-11|d|m1|20:00#ab`. En iOS el almacén va por id y nunca tuvo la restricción.
+
+## 426. Closures como valor de una rama en nativo (nov 2026)
+
+Visto al escribir el banco de sondeo del arco de rendimiento del nativo (M451). Una closure literal en la cola de una
+rama de `if`/`else` o en un brazo de `match` se emitía `Rc::new(move |…| …)` sin tipo: en Rust
+cada closure tiene el suyo y las ramas no unificaban (E0308 sobre código generado, sin mensaje de
+raylang). Ahora, y solo en esa posición, lleva el cast explícito a su `Rc<dyn Fn(…) -> …>`; una
+closure suelta en un `let` sigue con su tipo concreto (la llamada directa se inlinea). De paso,
+`tests/native_lib_cli.rs` — que solo corre en macOS y por tanto fuera del CI — llevaba roto desde
+que `std/media` entró al runtime de `ui` (1.27.58): le faltaba enlazar MediaPlayer.

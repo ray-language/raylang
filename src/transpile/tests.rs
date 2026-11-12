@@ -1960,3 +1960,15 @@ fn remove_at_and_insert_at_are_intercepted() {
     assert!(!transpile_src("fn main() -> int { 0 }").contains("mod __ray_float_fmt"), "solo si se usa");
     assert!(!transpile_src("fn main() -> int { 0 }").contains("mod __ray_md5"), "md5 solo si se usa");
 }
+
+/// Una closure literal que es el valor de una rama lleva el cast a su tipo `dyn` (las ramas de un
+/// `if`/`match` necesitan un tipo común); una closure suelta en un `let` no lo lleva.
+#[test]
+fn closure_literals_in_branches_are_cast_to_a_common_type() {
+    let rust = transpile_src(
+        "fn main() -> int { let k = 1; let f = if (k > 0) { fn(x: int) -> int { x + 1 } } else { fn(x: int) -> int { x * 2 } }; \
+         let g = fn(x: int) -> int { x - 1 }; f(g(3)) }",
+    );
+    assert_eq!(rust.matches(" as Rc<dyn Fn(i64) -> i64>)").count(), 2, "{rust}");
+    assert!(rust.contains("let g = Rc::new(move |x: i64| -> i64"), "{rust}");
+}

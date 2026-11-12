@@ -4,6 +4,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Una closure como valor de una rama compila a nativo**: `let f = if (c) { fn(x: int) -> int
+  { … } } else { fn(x: int) -> int { … } };` (o en los brazos de un `match`) rompía `ray build
+  --native` con un error de rustc sobre el código generado.
+
 ## 1.27.95 — 2026-11-11
 
 - **`std/alarm`: el id de una alarma admite `|` (pepa #347)**, y cualquier texto sin tabuladores

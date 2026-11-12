@@ -1,0 +1,18 @@
+import std/time;
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    var total = 0;
+    var parts: [string] = [];
+    for i in 0..300000 {
+        let s = "id=${i} name=user${i % 1000} ok=${i % 2 == 0}";
+        total = total + s.len();
+        if (i % 10 == 0) {
+            parts.push(s);
+        }
+    }
+    let joined = parts.join(",");
+    print(total);
+    print(joined.len());
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

@@ -1,0 +1,60 @@
+import std/time;
+
+trait Shape {
+    fn area(self) -> int;
+}
+
+struct Sq {
+    s: int,
+}
+
+struct Rect {
+    w: int,
+    h: int,
+}
+
+impl Shape for Sq {
+    fn area(self) -> int { self.s * self.s }
+}
+
+impl Shape for Rect {
+    fn area(self) -> int { self.w * self.h }
+}
+
+fn total<T: Shape>(xs: [T]) -> int {
+    var t = 0;
+    for x in xs {
+        t = (t + x.area()) % 1000003;
+    }
+    t
+}
+
+fn total_dyn(xs: [dyn Shape]) -> int {
+    var t = 0;
+    for x in xs {
+        t = (t + x.area()) % 1000003;
+    }
+    t
+}
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    var sq: [Sq] = [];
+    var rc: [Rect] = [];
+    var mixed: [dyn Shape] = [];
+    for i in 0..10000 {
+        sq.push(Sq { s: i % 100 });
+        rc.push(Rect { w: i % 50, h: i % 30 });
+        if (i % 2 == 0) {
+            mixed.push(Sq { s: i % 100 });
+        } else {
+            mixed.push(Rect { w: i % 50, h: i % 30 });
+        }
+    }
+    var acc = 0;
+    for r in 0..500 {
+        acc = (acc + total(sq) + total(rc) + total_dyn(mixed)) % 1000003;
+    }
+    print(acc);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

@@ -1,0 +1,17 @@
+import std/time;
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    let chunk = "the quick brown fox jumps over the lazy dog 0123456789 ";
+    let data = chunk.repeat(40000).to_bytes();
+    var a = 1;
+    var b = 0;
+    for r in 0..4 {
+        for i in 0..data.len() {
+            a = (a + (data[i] as int)) % 65521;
+            b = (b + a) % 65521;
+        }
+    }
+    print(b * 65536 + a);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

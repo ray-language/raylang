@@ -1,0 +1,29 @@
+import std/time;
+
+fn step(x: int) -> Result<int, string> {
+    if (x % 97 == 0) { Result.Err("bad") } else { Result.Ok(x * 2 % 1000003) }
+}
+
+fn run(x: int) -> Result<int, string> {
+    let a = step(x)?;
+    let b = step(a + 1)?;
+    Result.Ok(a + b)
+}
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    var ok = 0;
+    var sum = 0;
+    for i in 0..5000000 {
+        match (run(i)) {
+            Result.Ok(v) => {
+                ok = ok + 1;
+                sum = (sum + v) % 1000003;
+            },
+            Result.Err(_) => { },
+        }
+    }
+    print(ok);
+    print(sum);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

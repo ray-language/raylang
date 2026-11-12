@@ -1,0 +1,25 @@
+import std/time;
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    var count = 0;
+    let n = 500;
+    for py in 0..n {
+        for px in 0..n {
+            let cr = (px as float) * 3.0 / (n as float) - 2.0;
+            let ci = (py as float) * 2.0 / (n as float) - 1.0;
+            var zr = 0.0;
+            var zi = 0.0;
+            var it = 0;
+            while (it < 200 && zr * zr + zi * zi < 4.0) {
+                let t = zr * zr - zi * zi + cr;
+                zi = 2.0 * zr * zi + ci;
+                zr = t;
+                it = it + 1;
+            }
+            count = count + it;
+        }
+    }
+    print(count);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

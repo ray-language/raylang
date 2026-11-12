@@ -149,6 +149,12 @@ impl Visitor<'_> {
             _ => return,
         };
         let Some((_, what)) = PURE.iter().find(|(n, _)| *n == name) else { return };
+        // `join` es DOS funciones: unir strings (`parts.join(sep)` / `join(parts, sep)`) y esperar una
+        // tarea (`join(t);` / `t.join();`, un solo operando) — esta última se llama por su efecto.
+        let operands = args.len() + usize::from(matches!(callee.kind, ExprKind::Field { .. }));
+        if name == "join" && operands == 1 {
+            return;
+        }
         if (self.overridden)(name) {
             return;
         }
@@ -263,6 +269,9 @@ mod tests {
         assert!(w[0].contains("`xs.reverse()`") && w[1].contains("`xs.map(…)`"), "{w:?}");
         assert!(warnings_of("fn sort(xs: [int]) -> [int] { xs }\nfn main() -> int { let xs = [1]; sort(xs); xs.sort(); 0 }\n").is_empty());
         assert!(warnings_of("struct H { sort: fn(int) -> int }\nfn main() -> int { let h = H { sort: fn(n: int) -> int { n } }; h.sort(1); 0 }\n").is_empty());
+        // Esperar una tarea se llama por su efecto: `join(t);` y `t.join();` no avisan; unir strings sí.
+        assert!(warnings_of("fn main() -> int { let t = spawn(fn() -> int { 1 }); join(t); let u = spawn(fn() -> int { 1 }); u.join(); 0 }\n").is_empty());
+        assert_eq!(warnings_of("fn main() -> int { let ps = [\"a\"]; ps.join(\",\"); join(ps, \",\"); 0 }\n").len(), 2);
         // Revisión 1.27.91: un método de impl del usuario y una función de módulo (`pool::join`) también callan.
         assert!(warnings_of("struct T { n: int }\ntrait Sorter { fn sort(self); }\nimpl Sorter for T { fn sort(self) { print(self.n); } }\nfn main() -> int { let t = T { n: 1 }; t.sort(); 0 }\n").is_empty());
         let toks = crate::lexer::lex("fn main() -> int { let p = 1; pool.join(); 0 }").unwrap();

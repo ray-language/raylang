@@ -1,0 +1,35 @@
+import std/time;
+
+struct Acc {
+    balance: int,
+    n: int,
+}
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    let m: Map<int, Acc> = Map.new();
+    for i in 0..100000 {
+        m.insert(i, Acc { balance: 0, n: 0 });
+    }
+    var seed = 12345;
+    for i in 0..2000000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        let k = seed % 100000;
+        match (m.get(k)) {
+            Option.Some(a) => {
+                a.balance = a.balance + (seed % 100);
+                a.n = a.n + 1;
+            },
+            Option.None => { },
+        }
+    }
+    var sum = 0;
+    for i in 0..100000 {
+        match (m.get(i)) {
+            Option.Some(a) => sum = (sum + a.balance * 31 + a.n) % 1000000007,
+            Option.None => { },
+        }
+    }
+    print(sum);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

@@ -1,0 +1,35 @@
+import std/time;
+
+struct P {
+    x: float,
+    y: float,
+    vx: float,
+    vy: float,
+}
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    var ps: [P] = [];
+    for i in 0..1000 {
+        let f = i as float;
+        ps.push(P { x: f, y: f * 0.5, vx: 1.0 + f * 0.001, vy: 0.5 - f * 0.0005 });
+    }
+    for step in 0..3000 {
+        for p in ps {
+            p.x = p.x + p.vx * 0.01;
+            p.y = p.y + p.vy * 0.01;
+            if (p.x > 1000.0) {
+                p.vx = 0.0 - p.vx;
+            }
+            if (p.y < 0.0) {
+                p.vy = 0.0 - p.vy;
+            }
+        }
+    }
+    var sum = 0.0;
+    for p in ps {
+        sum = sum + p.x + p.y;
+    }
+    print(sum as int);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

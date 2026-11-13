@@ -251,7 +251,7 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     // `prelude_origin` (sin overrides del usuario): `sort(a, <prim>#less)` → `__sort_prim(a)`
     // (sort nativo; float fuera por NaN), y `index_of(…)/parse_int(…) .unwrap_or(d)` →
     // `__index_of_or`/`__parse_int_or` (muere el arreglo etiquetado + el Option + los marcos).
-    lower_prelude_fusions(program, &prelude_origin);
+    lower_prelude_fusions(program, &prelude_origin, &checker.local_callee_sites);
     // Paso 9 (V2, bench políglota): aplanar las cadenas de `+` de strings (incl. interpolación) a
     // `__concat(a, b, …)` → opcode `ConcatN` (un String con capacidad exacta, sin intermedios).
     // La ÚLTIMA bajada: el `Call` sintético comparte (línea, col) con el `Add` raíz y no debe
@@ -377,6 +377,8 @@ pub(super) struct PreludeOrigin {
     pub(super) index_of_fn: bool,
     pub(super) last_index_of_fn: bool,
     pub(super) parse_int_fn: bool,
+    /// ¿El `fn get` (Map) en el programa es el del prelude? (fusión `get(m, k).unwrap_or(d)`.)
+    pub(super) get_fn: bool,
     /// D3: ¿el `unwrap_or` que resolverá como `Option#unwrap_or` es el del prelude? (el usuario no
     /// redefinió el trait `OptionOps` ni aporta su propio `impl OptionOps for Option`).
     pub(super) unwrap_or_impl: bool,
@@ -413,6 +415,7 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
     // fusión correspondiente no aplica (la suya puede tener OTRA semántica).
     let mut origin = PreludeOrigin {
         sort_fn: !defined.contains("sort"),
+        get_fn: !defined.contains("get") && !defined.contains("get_or"),
         index_of_fn: !defined.contains("index_of"),
         last_index_of_fn: !defined.contains("last_index_of"),
         parse_int_fn: !defined.contains("parse_int"),
@@ -718,6 +721,10 @@ struct Checker {
     /// `destino(recv, args)`, de modo que el intérprete y la VM solo ven llamadas.
     /// M267: el cuarto campo es la profundidad en una cadena del mismo método (`lowering::ufcs_chain_depth`).
     ufcs_sites: HashMap<(usize, usize, String, usize), String>,
+    /// Posiciones `(línea, col)` de los callee que son una VARIABLE LOCAL de tipo función
+    /// (`let get = fn(…) {…}; get(a, b)`, un parámetro `get: fn(…)`). Las fusiones del prelude
+    /// reconocen sus patrones por el NOMBRE del callee; un sitio de estos no es el builtin.
+    local_callee_sites: HashSet<(usize, usize)>,
     /// M344 (rayauth R17): funciones libres a las que un sitio UFCS llegó pese a que un LOCAL
     /// homónimo que no es función (`fn fail(r: Res, status: int) { r.status(status) }`) las tapa
     /// en los motores (resuelven el `Ident` por ámbito: local primero). El sitio se baja al alias

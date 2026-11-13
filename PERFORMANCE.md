@@ -2884,9 +2884,9 @@ banco poliglota no cambia (sus programas no pasaban por estos caminos).
   en el sondeo. El perfil muestra `push`/`pop` de la pila como llamadas reales, clonado y
   destrucción de valores por instrucción y campos de struct buscados por nombre.
 
-## 27. M452 (nov 2026): la recursión sin contador en memoria
+## 27. M452 (nov 2026): la recursión sin contador en memoria — medida, hecha y RETIRADA
 
-**La medición que lo decidió.** `fibrec` nativo iba a 2× de `--fast` y a 1,8× de Go, y se daba
+**La medición (sigue valiendo).** `fibrec` nativo iba a 2× de `--fast` y a 1,8× de Go, y se daba
 por hecho que era el precio de la aritmética comprobada. Aislando cada pieza en una réplica del
 código generado (`fib(34)`, M3 Pro y Linux aarch64 — mismas cifras en ambos):
 
@@ -2899,34 +2899,86 @@ código generado (`fib(34)`, M3 Pro y Linux aarch64 — mismas cifras en ambos):
 | comprobada + parámetro + escribir el contador tras cada llamada | 21,8 |
 | comprobada + parámetro + UNA escritura del contador al entrar | 26,8 |
 
-La aritmética comprobada es gratis; un tercio del tiempo era el contador (M295): leerlo, sumarlo,
-escribirlo, compararlo y volver a escribirlo al salir, en cada llamada. Y basta UNA escritura por
-marco para perder toda la ganancia: la profundidad tiene que vivir en un registro.
+La aritmética comprobada es gratis; un tercio del tiempo es el contador (M295): leerlo, sumarlo,
+escribirlo, compararlo y volver a escribirlo al salir, en cada llamada. Basta UNA escritura por
+marco para perder la ganancia: la profundidad tiene que vivir en un registro.
 
-**Qué se hizo.** Cada función que puede recurrir se emite como un cuerpo `nombre__d(…, __rt_dp)`
-— recibe la profundidad de quien la llama, suma uno y compara, sin tocar memoria — más una
-entrada `nombre(…)` con la firma de raylang para quien no lleva la cuenta en un registro (código
-que no cuenta, valores función, closures): toma la base del contador en memoria y la restaura al
-volver. Dentro de un cuerpo, una llamada directa a otra función que cuenta pasa `__rt_dp` (en
-posición de cola, `__rt_dp - 1`: el marco no cuenta, como el `TailCall` de la VM); cualquier otra
-llamada que pueda volver a entrar en código raylang — una función que no cuenta, un valor función,
-un builtin que recibe una función — publica antes la profundidad en el contador. Un builtin sin
-funciones entre sus argumentos no puede volver a entrar y no paga nada, así que un bucle caliente
-de `main` sigue igual. `try_call` guarda y restaura el contador (un error que desenrolla no pasa
-por las entradas). Las closures siguen con el guard de M295. El límite sigue siendo en MARCOS y
-corta donde corta la VM (`tests/native_depth_cli.rs`, `recursion_depth_by_parameter_matches_the_vm`).
+**Lo que se hizo (#637).** Cada función que puede recurrir se emitía como un cuerpo
+`nombre__d(…, __rt_dp)` más una entrada `nombre(…)` que tomaba la base del contador en memoria;
+las llamadas directas pasaban `__rt_dp` y las que podían volver a entrar en código raylang
+publicaban antes la profundidad. Medido: `fibrec` 28,5 → 18,7 ms (Go 16,8), `treealloc` 22,8 →
+19,1.
 
-**Descartado**: el tope por puntero de pila — igual de rápido y más simple, pero el límite dejaría
-de ser «N marcos» y el nativo cortaría a otra profundidad que la VM.
+**Por qué se retiró.** La revisión previa a 1.27.97 reprodujo cuatro divergencias con la VM, todas
+de la misma raíz — el contador se publicaba «antes de la llamada», y hay demasiadas formas de que
+deje de valer lo publicado antes de que la llamada ocurra:
 
-**Medido** (banco poliglota, nativo, ms; Go de la misma corrida):
+1. Los argumentos se evalúan DESPUÉS de publicar: una llamada directa dentro de ellos deja el
+   contador en la profundidad de su subárbol (`run(f, walk(600))` → «stack overflow» falso), y en
+   una llamada de cola por valor una publicación anidada pisa el `__rt_dp - 1` (un trampolín de
+   5000 vueltas cortaba en 1024).
+2. `for x in <iterador>` llama a `next` sin publicar.
+3. Un campo de tipo función llamado como un builtin (`n.len(k)`) se clasificaba como builtin y no
+   publicaba: recursión sin contar.
+4. La entrada solo restauraba el contador al volver normalmente: en el modo sin fibras, una tarea
+   que falla dejaba sucio el contador del hilo del pool, y se acumulaba entre tareas.
 
-| Programa | 1.27.95 | ahora | Go |
-|---|---|---|---|
-| `fibrec` | 28,5 | **18,7** (−35 %) | 16,8 |
-| `treealloc` | 22,8 | **19,1** (−17 %) | 29,5 |
+Ninguna llegó a publicarse: #637 se revirtió en la PR de la release.
 
-El resto, dentro del ruido de la corrida (±5 %; `jsonserialize` +9 % sin una sola escritura nueva
-en su bucle — comprobado en el código generado —: es memoria, no este cambio). En el banco de
-sondeo `queens`, `results` y los demás no se mueven: su recursión es poco profunda o pasa por
-valores función.
+**Para reintentarlo.** El invariante no puede depender de cada sitio de llamada. Diseño propuesto:
+(a) una guarda con `Drop` en las ENTRADAS y en toda función que publica o que llama directamente
+(transitivamente) a una que publica — restaura el contador a la profundidad de su llamador al
+salir por cualquier vía, también por un error que desenrolla —; las funciones que solo se llaman
+entre sí sin tocar nada más (`fib`, recorrer un árbol) no la llevan y conservan la ganancia;
+(b) en posición de cola la guarda se suelta antes de llamar; (c) una llamada «de fuera» en cola
+con argumentos que llaman iza esos argumentos a temporales y publica después; (d) la
+clasificación de qué puede volver a entrar la da `emit_call` (que ya sabe por qué rama fue), no
+un segundo clasificador por nombre. Y el test tiene que cubrir los cuatro casos de arriba antes
+de escribir la primera línea.
+
+## 28. M453 (nov 2026): la VM, primera pasada — lo acotado, y dónde está el coste de fondo
+
+El banco de sondeo (§26) dejó a la VM entre 20× y 360× del nativo y entre 18× y 75× de Node.
+Antes de plantear un rediseño se atacó lo que tenía pinta de anomalía.
+
+**Lo que se hizo** (ns por operación en la VM, `benchmarks/probe/micro.ray`, mediana de 3):
+
+| Cambio | Antes | Ahora |
+|---|---|---|
+| `m.get(k).unwrap_or(d)`, clave `int` | 414 | 140 |
+| `m.get(k).unwrap_or(d)`, clave `string` | 308 | 81 |
+| las 43 operaciones del micro (media geométrica) | 1,000 | 0,944 |
+
+- **`get` + `unwrap_or` fundidos.** `get` es una función del prelude escrita en raylang: llama a
+  `__map_get` (que devuelve un arreglo), mira su longitud, construye un `Option`, y `unwrap_or` lo
+  desmonta con un `match` — dos marcos y dos reservas por lectura. El pase de fusiones D3 (que ya
+  cubría `index_of(…).unwrap_or(d)`) reescribe ahora `get(m, k).unwrap_or(d)` a `__get_or(m, k,
+  d)`, el primitivo de `get_or`. Solo con un default SIN llamadas: la forma fundida evalúa `d`
+  antes de buscar, y un default que modificara el mapa cambiaría el resultado. Vale para los tres
+  motores (la bajada es del checker).
+- **La cabecera del bucle de despacho.** Cada instrucción escribía `pending_error` (un `take()`
+  incondicional), descontaba `fuel` aunque no hubiera límite, leía el marco en curso con tres
+  comprobaciones de límites y volvía a indexar el código de la función dos veces. Ahora: `is_some`
+  antes de `take`, sin descuento cuando `fuel` es ilimitado, el marco y el código leídos una vez; y
+  `push`/`pop`/locales con `#[inline(always)]` (eran llamadas reales desde cientos de sitios).
+  Todo junto, −5,6 %.
+
+**Lo que NO es una anomalía.** Un `while (i < n) { s = s + i; i = i + 1; }` son cinco
+instrucciones por vuelta (`LocalLocalCmpJump`, `GetLocalLocal`, `Add`, `SetLocal`, `IncJump`) y
+cuesta 26 ns: ~5 ns por instrucción, unos 18 ciclos, donde un intérprete de bytecode afinado gasta
+3–5. No hay un sitio que lo explique: es la suma de la cabecera por instrucción, el `Result<Option
+<HeapValue>>` que devuelve cada una, y sobre todo mover valores con etiqueta — `HeapValue` no es
+`Copy` (lleva `Arc<str>`/`Arc<[u8]>`), así que cada lectura de local es un `clone()` fuera de
+línea y cada escritura un `drop`, y cada operación aritmética vuelve a mirar la etiqueta de sus
+operandos. Una función que devuelve `Option`/`Result` (200–300 ns) es simplemente muchas de esas
+instrucciones.
+
+**La palanca que queda** es la del §2 («el activo estratégico: tipos estáticos + erasure»): el
+checker conoce el tipo de cada expresión y el compilador de bytecode no lo usa. Con él se pueden
+emitir instrucciones especializadas (`AddInt` sobre locales enteros sin etiqueta ni clon, campos
+por posición en vez de por nombre — hoy `GetField` compara strings contra la definición del
+struct, ~15 ns por acceso). Es un cambio de formato del bytecode del compilador de Rust. (El
+espejo en raylang, `selfhost/compiler.ray` + `selfhost/vm.ray`, tiene su PROPIO bytecode y la
+paridad con él es de comportamiento — misma salida, mismo código de salida —, así que no hay que
+tocarlo; una primera versión de esta nota decía lo contrario.) Arco propio, con plan; no se ha
+empezado.

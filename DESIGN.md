@@ -20081,22 +20081,28 @@ arco M451 había dejado en `main` (nunca publicados), y se corrigieron antes del
   `.gitignore` (que iba en la otra PR) y un `git add -A` versionó 31 ejecutables (42 MiB). Se
   dejan de versionar; el historial conserva ese commit.
 
-## 428. M452 — la profundidad de recursión como parámetro oculto (nov 2026)
+## 428. M452 — la profundidad de recursión como parámetro oculto: hecho y RETIRADO (nov 2026)
 
-Rendimiento, con detalle y cifras en `PERFORMANCE.md` §27. Lo que importa para el contrato:
+M452 llevó la cuenta de profundidad de las funciones recursivas a un parámetro oculto (`fib(34)`
+nativo: 28,5 → 18,7 ms) y se fusionó (#637). La revisión previa a 1.27.97 encontró cuatro formas
+de que el nativo cortara donde la VM no corta, o no cortara donde debe — y se retiró ANTES de
+publicarse; el nativo vuelve al contador de M295. El detalle, la medición que sigue siendo válida
+y el diseño para reintentarlo están en `PERFORMANCE.md` §27. La lección de proceso: un esquema
+cuyo invariante («el contador vale la profundidad del marco que cuenta más cercano siempre que
+corre código que no la lleva en un registro») depende de publicar en cada sitio de llamada es
+frágil por construcción; el reintento debe apoyarse en guardas que restauran solas.
 
-- **El límite no cambia**: `RAYLANG_MAX_DEPTH` marcos (1024 por defecto), mismo mensaje, mismo
-  punto de corte que la VM. Lo que cambia es dónde vive la cuenta: en un parámetro (`__rt_dp`) de
-  las funciones que pueden recurrir, no en un contador en memoria.
-- **Dos formas por función**: `nombre__d` (el cuerpo, con la profundidad) y `nombre` (la entrada
-  con la firma de raylang). Quien toque el transpilador debe saber que una llamada directa entre
-  funciones que cuentan va a `__d`, y que cualquier cuerpo emitido FUERA del emisor de closures
-  (`spawn`, `scope`) tiene que cortar el contexto de profundidad (`emit_detached_body`): en una
-  fibra nueva la cuenta empieza de cero, y heredar el `__rt_dp` de la función que crea la fibra
-  contaba un marco de más (lo cazó `native_depth_cli`).
-- **El contador en memoria sigue existiendo** como base para las entradas de fuera y para las
-  closures (guard de M295). El invariante: siempre que corre código que no lleva la cuenta en un
-  registro, el contador vale la profundidad del marco que cuenta más cercano.
-- **Dos errores del primer intento**, cazados por la batería completa antes de empujar: una
-  variable local con el nombre de una función que cuenta (`f: fn(…)` con una `fn f` global) se
-  tomaba por la función; y el cuerpo de `spawn` heredaba la profundidad del creador.
+## 429. M453 — la VM, primera pasada (nov 2026)
+
+Rendimiento; cifras y diagnóstico en `PERFORMANCE.md` §28. Para el contrato:
+
+- **Una fusión más en el pase D3**: `get(m, k).unwrap_or(d)` → `__get_or(m, k, d)` cuando `d` no
+  lleva llamadas ni bloques. La condición no es una optimización sino corrección: la forma fundida
+  evalúa `d` antes de buscar. La guarda `PreludeOrigin::get_fn` la apaga si el usuario redefine
+  `get` o `get_or`.
+- **Nativo: el préstamo de un `get` termina en el `get`.** El resultado se liga a un temporal, y
+  `get_or` evalúa su default antes de prestar el mapa. Antes un default que modificaba el mapa
+  moría con «RefCell already borrowed» (la clase «RefCell en argumentos» de IDEAS §64).
+- **El coste de fondo de la VM no se ha tocado**: instrucciones especializadas por tipo exigen
+  cambiar el formato del bytecode (solo el de Rust: el selfhost tiene el suyo y la paridad es de
+  comportamiento). Queda descrito, no empezado.

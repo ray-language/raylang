@@ -242,14 +242,6 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     out.push_str("static __RAY_LIMIT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1024);\n");
     out.push_str("fn __ray_init_depth_limit() { __RAY_LIMIT.store(__ray_max_depth(), std::sync::atomic::Ordering::Relaxed); }\n");
     out.push_str("#[inline(always)] fn __ray_enter() -> __RayFrame { let p = __ray_depth_cell(); let d = unsafe { &*p }; let n = d.get() + 1; d.set(n); if n > __RAY_LIMIT.load(std::sync::atomic::Ordering::Relaxed) { __ray_depth_overflow(d) } __RayFrame(p) }\n");
-    // M452: las FUNCIONES que cuentan llevan la profundidad en un parámetro oculto (`__rt_dp`); el
-    // contador en memoria queda como la BASE que leen las entradas «de fuera» (el envoltorio de
-    // una función llamada desde código que no cuenta, o como valor) y las closures con guard. La
-    // función lo publica solo antes de una llamada que puede volver a entrar en código raylang.
-    out.push_str("#[inline(always)] fn __ray_depth_get() -> u32 { unsafe { (*__ray_depth_cell()).get() } }\n");
-    out.push_str("#[inline(always)] fn __ray_depth_set(n: u32) { unsafe { (*__ray_depth_cell()).set(n) } }\n");
-    out.push_str("#[inline(always)] fn __ray_depth_check(n: u32) { if n > __RAY_LIMIT.load(std::sync::atomic::Ordering::Relaxed) { __ray_depth_limit_hit() } }\n");
-    out.push_str("#[cold] #[inline(never)] fn __ray_depth_limit_hit() -> ! { __ray_rt_err(&format!(\"stack overflow (recursion too deep: {} frames; RAYLANG_MAX_DEPTH raises the limit)\", __RAY_LIMIT.load(std::sync::atomic::Ordering::Relaxed))) }\n");
     out.push_str("#[cold] #[inline(never)] fn __ray_depth_overflow(d: &std::cell::Cell<u32>) -> ! { d.set(d.get() - 1); __ray_rt_err(&format!(\"stack overflow (recursion too deep: {} frames; RAYLANG_MAX_DEPTH raises the limit)\", __RAY_LIMIT.load(std::sync::atomic::Ordering::Relaxed))) }\n");
     // M130: exit(code) — termina el PROCESO, byte-idéntico a la VM. OJO (M132): el print nativo
     // va por el HILO ESCRITOR de M96f — flushear std::io::stdout() aquí era el buffer equivocado
@@ -279,19 +271,14 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
         out.push_str("fn __ray_in_try() -> bool { __ray_ctx(|c| c.in_try > 0) }\n");
         out.push_str("fn __ray_try_call<F: FnOnce()>(f: F) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n");
         out.push_str("    __ray_ctx(|c| c.in_try += 1);\n");
-        // M452: un error que desenrolla no pasa por los envoltorios que restauran el contador.
-        out.push_str("    let __rt_dsave = __ray_depth_get();\n");
         out.push_str("    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));\n");
-        out.push_str("    __ray_depth_set(__rt_dsave);\n");
         out.push_str("    __ray_ctx(|c| c.in_try -= 1);\n");
     } else {
         out.push_str("thread_local! { static __RAY_IN_TRY: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }\n");
         out.push_str("fn __ray_in_try() -> bool { __RAY_IN_TRY.with(|d| d.get() > 0) }\n");
         out.push_str("fn __ray_try_call<F: FnOnce()>(f: F) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n");
         out.push_str("    __RAY_IN_TRY.with(|d| d.set(d.get() + 1));\n");
-        out.push_str("    let __rt_dsave = __ray_depth_get();\n");
         out.push_str("    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));\n");
-        out.push_str("    __ray_depth_set(__rt_dsave);\n");
         out.push_str("    __RAY_IN_TRY.with(|d| d.set(d.get() - 1));\n");
     }
     out.push_str("    Rc::new(std::cell::RefCell::new(match r {\n");

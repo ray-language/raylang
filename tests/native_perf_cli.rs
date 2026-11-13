@@ -323,12 +323,12 @@ fn hoisting_and_push_respect_assignments_inside_value_blocks() {
     );
 }
 
-/// M452: la profundidad de recursión como parámetro oculto corta donde corta la VM — recursión
-/// profunda bajo el límite, de cola (no cuenta marcos), mutua, a través de un valor función y de
-/// una función que no cuenta, un desbordamiento atrapado por `try_call` (y la cuenta sigue bien
-/// después) y closures que vuelven a entrar desde un builtin.
+/// El límite de recursión corta donde corta la VM — recursión profunda bajo el límite, de cola
+/// (no cuenta marcos), mutua, a través de un valor función y de una función que no cuenta, un
+/// desbordamiento atrapado por `try_call` (y la cuenta sigue bien después) y closures que vuelven
+/// a entrar desde un builtin. (Escrito para M452, que se retiró: lo debe pasar cualquier esquema.)
 #[test]
-fn recursion_depth_by_parameter_matches_the_vm() {
+fn recursion_depth_matches_the_vm() {
     engines(
         "depth_param",
         r#"fn down(n: int) -> int { if (n == 0) { 0 } else { 1 + down(n - 1) } }
@@ -350,6 +350,75 @@ fn main() {
 }
 "#,
         "900\n1000000\ntrue\n901\n800\nResult.Err(stack overflow (recursion too deep: 1024 frames; RAYLANG_MAX_DEPTH raises the limit))\n1000\n[100, 200, 300]\n",
+        false,
+    );
+}
+
+/// Arco de la VM: `m.get(k).unwrap_or(d)` se funde en la búsqueda directa cuando `d` no lleva
+/// llamadas; con un default que MODIFICA el mapa (`unwrap_or(put(m))`) no se funde y el orden es
+/// el de siempre (buscar, luego evaluar el default) — también en nativo, donde ese caso moría con
+/// «RefCell already borrowed».
+#[test]
+fn map_get_with_default_is_fused_only_when_the_default_has_no_calls() {
+    engines(
+        "map_get_or",
+        r#"struct S { d: int, }
+fn put(m: Map<string, int>) -> int { m.insert("z", 9); 7 }
+fn main() {
+    let m: Map<string, int> = Map.new();
+    m.insert("a", 1);
+    let s = S { d: 5 };
+    print(m.get("a").unwrap_or(0) + m.get("b").unwrap_or(s.d * 2));
+    print(m.get("z").unwrap_or(put(m)));
+    print(m.get("z").unwrap_or(0));
+    let mi: Map<int, string> = Map.new();
+    mi.insert(1, "x");
+    print(mi.get(1).unwrap_or("none") + mi.get(2).unwrap_or("none"));
+    print(get(m, "a").unwrap_or(-1));
+}
+"#,
+        "11\n7\n9\nxnone\n1\n",
+        true,
+    );
+}
+
+/// Revisión previa a 1.27.97. (1) Una variable local de tipo función llamada `get` no es el `get`
+/// del prelude: no se funde con `unwrap_or`. (2) `get_or` evalúa mapa, clave y default en ese
+/// orden en los tres motores. (3) Los casos que tumbaron M452 — una llamada recursiva dentro de
+/// los argumentos de otra que vuelve a entrar, un iterador consumido tras una recursión profunda
+/// y un trampolín de cola a través de un valor función — cuentan marcos como la VM.
+#[test]
+fn review_1_27_97_cases_match_on_all_engines() {
+    engines(
+        "review_1_27_97",
+        r#"fn lookup(get: fn(string, int) -> Option<int>) -> int { get("a", 1).unwrap_or(0) }
+fn key() -> string { print("key"); "a" }
+fn def() -> int { print("default"); 5 }
+fn the_map(m: Map<string, int>) -> Map<string, int> { print("map"); m }
+fn down(n: int) -> int { if (n == 0) { 0 } else { 1 + down(n - 1) } }
+fn helper(n: int) -> int { n }
+fn walk(n: int) -> int { if (n == 0) { 0 } else { helper(1) + walk(n - 1) } }
+fn run(f: fn(int) -> int, n: int) -> int { f(n) }
+fn tramp(k: fn(int, int) -> int, n: int, acc: int) -> int { if (n == 0) { acc } else { k(n - 1, helper(acc) + 1) } }
+fn deep(n: int, f: fn() -> int) -> int { if (n == 0) { f() } else { 1 + deep(n - 1, f) } }
+fn step(n: int, acc: int) -> int { tramp(step, n, acc) }
+fn main() {
+    print(lookup(fn(a: string, b: int) -> Option<int> { Option.Some(b + 41) }));
+    let get = fn(a: int, b: int) -> Option<int> { Option.Some(a + b) };
+    print(get(1, 2).unwrap_or(0));
+    let m: Map<string, int> = Map.new();
+    print(m.get_or(key(), def()));
+    print(the_map(m).get_or(key(), def()));
+    print(run(fn(k: int) -> int { down(k) }, walk(600)));
+    print(deep(900, fn() -> int { 1 }));
+    let it = [1, 2, 3].iter().map(fn(x: int) -> int { down(100) + x });
+    var s = 0;
+    for v in it { s = s + v; }
+    print(s);
+    print(step(5000, 0));
+}
+"#,
+        "42\n3\nkey\ndefault\n5\nmap\nkey\ndefault\n5\n600\n901\n306\n5000\n",
         false,
     );
 }

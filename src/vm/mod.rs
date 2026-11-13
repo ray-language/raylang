@@ -228,8 +228,9 @@ struct Vm<'a> {
     shared: Arc<Mutex<Shared>>,
     /// M42.1: **fuel** — presupuesto de instrucciones restante (límite de recursos para embeber raylang
     /// como lenguaje de scripts confinado). Decrece una por instrucción; al llegar a 0 se aborta con un
-    /// error limpio. `u64::MAX` = **sin límite** (el default): nunca se agota en la práctica, así que el
-    /// coste es un decremento + comparación por instrucción, sin ramas.
+    /// error limpio. `u64::MAX` = **sin límite** (el default): con él NO se descuenta (M453: una
+    /// comparación por instrucción, sin escritura) — el campo no sirve entonces para contar
+    /// instrucciones ejecutadas.
     fuel: u64,
     /// M330 D1: cuenta atrás de **saltos hacia atrás** (bucles) hasta la próxima consulta de la parada
     /// cooperativa (`stop::requested`). Se toca SOLO en el brazo de `Jump` cuando salta hacia atrás — el
@@ -397,7 +398,9 @@ impl<'a> Vm<'a> {
             // M190: la fibra despertó con un error pendiente (su `send` bloqueado vio cerrarse el
             // canal): se lanza en la instrucción que la aparcó (el `ip` ya apunta tras ella) y sigue
             // el camino normal de errores (try_call, fallo de la fibra, o fin del programa si es main).
-            if let Some(msg) = self.cur.pending_error.take() {
+            // (`is_some` antes de `take`: `take` ESCRIBE el campo en cada instrucción.)
+            if self.cur.pending_error.is_some() {
+                let msg = self.cur.pending_error.take().unwrap_or_default();
                 let fi = self.cur.frames.len().saturating_sub(1);
                 let (l, c) = self.cur.frames.get(fi).map(|f| {
                     let ip = f.ip.saturating_sub(1);
@@ -419,21 +422,29 @@ impl<'a> Vm<'a> {
                 }
             }
 
+            // El marco en curso se lee UNA vez (una sola comprobación de límites para sus tres campos).
             let fi = self.cur.frames.len() - 1;
-            let func = self.cur.frames[fi].function;
-            let ip = self.cur.frames[fi].ip;
-            let base = self.cur.frames[fi].locals_base; // V12: base del marco, UNA vez por instrucción
+            let (func, ip, base) = {
+                let fr = &self.cur.frames[fi];
+                (fr.function, fr.ip, fr.locals_base) // V12: base del marco, UNA vez por instrucción
+            };
 
             // M42.1: fuel. Sin límite (`u64::MAX`) nunca dispara; con límite, aborta al agotarse. La
             // posición es la de la instrucción en curso (para el diagnóstico).
-            if self.fuel == 0 {
-                let (l, c) = program.functions[func].chunk.lines.get(ip).copied().unwrap_or((0, 0));
-                return Err(runtime_error(l, c, "instruction limit exhausted (fuel)"));
+            // Sin límite no se descuenta (una escritura menos por instrucción).
+            if self.fuel != u64::MAX {
+                if self.fuel == 0 {
+                    let (l, c) = program.functions[func].chunk.lines.get(ip).copied().unwrap_or((0, 0));
+                    return Err(runtime_error(l, c, "instruction limit exhausted (fuel)"));
+                }
+                self.fuel -= 1;
             }
-            self.fuel -= 1;
 
+            // El código de la función, UNA vez: el fin de chunk y la lectura de la instrucción
+            // comparten la comprobación de límites.
+            let code = &program.functions[func].chunk.code;
             // Robustez: si se acabó el chunk sin Return (no debería), retorna unit.
-            if ip >= program.functions[func].chunk.code.len() {
+            if ip >= code.len() {
                 if let Some(frame) = self.cur.frames.pop() {
                     self.cur.stack.truncate(frame.stack_base);
                     self.cur.locals.truncate(frame.locals_base); // V12
@@ -450,7 +461,7 @@ impl<'a> Vm<'a> {
 
             // La instrucción se toma PRESTADA del programa (Opt.1: sin clonar). `instr` vive lo que
             // `program` (toda la VM), así que no estorba a las mutaciones de `self` del cuerpo.
-            let instr = &program.functions[func].chunk.code[ip];
+            let instr = &code[ip];
             self.cur.frames[fi].ip = ip + 1; // avance por defecto; los saltos lo cambian
 
             // M12.3: ejecutamos la instrucción dentro de un cierre que devuelve `Ok(Some(v))` (fin del
@@ -5487,6 +5498,7 @@ impl<'a> Vm<'a> {
         }
     }
 
+    #[inline(always)]
     fn get_local(&self, base: usize, slot: usize) -> HeapValue {
         match &self.cur.locals[base + slot] {
             Local::Plain(v) => v.clone(),
@@ -5494,6 +5506,7 @@ impl<'a> Vm<'a> {
         }
     }
 
+    #[inline(always)]
     fn set_local(&mut self, base: usize, slot: usize, v: HeapValue) {
         match &self.cur.locals[base + slot] {
             Local::Boxed(h) => {
@@ -5713,18 +5726,22 @@ impl<'a> Vm<'a> {
 
     // ----- Pila de operandos -----
 
+    #[inline(always)]
     fn push(&mut self, v: HeapValue) {
         self.cur.stack.push(v);
     }
 
+    #[inline(always)]
     fn pop(&mut self) -> HeapValue {
         self.cur.stack.pop().expect("empty stack: malformed bytecode")
     }
 
+    #[inline(always)]
     fn peek(&self) -> &HeapValue {
         self.cur.stack.last().expect("empty stack: malformed bytecode")
     }
 
+    #[inline(always)]
     fn pop_int(&mut self) -> i64 {
         match self.pop() {
             HeapValue::Int(n) => n,
@@ -5732,6 +5749,7 @@ impl<'a> Vm<'a> {
         }
     }
 
+    #[inline(always)]
     fn pop_obj(&mut self) -> Handle {
         match self.pop() {
             HeapValue::Obj(h) => h,

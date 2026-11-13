@@ -3868,3 +3868,69 @@ fn round5_float_guard_oracle() {
     "#,
     );
 }
+
+// ── M454: rondas 6 y 7 (operandos direccionados, campos por posición, match sin pila) ──
+
+/// Las formas que el arco funde SE EMITEN (si una ronda anterior dejara de producir su entrada,
+/// la salida seguiría siendo correcta por el camino genérico y la ganancia se perdería en silencio).
+#[test]
+fn rounds_6_and_7_emit_their_instructions() {
+    let src = r#"
+        struct P { x: int, y: int, }
+        enum E { A(int), B, }
+        fn pick(e: E, p: P) -> int {
+            let base = p.x;
+            match (e) {
+                E.A(v) => v + base,
+                E.B => base,
+            }
+        }
+        fn scale(a: float, b: float) -> float {
+            var t = a * b;
+            t = t + a;
+            if (t * t < 4.0) { t = t - 1.0; }
+            t
+        }
+        fn main() -> int {
+            let n = pick(E.A(2), P { x: 3, y: 4 }) + pick(E.B, P { x: 1, y: 1 });
+            if (scale(1.0, 0.5) < 2.0) { n } else { 0 }
+        }
+    "#;
+    assert!(has_op(src, |op| matches!(op, OpCode::Arith(..))), "a * b entre locales");
+    assert!(has_op(src, |op| matches!(op, OpCode::ArithSet(..))), "t = t + a");
+    assert!(has_op(src, |op| matches!(op, OpCode::ArithStack(..))), "… - 1.0 / … + base");
+    assert!(has_op(src, |op| matches!(op, OpCode::CmpJumpSrc(..))), "… < 4.0");
+    assert!(has_op(src, |op| matches!(op, OpCode::LocalField(..))), "p.x");
+    assert!(has_op(src, |op| matches!(op, OpCode::LocalTagJump(..))), "brazo de match");
+    assert!(has_op(src, |op| matches!(op, OpCode::EnumFieldToLocal(..))), "ligadura del payload");
+    assert!(has_op(src, |op| matches!(op, OpCode::ReturnLocal(..))), "retorno de un local");
+    assert!(!has_op(src, |op| matches!(op, OpCode::EnumTagEq(..))), "ninguna prueba de variante por la pila");
+    oracle_program(src);
+}
+
+/// La tabla de campos: un nombre con la misma posición en todos sus structs no ocupa fila; uno
+/// con posiciones distintas se resuelve por struct.
+#[test]
+fn field_positions_are_resolved_per_struct_only_when_they_differ() {
+    use crate::bytecode::{field_positions, CompiledStruct, NO_FIELD};
+    let st = |name: &str, fields: &[&str]| CompiledStruct { name: name.into(), fields: fields.iter().map(|f| f.to_string()).collect() };
+    let structs = [st("A", &["id", "name"]), st("B", &["name", "id"]), st("C", &["id", "z"])];
+    let names: Vec<String> = ["z", "id", "name"].iter().map(|n| n.to_string()).collect();
+    let (same, table) = field_positions(&names, &structs);
+    assert_eq!(same, vec![1, NO_FIELD, NO_FIELD], "z siempre en 1; id y name difieren");
+    assert!(table[0].is_empty(), "un campo uniforme no ocupa fila");
+    assert_eq!(table[1], vec![0, 1, 0]);
+    assert_eq!(table[2], vec![1, 0, NO_FIELD]);
+    oracle_program(
+        r#"
+        struct A { id: int, name: int, }
+        struct B { name: int, id: int, }
+        fn main() -> int {
+            let a = A { id: 1, name: 20 };
+            var b = B { name: 300, id: 4000 };
+            b.id = b.id + a.name;
+            a.id + a.name + b.name + b.id
+        }
+    "#,
+    );
+}

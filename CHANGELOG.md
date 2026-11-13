@@ -4,6 +4,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## 1.27.98 — 2026-11-14
+
+- **La VM es más rápida en bucles, structs y `match` (M454)**. La aritmética sobre variables
+  locales, las guardas de `if`/`while`, el acceso a campos y los brazos de un `match` sobre enum
+  (también `Option` y `Result`) se ejecutan en menos instrucciones y sin copiar valores: un bucle
+  entero cuesta un 40 % menos, un `match` sobre enum menos de la mitad, y leer un campo un 30 %
+  menos; un programa completo, en torno a un 20 % menos. `ray run`, `ray test` y `ray dev` lo notan; los binarios nativos no cambian.
+
 ## 1.27.97 — 2026-11-14
 
 - **`m.get(k).unwrap_or(d)` es 3–4× más rápido en la VM (M453)**: la lectura con valor por defecto

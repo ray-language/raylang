@@ -2982,3 +2982,109 @@ espejo en raylang, `selfhost/compiler.ray` + `selfhost/vm.ray`, tiene su PROPIO 
 paridad con él es de comportamiento — misma salida, mismo código de salida —, así que no hay que
 tocarlo; una primera versión de esta nota decía lo contrario.) Arco propio, con plan; no se ha
 empezado.
+
+## 29. M454 (nov 2026): la VM, segunda pasada — instrucciones que no pasan por la pila
+
+El §28 dejó escrita la palanca como «instrucciones especializadas por tipo». Antes de construir la
+tabla de tipos checker → compilador se midió qué parte del coste era el tipo:
+
+| Bucle (100 M de vueltas) | instrucciones por vuelta | ns por vuelta |
+|---|---|---|
+| `while (i < n) { i = i + 1; }` | 2 (`LocalLocalCmpJump`, `IncJump`) | 7,0 |
+| `while (i < n) { s = s + i; i = i + 1; }` | 5 (+ `GetLocalLocal`, `Add`, `SetLocal`) | 22,7 |
+
+Las dos instrucciones del primer bucle ya leían sus locales por referencia (V11) y cuestan 3,5 ns;
+las tres que añade el segundo cuestan 5,2 ns cada una. Lo caro no es mirar la etiqueta del valor
+sino moverlo: clonar el local a la pila, sacarlo, y volver a escribirlo. Y eso no lo arregla
+conocer el tipo (sin `unsafe`, el `clone` y el `drop` siguen ahí) sino no moverlo.
+
+**Lo que se hizo** — todo como rondas de mirilla sobre el bytecode de pila; el detalle del diseño
+en `DESIGN.md` §430:
+
+1. **Aritmética y guardas con operandos direccionados**: `s = s + i` es una instrucción
+   (`ArithSet`); `a * b` entre locales o con una constante, otra (`Arith`); `… + x` con el
+   izquierdo ya en la pila, `ArithStack`; `… < 4.0`, `CmpJumpSrc`. `CmpJump` no tenía camino
+   rápido de `float`.
+2. **Campos por posición** (`CompiledProgram::field_at`) y `LocalField` para `p.x`.
+3. **`match` sobre enum sin pila**: `LocalTagJump`, `EnumFieldToLocal`, `CopyLocal`, y el `unit`
+   de cada brazo que ya no se empuja.
+
+**Micro** (`benchmarks/probe/micro.ray`, ns por operación en la VM, mediana de 3; M3 Pro):
+
+| Operación | 1.27.97 | M454 | |
+|---|---|---|---|
+| `while` / `for` sobre enteros | 25,8 | 15,4 | 0,60× |
+| aritmética `float` | 36,7 | 25,3 | 0,69× |
+| guarda `float` (`zr*zr + zi*zi < 4.0`) | 76,6 | 46,5 | 0,61× |
+| leer un campo | 63,5 | 45,1 | 0,71× |
+| escribir un campo | 48,7 | 36,3 | 0,75× |
+| leer y escribir campos `float` | 74,9 | 46,7 | 0,62× |
+| `match` sobre un enum | 171,0 | 76,3 | 0,45× |
+| crear un enum y hacer `match` | 213,0 | 110,1 | 0,52× |
+| `match` sobre `Option` | 169,4 | 111,1 | 0,66× |
+| `?` sobre `Result` | 297,0 | 201,7 | 0,68× |
+| `for x in arr` | 40,1 | 30,4 | 0,76× |
+| structs en un arreglo, leer y escribir | 100,0 | 79,8 | 0,80× |
+| método de trait (estático / `dyn`) | 143,2 / 228,6 | 122,4 / 170,7 | 0,85× / 0,75× |
+| llamar a una función / a una closure | 48,0 / 64,4 | 49,0 / 66,2 | = |
+| las 43 operaciones (media geométrica) | 1,000 | 0,849 | |
+
+Strings, mapas, arreglos indexados, canales y `spawn` quedan dentro del ruido (±3 %): su coste
+está en el primitivo, no en el despacho.
+
+**Programas completos** (`benchmarks/probe/`, ms en la VM, mediana de 5):
+
+| sonda | 1.27.97 | M454 | |
+|---|---|---|---|
+| structs | 680 | 433 | 0,64× |
+| mandel | 2359 | 1645 | 0,70× |
+| results | 2151 | 1532 | 0,71× |
+| enums | 1124 | 825 | 0,73× |
+| traits | 1978 | 1467 | 0,74× |
+| bytesum | 629 | 498 | 0,79× |
+| mapstruct | 1001 | 792 | 0,79× |
+| queens | 254 | 215 | 0,84× |
+| sortst | 3259 | 2787 | 0,86× |
+| strbuild | 76 | 68 | 0,90× |
+| grid | 789 | 720 | 0,91× |
+| chan | 978 | 899 | 0,92× |
+| hof | 2694 | 2478 | 0,92× |
+| strappend | 170 | 167 | 0,98× |
+| strscan | 513 | 500 | 0,98× |
+| **media geométrica** | | | **0,82×** |
+
+**Segunda tanda: las llamadas, medidas por partes.** Un bucle que llama a `fn f0() -> int { 1 }`
+cuesta 26 ns más que el bucle solo, pero `Call` + `Return` son ~12 ns de eso: el resto es lo de
+alrededor. Cada argumento añade 4–6 ns y cada `let b = a` del cuerpo, 8. Tres cambios:
+
+- **Una ligadura de patrón ES su local.** `Variant(v)`, `P { x }` y `(a, b)` extraían cada
+  posición a un temporal `$sub` y lo copiaban al nombre: una instrucción y un clon por ligadura.
+- **`ReturnLocal`**: `[GetLocal, Return]` saca el valor del local (el marco muere ahí) en vez de
+  clonarlo.
+- **`CallValue` sin `Vec`**: llamar a una closure reservaba un vector por llamada para invertir
+  los argumentos; ahora el llamado se lee bajo ellos y pasan directos a los locales.
+
+En el micro, `match` sobre enum 76,3 → 67,1 y `Option` 111,1 → 105,2; el resto, plano. En las
+sondas completas (contra 1.27.97, con todo el arco y las correcciones de la revisión): `structs`
+0,64×, `results` 0,66×, `traits` 0,68×, `mandel` 0,70×, `enums` 0,71×, `hof` 0,83× (era 0,92×),
+`sortst` 0,85×; **media geométrica 0,81×**. Micro: 0,84×.
+
+**Medido y descartado:**
+
+- *Mover los argumentos en bloque* (`locals.extend(stack.drain(..))`): la llamada directa empeora
+  (48 → 52 ns); el `pop` + escritura por argumento es más barato que el iterador.
+- *Despacho en dos niveles* (las ~20 instrucciones más ejecutadas en una función compacta, el
+  resto fuera de línea): las calientes mejoran un 10–17 %, pero todo lo demás paga la llamada
+  (+8–15 ns por instrucción: `array_index` 1,56×, `bytes_index` 1,49×). Media geométrica 1,12×.
+- *`Return` fuera de línea*: +5–10 % en operaciones que ni siquiera retornan.
+
+Estos dos últimos enseñan lo mismo: a esta escala la colocación del código dentro del bucle de
+despacho mueve ±10 % operaciones que no se han tocado. Una operación suelta del micro no es
+evidencia; se juzga por la media geométrica y por las sondas completas.
+
+**Lo que queda.** (1) La cabecera del bucle de despacho (3,5 ns por instrucción: `stop`, error
+pendiente, GC, marco, combustible, fin de chunk). Es ya la mayor parte del coste de las
+instrucciones fundidas, y bajarla exige otra forma de bucle (marco cacheado entre instrucciones),
+no más fusiones. (2) No abrir marco para funciones diminutas — cambia las trazas de error, así
+que solo vale para cuerpos que no pueden fallar. (3) La tabla de tipos del checker sigue sin
+hacer falta; se construirá si una instrucción la necesita de verdad.

@@ -20100,3 +20100,17 @@ Rendimiento, con detalle y cifras en `PERFORMANCE.md` §27. Lo que importa para 
 - **Dos errores del primer intento**, cazados por la batería completa antes de empujar: una
   variable local con el nombre de una función que cuenta (`f: fn(…)` con una `fn f` global) se
   tomaba por la función; y el cuerpo de `spawn` heredaba la profundidad del creador.
+
+## 429. M453 — la VM, primera pasada (nov 2026)
+
+Rendimiento; cifras y diagnóstico en `PERFORMANCE.md` §28. Para el contrato:
+
+- **Una fusión más en el pase D3**: `get(m, k).unwrap_or(d)` → `__get_or(m, k, d)` cuando `d` no
+  lleva llamadas ni bloques. La condición no es una optimización sino corrección: la forma fundida
+  evalúa `d` antes de buscar. La guarda `PreludeOrigin::get_fn` la apaga si el usuario redefine
+  `get` o `get_or`.
+- **Nativo: el préstamo de un `get` termina en el `get`.** El resultado se liga a un temporal, y
+  `get_or` evalúa su default antes de prestar el mapa. Antes un default que modificaba el mapa
+  moría con «RefCell already borrowed» (la clase «RefCell en argumentos» de IDEAS §64).
+- **El coste de fondo de la VM no se ha tocado**: instrucciones especializadas por tipo exigen
+  cambiar el formato del bytecode y su espejo selfhost. Queda descrito, no empezado.

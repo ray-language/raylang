@@ -2930,3 +2930,48 @@ El resto, dentro del ruido de la corrida (±5 %; `jsonserialize` +9 % sin una so
 en su bucle — comprobado en el código generado —: es memoria, no este cambio). En el banco de
 sondeo `queens`, `results` y los demás no se mueven: su recursión es poco profunda o pasa por
 valores función.
+
+## 28. M453 (nov 2026): la VM, primera pasada — lo acotado, y dónde está el coste de fondo
+
+El banco de sondeo (§26) dejó a la VM entre 20× y 360× del nativo y entre 18× y 75× de Node.
+Antes de plantear un rediseño se atacó lo que tenía pinta de anomalía.
+
+**Lo que se hizo** (ns por operación en la VM, `benchmarks/probe/micro.ray`, mediana de 3):
+
+| Cambio | Antes | Ahora |
+|---|---|---|
+| `m.get(k).unwrap_or(d)`, clave `int` | 414 | 140 |
+| `m.get(k).unwrap_or(d)`, clave `string` | 308 | 81 |
+| las 43 operaciones del micro (media geométrica) | 1,000 | 0,944 |
+
+- **`get` + `unwrap_or` fundidos.** `get` es una función del prelude escrita en raylang: llama a
+  `__map_get` (que devuelve un arreglo), mira su longitud, construye un `Option`, y `unwrap_or` lo
+  desmonta con un `match` — dos marcos y dos reservas por lectura. El pase de fusiones D3 (que ya
+  cubría `index_of(…).unwrap_or(d)`) reescribe ahora `get(m, k).unwrap_or(d)` a `__get_or(m, k,
+  d)`, el primitivo de `get_or`. Solo con un default SIN llamadas: la forma fundida evalúa `d`
+  antes de buscar, y un default que modificara el mapa cambiaría el resultado. Vale para los tres
+  motores (la bajada es del checker).
+- **La cabecera del bucle de despacho.** Cada instrucción escribía `pending_error` (un `take()`
+  incondicional), descontaba `fuel` aunque no hubiera límite, leía el marco en curso con tres
+  comprobaciones de límites y volvía a indexar el código de la función dos veces. Ahora: `is_some`
+  antes de `take`, sin descuento cuando `fuel` es ilimitado, el marco y el código leídos una vez; y
+  `push`/`pop`/locales con `#[inline(always)]` (eran llamadas reales desde cientos de sitios).
+  Todo junto, −5,6 %.
+
+**Lo que NO es una anomalía.** Un `while (i < n) { s = s + i; i = i + 1; }` son cinco
+instrucciones por vuelta (`LocalLocalCmpJump`, `GetLocalLocal`, `Add`, `SetLocal`, `IncJump`) y
+cuesta 26 ns: ~5 ns por instrucción, unos 18 ciclos, donde un intérprete de bytecode afinado gasta
+3–5. No hay un sitio que lo explique: es la suma de la cabecera por instrucción, el `Result<Option
+<HeapValue>>` que devuelve cada una, y sobre todo mover valores con etiqueta — `HeapValue` no es
+`Copy` (lleva `Arc<str>`/`Arc<[u8]>`), así que cada lectura de local es un `clone()` fuera de
+línea y cada escritura un `drop`, y cada operación aritmética vuelve a mirar la etiqueta de sus
+operandos. Una función que devuelve `Option`/`Result` (200–300 ns) es simplemente muchas de esas
+instrucciones.
+
+**La palanca que queda** es la del §2 («el activo estratégico: tipos estáticos + erasure»): el
+checker conoce el tipo de cada expresión y el compilador de bytecode no lo usa. Con él se pueden
+emitir instrucciones especializadas (`AddInt` sobre locales enteros sin etiqueta ni clon, campos
+por posición en vez de por nombre — hoy `GetField` compara strings contra la definición del
+struct, ~15 ns por acceso). Es un cambio de formato del bytecode: toca el compilador de Rust y su
+espejo en raylang (`selfhost/compiler.ray`), que deben seguir emitiendo lo mismo. Arco propio, con
+plan; no se ha empezado.

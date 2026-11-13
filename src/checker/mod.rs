@@ -377,6 +377,8 @@ pub(super) struct PreludeOrigin {
     pub(super) index_of_fn: bool,
     pub(super) last_index_of_fn: bool,
     pub(super) parse_int_fn: bool,
+    /// ¿El `fn get` (Map) en el programa es el del prelude? (fusión `get(m, k).unwrap_or(d)`.)
+    pub(super) get_fn: bool,
     /// D3: ¿el `unwrap_or` que resolverá como `Option#unwrap_or` es el del prelude? (el usuario no
     /// redefinió el trait `OptionOps` ni aporta su propio `impl OptionOps for Option`).
     pub(super) unwrap_or_impl: bool,
@@ -413,6 +415,7 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
     // fusión correspondiente no aplica (la suya puede tener OTRA semántica).
     let mut origin = PreludeOrigin {
         sort_fn: !defined.contains("sort"),
+        get_fn: !defined.contains("get") && !defined.contains("get_or"),
         index_of_fn: !defined.contains("index_of"),
         last_index_of_fn: !defined.contains("last_index_of"),
         parse_int_fn: !defined.contains("parse_int"),

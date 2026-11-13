@@ -353,3 +353,31 @@ fn main() {
         false,
     );
 }
+
+/// Arco de la VM: `m.get(k).unwrap_or(d)` se funde en la búsqueda directa cuando `d` no lleva
+/// llamadas; con un default que MODIFICA el mapa (`unwrap_or(put(m))`) no se funde y el orden es
+/// el de siempre (buscar, luego evaluar el default) — también en nativo, donde ese caso moría con
+/// «RefCell already borrowed».
+#[test]
+fn map_get_with_default_is_fused_only_when_the_default_has_no_calls() {
+    engines(
+        "map_get_or",
+        r#"struct S { d: int, }
+fn put(m: Map<string, int>) -> int { m.insert("z", 9); 7 }
+fn main() {
+    let m: Map<string, int> = Map.new();
+    m.insert("a", 1);
+    let s = S { d: 5 };
+    print(m.get("a").unwrap_or(0) + m.get("b").unwrap_or(s.d * 2));
+    print(m.get("z").unwrap_or(put(m)));
+    print(m.get("z").unwrap_or(0));
+    let mi: Map<int, string> = Map.new();
+    mi.insert(1, "x");
+    print(mi.get(1).unwrap_or("none") + mi.get(2).unwrap_or("none"));
+    print(get(m, "a").unwrap_or(-1));
+}
+"#,
+        "11\n7\n9\nxnone\n1\n",
+        true,
+    );
+}

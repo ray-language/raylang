@@ -1132,7 +1132,7 @@ fn collect_concat(e: Expr, sites: &std::collections::HashSet<(usize, usize)>, ou
 
 pub(super) fn lower_prelude_fusions(program: &mut Program, origin: &PreludeOrigin) {
     let sort_on = origin.sort_fn && !origin.ord_prims.is_empty();
-    let or_on = origin.unwrap_or_impl && (origin.index_of_fn || origin.last_index_of_fn || origin.parse_int_fn);
+    let or_on = origin.unwrap_or_impl && (origin.index_of_fn || origin.last_index_of_fn || origin.parse_int_fn || origin.get_fn);
     if !sort_on && !or_on {
         return;
     }
@@ -1203,6 +1203,13 @@ fn lower_fusion_expr(expr: &mut Expr, origin: &PreludeOrigin) {
                         }
                         ExprKind::Ident(w) if w == "parse_int" && iargs.len() == 1 && origin.parse_int_fn => {
                             Some("__parse_int_or")
+                        }
+                        // Arco de la VM (nov 2026): `m.get(k).unwrap_or(d)` → `__get_or(m, k, d)`, el
+                        // primitivo de `get_or` (una búsqueda, sin el arreglo de `__map_get` ni el
+                        // `Option`). Solo con un default SIN llamadas: la forma fusionada evalúa `d`
+                        // antes de buscar, y un `d` que modificara el mapa cambiaría el resultado.
+                        ExprKind::Ident(w) if w == "get" && iargs.len() == 2 && origin.get_fn && call_free(&args[1]) => {
+                            Some("__get_or")
                         }
                         _ => None,
                     },
@@ -1531,3 +1538,15 @@ fn lower_print_shows_expr(expr: &mut Expr, sites: &PrintShowMap) {
     }
 }
 
+
+/// ¿Está `e` libre de llamadas (y de bloques, que pueden contenerlas)? Literales, variables,
+/// campos, índices y aritmética: evaluarlo antes o después de otra expresión no cambia nada.
+fn call_free(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Int(..) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Char(_) | ExprKind::Ident(_) => true,
+        ExprKind::Unary { expr, .. } | ExprKind::Cast { expr, .. } => call_free(expr),
+        ExprKind::Binary { left, right, .. } => call_free(left) && call_free(right),
+        ExprKind::Field { object, .. } => call_free(object),
+        _ => false,
+    }
+}

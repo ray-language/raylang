@@ -2091,19 +2091,27 @@ impl Transpiler {
             // get_or(m, k, default) — el del prelude lleva 3 args; un `get_or` con otra aridad no es este
             // builtin → cae al fallback (evita el pánico por `eff[2]` inexistente).
             "get_or" if eff.len() == 3 => {
+                // El default se evalúa ANTES de prestar el mapa (orden de la VM: mapa, clave,
+                // default, y luego la búsqueda): un default que lo modifica (`m.get_or(k, put(m))`)
+                // chocaba con el préstamo vivo — «RefCell already borrowed».
+                out.push_str("{ let __rt_d = ");
+                self.emit_expr(out, eff[2])?;
+                out.push_str("; ");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow().get(");
                 self.emit_map_key_ref(out, eff[1])?;
-                out.push_str(").cloned().unwrap_or(");
-                self.emit_expr(out, eff[2])?;
-                out.push(')');
+                out.push_str(").cloned().unwrap_or(__rt_d) }");
             }
             // get(m, k) → Option<V> (Rust). Se usa fusionado con `.unwrap_or(d)` (nativo de Option).
             "get" => {
+                // El resultado se liga a un temporal: el préstamo del mapa termina AQUÍ y no al
+                // final de la sentencia (`m.get(k).unwrap_or(put(m))` moría con «RefCell already
+                // borrowed» cuando el default modificaba el mapa; la VM lo permite).
+                out.push_str("{ let __rt_g = ");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow().get(");
                 self.emit_map_key_ref(out, eff[1])?;
-                out.push_str(").cloned()");
+                out.push_str(").cloned(); __rt_g }");
             }
             // remove(m, k) → Option<V> (quita y devuelve). Fusionado con unwrap_or. La clave se iza
             // antes del borrow_mut (puede leer el mismo map: `m.remove(m.keys()[0])`).

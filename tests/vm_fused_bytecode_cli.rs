@@ -159,3 +159,57 @@ fn errors_keep_their_message_and_position() {
         assert!(err.contains(want), "{name}: {err}");
     }
 }
+
+#[test]
+fn pattern_bindings_and_returns_from_locals_match_the_interpreter() {
+    let (out, _) = same_on_both(
+        "bind",
+        r#"struct P { x: int, y: int, }
+enum T { Leaf(int), Node(T, T), Pair((int, string)), Wrap(Option<P>), }
+fn sum(t: T) -> int {
+    match (t) {
+        T.Leaf(v) => v,
+        T.Node(T.Leaf(a), r) => a + sum(r),
+        T.Node(l, r) => sum(l) + sum(r),
+        T.Pair((n, s)) => n + s.len(),
+        T.Wrap(Option.Some(P { x, y })) => x * y,
+        T.Wrap(Option.None) => 0,
+    }
+}
+fn shadow(o: Option<int>) -> int {
+    let v = 100;
+    let got = match (o) {
+        Option.Some(v) => v + 1,
+        Option.None => v,
+    };
+    got + v
+}
+fn counter() -> fn() -> int {
+    var n = 0;
+    fn() -> int {
+        n = n + 1;
+        n
+    }
+}
+fn pick(a: [int], i: int) -> int {
+    let v = a[i];
+    v
+}
+fn keep(s: string) -> string {
+    let t = s + "!";
+    t
+}
+fn apply(f: fn(int, int) -> int, a: int, b: int) -> int { f(a, b) }
+fn main() {
+    let t = T.Node(T.Leaf(1), T.Node(T.Node(T.Leaf(2), T.Leaf(3)), T.Pair((4, "abc"))));
+    print("${sum(t)} ${sum(T.Wrap(Option.Some(P { x: 3, y: 5 })))} ${sum(T.Wrap(Option.None))}");
+    print("${shadow(Option.Some(1))} ${shadow(Option.None)}");
+    let c = counter();
+    let k = 10;
+    let add = fn(a: int, b: int) -> int { a + b + k };
+    print("${c()} ${c()} ${c()} ${pick([7, 8, 9], 1)} ${keep("a")} ${apply(add, 1, 2)} ${apply(fn(a: int, b: int) -> int { a * b }, 3, 4)}");
+}
+"#,
+    );
+    assert_eq!(out, "13 15 0\n102 200\n1 2 3 8 a! 13 12\n");
+}

@@ -5300,11 +5300,7 @@ impl<'a> Vm<'a> {
                     if self.cur.frames.len() >= max_frames() {
                         return Err(runtime_error(pos!().0, pos!().1, &crate::runtime::stack_overflow_message()));
                     }
-                    let base = self.push_locals(*idx);
-                    for i in (0..*argc).rev() {
-                        let v = self.pop();
-                        self.put_arg_at(base + i, v);
-                    }
+                    let base = self.open_frame_locals(*idx, *argc);
                     self.cur.frames.push(CallFrame {
                         function: *idx, ip: 0, locals_base: base, upvalues: Vec::new(), stack_base: self.cur.stack.len(),
                     });
@@ -5342,22 +5338,19 @@ impl<'a> Vm<'a> {
                     if self.cur.frames.len() >= max_frames() {
                         return Err(runtime_error(pos!().0, pos!().1, &crate::runtime::stack_overflow_message()));
                     }
-                    let mut args_rev = Vec::with_capacity(*argc);
-                    for _ in 0..*argc {
-                        args_rev.push(self.pop());
-                    }
-                    let (fn_idx, upvalues) = match self.pop() {
-                        HeapValue::Function(i) => (i, Vec::new()),
-                        HeapValue::Obj(h) => match self.cur.heap.get(h) {
+                    // M454: el llamado está BAJO sus argumentos; se lee ahí y los argumentos pasan
+                    // de la pila a los locales sin un `Vec` intermedio por llamada.
+                    let callee_at = self.cur.stack.len() - *argc - 1;
+                    let (fn_idx, upvalues) = match &self.cur.stack[callee_at] {
+                        HeapValue::Function(i) => (*i, Vec::new()),
+                        HeapValue::Obj(h) => match self.cur.heap.get(*h) {
                             Obj::Closure(c) => (c.index, c.upvalues.clone()),
                             _ => unreachable!("the checker guarantees a function"),
                         },
                         _ => unreachable!("the checker guarantees a function"),
                     };
-                    let base = self.push_locals(fn_idx);
-                    for (j, val) in args_rev.into_iter().enumerate() {
-                        self.put_arg_at(base + *argc - 1 - j, val);
-                    }
+                    let base = self.open_frame_locals(fn_idx, *argc);
+                    self.pop(); // el llamado
                     self.cur.frames.push(CallFrame {
                         function: fn_idx, ip: 0, locals_base: base, upvalues, stack_base: self.cur.stack.len(),
                     });
@@ -5448,45 +5441,60 @@ impl<'a> Vm<'a> {
                 }
 
                 OpCode::Return => {
-                    let mut result = self.pop();
-                    if profile::enabled() {
-                        self.cur.prof.leave(self.cur.frames.len());
-                    }
-                    if let Some(frame) = self.cur.frames.pop() {
-                        // El `Return` que baja `?` ocurre en mitad de una expresión: los operandos
-                        // pendientes de este marco quedan por encima de su base y hay que descartarlos,
-                        // o desalinean los argumentos de la siguiente llamada del llamador (M64.1).
-                        self.cur.stack.truncate(frame.stack_base);
-                        self.cur.locals.truncate(frame.locals_base); // V12: cierra la ventana del marco
-                    }
-                    // M97.2: ¿este `Return` cierra un `try_call`? El marcador guardó la altura de
-                    // marcos ANTES de la llamada, así que coincide justo tras sacar el marco del
-                    // cuerpo protegido. Entonces el valor que se entrega no es el del cuerpo (el
-                    // prelude ya lo guardó en su array capturado) sino `[]` = "no falló".
-                    // Una sola comparación sobre un `Vec` casi siempre vacío: el camino caliente
-                    // paga un `last()` y nada más.
-                    if self
-                        .cur
-                        .try_markers
-                        .last()
-                        .is_some_and(|m| m.frames_len == self.cur.frames.len())
-                    {
-                        self.cur.try_markers.pop();
-                        let h = self.cur.heap.allocate(Obj::Array(Vec::new()));
-                        result = HeapValue::Obj(h);
-                    }
-                    if self.cur.frames.is_empty() {
-                        // La fibra terminó: si es main → fin del programa; si es spawn → siguiente fibra.
-                        match self.on_fiber_done(result)? {
-                            Some(v) => return Ok(Some(v)),
-                            None => return Ok(None),
-                        }
-                    }
-                    self.push(result); // entregamos el valor al llamador
+                    let result = self.pop();
+                    return self.do_return(result);
+                }
+                OpCode::ReturnLocal(slot) => {
+                    // El marco muere aquí: el valor sale del slot (un `Boxed` se lee de su celda).
+                    let result = match &mut self.cur.locals[base + *slot as usize] {
+                        Local::Plain(v) => std::mem::replace(v, HeapValue::Unit),
+                        Local::Boxed(_) => self.get_local(base, *slot as usize),
+                    };
+                    return self.do_return(result);
                 }
             }
             Ok(None)
     }
+    /// El cierre de un marco con su valor ya en mano (`Return`, `ReturnLocal`).
+    #[inline(always)]
+    fn do_return(&mut self, mut result: HeapValue) -> Result<Option<HeapValue>, RuntimeError> {
+        if profile::enabled() {
+            self.cur.prof.leave(self.cur.frames.len());
+        }
+        if let Some(frame) = self.cur.frames.pop() {
+            // El `Return` que baja `?` ocurre en mitad de una expresión: los operandos
+            // pendientes de este marco quedan por encima de su base y hay que descartarlos,
+            // o desalinean los argumentos de la siguiente llamada del llamador (M64.1).
+            self.cur.stack.truncate(frame.stack_base);
+            self.cur.locals.truncate(frame.locals_base); // V12: cierra la ventana del marco
+        }
+        // M97.2: ¿este `Return` cierra un `try_call`? El marcador guardó la altura de
+        // marcos ANTES de la llamada, así que coincide justo tras sacar el marco del
+        // cuerpo protegido. Entonces el valor que se entrega no es el del cuerpo (el
+        // prelude ya lo guardó en su array capturado) sino `[]` = "no falló".
+        // Una sola comparación sobre un `Vec` casi siempre vacío: el camino caliente
+        // paga un `last()` y nada más.
+        if self
+            .cur
+            .try_markers
+            .last()
+            .is_some_and(|m| m.frames_len == self.cur.frames.len())
+        {
+            self.cur.try_markers.pop();
+            let h = self.cur.heap.allocate(Obj::Array(Vec::new()));
+            result = HeapValue::Obj(h);
+        }
+        if self.cur.frames.is_empty() {
+            // La fibra terminó: si es main → fin del programa; si es spawn → siguiente fibra.
+            match self.on_fiber_done(result)? {
+                Some(v) => return Ok(Some(v)),
+                None => return Ok(None),
+            }
+        }
+        self.push(result); // entregamos el valor al llamador
+        Ok(None)
+    }
+
     /// M79: compone la traza de llamadas a partir de los marcos vivos de la fibra en
     /// curso. La entrada 0 es el marco más interno (su nombre + la posición del error);
     /// cada llamador aporta su nombre + la posición de su llamada en vuelo: su `ip`
@@ -5604,6 +5612,18 @@ impl<'a> Vm<'a> {
                     self.cur.locals.push(Local::Plain(HeapValue::Unit));
                 }
             }
+        }
+        base
+    }
+
+    /// Abre la ventana de locales de `fn_idx` y mueve a ella los `argc` argumentos que están en
+    /// la cima de la pila (en orden). Devuelve la base del marco.
+    #[inline(always)]
+    fn open_frame_locals(&mut self, fn_idx: usize, argc: usize) -> usize {
+        let base = self.push_locals(fn_idx);
+        for i in (0..argc).rev() {
+            let v = self.pop();
+            self.put_arg_at(base + i, v);
         }
         base
     }

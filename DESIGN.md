@@ -20138,6 +20138,9 @@ tipo» (§429) y la medición lo reorientó antes de escribir código:
   genéricas siguen existiendo — son el camino lento y lo que queda cuando un salto cae en mitad
   de un patrón. El orden de evaluación y el punto donde nace cada error no cambian.
 - **Solo el bytecode de Rust.** El selfhost tiene el suyo y la paridad es de comportamiento.
-- **Lo que no se movió**: las llamadas (`Call` + `Return`, ~30 ns el par). No hay una anomalía
-  barata ahí; el siguiente paso con recorrido es no abrir marco para funciones diminutas
-  (inlining en el compilador de bytecode), que es otro arco.
+- **Alrededor de las llamadas.** Una ligadura de patrón (`Variant(v)`, `P { x }`, `(a, b)`) es
+  directamente su local (`emit_subpattern`; antes pasaba por un temporal `$sub`); `ReturnLocal`
+  saca el valor del local que muere; `CallValue` ya no reserva un `Vec` por llamada.
+- **Descartado por medición**: el despacho en dos niveles (instrucciones calientes en una función
+  compacta) y `Return` fuera de línea — lo que queda fuera de línea paga más de lo que ganan las
+  calientes (`PERFORMANCE.md` §29).

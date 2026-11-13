@@ -3053,9 +3053,37 @@ está en el primitivo, no en el despacho.
 | strscan | 513 | 500 | 0,98× |
 | **media geométrica** | | | **0,82×** |
 
-**Lo que queda.** (1) Las llamadas: `Call` + `Return` son ~30 ns y no se han movido; `hof` y
-`sortst` (closures por elemento) son las sondas que menos ganan. El paso con recorrido es no abrir
-marco para funciones diminutas. (2) La cabecera del bucle de despacho (3,5 ns por instrucción:
-`stop`, error pendiente, GC, marco, combustible, fin de chunk): cachear el marco entre
-instrucciones exige distinguir las que pueden cambiarlo. (3) La tabla de tipos del checker sigue
-sin hacer falta; se construirá si una instrucción la necesita de verdad.
+**Segunda tanda: las llamadas, medidas por partes.** Un bucle que llama a `fn f0() -> int { 1 }`
+cuesta 26 ns más que el bucle solo, pero `Call` + `Return` son ~12 ns de eso: el resto es lo de
+alrededor. Cada argumento añade 4–6 ns y cada `let b = a` del cuerpo, 8. Tres cambios:
+
+- **Una ligadura de patrón ES su local.** `Variant(v)`, `P { x }` y `(a, b)` extraían cada
+  posición a un temporal `$sub` y lo copiaban al nombre: una instrucción y un clon por ligadura.
+- **`ReturnLocal`**: `[GetLocal, Return]` saca el valor del local (el marco muere ahí) en vez de
+  clonarlo.
+- **`CallValue` sin `Vec`**: llamar a una closure reservaba un vector por llamada para invertir
+  los argumentos; ahora el llamado se lee bajo ellos y pasan directos a los locales.
+
+En el micro, `match` sobre enum 76,3 → 67,1 y `Option` 111,1 → 105,2; el resto, plano. En las
+sondas completas (contra 1.27.97, con todo el arco): `results` 0,67×, `traits` 0,70×, `enums`
+0,71×, `hof` 0,84× (era 0,92×), `sortst` 0,84×; **media geométrica 0,81×**.
+
+**Medido y descartado:**
+
+- *Mover los argumentos en bloque* (`locals.extend(stack.drain(..))`): la llamada directa empeora
+  (48 → 52 ns); el `pop` + escritura por argumento es más barato que el iterador.
+- *Despacho en dos niveles* (las ~20 instrucciones más ejecutadas en una función compacta, el
+  resto fuera de línea): las calientes mejoran un 10–17 %, pero todo lo demás paga la llamada
+  (+8–15 ns por instrucción: `array_index` 1,56×, `bytes_index` 1,49×). Media geométrica 1,12×.
+- *`Return` fuera de línea*: +5–10 % en operaciones que ni siquiera retornan.
+
+Estos dos últimos enseñan lo mismo: a esta escala la colocación del código dentro del bucle de
+despacho mueve ±10 % operaciones que no se han tocado. Una operación suelta del micro no es
+evidencia; se juzga por la media geométrica y por las sondas completas.
+
+**Lo que queda.** (1) La cabecera del bucle de despacho (3,5 ns por instrucción: `stop`, error
+pendiente, GC, marco, combustible, fin de chunk). Es ya la mayor parte del coste de las
+instrucciones fundidas, y bajarla exige otra forma de bucle (marco cacheado entre instrucciones),
+no más fusiones. (2) No abrir marco para funciones diminutas — cambia las trazas de error, así
+que solo vale para cuerpos que no pueden fallar. (3) La tabla de tipos del checker sigue sin
+hacer falta; se construirá si una instrucción la necesita de verdad.

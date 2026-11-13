@@ -866,6 +866,20 @@ impl<'a> Compiler<'a> {
     /// bool); en runtime el primer fallo salta y deja exactamente un bool → el llamador lo limpia con
     /// un solo `Pop`. Un `Wildcard` no emite nada (siempre casa); un `Binding` liga sin test. Un
     /// sub-patrón anidado se extrae a un local temporal (`$sub`) y se recurre.
+    /// El valor de una posición de un patrón está en la cima de la pila: lo guarda en un local y
+    /// casa el sub-patrón contra él. M454: un `Binding` ES ese local (antes se extraía a un
+    /// temporal `$sub` y se copiaba al nombre: una instrucción y un clon por ligadura).
+    fn emit_subpattern(&mut self, sub: &Pattern, to_next: &mut Vec<usize>, line: usize, col: usize) -> Result<(), CompileError> {
+        if let PatternKind::Binding(name) = &sub.kind {
+            let slot = self.declare_local(name);
+            self.emit(OpCode::InitLocal(slot), line, col);
+            return Ok(());
+        }
+        let sub_slot = self.declare_local("$sub");
+        self.emit(OpCode::InitLocal(sub_slot), line, col);
+        self.emit_pattern_test(sub, sub_slot, to_next, line, col)
+    }
+
     fn emit_pattern_test(&mut self, pat: &Pattern, val_slot: usize, to_next: &mut Vec<usize>, line: usize, col: usize) -> Result<(), CompileError> {
         match &pat.kind {
             PatternKind::Wildcard => {}
@@ -889,9 +903,7 @@ impl<'a> Compiler<'a> {
                     }
                     self.emit(OpCode::GetLocal(val_slot), line, col);
                     self.emit(OpCode::GetEnumField(i), line, col);
-                    let sub_slot = self.declare_local("$sub");
-                    self.emit(OpCode::InitLocal(sub_slot), line, col);
-                    self.emit_pattern_test(sub, sub_slot, to_next, line, col)?;
+                    self.emit_subpattern(sub, to_next, line, col)?;
                 }
             }
             PatternKind::Struct { fields, .. } => {
@@ -904,9 +916,7 @@ impl<'a> Compiler<'a> {
                     self.emit(OpCode::GetLocal(val_slot), line, col);
                     let id = self.field_id(fname);
                     self.emit(OpCode::GetField(id), line, col);
-                    let sub_slot = self.declare_local("$sub");
-                    self.emit(OpCode::InitLocal(sub_slot), line, col);
-                    self.emit_pattern_test(fpat, sub_slot, to_next, line, col)?;
+                    self.emit_subpattern(fpat, to_next, line, col)?;
                 }
             }
             // M310: tupla = arreglo en runtime; cada posición se indexa a un temporal y se casa.
@@ -918,9 +928,7 @@ impl<'a> Compiler<'a> {
                     self.emit(OpCode::GetLocal(val_slot), line, col);
                     self.emit_int(i as i64, line, col);
                     self.emit(OpCode::Index, line, col);
-                    let sub_slot = self.declare_local("$sub");
-                    self.emit(OpCode::InitLocal(sub_slot), line, col);
-                    self.emit_pattern_test(sub, sub_slot, to_next, line, col)?;
+                    self.emit_subpattern(sub, to_next, line, col)?;
                 }
             }
             // M310: literal = igualdad; si no casa, al siguiente brazo (dejando el bool).
@@ -1749,6 +1757,14 @@ fn fuse_enum_round7(chunk: &mut Chunk) {
                         i += 2;
                         continue;
                     }
+                }
+            }
+            if free(i + 1, i + 1) && matches!(chunk.code[i + 1], OpCode::Return) {
+                if let Some(s) = small(*s) {
+                    code.push(OpCode::ReturnLocal(s));
+                    lines.push(chunk.lines[i + 1]);
+                    i += 2;
+                    continue;
                 }
             }
             if free(i + 1, i + 3) {

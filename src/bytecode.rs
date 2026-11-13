@@ -975,6 +975,10 @@ pub enum OpCode {
     /// `[GetLocal|Constant, CmpJump]`.
     CmpJumpSrc(CmpOp, Src, usize),
 
+    /// Devuelve el valor del local `slot`. Funde `[GetLocal, Return]`: el marco muere aquí, así
+    /// que el valor SALE del local en vez de clonarse.
+    ReturnLocal(u32),
+
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como
     /// campos tenga (estaban en orden de declaración) y empuja el struct.

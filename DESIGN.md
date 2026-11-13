@@ -20061,3 +20061,22 @@ raylang). Ahora, y solo en esa posición, lleva el cast explícito a su `Rc<dyn 
 closure suelta en un `let` sigue con su tipo concreto (la llamada directa se inlinea). De paso,
 `tests/native_lib_cli.rs` — que solo corre en macOS y por tanto fuera del CI — llevaba roto desde
 que `std/media` entró al runtime de `ui` (1.27.58): le faltaba enlazar MediaPlayer.
+
+## 427. Revisión previa a 1.27.96 (nov 2026)
+
+La revisión del rango `v1.27.95..` encontró dos resultados distintos a los de la VM en lo que el
+arco M451 había dejado en `main` (nunca publicados), y se corrigieron antes del tag:
+
+- **Una fila izada con un índice que SÍ cambiaba.** El análisis de izado tenía dos recorridos: el
+  que acepta el cuerpo y el que apunta qué variables cambia el bucle; el segundo no entraba en los
+  bloques con valor (`let v = if (c) { k = k + 1; 1 } else { 0 };`, la condición de un `while`),
+  así que `g[k]` se daba por invariante. Un bloque con valor ya no admite sentencias: ese bucle no
+  se iza. La lección es la de siempre con dos recorridos de la misma cosa.
+- **`xs.push(valor)` con un valor que reasigna `xs`.** El camino rápido evaluaba el valor antes de
+  leer la variable; la VM lee el arreglo primero. Con un bloque dentro del valor se usa el camino
+  general, como ya hacía la escritura de un campo.
+- **Estado de emisión por función.** El cast de closures y los préstamos izados se guardan y
+  restauran por función, también si una rama no se puede emitir y la función sale como stub.
+- **Binarios en el repo.** La rama de las closures salió de `main` con `benchmarks/probe/` sin su
+  `.gitignore` (que iba en la otra PR) y un `git add -A` versionó 31 ejecutables (42 MiB). Se
+  dejan de versionar; el historial conserva ese commit.

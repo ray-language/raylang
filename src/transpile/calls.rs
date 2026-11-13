@@ -1773,6 +1773,10 @@ impl Transpiler {
                     && !self.is_cell(name)
                     && matches!(self.lookup(name), Some(Type::Array(_)))
                     && !self.hoisted_borrows.contains_key(name)
+                    // El orden de la VM es arreglo y LUEGO valor: un valor con un bloque dentro
+                    // puede reasignar la variable (`xs.push({ xs = [9]; 2 })`) y el elemento iría
+                    // al arreglo nuevo (revisión previa a 1.27.96).
+                    && !has_inline_block(eff[1])
                 {
                     out.push_str("{ let __rt_v = ");
                     self.emit_expr(out, eff[1])?;

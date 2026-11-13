@@ -1976,7 +1976,7 @@ fn string_literals_do_not_allocate_per_use() {
     );
     assert!(!rust.contains("Rc::<str>::from(\"delta\")") && !rust.contains("Rc::<str>::from(\"alpha\")"), "{rust}");
     assert_eq!(rust.matches("\"delta\"").count(), 1, "una sola entrada en la tabla: {rust}");
-    assert!(rust.contains("(&*line.clone() == \"alpha\")") && rust.contains("(&*line.clone() != \"beta\")"), "{rust}");
+    assert!(rust.contains("(&*line == \"alpha\")") && rust.contains("(&*line != \"beta\")"), "sin clonar el Rc de la local: {rust}");
     assert!(rust.contains("fn __ray_lit(i: usize) -> Rc<str>"), "{rust}");
 }
 

@@ -282,3 +282,43 @@ fn main() {
         true,
     );
 }
+
+/// Revisión previa a 1.27.96: (1) una asignación dentro de un bloque con VALOR (el `if` de un
+/// `let`, la condición de un `while`) cambia el índice de una fila — no se iza; (2) `xs.push(v)`
+/// con un valor que reasigna `xs` conserva el orden de la VM (arreglo, luego valor); (3) comparar
+/// una variable con un literal, en ambos órdenes.
+#[test]
+fn hoisting_and_push_respect_assignments_inside_value_blocks() {
+    engines(
+        "review_1_27_96",
+        r#"fn main() {
+    var g: [[int]] = [[1, 2, 3], [10, 20, 30], [100, 200, 300]];
+    var k = 0;
+    var total = 0;
+    for i in 0..3 {
+        let v = if (i > 0) { k = k + 1; 1 } else { 0 };
+        total = total + g[k][i] + v;
+    }
+    print(total);
+    k = 0;
+    var i = 0;
+    total = 0;
+    while ({ k = (k + 1) % 3; i < 3 }) {
+        total = total + g[k][i];
+        i = i + 1;
+    }
+    print(total);
+    var xs = [1];
+    let old = xs;
+    xs.push({ xs = [9]; 2 });
+    print(old);
+    print(xs);
+    let line = "alpha";
+    print(line == "alpha");
+    print("beta" != line);
+}
+"#,
+        "323\n213\n[1, 2]\n[9]\ntrue\ntrue\n",
+        true,
+    );
+}

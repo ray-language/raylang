@@ -4,7 +4,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.96 — 2026-11-13
 
 - **Binarios nativos más rápidos en código con abstracciones (M451)**. Los literales de string ya
   no se crean en cada uso (comparar con un literal, 12× más rápido; `contains` y las consultas a
@@ -15,6 +15,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   rápida; rellenar un arreglo con `push`, casi 3×). El resultado de los programas no cambia.
 - **Un tipo llamado como un tipo de Rust compila a nativo**: `struct Rc`, `struct Vec`,
   `struct String`, `enum Box`… rompían `ray build --native` con cientos de errores de rustc.
+- **Los binarios del banco de sondeo ya no están en el repo**: con la PR de las closures se
+  colaron 31 ejecutables compilados (42 MiB) en `benchmarks/probe/`; se dejan de versionar (los
+  regenera `./run.py --build`).
 - **El aviso de resultado descartado ya no salta con `join(tarea);`**: esperar una tarea se
   llama por su efecto; el aviso queda para el `join` de strings.
 - **Una closure como valor de una rama compila a nativo**: `let f = if (c) { fn(x: int) -> int

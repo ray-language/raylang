@@ -38,6 +38,10 @@ impl Transpiler {
         let prev_cells = std::mem::take(&mut self.cells);
         let prev_marked = std::mem::take(&mut self.send_fn_params);
         let prev_dicts = std::mem::take(&mut self.dict_params);
+        // Estado de emisión que es de UNA función: si esta falla a medias (y sale como stub), ni el
+        // cast de closures ni los préstamos izados deben llegar a la siguiente.
+        let prev_cast = std::mem::take(&mut self.cast_fn_literals);
+        let prev_hoisted = std::mem::take(&mut self.hoisted_borrows);
         let prev_ret = self.current_ret.replace(f.return_type.clone());
         let prev_expected = self.expected_ty.take();
         let r = self.emit_function_inner(out, rust_name, f);
@@ -46,6 +50,8 @@ impl Transpiler {
         self.cells = prev_cells;
         self.send_fn_params = prev_marked;
         self.dict_params = prev_dicts;
+        self.cast_fn_literals = prev_cast;
+        self.hoisted_borrows = prev_hoisted;
         self.current_ret = prev_ret;
         self.expected_ty = prev_expected;
         r
@@ -484,9 +490,15 @@ impl Transpiler {
                     _ => None,
                 }
             }
-            /// Un bloque cuyo valor es su cola escalar.
+            /// Un bloque cuyo valor es su cola escalar, SIN sentencias: una asignación dentro de un
+            /// bloque con valor (`let v = if (c) { k = k + 1; 1 } else { 0 };`, o en la condición
+            /// de un `while`) cambiaría una variable que `mutated_in` — que solo recorre las
+            /// sentencias del bucle — daría por invariante, y una fila `g[k]` se izaría con el `k`
+            /// de antes del bucle (revisión previa a 1.27.96: resultado distinto al de la VM).
             fn value_block(&mut self, b: &crate::ast::Block) -> Option<Type> {
-                self.statements(b)?;
+                if !b.statements.is_empty() {
+                    return None;
+                }
                 self.expr(b.tail.as_ref()?)
             }
             fn block(&mut self, b: &crate::ast::Block) -> Option<()> {
@@ -1649,7 +1661,10 @@ impl Transpiler {
                 } else if let Some((other, lit)) = str_literal_comparison(op, left, right) {
                     // `s == "lit"` / `"lit" != s`: se compara el TEXTO, sin crear el string del literal.
                     out.push_str("(&*");
-                    self.emit_expr(out, other)?;
+                    match &other.kind {
+                        ExprKind::Ident(n) if !self.is_cell(n) && matches!(self.lookup(n), Some(Type::String)) => out.push_str(&mangle(n)),
+                        _ => self.emit_expr(out, other)?,
+                    }
                     write!(out, " {} {:?})", if matches!(op, BinaryOp::Eq) { "==" } else { "!=" }, lit).unwrap();
                 } else if matches!(op, BinaryOp::Shl | BinaryOp::Shr)
                     && matches!(self.type_of(left)?, Type::UInt(_))
@@ -1725,12 +1740,13 @@ impl Transpiler {
                 out.push(' ');
                 let prev = self.cast_fn_literals;
                 self.cast_fn_literals = prev || else_branch.is_some() && yields_fn_literal(e);
-                self.emit_block(out, then_branch)?;
-                if let Some(eb) = else_branch {
+                let mut r = self.emit_block(out, then_branch);
+                if let (Ok(()), Some(eb)) = (&r, else_branch) {
                     out.push_str(" else ");
-                    self.emit_expr(out, eb)?;
+                    r = self.emit_expr(out, eb);
                 }
-                self.cast_fn_literals = prev;
+                self.cast_fn_literals = prev; // también si una rama no se pudo emitir
+                r?;
             }
             ExprKind::While { cond, body, label } => {
                 // M308: etiqueta → `'ray_l: loop`/`'ray_l: while` (va en `head`, pegada al bucle).
@@ -1900,8 +1916,7 @@ impl Transpiler {
                         match &array.kind {
                             // N6b: dentro de un loop puro-escalar el préstamo está IZADO → se indexa el
                             // guard directamente (sin borrow por elemento; LLVM puede vectorizar).
-                            _ if self.hoisted_guard(array).is_some() => {
-                                let guard = self.hoisted_guard(array).unwrap_or_default();
+                            _ if let Some(guard) = self.hoisted_guard(array) => {
                                 write!(out, "{guard}[__ray_idx(").unwrap();
                                 self.emit_expr(out, index)?;
                                 write!(out, ", {guard}.len())].clone()").unwrap();
@@ -2984,7 +2999,7 @@ fn str_literal_comparison<'a>(op: &BinaryOp, left: &'a Expr, right: &'a Expr) ->
 
 /// ¿Contiene `e` un bloque en línea (`{ … }`, `if`, `match`, `while`, una closure)? Solo ahí puede
 /// haber una sentencia — p. ej. una asignación a una variable local — dentro de una expresión.
-fn has_inline_block(e: &Expr) -> bool {
+pub(super) fn has_inline_block(e: &Expr) -> bool {
     let mut found = false;
     super::analysis::visit_exprs_expr(e, &mut |x: &Expr| {
         if matches!(x.kind, ExprKind::Block(_) | ExprKind::If { .. } | ExprKind::Match { .. } | ExprKind::While { .. } | ExprKind::Func(_)) {

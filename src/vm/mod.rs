@@ -184,8 +184,76 @@ pub fn run(chunk: &Chunk) -> Result<Value, RuntimeError> {
         main: 0,
         shared_consts: Vec::new(),
         externs: Vec::new(),
+        field_names: Vec::new(),
+        field_pos: Vec::new(),
     };
     run_program(&program)
+}
+
+/// El caso común de una comparación: dos `int` o dos `float` (IEEE, como el camino general).
+#[inline(always)]
+fn cmp_fast(op: CmpOp, l: &HeapValue, r: &HeapValue) -> Option<bool> {
+    macro_rules! cmp {
+        ($a:expr, $b:expr) => {
+            match op {
+                CmpOp::Less => $a < $b,
+                CmpOp::LessEqual => $a <= $b,
+                CmpOp::Greater => $a > $b,
+                CmpOp::GreaterEqual => $a >= $b,
+                CmpOp::Equal => $a == $b,
+                CmpOp::NotEqual => $a != $b,
+            }
+        };
+    }
+    match (l, r) {
+        (HeapValue::Int(a), HeapValue::Int(b)) => Some(cmp!(a, b)),
+        (HeapValue::Float(a), HeapValue::Float(b)) => Some(cmp!(a, b)),
+        _ => None,
+    }
+}
+
+/// El opcode genérico de un comparador fundido (para `apply_binary`).
+fn cmp_generic(op: CmpOp) -> OpCode {
+    match op {
+        CmpOp::Less => OpCode::Less,
+        CmpOp::LessEqual => OpCode::LessEqual,
+        CmpOp::Greater => OpCode::Greater,
+        CmpOp::GreaterEqual => OpCode::GreaterEqual,
+        CmpOp::Equal => OpCode::Equal,
+        CmpOp::NotEqual => OpCode::NotEqual,
+    }
+}
+
+/// M454: el caso común de una `Arith*` sobre operandos prestados — dos `int` o dos `float`.
+/// `None` = no es ese caso; `Some(Err(()))` = es de enteros pero desborda o divide por cero (el
+/// camino lento arma el error con su posición).
+#[inline(always)]
+fn arith_fast(op: crate::bytecode::ArithOp, l: &HeapValue, r: &HeapValue) -> Option<Result<HeapValue, ()>> {
+    use crate::bytecode::ArithOp;
+    match (l, r) {
+        (HeapValue::Int(a), HeapValue::Int(b)) => {
+            let (a, b) = (*a, *b);
+            let v = match op {
+                ArithOp::Add => a.checked_add(b),
+                ArithOp::Sub => a.checked_sub(b),
+                ArithOp::Mul => a.checked_mul(b),
+                ArithOp::Div => a.checked_div(b),
+                ArithOp::Rem => a.checked_rem(b),
+            };
+            Some(v.map(HeapValue::Int).ok_or(()))
+        }
+        (HeapValue::Float(a), HeapValue::Float(b)) => {
+            let (a, b) = (*a, *b);
+            Some(Ok(HeapValue::Float(match op {
+                ArithOp::Add => a + b,
+                ArithOp::Sub => a - b,
+                ArithOp::Mul => a * b,
+                ArithOp::Div => a / b,
+                ArithOp::Rem => a % b,
+            })))
+        }
+        _ => None,
+    }
 }
 
 /// Un slot local. Normalmente guarda el valor directamente (`Plain`); si la variable
@@ -691,6 +759,55 @@ impl<'a> Vm<'a> {
                     }
                 }
 
+                // M454: aritmética con operandos direccionados — se leen en su sitio; el caso
+                // común (dos int o dos float) no clona, no toca la pila y no pasa por `apply_binary`.
+                OpCode::Arith(op, a, b) => {
+                    let fast = match (self.src_ref(base, func, *a), self.src_ref(base, func, *b)) {
+                        (Some(l), Some(r)) => arith_fast(*op, l, r),
+                        _ => None,
+                    };
+                    let v = match fast {
+                        Some(Ok(v)) => v,
+                        _ => {
+                            let (l, r) = (self.src_value(base, func, *a), self.src_value(base, func, *b));
+                            self.arith_slow(*op, l, r, pos!().0, pos!().1)?
+                        }
+                    };
+                    self.push(v);
+                }
+                OpCode::ArithSet(op, a, b, dst) => {
+                    let fast = match (self.src_ref(base, func, *a), self.src_ref(base, func, *b)) {
+                        (Some(l), Some(r)) => arith_fast(*op, l, r),
+                        _ => None,
+                    };
+                    let v = match fast {
+                        Some(Ok(v)) => v,
+                        _ => {
+                            let (l, r) = (self.src_value(base, func, *a), self.src_value(base, func, *b));
+                            self.arith_slow(*op, l, r, pos!().0, pos!().1)?
+                        }
+                    };
+                    self.set_local(base, *dst as usize, v);
+                }
+                OpCode::ArithStack(op, b) => {
+                    let fast = match (self.cur.stack.last(), self.src_ref(base, func, *b)) {
+                        (Some(l), Some(r)) => arith_fast(*op, l, r),
+                        _ => None,
+                    };
+                    match fast {
+                        Some(Ok(v)) => {
+                            // La cima era un escalar (int/float): se reemplaza en su sitio.
+                            *self.cur.stack.last_mut().expect("empty stack: malformed bytecode") = v;
+                        }
+                        _ => {
+                            let r = self.src_value(base, func, *b);
+                            let l = self.pop();
+                            let v = self.arith_slow(*op, l, r, pos!().0, pos!().1)?;
+                            self.push(v);
+                        }
+                    }
+                }
+
                 OpCode::Jump(target) => {
                     // M330 D1: un salto hacia atrás es una vuelta de bucle — cada
                     // STOP_CHECK_BACKEDGES vueltas, la parada cooperativa (ver `backedges`).
@@ -844,33 +961,47 @@ impl<'a> Vm<'a> {
                 OpCode::CmpJump(op, target) => {
                     let right = self.pop();
                     let left = self.pop();
-                    let res = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
-                        // Fast-path entero (el caso dominante: i < n, x == 0, …).
-                        match op {
-                            CmpOp::Less => a < b,
-                            CmpOp::LessEqual => a <= b,
-                            CmpOp::Greater => a > b,
-                            CmpOp::GreaterEqual => a >= b,
-                            CmpOp::Equal => a == b,
-                            CmpOp::NotEqual => a != b,
-                        }
-                    } else {
-                        let legacy = match op {
-                            CmpOp::Less => &OpCode::Less,
-                            CmpOp::LessEqual => &OpCode::LessEqual,
-                            CmpOp::Greater => &OpCode::Greater,
-                            CmpOp::GreaterEqual => &OpCode::GreaterEqual,
-                            CmpOp::Equal => &OpCode::Equal,
-                            CmpOp::NotEqual => &OpCode::NotEqual,
-                        };
-                        match self.apply_binary(legacy, left, right, pos!().0, pos!().1)? {
+                    let res = match cmp_fast(*op, &left, &right) {
+                        Some(b) => b,
+                        None => match self.apply_binary(&cmp_generic(*op), left, right, pos!().0, pos!().1)? {
                             HeapValue::Bool(b) => b,
                             _ => unreachable!("a comparison produces bool"),
+                        },
+                    };
+                    if !res {
+                        self.cur.frames[fi].ip = *target;
+                    }
+                }
+                // M454: la guarda con el operando derecho leído en su sitio.
+                OpCode::CmpJumpSrc(op, b, target) => {
+                    let fast = match (self.cur.stack.last(), self.src_ref(base, func, *b)) {
+                        (Some(l), Some(r)) => cmp_fast(*op, l, r),
+                        _ => None,
+                    };
+                    let res = match fast {
+                        Some(res) => {
+                            self.pop();
+                            res
+                        }
+                        None => {
+                            let right = self.src_value(base, func, *b);
+                            let left = self.pop();
+                            match self.apply_binary(&cmp_generic(*op), left, right, pos!().0, pos!().1)? {
+                                HeapValue::Bool(b) => b,
+                                _ => unreachable!("a comparison produces bool"),
+                            }
                         }
                     };
                     if !res {
                         self.cur.frames[fi].ip = *target;
                     }
+                }
+                OpCode::LocalField(slot, id) => {
+                    let h = self.local_obj(base, *slot as usize);
+                    let s = self.as_struct(h);
+                    let pos = self.program.field_pos[*id as usize][s.struct_idx] as usize;
+                    let v = s.fields[pos].clone();
+                    self.push(v);
                 }
                 // A4 (ronda 2): local[s] + const / local[s] - const, en una instrucción.
                 // V9 (ronda 5): `local[s] = local[s] + const` sin pasar por la pila — el
@@ -973,15 +1104,27 @@ impl<'a> Vm<'a> {
                     self.push(r);
                 }
                 OpCode::InitLocal(slot) => {
-                    // Declaración: si el slot está boxeado, estrena celda (shadowing
-                    // seguro); si no, guarda el valor directamente.
                     let v = self.pop();
-                    let boxed = self.program.functions[func].captured.get(*slot).copied().unwrap_or(false);
-                    self.cur.locals[base + *slot] = if boxed {
-                        Local::Boxed(self.cur.heap.allocate(Obj::Cell(v)))
-                    } else {
-                        Local::Plain(v)
+                    self.init_local(func, base, *slot, v);
+                }
+                // M454: ligaduras y pruebas de variante leyendo el local en su sitio.
+                OpCode::CopyLocal(src, dst) => {
+                    let v = match &self.cur.locals[base + *src as usize] {
+                        Local::Plain(v) => v.clone(),
+                        Local::Boxed(_) => self.get_local(base, *src as usize),
                     };
+                    self.init_local(func, base, *dst as usize, v);
+                }
+                OpCode::EnumFieldToLocal(src, i, dst) => {
+                    let h = self.local_obj(base, *src as usize);
+                    let v = self.as_enum(h).payload[*i as usize].clone();
+                    self.init_local(func, base, *dst as usize, v);
+                }
+                OpCode::LocalTagJump(slot, tag, target) => {
+                    let h = self.local_obj(base, *slot as usize);
+                    if self.as_enum(h).tag != *tag {
+                        self.cur.frames[fi].ip = *target;
+                    }
                 }
                 OpCode::GetUpvalue(i) => {
                     let h = self.cur.frames[fi].upvalues[*i];
@@ -5134,23 +5277,23 @@ impl<'a> Vm<'a> {
                 OpCode::RegexNative { .. } => {
                     unreachable!("RegexNative is only emitted with the `regex` feature")
                 }
-                OpCode::GetField(name) => {
-                    // TA1: el nombre se resuelve a POSICIÓN en la tabla de defs (compartida), no en
-                    // la instancia (que ya no lleva nombres).
+                OpCode::GetField(id) => {
+                    // M454: la posición sale de la tabla `[campo][struct]` del programa (la instancia
+                    // no lleva nombres, TA1).
                     let h = self.pop_obj();
                     let s = self.as_struct(h);
-                    let pos = self.program.structs[s.struct_idx].fields.iter().position(|n| n == name)
-                        .expect("the checker guarantees the field");
+                    let pos = self.program.field_pos[*id][s.struct_idx] as usize;
                     let v = s.fields[pos].clone();
                     self.push(v);
                 }
-                OpCode::SetField(name) => {
+                OpCode::SetField(id) => {
                     let v = self.pop();
                     let h = self.pop_obj();
-                    let idx = self.as_struct(h).struct_idx;
-                    let pos = self.program.structs[idx].fields.iter().position(|n| n == name)
-                        .expect("the checker guarantees the field");
-                    self.as_struct_mut(h).fields[pos] = v;
+                    let program = self.program;
+                    let table = &program.field_pos[*id];
+                    let s = self.as_struct_mut(h);
+                    let pos = table[s.struct_idx] as usize;
+                    s.fields[pos] = v;
                 }
 
                 OpCode::Call(idx, argc) => {
@@ -5486,6 +5629,93 @@ impl<'a> Vm<'a> {
         match &self.cur.locals[base + slot] {
             Local::Plain(HeapValue::Int(n)) => Some(*n),
             _ => None,
+        }
+    }
+
+    /// M454: un operando direccionado, PRESTADO (None si el local está boxeado: va por el camino lento).
+    #[inline(always)]
+    fn src_ref(&self, base: usize, func: usize, s: crate::bytecode::Src) -> Option<&HeapValue> {
+        match s {
+            crate::bytecode::Src::Local(slot) => match &self.cur.locals[base + slot as usize] {
+                Local::Plain(v) => Some(v),
+                Local::Boxed(_) => None,
+            },
+            crate::bytecode::Src::Const(c) => Some(&self.program.functions[func].consts[c as usize]),
+        }
+    }
+
+    /// M454: el valor de un operando direccionado, como lo dejarían `GetLocal`/`Constant` en la pila.
+    fn src_value(&self, base: usize, func: usize, s: crate::bytecode::Src) -> HeapValue {
+        match s {
+            crate::bytecode::Src::Local(slot) => self.get_local(base, slot as usize),
+            crate::bytecode::Src::Const(c) => match &self.program.functions[func].consts[c as usize] {
+                // Como `Constant`: cada evaluación de un literal de bytes es un búfer propio (rayffi #211).
+                HeapValue::Bytes(b) => HeapValue::Bytes(std::sync::Arc::from(&b[..])),
+                v => v.clone(),
+            },
+        }
+    }
+
+    /// M454: el camino general de una `Arith*` — lo que hace el opcode binario genérico con los
+    /// dos valores ya en mano (desbordamiento y división por cero incluidos).
+    #[inline(never)]
+    fn arith_slow(&mut self, op: crate::bytecode::ArithOp, left: HeapValue, right: HeapValue, line: usize, col: usize) -> Result<HeapValue, RuntimeError> {
+        use crate::bytecode::ArithOp;
+        if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
+            let (a, b) = (*a, *b);
+            let ovf = || runtime_error(line, col, "arithmetic overflow on int");
+            return Ok(HeapValue::Int(match op {
+                ArithOp::Add => a.checked_add(b).ok_or_else(ovf)?,
+                ArithOp::Sub => a.checked_sub(b).ok_or_else(ovf)?,
+                ArithOp::Mul => a.checked_mul(b).ok_or_else(ovf)?,
+                ArithOp::Div => {
+                    if b == 0 {
+                        return Err(runtime_error(line, col, "integer division by zero"));
+                    }
+                    a.checked_div(b).ok_or_else(ovf)?
+                }
+                ArithOp::Rem => {
+                    if b == 0 {
+                        return Err(runtime_error(line, col, "modulo by zero"));
+                    }
+                    a.checked_rem(b).ok_or_else(ovf)?
+                }
+            }));
+        }
+        // M11.7b: `+` sobre dos arreglos los concatena en uno nuevo.
+        if let (ArithOp::Add, HeapValue::Obj(l), HeapValue::Obj(r)) = (op, &left, &right) {
+            let (l, r) = (*l, *r);
+            let mut elems = self.as_array(l).clone();
+            elems.extend(self.as_array(r).iter().cloned());
+            let h = self.cur.heap.allocate(Obj::Array(elems));
+            return Ok(HeapValue::Obj(h));
+        }
+        self.apply_binary(&op.generic(), left, right, line, col)
+    }
+
+    /// Declaración de un local: si el slot está boxeado, estrena celda (shadowing seguro); si
+    /// no, guarda el valor directamente.
+    #[inline(always)]
+    fn init_local(&mut self, func: usize, base: usize, slot: usize, v: HeapValue) {
+        let f = &self.program.functions[func];
+        let boxed = f.has_captured && f.captured.get(slot).copied().unwrap_or(false);
+        self.cur.locals[base + slot] = if boxed {
+            Local::Boxed(self.cur.heap.allocate(Obj::Cell(v)))
+        } else {
+            Local::Plain(v)
+        };
+    }
+
+    /// M454: el handle del objeto que guarda un local (el checker garantiza que lo es).
+    #[inline(always)]
+    fn local_obj(&self, base: usize, slot: usize) -> Handle {
+        match &self.cur.locals[base + slot] {
+            Local::Plain(HeapValue::Obj(h)) => *h,
+            Local::Plain(_) => unreachable!("the checker guarantees an object"),
+            Local::Boxed(_) => match self.get_local(base, slot) {
+                HeapValue::Obj(h) => h,
+                _ => unreachable!("the checker guarantees an object"),
+            },
         }
     }
 

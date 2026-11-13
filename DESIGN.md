@@ -20106,3 +20106,38 @@ Rendimiento; cifras y diagnóstico en `PERFORMANCE.md` §28. Para el contrato:
 - **El coste de fondo de la VM no se ha tocado**: instrucciones especializadas por tipo exigen
   cambiar el formato del bytecode (solo el de Rust: el selfhost tiene el suyo y la paridad es de
   comportamiento). Queda descrito, no empezado.
+
+## 430. M454 — la VM, segunda pasada: instrucciones que no pasan por la pila (nov 2026)
+
+Rendimiento; cifras en `PERFORMANCE.md` §29. El arco se planteó como «bytecode especializado por
+tipo» (§429) y la medición lo reorientó antes de escribir código:
+
+- **El tipo no era el coste.** Un bucle vacío paga 3,5 ns por instrucción; `s = s + i` eran tres
+  instrucciones a 5,2 ns cada una. La diferencia es mover valores con etiqueta por la pila
+  (`HeapValue` no es `Copy`: cada carga es un `clone`, cada descarte un `drop`), no mirar la
+  etiqueta. Sin `unsafe`, saber el tipo de antemano no ahorra ni el `clone` ni el `drop`; leer el
+  operando EN SU SITIO sí. Por eso la tabla de tipos del checker hacia el compilador de bytecode
+  **no se ha construido**: ninguna de las instrucciones nuevas la necesita.
+- **Operandos direccionados.** `Arith(op, a, b)`, `ArithSet(op, a, b, dst)` y `ArithStack(op, b)`
+  toman sus operandos de un local o de una constante (`Src`). El caso común —dos `int` o dos
+  `float` en slots sin capturar— no clona ni toca la pila; cualquier otro (local capturado,
+  strings, arreglos, `uint`, desbordamiento, división por cero) materializa los dos valores y
+  sigue el camino general (`arith_slow` → `apply_binary`), con el mismo mensaje y la misma
+  posición. `CmpJumpSrc` hace lo mismo con la guarda de un `if`/`while`, y `CmpJump` gana el
+  camino rápido de `float` que solo tenía el de `int`.
+- **Campos por posición.** `GetField`/`SetField` llevan el id del NOMBRE del campo y el programa
+  una tabla `field_pos[id][struct_idx]`. No hace falta el tipo del receptor: el checker garantiza
+  que el struct tiene el campo y la instancia ya lleva su `struct_idx`. `LocalField` lee el campo
+  de un struct que está en un local sin subir el handle a la pila.
+- **`match` sin pila.** `LocalTagJump` prueba la variante del enum que guarda un local y salta;
+  `EnumFieldToLocal` y `CopyLocal` ligan el payload. Un brazo `Variant(v) => …` pasa de unas diez
+  instrucciones a cuatro. El `unit` de un brazo o de una rama usada como sentencia ya no se
+  empuja para tirarlo (`[Unit, Jump(t)]` con `Pop` en el destino → `Jump(t + 1)`).
+- **Todo son rondas de mirilla** (`fuse_operands_round6`, `fuse_enum_round7`) sobre la salida de
+  las anteriores: el compilador sigue emitiendo el bytecode de pila de siempre y las instrucciones
+  genéricas siguen existiendo — son el camino lento y lo que queda cuando un salto cae en mitad
+  de un patrón. El orden de evaluación y el punto donde nace cada error no cambian.
+- **Solo el bytecode de Rust.** El selfhost tiene el suyo y la paridad es de comportamiento.
+- **Lo que no se movió**: las llamadas (`Call` + `Return`, ~30 ns el par). No hay una anomalía
+  barata ahí; el siguiente paso con recorrido es no abrir marco para funciones diminutas
+  (inlining en el compilador de bytecode), que es otro arco.

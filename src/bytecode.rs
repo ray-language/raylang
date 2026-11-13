@@ -946,14 +946,45 @@ pub enum OpCode {
     /// Total e idempotente (handle cosechado = no-op). Primitivo `__proc_kill`.
     ProcKill,
 
+    // --- Aritmética con operandos direccionados (M454) ---
+    /// `a op b` leyendo los dos operandos EN SU SITIO (local o constante), sin clonarlos ni
+    /// pasarlos por la pila; empuja el resultado. Funde `[GetLocalLocal|GetLocalConst, op]`.
+    Arith(ArithOp, Src, Src),
+    /// Como `Arith`, y deja el resultado en el local `dst`: `s = s + i` en UNA instrucción
+    /// (antes `GetLocalLocal`, `Add`, `SetLocal`).
+    ArithSet(ArithOp, Src, Src, u32),
+    /// El operando izquierdo es la cima de la pila; el derecho, direccionado. Funde
+    /// `[GetLocal|Constant, op]` (el `… + x`, `… * 2.0` de una expresión mayor).
+    ArithStack(ArithOp, Src),
+
+    // --- Enums y locales sin pasar por la pila (M454) ---
+    /// La prueba de un brazo de `match` sobre un local: si la variante del enum en `slot` NO es
+    /// `tag`, salta a `target`. Funde `[GetLocal, EnumTagEq, JumpIfFalse, Pop]`.
+    LocalTagJump(u32, u32, usize),
+    /// `dst = payload[i]` del enum en el local `slot` (declaración, como `InitLocal`). Funde
+    /// `[GetLocal, GetEnumField, InitLocal]`.
+    EnumFieldToLocal(u32, u32, u32),
+    /// `dst = src` entre locales (declaración, como `InitLocal`). Funde `[GetLocal, InitLocal]`.
+    CopyLocal(u32, u32),
+
+    /// Empuja el campo `field_names[id]` del struct que guarda el local `slot`. Funde
+    /// `[GetLocal, GetField]` (`p.x`, `self.x`).
+    LocalField(u32, u32),
+    /// La guarda de un `if`/`while` con el operando derecho direccionado: saca el izquierdo de la
+    /// pila, lo compara con el local o la constante y salta a `target` si es falso. Funde
+    /// `[GetLocal|Constant, CmpJump]`.
+    CmpJumpSrc(CmpOp, Src, usize),
+
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como
     /// campos tenga (estaban en orden de declaración) y empuja el struct.
     MakeStruct(usize),
-    /// Saca un struct; empuja el valor de su campo (buscado por nombre).
-    GetField(String),
-    /// Saca valor y struct; asigna `struct.campo = valor` (por nombre).
-    SetField(String),
+    /// Saca un struct; empuja el valor de su campo. M454: el operando es el id del NOMBRE del
+    /// campo (`CompiledProgram.field_names`); la posición sale de `field_pos[id][struct_idx]`, dos
+    /// cargas en vez de comparar el nombre contra cada campo de la definición.
+    GetField(usize),
+    /// Saca valor y struct; asigna `struct.campo = valor` (mismo operando que `GetField`).
+    SetField(usize),
 
     // --- Enums (M5) ---
     /// Construye una variante de enum: `(enum_id, variant_id)` indexan
@@ -1010,6 +1041,36 @@ pub enum RegexNativeFn {
     ReplaceAll,
     Captures,
     CapturesStr,
+}
+
+/// M454: la operación de una instrucción aritmética con operandos direccionados (`Arith*`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ArithOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Rem,
+}
+
+impl ArithOp {
+    /// El opcode genérico equivalente (el camino lento reutiliza `apply_binary`).
+    pub fn generic(self) -> OpCode {
+        match self {
+            ArithOp::Add => OpCode::Add,
+            ArithOp::Sub => OpCode::Sub,
+            ArithOp::Mul => OpCode::Mul,
+            ArithOp::Div => OpCode::Div,
+            ArithOp::Rem => OpCode::Rem,
+        }
+    }
+}
+
+/// M454: un operando direccionado: un local del marco o una constante del chunk.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Src {
+    Local(u32),
+    Const(u32),
 }
 
 /// A4: el comparador de una `CmpJump` (los seis de la familia de comparación).
@@ -1181,6 +1242,23 @@ pub struct CompiledProgram {
     pub shared_consts: Vec<Vec<crate::runtime::Value>>,
     /// Descriptores de las funciones externas (M41, FFI), indexados por el `CallExtern(idx, _)`.
     pub externs: Vec<crate::ffi::ExternDesc>,
+    /// M454: los nombres de campo que el programa lee o escribe, indexados por el operando de
+    /// `GetField`/`SetField`.
+    pub field_names: Vec<String>,
+    /// M454: `field_pos[id][struct_idx]` = posición del campo `field_names[id]` en ese struct
+    /// (`NO_FIELD` si no lo tiene). El checker garantiza que el receptor lo tiene.
+    pub field_pos: Vec<Vec<u32>>,
+}
+
+/// M454: marca de «este struct no tiene ese campo» en `CompiledProgram.field_pos`.
+pub const NO_FIELD: u32 = u32::MAX;
+
+/// M454: la tabla `[campo][struct] → posición` de un programa.
+pub fn field_positions(field_names: &[String], structs: &[CompiledStruct]) -> Vec<Vec<u32>> {
+    field_names
+        .iter()
+        .map(|n| structs.iter().map(|s| s.fields.iter().position(|f| f == n).map_or(NO_FIELD, |p| p as u32)).collect())
+        .collect()
 }
 
 #[cfg(test)]

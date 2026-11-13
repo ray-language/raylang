@@ -138,6 +138,8 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
 
     let mut c = Compiler {
         split_for_fused: HashMap::new(),
+        field_ids: HashMap::new(),
+        field_names: Vec::new(),
         indices: &indices,
         structs: &struct_defs,
         enums: &enum_defs,
@@ -155,8 +157,10 @@ pub fn compile_program(program: &Program) -> Result<CompiledProgram, CompileErro
     }
 
     let shared_consts = std::mem::take(&mut c.shared_consts);
-    let functions = c.functions.into_iter().map(|o| o.expect("toda función quedó compilada")).collect();
-    Ok(CompiledProgram { functions, structs: struct_table, enums: enum_table, main, externs, shared_consts })
+    let field_names = std::mem::take(&mut c.field_names);
+    let field_pos = crate::bytecode::field_positions(&field_names, &struct_table);
+    let functions: Vec<CompiledFn> = c.functions.into_iter().map(|o| o.expect("toda función quedó compilada")).collect();
+    Ok(CompiledProgram { functions, structs: struct_table, enums: enum_table, main, externs, shared_consts, field_names, field_pos })
 }
 
 /// Compila una expresión suelta a un `Chunk` (sin variables ni llamadas). Se usa
@@ -166,7 +170,7 @@ pub fn compile_expr(expr: &Expr) -> Result<Chunk, CompileError> {
     let structs = HashMap::new();
     let enums = HashMap::new();
     let extern_indices = HashMap::new();
-    let mut c = Compiler { split_for_fused: HashMap::new(), indices: &indices, structs: &structs, enums: &enums, n_named: 0, functions: Vec::new(), scopes: Vec::new(), consts: HashMap::new(), shared_slots: HashMap::new(), readonly: std::collections::HashSet::new(), shared_consts: Vec::new(), extern_indices: &extern_indices };
+    let mut c = Compiler { split_for_fused: HashMap::new(), field_ids: HashMap::new(), field_names: Vec::new(), indices: &indices, structs: &structs, enums: &enums, n_named: 0, functions: Vec::new(), scopes: Vec::new(), consts: HashMap::new(), shared_slots: HashMap::new(), readonly: std::collections::HashSet::new(), shared_consts: Vec::new(), extern_indices: &extern_indices };
     c.scopes.push(FnScope::new());
     c.emit_expr(expr)?;
     c.emit(OpCode::Return, expr.line, expr.col);
@@ -230,6 +234,9 @@ struct Compiler<'a> {
     /// `let` deja el string y el separador en dos locales ocultos y el `for` itera con `SplitNext`
     /// sin materializar el arreglo. Nombre → (slot del string, slot del separador).
     split_for_fused: HashMap<String, (usize, usize)>,
+    /// M454: nombre de campo → su id (el operando de `GetField`/`SetField`), y los nombres por id.
+    field_ids: HashMap<String, usize>,
+    field_names: Vec<String>,
     indices: &'a HashMap<String, usize>,
     structs: &'a StructDefs,
     enums: &'a EnumDefs,
@@ -291,6 +298,8 @@ impl<'a> Compiler<'a> {
             fuse_guard_round3(&mut self.cur().chunk); // P0.6: GetLocalConst;CmpJump → guarda en 1 opcode
             fuse_index_round4(&mut self.cur().chunk); // MM2: [GetLocalLocal|GetLocal, Index] → IndexLL/IndexLocal
             fuse_loop_round5(&mut self.cur().chunk); // V9: [AddLocalConst, SetLocal(, Jump)] → IncLocalConst/IncJump
+            fuse_operands_round6(&mut self.cur().chunk); // M454: aritmética con operandos direccionados
+            fuse_enum_round7(&mut self.cur().chunk); // M454: brazos de match y ligaduras sin pila
             discard_spawn_results(&mut self.cur().chunk); // M98.1: spawn fire-and-forget sin Task retenida
         }
 
@@ -346,6 +355,17 @@ impl<'a> Compiler<'a> {
 
     fn cur(&mut self) -> &mut FnScope {
         self.scopes.last_mut().expect("siempre hay un ámbito de función activo")
+    }
+
+    /// M454: el id de un nombre de campo (lo interna la primera vez).
+    fn field_id(&mut self, name: &str) -> usize {
+        if let Some(&id) = self.field_ids.get(name) {
+            return id;
+        }
+        let id = self.field_names.len();
+        self.field_names.push(name.to_string());
+        self.field_ids.insert(name.to_string(), id);
+        id
     }
 
     fn emit(&mut self, op: OpCode, line: usize, col: usize) -> usize {
@@ -882,7 +902,8 @@ impl<'a> Compiler<'a> {
                         continue;
                     }
                     self.emit(OpCode::GetLocal(val_slot), line, col);
-                    self.emit(OpCode::GetField(fname.clone()), line, col);
+                    let id = self.field_id(fname);
+                    self.emit(OpCode::GetField(id), line, col);
                     let sub_slot = self.declare_local("$sub");
                     self.emit(OpCode::InitLocal(sub_slot), line, col);
                     self.emit_pattern_test(fpat, sub_slot, to_next, line, col)?;
@@ -1056,7 +1077,8 @@ impl<'a> Compiler<'a> {
                 ExprKind::Field { object, name } => {
                     self.emit_expr(object)?;
                     self.emit_expr(value)?;
-                    self.emit(OpCode::SetField(name.clone()), line, col);
+                    let id = self.field_id(name);
+                    self.emit(OpCode::SetField(id), line, col);
                 }
                 _ => unreachable!("the checker guarantees an lvalue"),
             },
@@ -1338,7 +1360,8 @@ impl<'a> Compiler<'a> {
                     self.emit(OpCode::Index, line, col);
                 } else {
                     self.emit_expr(object)?;
-                    self.emit(OpCode::GetField(name.clone()), line, col);
+                    let id = self.field_id(name);
+                    self.emit(OpCode::GetField(id), line, col);
                 }
             }
 
@@ -1529,6 +1552,252 @@ fn fuse_loop_round5(chunk: &mut Chunk) {
             | OpCode::GetLocalConstCmpJump(_, _, _, t)
             | OpCode::LocalLocalCmpJump(_, _, _, t)
             | OpCode::IncJump(_, _, t) => *t = old_a_new[*t],
+            OpCode::DotRange { exit, .. } => *exit = old_a_new[*exit],
+            _ => {}
+        }
+    }
+    chunk.code = code;
+    chunk.lines = lines;
+}
+
+/// **Ronda 6** (M454): aritmética con operandos direccionados. Lo que queda tras las rondas 1–5:
+///
+///   - `[GetLocalLocal(a, b), op]` → `Arith(op, L a, L b)`
+///   - `[GetLocalConst(a, c), op]` → `Arith(op, L a, C c)` (`Mul`/`Div`/`Rem`: `Add`/`Sub` ya son
+///     `AddLocalConst`/`SubLocalConst`)
+///   - cualquiera de las anteriores, o `AddLocalConst`/`SubLocalConst`, seguida de `SetLocal(d)` →
+///     `ArithSet(op, x, y, d)`
+///   - `[GetLocal(b) | Constant(c), op]` → `ArithStack(op, L b | C c)` (el izquierdo ya está en la pila)
+///
+/// con `op` ∈ {`Add`, `Sub`, `Mul`, `Div`, `Rem`}. El orden de lectura de los operandos y el punto
+/// donde nace el error (la posición del operador) no cambian. Mismo remapeo de saltos que las demás.
+fn fuse_operands_round6(chunk: &mut Chunk) {
+    use crate::bytecode::{ArithOp, Src};
+    let n = chunk.code.len();
+    if n == 0 {
+        return;
+    }
+    let mut is_target = vec![false; n + 1];
+    for op in &chunk.code {
+        match op {
+            OpCode::Jump(t)
+            | OpCode::JumpIfFalse(t)
+            | OpCode::SplitNext { target: t, .. }
+            | OpCode::CmpJump(_, t)
+            | OpCode::GetLocalConstCmpJump(_, _, _, t)
+            | OpCode::LocalLocalCmpJump(_, _, _, t)
+            | OpCode::IncJump(_, _, t) => is_target[*t] = true,
+            OpCode::DotRange { exit, .. } => is_target[*exit] = true,
+            _ => {}
+        }
+    }
+    let arith = |op: &OpCode| match op {
+        OpCode::Add => Some(ArithOp::Add),
+        OpCode::Sub => Some(ArithOp::Sub),
+        OpCode::Mul => Some(ArithOp::Mul),
+        OpCode::Div => Some(ArithOp::Div),
+        OpCode::Rem => Some(ArithOp::Rem),
+        _ => None,
+    };
+    // Un slot o un índice de constante que no quepa en u32 no se funde (no ocurre en la práctica).
+    let small = |v: usize| u32::try_from(v).ok();
+    let mut old_a_new = vec![0usize; n + 1];
+    let mut code = Vec::with_capacity(n);
+    let mut lines = Vec::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        old_a_new[i] = code.len();
+        // (operación, izquierdo, derecho, instrucciones consumidas, índice de la posición a conservar)
+        let mut found: Option<(ArithOp, Option<Src>, Src, usize, usize)> = None;
+        match &chunk.code[i] {
+            OpCode::AddLocalConst(s, c) | OpCode::SubLocalConst(s, c) => {
+                if let (Some(s), Some(c)) = (small(*s), small(*c)) {
+                    let op = if matches!(chunk.code[i], OpCode::AddLocalConst(..)) { ArithOp::Add } else { ArithOp::Sub };
+                    found = Some((op, Some(Src::Local(s)), Src::Const(c), 1, i));
+                }
+            }
+            first if i + 1 < n && !is_target[i + 1] => {
+                if let Some(op) = arith(&chunk.code[i + 1]) {
+                    found = match first {
+                        OpCode::GetLocalLocal(a, b) => small(*a).zip(small(*b)).map(|(a, b)| (op, Some(Src::Local(a)), Src::Local(b), 2, i + 1)),
+                        OpCode::GetLocalConst(a, c) => small(*a).zip(small(*c)).map(|(a, c)| (op, Some(Src::Local(a)), Src::Const(c), 2, i + 1)),
+                        OpCode::GetLocal(b) => small(*b).map(|b| (op, None, Src::Local(b), 2, i + 1)),
+                        OpCode::Constant(c) => small(*c).map(|c| (op, None, Src::Const(c), 2, i + 1)),
+                        _ => None,
+                    };
+                }
+            }
+            _ => {}
+        }
+        if let Some((op, left, right, used, at)) = found {
+            let next = i + used;
+            let dst = match (left, chunk.code.get(next)) {
+                (Some(_), Some(OpCode::SetLocal(d))) if !is_target[next] => small(*d),
+                _ => None,
+            };
+            match (left, dst) {
+                (Some(l), Some(d)) => {
+                    code.push(OpCode::ArithSet(op, l, right, d));
+                    lines.push(chunk.lines[at]);
+                    i = next + 1;
+                    continue;
+                }
+                (Some(l), None) if used == 2 => {
+                    code.push(OpCode::Arith(op, l, right));
+                    lines.push(chunk.lines[at]);
+                    i = next;
+                    continue;
+                }
+                (None, _) => {
+                    code.push(OpCode::ArithStack(op, right));
+                    lines.push(chunk.lines[at]);
+                    i = next;
+                    continue;
+                }
+                // `AddLocalConst`/`SubLocalConst` sin `SetLocal` detrás: se queda como está.
+                _ => {}
+            }
+        }
+        code.push(chunk.code[i].clone());
+        lines.push(chunk.lines[i]);
+        i += 1;
+    }
+    old_a_new[n] = code.len();
+    for op in &mut code {
+        match op {
+            OpCode::Jump(t)
+            | OpCode::JumpIfFalse(t)
+            | OpCode::SplitNext { target: t, .. }
+            | OpCode::CmpJump(_, t)
+            | OpCode::GetLocalConstCmpJump(_, _, _, t)
+            | OpCode::LocalLocalCmpJump(_, _, _, t)
+            | OpCode::IncJump(_, _, t) => *t = old_a_new[*t],
+            OpCode::DotRange { exit, .. } => *exit = old_a_new[*exit],
+            _ => {}
+        }
+    }
+    chunk.code = code;
+    chunk.lines = lines;
+}
+
+/// **Ronda 7** (M454): los brazos de un `match` sobre enum y las ligaduras de un patrón, sin
+/// pasar por la pila:
+///
+///   - `[GetLocal(s), EnumTagEq(tag), JumpIfFalse(t), Pop]` con `code[t] == Pop` →
+///     `LocalTagJump(s, tag, t + 1)` (el bool nunca existe; el salto brinca el `Pop` del otro lado)
+///   - `[GetLocal(s), GetEnumField(i), InitLocal(d)]` → `EnumFieldToLocal(s, i, d)`
+///   - `[GetLocal(a), InitLocal(b)]` → `CopyLocal(a, b)`
+fn fuse_enum_round7(chunk: &mut Chunk) {
+    let n = chunk.code.len();
+    if n == 0 {
+        return;
+    }
+    let mut is_target = vec![false; n + 1];
+    for op in &chunk.code {
+        match op {
+            OpCode::Jump(t)
+            | OpCode::JumpIfFalse(t)
+            | OpCode::SplitNext { target: t, .. }
+            | OpCode::CmpJump(_, t)
+            | OpCode::GetLocalConstCmpJump(_, _, _, t)
+            | OpCode::LocalLocalCmpJump(_, _, _, t)
+            | OpCode::IncJump(_, _, t) => is_target[*t] = true,
+            OpCode::DotRange { exit, .. } => is_target[*exit] = true,
+            _ => {}
+        }
+    }
+    let small = |v: usize| u32::try_from(v).ok();
+    let free = |from: usize, to: usize| (from..=to).all(|k| k < n && !is_target[k]);
+    let mut old_a_new = vec![0usize; n + 1];
+    let mut code = Vec::with_capacity(n);
+    let mut lines = Vec::with_capacity(n);
+    let mut i = 0;
+    while i < n {
+        old_a_new[i] = code.len();
+        // [Unit, Jump(t)] con code[t] == Pop → Jump(t + 1): el `unit` de un brazo o de una rama
+        // usada como sentencia nunca llega a existir.
+        if free(i + 1, i + 1) {
+            if let (OpCode::Unit, OpCode::Jump(t)) = (&chunk.code[i], &chunk.code[i + 1]) {
+                if *t > i + 1 && matches!(chunk.code.get(*t), Some(OpCode::Pop)) {
+                    code.push(OpCode::Jump(*t + 1));
+                    lines.push(chunk.lines[i + 1]);
+                    i += 2;
+                    continue;
+                }
+            }
+            // [GetLocal(b) | Constant(c), CmpJump(op, t)] → CmpJumpSrc(op, L b | C c, t)
+            if let OpCode::CmpJump(op, t) = &chunk.code[i + 1] {
+                let src = match &chunk.code[i] {
+                    OpCode::GetLocal(b) => small(*b).map(crate::bytecode::Src::Local),
+                    OpCode::Constant(c) => small(*c).map(crate::bytecode::Src::Const),
+                    _ => None,
+                };
+                if let Some(src) = src {
+                    code.push(OpCode::CmpJumpSrc(*op, src, *t));
+                    lines.push(chunk.lines[i + 1]);
+                    i += 2;
+                    continue;
+                }
+            }
+        }
+        if let OpCode::GetLocal(s) = &chunk.code[i] {
+            if free(i + 1, i + 1) {
+                if let OpCode::GetField(id) = &chunk.code[i + 1] {
+                    if let (Some(s), Some(id)) = (small(*s), small(*id)) {
+                        code.push(OpCode::LocalField(s, id));
+                        lines.push(chunk.lines[i + 1]);
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
+            if free(i + 1, i + 3) {
+                if let (OpCode::EnumTagEq(tag), OpCode::JumpIfFalse(t), OpCode::Pop) = (&chunk.code[i + 1], &chunk.code[i + 2], &chunk.code[i + 3]) {
+                    if let (Some(s), Some(tag), Some(OpCode::Pop)) = (small(*s), small(*tag), chunk.code.get(*t)) {
+                        code.push(OpCode::LocalTagJump(s, tag, *t + 1)); // coordenadas viejas; se remapea abajo
+                        lines.push(chunk.lines[i + 1]);
+                        i += 4;
+                        continue;
+                    }
+                }
+            }
+            if free(i + 1, i + 2) {
+                if let (OpCode::GetEnumField(f), OpCode::InitLocal(d)) = (&chunk.code[i + 1], &chunk.code[i + 2]) {
+                    if let (Some(s), Some(f), Some(d)) = (small(*s), small(*f), small(*d)) {
+                        code.push(OpCode::EnumFieldToLocal(s, f, d));
+                        lines.push(chunk.lines[i + 1]);
+                        i += 3;
+                        continue;
+                    }
+                }
+            }
+            if free(i + 1, i + 1) {
+                if let OpCode::InitLocal(d) = &chunk.code[i + 1] {
+                    if let (Some(s), Some(d)) = (small(*s), small(*d)) {
+                        code.push(OpCode::CopyLocal(s, d));
+                        lines.push(chunk.lines[i + 1]);
+                        i += 2;
+                        continue;
+                    }
+                }
+            }
+        }
+        code.push(chunk.code[i].clone());
+        lines.push(chunk.lines[i]);
+        i += 1;
+    }
+    old_a_new[n] = code.len();
+    for op in &mut code {
+        match op {
+            OpCode::Jump(t)
+            | OpCode::JumpIfFalse(t)
+            | OpCode::SplitNext { target: t, .. }
+            | OpCode::CmpJump(_, t)
+            | OpCode::GetLocalConstCmpJump(_, _, _, t)
+            | OpCode::LocalLocalCmpJump(_, _, _, t)
+            | OpCode::IncJump(_, _, t)
+            | OpCode::LocalTagJump(_, _, t)
+            | OpCode::CmpJumpSrc(_, _, t) => *t = old_a_new[*t],
             OpCode::DotRange { exit, .. } => *exit = old_a_new[*exit],
             _ => {}
         }

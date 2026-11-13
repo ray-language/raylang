@@ -322,3 +322,34 @@ fn hoisting_and_push_respect_assignments_inside_value_blocks() {
         true,
     );
 }
+
+/// M452: la profundidad de recursión como parámetro oculto corta donde corta la VM — recursión
+/// profunda bajo el límite, de cola (no cuenta marcos), mutua, a través de un valor función y de
+/// una función que no cuenta, un desbordamiento atrapado por `try_call` (y la cuenta sigue bien
+/// después) y closures que vuelven a entrar desde un builtin.
+#[test]
+fn recursion_depth_by_parameter_matches_the_vm() {
+    engines(
+        "depth_param",
+        r#"fn down(n: int) -> int { if (n == 0) { 0 } else { 1 + down(n - 1) } }
+fn tail(n: int, acc: int) -> int { if (n == 0) { acc } else { tail(n - 1, acc + 1) } }
+fn even(n: int) -> bool { if (n == 0) { true } else { odd(n - 1) } }
+fn odd(n: int) -> bool { if (n == 0) { false } else { even(n - 1) } }
+fn via(f: fn(int) -> int, n: int) -> int { if (n == 0) { 0 } else { 1 + f(n - 1) } }
+fn helper(n: int) -> int { down(n) + 1 }
+fn main() {
+    print(down(900));
+    print(tail(1000000, 0));
+    print(even(500));
+    print(helper(900));
+    print(via(fn(k: int) -> int { down(k) }, 800));
+    let r = try_call(fn() { print(down(2000)); });
+    print(r);
+    print(down(1000));
+    print([1, 2, 3].map(fn(x: int) -> int { down(x * 100) }));
+}
+"#,
+        "900\n1000000\ntrue\n901\n800\nResult.Err(stack overflow (recursion too deep: 1024 frames; RAYLANG_MAX_DEPTH raises the limit))\n1000\n[100, 200, 300]\n",
+        false,
+    );
+}

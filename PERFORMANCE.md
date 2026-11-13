@@ -2883,3 +2883,50 @@ banco poliglota no cambia (sus programas no pasaban por estos caminos).
   llamada 51 ns, `Result` con `?` ~300 ns, `map.get` 300–400 ns. Frente a Node, 18–75× más lenta
   en el sondeo. El perfil muestra `push`/`pop` de la pila como llamadas reales, clonado y
   destrucción de valores por instrucción y campos de struct buscados por nombre.
+
+## 27. M452 (nov 2026): la recursión sin contador en memoria
+
+**La medición que lo decidió.** `fibrec` nativo iba a 2× de `--fast` y a 1,8× de Go, y se daba
+por hecho que era el precio de la aritmética comprobada. Aislando cada pieza en una réplica del
+código generado (`fib(34)`, M3 Pro y Linux aarch64 — mismas cifras en ambos):
+
+| Variante | ms |
+|---|---|
+| hoy: contador de profundidad en memoria + aritmética comprobada | 26,7 |
+| solo aritmética comprobada | 17,3 |
+| solo contador | 26,7 |
+| comprobada + profundidad como parámetro | 17,3 |
+| comprobada + parámetro + escribir el contador tras cada llamada | 21,8 |
+| comprobada + parámetro + UNA escritura del contador al entrar | 26,8 |
+
+La aritmética comprobada es gratis; un tercio del tiempo era el contador (M295): leerlo, sumarlo,
+escribirlo, compararlo y volver a escribirlo al salir, en cada llamada. Y basta UNA escritura por
+marco para perder toda la ganancia: la profundidad tiene que vivir en un registro.
+
+**Qué se hizo.** Cada función que puede recurrir se emite como un cuerpo `nombre__d(…, __rt_dp)`
+— recibe la profundidad de quien la llama, suma uno y compara, sin tocar memoria — más una
+entrada `nombre(…)` con la firma de raylang para quien no lleva la cuenta en un registro (código
+que no cuenta, valores función, closures): toma la base del contador en memoria y la restaura al
+volver. Dentro de un cuerpo, una llamada directa a otra función que cuenta pasa `__rt_dp` (en
+posición de cola, `__rt_dp - 1`: el marco no cuenta, como el `TailCall` de la VM); cualquier otra
+llamada que pueda volver a entrar en código raylang — una función que no cuenta, un valor función,
+un builtin que recibe una función — publica antes la profundidad en el contador. Un builtin sin
+funciones entre sus argumentos no puede volver a entrar y no paga nada, así que un bucle caliente
+de `main` sigue igual. `try_call` guarda y restaura el contador (un error que desenrolla no pasa
+por las entradas). Las closures siguen con el guard de M295. El límite sigue siendo en MARCOS y
+corta donde corta la VM (`tests/native_depth_cli.rs`, `recursion_depth_by_parameter_matches_the_vm`).
+
+**Descartado**: el tope por puntero de pila — igual de rápido y más simple, pero el límite dejaría
+de ser «N marcos» y el nativo cortaría a otra profundidad que la VM.
+
+**Medido** (banco poliglota, nativo, ms; Go de la misma corrida):
+
+| Programa | 1.27.95 | ahora | Go |
+|---|---|---|---|
+| `fibrec` | 28,5 | **18,7** (−35 %) | 16,8 |
+| `treealloc` | 22,8 | **19,1** (−17 %) | 29,5 |
+
+El resto, dentro del ruido de la corrida (±5 %; `jsonserialize` +9 % sin una sola escritura nueva
+en su bucle — comprobado en el código generado —: es memoria, no este cambio). En el banco de
+sondeo `queens`, `results` y los demás no se mueven: su recursión es poco profunda o pasa por
+valores función.

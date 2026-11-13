@@ -60,6 +60,19 @@ struct Transpiler {
     /// M295: ¿el cuerpo que se está emitiendo lleva guard `_f`? (para soltarlo en las llamadas de
     /// cola) y las posiciones de esas llamadas en ese cuerpo.
     depth_active: bool,
+    /// M452: se está emitiendo el cuerpo de una FUNCIÓN que cuenta profundidad (`nombre__d`): su
+    /// profundidad vive en el parámetro oculto `__rt_dp` (un registro), no en el contador en
+    /// memoria. Falso dentro de una closure (que sigue con el guard `_f`).
+    depth_param: bool,
+    /// M452: nombres de builtin que el usuario REDEFINE (su definición se emite: es código raylang
+    /// y puede volver a entrar; ver `may_reenter`).
+    user_overrides: std::collections::HashSet<String>,
+    /// M452: la llamada en curso resultó DIRECTA a otra función que cuenta (`g__d(…, __rt_dp)`);
+    /// si no, antes de llamar se publica la profundidad en el contador (ver `ExprKind::Call`).
+    depth_direct: bool,
+    /// M452: argumento de profundidad de la llamada en curso (`__rt_dp`, o `__rt_dp - 1` en
+    /// posición de cola: el marco no cuenta, como el `TailCall` de la VM).
+    depth_arg: Option<&'static str>,
     tail_sites: std::collections::HashSet<(usize, usize)>,
     /// Pila de ámbitos: nombre de variable → su tipo (para decidir clonado y para la inferencia de `let`).
     scopes: Vec<HashMap<String, Type>>,
@@ -431,6 +444,10 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         str_lit_index: HashMap::new(),
         depth_closures,
         depth_active: false,
+        depth_param: false,
+        user_overrides: prog.functions.iter().filter(|f| is_handled_builtin(&f.name) && !skip_fn_def(f)).map(|f| f.name.clone()).collect(),
+        depth_direct: false,
+        depth_arg: None,
         tail_sites: std::collections::HashSet::new(),
         scopes: Vec::new(),
         probe_binds: std::cell::RefCell::new(Vec::new()),

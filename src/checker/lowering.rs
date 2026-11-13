@@ -1124,20 +1124,21 @@ fn collect_concat(e: Expr, sites: &std::collections::HashSet<(usize, usize)>, ou
 // - **V5 sort**: tras `lower_dict_calls`, `sort(a, <prim>#less)` (el sort genérico con el
 //   diccionario de un `impl Ord` primitivo) → `__sort_prim(a)` (sort nativo de Rust; el del
 //   prelude paga 2 clones de String por comparación vía `Index`). `float` fuera (NaN).
-// - **D3 unwrap_or**: `index_of(s, sub).unwrap_or(d)`, `last_index_of(…)` (M431) y
-//   `parse_int(s).unwrap_or(d)` — que tras
+// - **D3 unwrap_or**: `index_of(s, sub).unwrap_or(d)`, `last_index_of(…)` (M431),
+//   `parse_int(s).unwrap_or(d)` y (M453) `get(m, k).unwrap_or(d)` con `d` sin llamadas → `__get_or`
+//   — que tras
 //   las bajadas son `Option#unwrap_or(index_of(s, sub), d)` — → `__index_of_or(s, sub, d)` /
 //   `__parse_int_or(s, d)`: muere el arreglo etiquetado del primitivo, el Option del wrapper y
 //   los marcos de ambas llamadas (~3 allocs de heap + 2 marcos por uso; patrón P0.2 `get_or`).
 
-pub(super) fn lower_prelude_fusions(program: &mut Program, origin: &PreludeOrigin) {
+pub(super) fn lower_prelude_fusions(program: &mut Program, origin: &PreludeOrigin, local_callees: &HashSet<(usize, usize)>) {
     let sort_on = origin.sort_fn && !origin.ord_prims.is_empty();
     let or_on = origin.unwrap_or_impl && (origin.index_of_fn || origin.last_index_of_fn || origin.parse_int_fn || origin.get_fn);
     if !sort_on && !or_on {
         return;
     }
     for f in &mut program.functions {
-        lower_fusion_block(&mut f.body, origin);
+        lower_fusion_block(&mut f.body, origin, local_callees);
     }
 }
 
@@ -1146,37 +1147,37 @@ fn sortable_dict(d: &str, origin: &PreludeOrigin) -> bool {
         && origin.ord_prims.contains(d.split('#').next().unwrap_or(""))
 }
 
-fn lower_fusion_block(block: &mut Block, origin: &PreludeOrigin) {
+fn lower_fusion_block(block: &mut Block, origin: &PreludeOrigin, local_callees: &HashSet<(usize, usize)>) {
     for stmt in &mut block.statements {
         match &mut stmt.kind {
-            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_fusion_expr(value, origin),
+            StmtKind::Let { value, .. } | StmtKind::LetTuple { value, .. } => lower_fusion_expr(value, origin, local_callees),
             StmtKind::For { iter, body, .. } => {
                 match iter {
-                    ForIter::Range { start, end } => { lower_fusion_expr(start, origin); lower_fusion_expr(end, origin); }
-                    ForIter::In(e) => lower_fusion_expr(e, origin),
-                    ForIter::Iter { expr, .. } => lower_fusion_expr(expr, origin),
+                    ForIter::Range { start, end } => { lower_fusion_expr(start, origin, local_callees); lower_fusion_expr(end, origin, local_callees); }
+                    ForIter::In(e) => lower_fusion_expr(e, origin, local_callees),
+                    ForIter::Iter { expr, .. } => lower_fusion_expr(expr, origin, local_callees),
                 }
-                lower_fusion_block(body, origin);
+                lower_fusion_block(body, origin, local_callees);
             }
             StmtKind::Assign { target, value } => {
-                lower_fusion_expr(target, origin);
-                lower_fusion_expr(value, origin);
+                lower_fusion_expr(target, origin, local_callees);
+                lower_fusion_expr(value, origin, local_callees);
             }
             StmtKind::Break { .. } | StmtKind::Continue { .. } => {}
             StmtKind::Return { value } => {
                 if let Some(v) = value {
-                    lower_fusion_expr(v, origin);
+                    lower_fusion_expr(v, origin, local_callees);
                 }
             }
-            StmtKind::Expr(e) => lower_fusion_expr(e, origin),
+            StmtKind::Expr(e) => lower_fusion_expr(e, origin, local_callees),
         }
     }
     if let Some(t) = &mut block.tail {
-        lower_fusion_expr(t, origin);
+        lower_fusion_expr(t, origin, local_callees);
     }
 }
 
-fn lower_fusion_expr(expr: &mut Expr, origin: &PreludeOrigin) {
+fn lower_fusion_expr(expr: &mut Expr, origin: &PreludeOrigin, local_callees: &HashSet<(usize, usize)>) {
     if let ExprKind::Call { callee, args } = &mut expr.kind {
         if let ExprKind::Ident(n) = &callee.kind {
             let n = n.clone(); // termina el préstamo: abajo se REESCRIBE callee.kind
@@ -1193,6 +1194,9 @@ fn lower_fusion_expr(expr: &mut Expr, origin: &PreludeOrigin) {
             // (otro Option) queda intacto.
             if n == "Option#unwrap_or" && args.len() == 2 && origin.unwrap_or_impl {
                 let target = match &args[0].kind {
+                    // Una variable local de tipo función con el nombre del wrapper (`let get =
+                    // fn(…) {…}`, un parámetro `parse_int: fn(…)`) NO es el del prelude.
+                    ExprKind::Call { callee: inner, .. } if local_callees.contains(&(inner.line, inner.col)) => None,
                     ExprKind::Call { callee: inner, args: iargs } => match &inner.kind {
                         ExprKind::Ident(w) if w == "index_of" && iargs.len() == 2 && origin.index_of_fn => {
                             Some("__index_of_or")
@@ -1231,66 +1235,66 @@ fn lower_fusion_expr(expr: &mut Expr, origin: &PreludeOrigin) {
     }
     match &mut expr.kind {
         ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } | ExprKind::Try(inner) => {
-            lower_fusion_expr(inner, origin)
+            lower_fusion_expr(inner, origin, local_callees)
         }
         ExprKind::Binary { left, right, .. } => {
-            lower_fusion_expr(left, origin);
-            lower_fusion_expr(right, origin);
+            lower_fusion_expr(left, origin, local_callees);
+            lower_fusion_expr(right, origin, local_callees);
         }
         ExprKind::Call { callee, args } => {
-            lower_fusion_expr(callee, origin);
+            lower_fusion_expr(callee, origin, local_callees);
             for a in args {
-                lower_fusion_expr(a, origin);
+                lower_fusion_expr(a, origin, local_callees);
             }
         }
         ExprKind::ArrayLit(elems) | ExprKind::TupleLit(elems) => {
             for e in elems {
-                lower_fusion_expr(e, origin);
+                lower_fusion_expr(e, origin, local_callees);
             }
         }
         ExprKind::MapLit(pairs) => {
             for (k, v) in pairs {
-                lower_fusion_expr(k, origin);
-                lower_fusion_expr(v, origin);
+                lower_fusion_expr(k, origin, local_callees);
+                lower_fusion_expr(v, origin, local_callees);
             }
         }
         ExprKind::Index { array, index } => {
-            lower_fusion_expr(array, origin);
-            lower_fusion_expr(index, origin);
+            lower_fusion_expr(array, origin, local_callees);
+            lower_fusion_expr(index, origin, local_callees);
         }
         ExprKind::StructLit { fields, .. } => {
             for (_, e) in fields {
-                lower_fusion_expr(e, origin);
+                lower_fusion_expr(e, origin, local_callees);
             }
         }
         ExprKind::EnumLit { args, .. } => {
             for a in args {
-                lower_fusion_expr(a, origin);
+                lower_fusion_expr(a, origin, local_callees);
             }
         }
-        ExprKind::Field { object, .. } => lower_fusion_expr(object, origin),
-        ExprKind::Func(f) => lower_fusion_block(&mut f.body, origin),
+        ExprKind::Field { object, .. } => lower_fusion_expr(object, origin, local_callees),
+        ExprKind::Func(f) => lower_fusion_block(&mut f.body, origin, local_callees),
         ExprKind::Match { scrutinee, arms } => {
-            lower_fusion_expr(scrutinee, origin);
+            lower_fusion_expr(scrutinee, origin, local_callees);
             for arm in arms {
                 if let Some(g) = &mut arm.guard {
-                    lower_fusion_expr(g, origin);
+                    lower_fusion_expr(g, origin, local_callees);
                 }
-                lower_fusion_expr(&mut arm.body, origin);
+                lower_fusion_expr(&mut arm.body, origin, local_callees);
             }
         }
         ExprKind::If { cond, then_branch, else_branch } => {
-            lower_fusion_expr(cond, origin);
-            lower_fusion_block(then_branch, origin);
+            lower_fusion_expr(cond, origin, local_callees);
+            lower_fusion_block(then_branch, origin, local_callees);
             if let Some(e) = else_branch {
-                lower_fusion_expr(e, origin);
+                lower_fusion_expr(e, origin, local_callees);
             }
         }
         ExprKind::While { cond, body, .. } => {
-            lower_fusion_expr(cond, origin);
-            lower_fusion_block(body, origin);
+            lower_fusion_expr(cond, origin, local_callees);
+            lower_fusion_block(body, origin, local_callees);
         }
-        ExprKind::Block(b) => lower_fusion_block(b, origin),
+        ExprKind::Block(b) => lower_fusion_block(b, origin, local_callees),
         ExprKind::Int(..) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_)
         | ExprKind::Char(_) | ExprKind::Bytes(_) | ExprKind::Ident(_) => {}
     }
@@ -1540,7 +1544,8 @@ fn lower_print_shows_expr(expr: &mut Expr, sites: &PrintShowMap) {
 
 
 /// ¿Está `e` libre de llamadas (y de bloques, que pueden contenerlas)? Literales, variables,
-/// campos, índices y aritmética: evaluarlo antes o después de otra expresión no cambia nada.
+/// campos y aritmética: evaluarlo antes o después de otra expresión no cambia nada. (Un índice
+/// `a[i]` queda fuera: puede fallar, y el orden de un fallo sí se observa.)
 fn call_free(e: &Expr) -> bool {
     match &e.kind {
         ExprKind::Int(..) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Str(_) | ExprKind::Char(_) | ExprKind::Ident(_) => true,

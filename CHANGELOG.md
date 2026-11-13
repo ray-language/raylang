@@ -4,18 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.97 — 2026-11-14
 
 - **`m.get(k).unwrap_or(d)` es 3–4× más rápido en la VM (M453)**: la lectura con valor por defecto
   ya no pasa por un `Option` intermedio cuando el default no lleva llamadas (igual que
   `m.get_or(k, d)`). El bucle de despacho de la VM va además un 5–6 % más ligero en general.
 - **`m.get(k).unwrap_or(f(m))` ya no rompe un binario nativo**: cuando el valor por defecto
   modificaba el mismo mapa, el nativo moría con «RefCell already borrowed»; la VM lo permitía.
-
-- **La recursión es más rápida en los binarios nativos (M452)**: el límite de profundidad —que
-  sigue cortando en el mismo marco y con el mismo mensaje que la VM— ya no se lleva en un contador
-  en memoria sino en un parámetro oculto entre las funciones recursivas. Una función recursiva
-  pura va un 35 % más rápida (`fib(34)`: 28,5 → 18,7 ms) y recorrer un árbol, un 17 %.
 
 ## 1.27.96 — 2026-11-13
 

@@ -228,8 +228,9 @@ struct Vm<'a> {
     shared: Arc<Mutex<Shared>>,
     /// M42.1: **fuel** — presupuesto de instrucciones restante (límite de recursos para embeber raylang
     /// como lenguaje de scripts confinado). Decrece una por instrucción; al llegar a 0 se aborta con un
-    /// error limpio. `u64::MAX` = **sin límite** (el default): nunca se agota en la práctica, así que el
-    /// coste es un decremento + comparación por instrucción, sin ramas.
+    /// error limpio. `u64::MAX` = **sin límite** (el default): con él NO se descuenta (M453: una
+    /// comparación por instrucción, sin escritura) — el campo no sirve entonces para contar
+    /// instrucciones ejecutadas.
     fuel: u64,
     /// M330 D1: cuenta atrás de **saltos hacia atrás** (bucles) hasta la próxima consulta de la parada
     /// cooperativa (`stop::requested`). Se toca SOLO en el brazo de `Jump` cuando salta hacia atrás — el

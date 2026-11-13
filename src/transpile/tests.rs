@@ -232,11 +232,8 @@ fn transpiles_recursive_fib() {
     assert!(rust.contains("fn fib(mut n: i64) -> i64"), "{}", rust);
     // H6: la resta de int baja al helper CHECKED (overflow → runtime error, como la VM).
     // Los args van IZADOS a temporales (clase RefCell-en-args, ago 2026).
-    // M452: fib puede recurrir → la llamada directa va al cuerpo `fib__d` con la profundidad en
-    // un registro; `fn fib(…)` es la entrada para quien no la lleva.
-    assert!(rust.contains("fn fib__d(mut n: i64, mut __rt_dp: u32) -> i64 { __rt_dp += 1; __ray_depth_check(__rt_dp);"), "{}", rust);
-    assert!(rust.contains("let __rt_a0 = __ray_sub(n, 1i64); fib__d(__rt_a0, __rt_dp)"), "{}", rust);
-    assert!(rust.contains("let __rt_a0 = 10i64; fib__d(__rt_a0, __rt_dp) }.ray_show()"), "{}", rust);
+    assert!(rust.contains("let __rt_a0 = __ray_sub(n, 1i64); fib(__rt_a0)"), "{}", rust);
+    assert!(rust.contains("let __rt_a0 = 10i64; fib(__rt_a0) }.ray_show()"), "{}", rust);
 }
 
 #[test]
@@ -348,7 +345,7 @@ fn field_reads_close_their_borrow_guard_before_the_next_argument() {
     crate::checker::check(&mut prog).expect("check");
     let rust = super::transpile_full(&prog, &[], false, true).expect("transpile").source;
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(rust.matches("let __rt_p = ({ s.borrow().p.clone() }); let __rt_d = { let __rt_a0 = s.clone(); data__d(__rt_a0, __rt_dp) }; match std::fs::write(&*__rt_p, &*__rt_d)").count(), 1, "el campo en su bloque y los args una vez: {rust}");
+    assert_eq!(rust.matches("let __rt_p = ({ s.borrow().p.clone() }); let __rt_d = { let __rt_a0 = s.clone(); data(__rt_a0) }; match std::fs::write(&*__rt_p, &*__rt_d)").count(), 1, "el campo en su bloque y los args una vez: {rust}");
 }
 
 /// N-D4b: `let f = s.split(sep)` consumido SOLO por `f[const]` → extracción en una pasada, sin
@@ -1404,8 +1401,8 @@ fn trait_method_named_like_builtin_calls_the_impl() {
              s.get(\"a\"); s.keys().len() }",
     );
     assert!(rust.contains("fn Store_HH_get"), "la def del método se emite: {}", rust);
-    assert!(rust.contains("Store_HH_get__d(__rt_a0"), "el sitio llama al impl, no al builtin de Map: {}", rust);
-    assert!(rust.contains("Store_HH_keys__d(__rt_a0"), "keys va al impl, no a __ray_keys: {}", rust);
+    assert!(rust.contains("Store_HH_get(__rt_a0"), "el sitio llama al impl, no al builtin de Map: {}", rust);
+    assert!(rust.contains("Store_HH_keys(__rt_a0"), "keys va al impl, no a __ray_keys: {}", rust);
 }
 
 #[test]
@@ -1764,14 +1761,14 @@ fn hoists_composite_literal_args_to_temporaries() {
         let end = rest[1..].find("\nfn ").map(|i| i + 1).unwrap_or(rest.len());
         rest[..end].to_string()
     };
-    let pure = body_of(&transpile_src("fn main() { print([1, 2, -3]); }"), "fn ray_main__d");
+    let pure = body_of(&transpile_src("fn main() { print([1, 2, -3]); }"), "fn ray_main");
     assert!(pure.contains("vec![1i64, 2i64, __ray_neg(3i64)]") && !pure.contains("__rt_a"), "literales puros en línea: {}", pure);
-    let mixed = body_of(&transpile_src("fn main() { let a = 1; print([a, 2]); }"), "fn ray_main__d");
+    let mixed = body_of(&transpile_src("fn main() { let a = 1; print([a, 2]); }"), "fn ray_main");
     assert!(mixed.contains("let __rt_a0") && !mixed.contains("let __rt_a1") && mixed.contains("vec![__rt_a0, 2i64]"), "mixto: solo se iza el no literal: {}", mixed);
     // M396 (rayplay #168): el const compartido también como ARGUMENTO de un parámetro de solo lectura.
     let shared = body_of(
         &transpile_src("const TAB: [int] = [1, 2, 3];\nfn first(t: [int], i: int) -> int { t[i] }\nfn grow(t: [int]) -> int { t.push(1); t.len() }\nfn main() { print(first(TAB, 0)); print(grow(TAB)); }"),
-        "fn ray_main__d",
+        "fn ray_main",
     );
     assert!(shared.contains("let __rt_a0 = TAB__shared();"), "const a parámetro de solo lectura: compartido: {}", shared);
     assert!(shared.contains("let __rt_a0 = TAB();"), "const a parámetro que muta: literal fresco: {}", shared);
@@ -1798,22 +1795,20 @@ fn depth_prologue_only_on_functions_that_can_recurse() {
     // (Las closures del PRELUDE sí pueden estar en ciclo —llaman a valores `fn`—; el conjunto no
     // distingue origen, así que aquí no se afirma nada sobre él.)
     let _ = closures;
-    // En el Rust emitido (M452): fib y los recursivos tienen el cuerpo `__d` con la profundidad
-    // en un parámetro (sin `__ray_enter`); leaf/helper no llevan nada; main siempre cuenta.
+    // En el Rust emitido: fib y los recursivos llevan `__ray_enter`; leaf/helper no; main siempre.
     let out = transpile_src(src);
-    for f in ["fn fib__d(", "fn even__d(", "fn apply__d(", "fn ray_main__d("] {
+    for f in ["fn fib(", "fn even(", "fn apply(", "fn ray_main("] {
         let i = out.find(f).unwrap_or_else(|| panic!("{f} emitida"));
-        assert!(out[i..i + 200].contains("__rt_dp += 1; __ray_depth_check(__rt_dp);") && !out[i..i + 200].contains("__ray_enter()"), "{f} lleva el prólogo");
+        assert!(out[i..i + 200].contains("__ray_enter()"), "{f} lleva el prólogo");
     }
     for f in ["fn leaf(", "fn helper("] {
         let i = out.find(f).unwrap_or_else(|| panic!("{f} emitida"));
-        assert!(!out[i..i + 120].contains("__ray_depth") && !out[i..i + 120].contains("__ray_enter()"), "{f} NO lleva el prólogo");
+        assert!(!out[i..i + 120].contains("__ray_enter()"), "{f} NO lleva el prólogo");
     }
-    assert!(!out.contains("fn leaf__d(") && !out.contains("fn helper__d("), "sin cuerpo __d para lo que no recurre");
-    // Una llamada en cola no cuenta marco: odd → even pasa `__rt_dp - 1`.
-    let i = out.find("fn odd__d(").unwrap();
+    // Las llamadas en cola de un cuerpo con guard lo sueltan antes (`drop(_f)`): odd → even es de cola.
+    let i = out.find("fn odd(").unwrap();
     let odd = &out[i..i + 400];
-    assert!(odd.contains("even__d(__rt_a0, __rt_dp - 1)"), "la llamada de cola no cuenta marco: {odd}");
+    assert!(odd.contains("drop(_f);") && odd.find("drop(_f);") < odd.find("even("), "tail call suelta el guard antes de llamar: {odd}");
 }
 
 /// M295: `--fast` quita el contador de profundidad del todo (código propio y confiado).
@@ -1926,12 +1921,11 @@ fn a_match_guard_is_not_a_tail_call_site() {
          fn h(a: int, p: string) -> int { match (a) { 1 if p.starts_with(\"x\") => g(p), _ => 0 } }\n\
          fn main() -> int { h(1, \"xy\") }",
     );
-    let start = rust.find("fn h__d(").expect("fn h__d");
+    let start = rust.find("fn h(").expect("fn h");
     let end = rust[start..].find("\nfn ").map(|i| start + i).unwrap_or(rust.len());
     let body = &rust[start..end];
-    // M452: «no contar el marco» es pasar `__rt_dp - 1`; la guarda no lo hace, el cuerpo sí.
-    assert!(body.contains("1 if {  p.clone().starts_with(\"x\") } =>"), "la guarda no toca la profundidad: {body}");
-    assert_eq!(body.matches("__rt_dp - 1").count(), 1, "solo la llamada de cola del cuerpo: {body}");
+    assert!(!body.contains("drop(_f); p.clone().starts_with"), "la guarda no suelta el marco: {body}");
+    assert_eq!(body.matches("std::mem::drop(_f)").count(), 1, "solo la llamada de cola del cuerpo: {body}");
 }
 
 /// rayobs #292: un TIPO que menciona `Channel<T>` (campo de struct) trae el runtime de canales aunque

@@ -32,6 +32,7 @@ impl Checker {
             break_ok: false,
             type_params: HashSet::new(),
             ufcs_sites: HashMap::new(),
+            local_callee_sites: HashSet::new(),
             pub_functions: HashSet::new(),
             for_iter_sites: HashMap::new(),
             op_sites: HashMap::new(),
@@ -3061,6 +3062,9 @@ impl Checker {
             // Llamada directa por nombre: `f(a, b)`.
             ExprKind::Ident(n) => {
                 let n = n.clone();
+                if self.lookup(&n).is_some() {
+                    self.local_callee_sites.insert((callee.line, callee.col));
+                }
                 // Completion tras `|>`: el LSP repara `x |> parc` como `x |> __raycomplete__`, que el
                 // parser desazucara a `__raycomplete__(x)`. Como `x |> f` ≡ `f(x)`, enumeramos los
                 // miembros del tipo del receptor (el primer argumento) —las mismas funciones que ofrece

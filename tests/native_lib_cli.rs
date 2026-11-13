@@ -149,7 +149,10 @@ fn the_static_library_drives_a_c_shell_end_to_end() {
         .arg(&lib)
         .arg("-o")
         .arg(&exe)
-        .args(["-framework", "AppKit", "-framework", "WebKit", "-framework", "Foundation", "-lobjc"])
+        // MediaPlayer: el runtime de `ui` trae `std/media` (Now Playing) desde 1.27.58; sin él el
+        // enlace muere con `_MPMediaItemProperty…` sin resolver (este test solo corre en macOS,
+        // fuera del CI, y llevaba roto desde entonces).
+        .args(["-framework", "AppKit", "-framework", "WebKit", "-framework", "Foundation", "-framework", "MediaPlayer", "-lobjc"])
         .output()
         .expect("cc");
     assert!(cc.status.success(), "link del driver\n{}", String::from_utf8_lossy(&cc.stderr));

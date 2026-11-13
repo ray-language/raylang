@@ -198,8 +198,8 @@ impl Transpiler {
 
     /// El argumento de un parámetro DICCIONARIO monomorfizado (`__D: Fn(…) + Clone`). El impl por
     /// nombre va como ítem de función (tamaño cero, inlineable); un diccionario propio se reenvía
-    /// clonado; una closure literal va tal cual; cualquier otro valor función (un `Rc<dyn Fn>`, que
-    /// no implementa `Fn`) se envuelve en una closure que lo llama.
+    /// clonado; cualquier otro valor función — una closure literal o un `Rc<dyn Fn>`, que no
+    /// implementa `Fn` — se envuelve en una closure que lo llama.
     pub(super) fn emit_dict_arg(&mut self, out: &mut String, a: &Expr, arity: usize) -> Result<(), String> {
         match &a.kind {
             ExprKind::Ident(n) if self.dict_params.contains(n) => {
@@ -210,10 +210,12 @@ impl Transpiler {
                 out.push_str(&mangle(n));
                 return Ok(());
             }
-            ExprKind::Func(fx) => return self.emit_func_literal(out, fx, false),
+            // Una closure literal NO va por `emit_func_literal(…, false)`: ese modo es el de las
+            // closures que cruzan fibras (reconstruye sus capturas desde `__RaySend` dentro del
+            // cuerpo) y una captura con el nombre de un parámetro lo pisaba. Va por la vía general.
             _ => {}
         }
-        let params: Vec<String> = (0..arity).map(|i| format!("__d{i}")).collect();
+        let params: Vec<String> = (0..arity).map(|i| format!("__rt_dp{i}")).collect();
         out.push_str("{ let __rt_d = ");
         self.emit_expr(out, a)?;
         write!(out, "; move |{}| __rt_d({}) }}", params.join(", "), params.join(", ")).unwrap();

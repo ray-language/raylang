@@ -1,0 +1,34 @@
+import std/time;
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    let ch: Channel<int> = Channel.bounded(64);
+    let n = 1000000;
+    let prod = spawn(fn() {
+        for i in 0..n {
+            send(ch, i);
+        }
+        close(ch);
+    });
+    var sum = 0;
+    while (true) {
+        match (recv(ch)) {
+            Option.Some(v) => sum = (sum + v) % 1000003,
+            Option.None => break,
+        }
+    }
+    join(prod);
+    print(sum);
+    var acc = 0;
+    for r in 0..100 {
+        var ts: [Task<int>] = [];
+        for i in 0..1000 {
+            ts.push(spawn(fn() -> int { i * 2 + r }));
+        }
+        for t in ts {
+            acc = (acc + join(t)) % 1000003;
+        }
+    }
+    print(acc);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

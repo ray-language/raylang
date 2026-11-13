@@ -1,0 +1,36 @@
+import std/time;
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    let line = "GET /api/v1/users/12345?limit=50&offset=200 HTTP/1.1 host=example.com ua=Mozilla/5.0 status=200 bytes=5123";
+    var digits = 0;
+    var words = 0;
+    var numsum = 0;
+    for r in 0..40000 {
+        var cur = 0;
+        var in_num = false;
+        for c in line.chars() {
+            if (c >= '0' && c <= '9') {
+                digits = digits + 1;
+                cur = cur * 10 + (char_code(c) - 48);
+                in_num = true;
+            } else {
+                if (in_num) {
+                    numsum = (numsum + cur) % 1000003;
+                    cur = 0;
+                    in_num = false;
+                }
+                if (c == ' ') {
+                    words = words + 1;
+                }
+            }
+        }
+        if (in_num) {
+            numsum = (numsum + cur) % 1000003;
+        }
+    }
+    print(digits);
+    print(words);
+    print(numsum);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

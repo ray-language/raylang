@@ -345,7 +345,7 @@ fn field_reads_close_their_borrow_guard_before_the_next_argument() {
     crate::checker::check(&mut prog).expect("check");
     let rust = super::transpile_full(&prog, &[], false, true).expect("transpile").source;
     let _ = std::fs::remove_dir_all(&dir);
-    assert_eq!(rust.matches("let __rt_p = ({ s.clone().borrow().p.clone() }); let __rt_d = { let __rt_a0 = s.clone(); data(__rt_a0) }; match std::fs::write(&*__rt_p, &*__rt_d)").count(), 1, "el campo en su bloque y los args una vez: {rust}");
+    assert_eq!(rust.matches("let __rt_p = ({ s.borrow().p.clone() }); let __rt_d = { let __rt_a0 = s.clone(); data(__rt_a0) }; match std::fs::write(&*__rt_p, &*__rt_d)").count(), 1, "el campo en su bloque y los args una vez: {rust}");
 }
 
 /// N-D4b: `let f = s.split(sep)` consumido SOLO por `f[const]` → extracción en una pasada, sin
@@ -440,9 +440,11 @@ fn sort_on_a_generic_array_goes_through_the_less_dictionary() {
     let rust = transpile_src(
         "fn smallest<T: Ord>(a: [T]) -> [T] { sort(a) }\nfn main() {\n    print(smallest([3, 1, 2])[0]);\n    print(smallest([2.5, 1.5])[0]);\n}",
     );
-    assert!(rust.contains("fn smallest<T: Clone + RayShow + 'static + __RaySendConv>("), "{rust}");
+    // El diccionario del bound es un genérico monomorfizado (`__D1: Fn`); para `__ray_sort_by` se
+    // envuelve en el `Rc<dyn Fn>` que espera.
+    assert!(rust.contains("fn smallest<T: Clone + RayShow + 'static + __RaySendConv, __D1: Fn(T, T) -> bool + Clone + 'static>("), "{rust}");
     assert!(rust.contains("__ray_sort_by(&"), "{rust}");
-    assert!(rust.contains("&T_HH_Ord_HH_less)"), "{rust}");
+    assert!(rust.contains("&(Rc::new(T_HH_Ord_HH_less.clone()) as Rc<dyn Fn(T, T) -> bool>))"), "{rust}");
     assert!(!rust.contains("+ Ord>"), "{rust}");
 }
 
@@ -518,7 +520,7 @@ fn transpiles_map_add_to_get() {
     assert!(rust.contains("HashMap"), "{}", rust);
     assert!(rust.contains(".entry("), "{}", rust);
     assert!(rust.contains(".or_insert(0i64) += "), "{}", rust);
-    assert!(rust.contains(".get(&") && rust.contains(".unwrap_or("), "{}", rust);
+    assert!(rust.contains(".get(\"a\")") && rust.contains(".unwrap_or("), "la clave literal se consulta como &str: {}", rust);
 }
 
 #[test]
@@ -532,7 +534,8 @@ fn transpiles_struct_and_enum_match() {
     assert!(rust.contains("struct P {"), "{}", rust);
     assert!(rust.contains("enum Shape {"), "{}", rust);
     assert!(rust.contains("Rc::new(std::cell::RefCell::new(P {"), "{}", rust);
-    assert!(rust.contains("Rc::new(Shape::Circle(2.0f64))"), "{}", rust);
+    // `Shape` solo lleva escalares: enum de valor (`Copy`, sin `Rc`).
+    assert!(rust.contains("__RayVal::new(Shape::Circle(2.0f64))") && rust.contains("#[derive(Clone, Copy, PartialEq)]\nenum Shape {"), "{}", rust);
     assert!(rust.contains("match &*") && rust.contains("Shape::Circle(r)"), "{}", rust);
     assert!(rust.contains("RayShow for Rc<std::cell::RefCell<P>>"), "{}", rust);
 }
@@ -586,9 +589,10 @@ fn transpiles_generic_types() {
          fn main() -> int { let p = Par { a: 1, b: true }; extract(Box.Llena(9)) }",
     );
     assert!(rust.contains("struct Par<A: Clone"), "{}", rust);
-    assert!(rust.contains("enum Box<T: Clone"), "{}", rust);
-    assert!(rust.contains("Box::Llena(v)"), "{}", rust); // match de enum genérico
-    assert!(rust.contains("Rc::new(Box::Llena(9i64))"), "{}", rust);
+    // `Box` es un tipo de Rust que el código generado usa: el del usuario sale con sufijo.
+    assert!(rust.contains("enum Box_<T: Clone"), "{}", rust);
+    assert!(rust.contains("Box_::Llena(v)"), "{}", rust); // match de enum genérico
+    assert!(rust.contains("Rc::new(Box_::Llena(9i64))"), "{}", rust);
 }
 
 #[test]
@@ -1145,7 +1149,7 @@ fn transpiles_contains_and_parse_float() {
         "fn main() -> int { let ok = \"abc\".contains(\"b\"); let xs: [int] = [1, 2]; \
          let m = xs.contains(2); match (parse_float(\"1.5\")) { Option.Some(f) => { if (ok && m) { 1 } else { 0 } }, Option.None => 0 } }",
     );
-    assert!(rust.contains(".contains(&*"), "string contains: {}", rust);
+    assert!(rust.contains(".contains(\"b\")"), "string contains, la aguja literal como &str: {}", rust);
     assert!(rust.contains(".iter().any(|__e| *__e == __rt_x)"), "array contains: {}", rust);
     assert!(rust.contains(".parse::<f64>().ok()"), "parse_float: {}", rust);
 }
@@ -1939,7 +1943,7 @@ fn asserts_and_panics_carry_the_user_position() {
     let rust = transpile_src("fn main() { assert(1 == 2); assert_eq(1, 2); panic(\"boom\"); }");
     assert!(rust.contains("__ray_rt_err_at(\"assertion failed\", \"1:13\")"), "{rust}");
     assert!(rust.contains("__ray_rt_err_at(&format!(\"assert_eq failed: {} != {}\", __rt_a.ray_show(), __rt_b.ray_show()), \"1:29\")"), "{rust}");
-    assert!(rust.contains("__ray_rt_err_at(&*(Rc::<str>::from(\"boom\")), \"1:46\")"), "{rust}");
+    assert!(rust.contains("__ray_rt_err_at(&*(__ray_lit(") && rust.contains("), \"1:46\")") && rust.contains("static __RAY_LITS: [&str; "), "{rust}");
     assert!(rust.contains("fn __ray_rt_err_at(msg: &str, at: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string(), Some(at.to_string()))) }"), "{rust}");
     crate::transpile::set_position_bands(vec![(1, "m".into())]);
     let labeled = transpile_src("fn main() {\n    assert(1 == 2);\n}");
@@ -1959,6 +1963,84 @@ fn remove_at_and_insert_at_are_intercepted() {
     assert!(rust.contains("index {} out of range (length {})"), "{rust}");
     assert!(!transpile_src("fn main() -> int { 0 }").contains("mod __ray_float_fmt"), "solo si se usa");
     assert!(!transpile_src("fn main() -> int { 0 }").contains("mod __ray_md5"), "md5 solo si se usa");
+}
+
+/// Arco de rendimiento (nov 2026): un literal de string no reserva en cada uso — como valor sale
+/// de la tabla por hilo (`__ray_lit(i)`, sin repetir entradas) y donde basta el texto va como `&str`.
+#[test]
+fn string_literals_do_not_allocate_per_use() {
+    let rust = transpile_src(
+        "fn takes(s: string) -> int { s.len() }\n\
+         fn main() -> int { let line = \"alpha\"; var n = takes(\"delta\") + takes(\"delta\"); \
+         if (line == \"alpha\") { n = n + 1; } if (\"beta\" != line) { n = n + 1; } n }",
+    );
+    assert!(!rust.contains("Rc::<str>::from(\"delta\")") && !rust.contains("Rc::<str>::from(\"alpha\")"), "{rust}");
+    assert_eq!(rust.matches("\"delta\"").count(), 1, "una sola entrada en la tabla: {rust}");
+    assert!(rust.contains("(&*line.clone() == \"alpha\")") && rust.contains("(&*line.clone() != \"beta\")"), "{rust}");
+    assert!(rust.contains("fn __ray_lit(i: usize) -> Rc<str>"), "{rust}");
+}
+
+/// Arco de rendimiento (nov 2026): el diccionario de un bound (`T#Trait#metodo`) es un genérico de
+/// Rust — el impl viaja como ítem de función y se inlinea, sin `Rc<dyn Fn>` por llamada. Una
+/// función que recurre con un diccionario CONSTRUIDO (recursión polimórfica) sigue por `dyn`.
+#[test]
+fn bound_dictionaries_are_monomorphized() {
+    let rust = transpile_src(
+        "trait Sh { fn area(self) -> int; }\nstruct P { x: int }\nimpl Sh for P { fn area(self) -> int { self.x } }\n\
+         fn one<T: Sh>(s: T) -> int { s.area() }\nfn two<T: Sh>(s: T) -> int { one(s) + one(s) }\n\
+         fn deep<T: Show>(x: T, n: int) -> string { if (n == 0) { x.show() } else { deep([x], n - 1) } }\n\
+         fn main() -> int { two(P { x: 2 }) }",
+    );
+    assert!(rust.contains("fn one<T: Clone + RayShow + 'static + __RaySendConv, __D1: Fn(T) -> i64 + Clone + 'static>(mut s: T, mut T_HH_Sh_HH_area: __D1)"), "{rust}");
+    assert!(rust.contains("let __rt_a1 = P_HH_area; two("), "el impl va como ítem de función: {rust}");
+    assert!(rust.contains("let __rt_a1 = T_HH_Sh_HH_area.clone(); one("), "el diccionario propio se reenvía: {rust}");
+    assert!(rust.contains("mut T_HH_Show_HH_show: Rc<dyn Fn(T) -> Rc<str>>"), "la recursión polimórfica sigue por dyn: {rust}");
+}
+
+/// Arco de rendimiento (nov 2026): un enum sin parámetros de tipo cuyos datos son todos escalares
+/// (o no lleva datos) es un valor `Copy` (`__RayVal<E>`); con un string, otro enum o recursión
+/// sigue compartido por `Rc`.
+#[test]
+fn scalar_enums_are_values_and_the_rest_stay_shared() {
+    let rust = transpile_src(
+        "enum Op { Push(int), Add }\nenum Name { Of(string), Anon }\nenum Tree { Leaf(int), Node(Tree, Tree) }\n\
+         fn run(o: Op) -> int { match (o) { Op.Push(v) => v, Op.Add => 1 } }\n\
+         fn main() -> int { let n = Name.Of(\"x\"); let t = Tree.Leaf(1); run(Op.Push(2)) }",
+    );
+    assert!(rust.contains("fn run(mut o: __RayVal<Op>) -> i64") && rust.contains("__RayVal::new(Op::Push("), "{rust}");
+    assert!(rust.contains("impl RayShow for __RayVal<Op>"), "{rust}");
+    assert!(rust.contains("Rc::new(Name::Of(") && rust.contains("Rc::new(Tree::Leaf(") && rust.contains("#[derive(Clone, PartialEq)]\nenum Tree {"), "{rust}");
+}
+
+/// Arco de rendimiento (nov 2026): el izado de préstamos cubre control de flujo, escrituras y filas
+/// invariantes de un arreglo de arreglos; con escrituras o filas hay una guarda en ejecución y un
+/// camino sin izar. Leer o escribir un campo, y `push`, sobre una variable local no clonan su `Rc`.
+#[test]
+fn loops_hoist_borrows_across_control_flow_stores_and_rows() {
+    let rust = transpile_src(
+        "struct P { x: int }\n\
+         fn main() -> int {\n\
+             var a: [int] = [1, 2, 3]; var b: [int] = [0, 0, 0]; var g: [[int]] = [[1, 2], [3, 4]];\n\
+             var n = 0;\n\
+             for i in 0..3 { if (a[i] > 1) { n = n + a[i]; } }\n\
+             for i in 0..3 { b[i] = a[i] + 1; }\n\
+             let y = 1;\n\
+             for x in 0..2 { g[y][x] = g[y - 1][x] + 1; }\n\
+             let p = P { x: 1 }; p.x = p.x + 1; a.push(4);\n\
+             n + p.x\n\
+         }",
+    );
+    // solo lectura: sin guarda de alias
+    assert!(rust.contains("{\n    let __rt_bh_0 = a.borrow();\n    for i in __rt_lo..__rt_hi"), "{rust}");
+    // escritura con dos arreglos: guarda de identidad y camino sin izar
+    assert!(rust.contains("if Rc::as_ptr(&b) as *const u8 != Rc::as_ptr(&a) as *const u8 {\n    let mut __rt_bh_0 = b.borrow_mut();\n    let __rt_bh_1 = a.borrow();"), "{rust}");
+    assert!(rust.contains(" else { for i in __rt_lo..__rt_hi "), "{rust}");
+    // filas: índice que no puede fallar, `None` = sin izar
+    assert!(rust.contains("let __rt_row_0 = __ray_row(&g, Some(y));") && rust.contains("__ray_row(&g, Some(y).and_then(|__a: i64| Some(1i64).and_then(|__b: i64| __a.checked_sub(__b))))"), "{rust}");
+    assert!(rust.contains("__rt_row_0.is_some() && __rt_row_1.is_some() && Rc::as_ptr(__rt_row_0.as_ref().unwrap()) as *const u8 != Rc::as_ptr(__rt_row_1.as_ref().unwrap()) as *const u8"), "{rust}");
+    // variable local: sin `Rc::clone` para un campo ni para `push`
+    assert!(rust.contains("{ let __rt_rhs = __ray_add(({ p.borrow().x.clone() }), 1i64); p.borrow_mut().x = __rt_rhs; }"), "{rust}");
+    assert!(rust.contains("{ let __rt_v = 4i64; a.borrow_mut().push(__rt_v); }"), "{rust}");
 }
 
 /// Una closure literal que es el valor de una rama lleva el cast a su tipo `dyn` (las ramas de un

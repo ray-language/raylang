@@ -37,8 +37,31 @@ pub(super) fn mangle(name: &str) -> String {
         if is_rust_keyword(&base) {
             return format!("r#{base}");
         }
+        // Un tipo (o función) de usuario con el nombre de un tipo de Rust que el código generado usa
+        // SIN calificar (`struct Rc`, `struct Vec`, `trait Send`…) lo tapaba: el build nativo moría
+        // con cientos de errores de rustc. Sufijo `_`; el nombre que se MUESTRA sigue siendo el original.
+        if shadows_generated_code(&base) {
+            return format!("{base}_");
+        }
     }
     base
+}
+
+/// ¿Es `s` un nombre que el Rust generado (o su runtime embebido) usa sin calificar? Los nombres del
+/// prelude de raylang (`Option`, `Result`, `Eq`, `Clone`…) no están: el checker ya los niega a un
+/// tipo de usuario, y varios se emiten tal cual.
+pub(super) fn shadows_generated_code(s: &str) -> bool {
+    matches!(
+        s,
+        "Rc" | "Arc" | "Weak" | "RefCell" | "Cell" | "Vec" | "VecDeque" | "String" | "Box" | "HashMap"
+            | "HashSet" | "BTreeMap" | "BTreeSet" | "Send" | "Sync" | "Sized" | "Copy" | "Drop" | "Fn"
+            | "FnMut" | "FnOnce" | "Default" | "Into" | "Iterator" | "IntoIterator" | "ToString"
+            | "ToOwned" | "AsRef" | "AsMut" | "Some" | "None" | "Ok" | "Err" | "Mutex" | "Duration"
+            | "Instant" | "Path" | "PathBuf" | "Ordering" | "Debug" | "Display" | "Unpin" | "Any"
+            | "Error" | "Write" | "Read" | "Pin" | "Borrow" | "BorrowMut" | "PartialEq" | "PartialOrd"
+            | "TryFrom" | "TryInto" | "Extend" | "FromIterator" | "DoubleEndedIterator"
+            | "ExactSizeIterator" | "RayShow" | "ray_main"
+    )
 }
 
 /// ¿Es `s` una palabra reservada de Rust (estricta o reservada-para-el-futuro) que un identificador

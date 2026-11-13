@@ -1,0 +1,19 @@
+import std/time;
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    var xs: [int] = [];
+    for i in 0..100000 {
+        xs.push(i);
+    }
+    var acc = 0;
+    for r in 0..100 {
+        let s = xs
+            .map(fn(x: int) -> int { x * 3 + r })
+            .filter(fn(x: int) -> bool { x % 2 == 0 })
+            .fold(0, fn(a: int, x: int) -> int { (a + x) % 1000003 });
+        acc = (acc + s) % 1000003;
+    }
+    print(acc);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

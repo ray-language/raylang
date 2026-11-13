@@ -1,0 +1,47 @@
+import std/time;
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    let n = 3000000;
+    var sieve: [bool] = [];
+    for i in 0..n {
+        sieve.push(true);
+    }
+    var i = 2;
+    while (i * i < n) {
+        if (sieve[i]) {
+            var j = i * i;
+            while (j < n) {
+                sieve[j] = false;
+                j = j + i;
+            }
+        }
+        i = i + 1;
+    }
+    var primes = 0;
+    for k in 2..n {
+        if (sieve[k]) {
+            primes = primes + 1;
+        }
+    }
+    print(primes);
+    let w = 700;
+    var g: [[int]] = [];
+    for y in 0..w {
+        var row: [int] = [];
+        for x in 0..w {
+            row.push((x * 31 + y * 17) % 10);
+        }
+        g.push(row);
+    }
+    for y in 1..w {
+        for x in 1..w {
+            let up = g[y - 1][x];
+            let left = g[y][x - 1];
+            let best = if (up < left) { up } else { left };
+            g[y][x] = (g[y][x] + best) % 1000003;
+        }
+    }
+    print(g[w - 1][w - 1]);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

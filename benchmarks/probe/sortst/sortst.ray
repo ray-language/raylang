@@ -1,0 +1,22 @@
+import std/time;
+
+struct Row {
+    id: int,
+    score: int,
+    name: string,
+}
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    var rows: [Row] = [];
+    var seed = 42;
+    for i in 0..300000 {
+        seed = (seed * 1103515245 + 12345) % 2147483648;
+        rows.push(Row { id: i, score: seed % 100000, name: "n${seed % 1000}" });
+    }
+    let by_score = rows.sort_by(fn(a: Row, b: Row) -> bool { a.score < b.score || (a.score == b.score && a.id < b.id) });
+    let by_name = rows.sort_by(fn(a: Row, b: Row) -> bool { a.name < b.name || (a.name == b.name && a.id < b.id) });
+    print(by_score[0].id + by_score[299999].id);
+    print(by_name[0].id + by_name[299999].id);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

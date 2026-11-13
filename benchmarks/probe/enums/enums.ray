@@ -1,0 +1,58 @@
+import std/time;
+
+enum Op {
+    Push(int),
+    Add,
+    Mul,
+    Dup,
+    Swap,
+    Mod(int),
+}
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    var prog: [Op] = [];
+    for i in 0..200 {
+        prog.push(Op.Push(i + 1));
+        prog.push(Op.Add);
+        prog.push(Op.Dup);
+        prog.push(Op.Mul);
+        prog.push(Op.Mod(1000003));
+    }
+    var total = 0;
+    for r in 0..3000 {
+        var stack: [int] = [r];
+        for op in prog {
+            match (op) {
+                Op.Push(v) => stack.push(v),
+                Op.Add => {
+                    let b = stack.pop().unwrap_or(0);
+                    let a = stack.pop().unwrap_or(0);
+                    stack.push(a + b);
+                },
+                Op.Mul => {
+                    let b = stack.pop().unwrap_or(0);
+                    let a = stack.pop().unwrap_or(0);
+                    stack.push(a * b);
+                },
+                Op.Dup => {
+                    let a = stack[stack.len() - 1];
+                    stack.push(a);
+                },
+                Op.Swap => {
+                    let b = stack.pop().unwrap_or(0);
+                    let a = stack.pop().unwrap_or(0);
+                    stack.push(b);
+                    stack.push(a);
+                },
+                Op.Mod(m) => {
+                    let a = stack.pop().unwrap_or(0);
+                    stack.push(a % m);
+                },
+            }
+        }
+        total = (total + stack[0]) % 1000003;
+    }
+    print(total);
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

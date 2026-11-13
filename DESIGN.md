@@ -20123,17 +20123,20 @@ tipo» (§429) y la medición lo reorientó antes de escribir código:
   `float` en slots sin capturar— no clona ni toca la pila; cualquier otro (local capturado,
   strings, arreglos, `uint`, desbordamiento, división por cero) materializa los dos valores y
   sigue el camino general (`arith_slow` → `apply_binary`), con el mismo mensaje y la misma
-  posición. `CmpJumpSrc` hace lo mismo con la guarda de un `if`/`while`, y `CmpJump` gana el
-  camino rápido de `float` que solo tenía el de `int`.
+  posición. `CmpJumpSrc` hace lo mismo con la guarda de un `if`/`while`, y las tres guardas
+  fundidas que ya existían (`CmpJump`, `LocalLocalCmpJump`, `GetLocalConstCmpJump`) ganan el
+  camino rápido de `float` que solo tenían de `int` (`cmp_fast`).
 - **Campos por posición.** `GetField`/`SetField` llevan el id del NOMBRE del campo y el programa
-  una tabla `field_pos[id][struct_idx]`. No hace falta el tipo del receptor: el checker garantiza
+  las tablas `field_same`/`field_pos` (`CompiledProgram::field_at`): la posición directa cuando
+  es la misma en todos los structs que tienen el campo, y una fila por struct solo cuando
+  difiere — lineal en el total de campos, no campos × structs. No hace falta el tipo del receptor: el checker garantiza
   que el struct tiene el campo y la instancia ya lleva su `struct_idx`. `LocalField` lee el campo
   de un struct que está en un local sin subir el handle a la pila.
 - **`match` sin pila.** `LocalTagJump` prueba la variante del enum que guarda un local y salta;
   `EnumFieldToLocal` y `CopyLocal` ligan el payload. Un brazo `Variant(v) => …` pasa de unas diez
   instrucciones a cuatro. El `unit` de un brazo o de una rama usada como sentencia ya no se
   empuja para tirarlo (`[Unit, Jump(t)]` con `Pop` en el destino → `Jump(t + 1)`).
-- **Todo son rondas de mirilla** (`fuse_operands_round6`, `fuse_enum_round7`) sobre la salida de
+- **Todo son rondas de mirilla** (`fuse_operands_round6`, `fuse_stackless_round7`) sobre la salida de
   las anteriores: el compilador sigue emitiendo el bytecode de pila de siempre y las instrucciones
   genéricas siguen existiendo — son el camino lento y lo que queda cuando un salto cae en mitad
   de un patrón. El orden de evaluación y el punto donde nace cada error no cambian.
@@ -20144,3 +20147,11 @@ tipo» (§429) y la medición lo reorientó antes de escribir código:
 - **Descartado por medición**: el despacho en dos niveles (instrucciones calientes en una función
   compacta) y `Return` fuera de línea — lo que queda fuera de línea paga más de lo que ganan las
   calientes (`PERFORMANCE.md` §29).
+- **Revisión previa a 1.27.98.** Sin errores de corrección. Corregido: la tabla de campos era
+  densa (campos × structs, con una búsqueda de string por celda en cada compilación — `ray test`
+  recompila por prueba: 400 structs y 100 pruebas, 0,36 → 1,4 s); `arith_slow` repetía los
+  mensajes de desbordamiento y división por cero que ya da `apply_binary`; las rondas 6 y 7
+  copiaban la lista de instrucciones con destino de salto (ahora `jump_target`/`jump_target_mut`,
+  un solo sitio que mantener); los operandos `u32` de las instrucciones nuevas (no encogían
+  `OpCode` y obligaban a convertir) son `usize` como el resto; y las instrucciones nuevas tienen
+  prueba de que SE EMITEN (`src/vm/tests.rs`), no solo de que dan lo mismo.

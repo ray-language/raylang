@@ -952,7 +952,7 @@ pub enum OpCode {
     Arith(ArithOp, Src, Src),
     /// Como `Arith`, y deja el resultado en el local `dst`: `s = s + i` en UNA instrucción
     /// (antes `GetLocalLocal`, `Add`, `SetLocal`).
-    ArithSet(ArithOp, Src, Src, u32),
+    ArithSet(ArithOp, Src, Src, usize),
     /// El operando izquierdo es la cima de la pila; el derecho, direccionado. Funde
     /// `[GetLocal|Constant, op]` (el `… + x`, `… * 2.0` de una expresión mayor).
     ArithStack(ArithOp, Src),
@@ -960,16 +960,16 @@ pub enum OpCode {
     // --- Enums y locales sin pasar por la pila (M454) ---
     /// La prueba de un brazo de `match` sobre un local: si la variante del enum en `slot` NO es
     /// `tag`, salta a `target`. Funde `[GetLocal, EnumTagEq, JumpIfFalse, Pop]`.
-    LocalTagJump(u32, u32, usize),
+    LocalTagJump(usize, usize, usize),
     /// `dst = payload[i]` del enum en el local `slot` (declaración, como `InitLocal`). Funde
     /// `[GetLocal, GetEnumField, InitLocal]`.
-    EnumFieldToLocal(u32, u32, u32),
+    EnumFieldToLocal(usize, usize, usize),
     /// `dst = src` entre locales (declaración, como `InitLocal`). Funde `[GetLocal, InitLocal]`.
-    CopyLocal(u32, u32),
+    CopyLocal(usize, usize),
 
     /// Empuja el campo `field_names[id]` del struct que guarda el local `slot`. Funde
     /// `[GetLocal, GetField]` (`p.x`, `self.x`).
-    LocalField(u32, u32),
+    LocalField(usize, usize),
     /// La guarda de un `if`/`while` con el operando derecho direccionado: saca el izquierdo de la
     /// pila, lo compara con el local o la constante y salta a `target` si es falso. Funde
     /// `[GetLocal|Constant, CmpJump]`.
@@ -977,14 +977,14 @@ pub enum OpCode {
 
     /// Devuelve el valor del local `slot`. Funde `[GetLocal, Return]`: el marco muere aquí, así
     /// que el valor SALE del local en vez de clonarse.
-    ReturnLocal(u32),
+    ReturnLocal(usize),
 
     // --- Structs (M3.2) ---
     /// Construye el struct definido en `structs[idx]`: saca tantos valores como
     /// campos tenga (estaban en orden de declaración) y empuja el struct.
     MakeStruct(usize),
     /// Saca un struct; empuja el valor de su campo. M454: el operando es el id del NOMBRE del
-    /// campo (`CompiledProgram.field_names`); la posición sale de `field_pos[id][struct_idx]`, dos
+    /// campo (`CompiledProgram.field_names`); la posición sale de `CompiledProgram::field_at`, una o dos
     /// cargas en vez de comparar el nombre contra cada campo de la definición.
     GetField(usize),
     /// Saca valor y struct; asigna `struct.campo = valor` (mismo operando que `GetField`).
@@ -1073,8 +1073,8 @@ impl ArithOp {
 /// M454: un operando direccionado: un local del marco o una constante del chunk.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Src {
-    Local(u32),
-    Const(u32),
+    Local(usize),
+    Const(usize),
 }
 
 /// A4: el comparador de una `CmpJump` (los seis de la familia de comparación).
@@ -1249,20 +1249,64 @@ pub struct CompiledProgram {
     /// M454: los nombres de campo que el programa lee o escribe, indexados por el operando de
     /// `GetField`/`SetField`.
     pub field_names: Vec<String>,
-    /// M454: `field_pos[id][struct_idx]` = posición del campo `field_names[id]` en ese struct
-    /// (`NO_FIELD` si no lo tiene). El checker garantiza que el receptor lo tiene.
+    /// M454: `field_same[id]` = la posición del campo `field_names[id]` cuando es la MISMA en
+    /// todos los structs que lo tienen (lo habitual: un nombre suele vivir en un solo struct);
+    /// `NO_FIELD` si difiere, y entonces manda `field_pos`.
+    pub field_same: Vec<u32>,
+    /// M454: solo para los nombres con posiciones distintas: `field_pos[id][struct_idx]` (`NO_FIELD`
+    /// si ese struct no lo tiene). Vacío para los demás — la tabla no crece con campos × structs.
     pub field_pos: Vec<Vec<u32>>,
 }
 
-/// M454: marca de «este struct no tiene ese campo» en `CompiledProgram.field_pos`.
+/// M454: marca de «sin posición» en las tablas de campos de `CompiledProgram`.
 pub const NO_FIELD: u32 = u32::MAX;
 
-/// M454: la tabla `[campo][struct] → posición` de un programa.
-pub fn field_positions(field_names: &[String], structs: &[CompiledStruct]) -> Vec<Vec<u32>> {
-    field_names
-        .iter()
-        .map(|n| structs.iter().map(|s| s.fields.iter().position(|f| f == n).map_or(NO_FIELD, |p| p as u32)).collect())
-        .collect()
+impl CompiledProgram {
+    /// M454: la posición del campo `id` en el struct `struct_idx`. El checker garantiza que el
+    /// receptor tiene el campo; si no fuera así es un error interno, no una lectura fuera de rango.
+    #[inline(always)]
+    pub fn field_at(&self, id: usize, struct_idx: usize) -> usize {
+        let same = self.field_same[id];
+        if same != NO_FIELD {
+            return same as usize;
+        }
+        let pos = self.field_pos[id][struct_idx];
+        if pos == NO_FIELD {
+            crate::ice!("field access on a struct without that field (the checker guarantees it)");
+        }
+        pos as usize
+    }
+}
+
+/// M454: las tablas de posiciones de campo de un programa (`field_same`, `field_pos`). Un
+/// recorrido de los campos de cada struct: lineal en el total de campos.
+pub fn field_positions(field_names: &[String], structs: &[CompiledStruct]) -> (Vec<u32>, Vec<Vec<u32>>) {
+    let ids: std::collections::HashMap<&str, usize> = field_names.iter().enumerate().map(|(i, n)| (n.as_str(), i)).collect();
+    let mut owners: Vec<Vec<(usize, u32)>> = vec![Vec::new(); field_names.len()];
+    for (si, s) in structs.iter().enumerate() {
+        for (pos, f) in s.fields.iter().enumerate() {
+            if let Some(&id) = ids.get(f.as_str()) {
+                owners[id].push((si, pos as u32));
+            }
+        }
+    }
+    let mut same = vec![NO_FIELD; field_names.len()];
+    let mut table = vec![Vec::new(); field_names.len()];
+    for (id, own) in owners.iter().enumerate() {
+        match own.first() {
+            Some(&(_, first)) if own.iter().all(|&(_, p)| p == first) => same[id] = first,
+            Some(_) => {
+                let mut row = vec![NO_FIELD; structs.len()];
+                for &(si, p) in own {
+                    row[si] = p;
+                }
+                table[id] = row;
+            }
+            // Ningún struct lo tiene: no es alcanzable tras el checker; queda sin posición.
+            None => table[id] = vec![NO_FIELD; structs.len()],
+        }
+    }
+    (same, table)
 }
 
 #[cfg(test)]

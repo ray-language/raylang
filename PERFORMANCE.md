@@ -3005,7 +3005,7 @@ en `DESIGN.md` §430:
    (`ArithSet`); `a * b` entre locales o con una constante, otra (`Arith`); `… + x` con el
    izquierdo ya en la pila, `ArithStack`; `… < 4.0`, `CmpJumpSrc`. `CmpJump` no tenía camino
    rápido de `float`.
-2. **Campos por posición** (`field_pos[campo][struct]`) y `LocalField` para `p.x`.
+2. **Campos por posición** (`CompiledProgram::field_at`) y `LocalField` para `p.x`.
 3. **`match` sobre enum sin pila**: `LocalTagJump`, `EnumFieldToLocal`, `CopyLocal`, y el `unit`
    de cada brazo que ya no se empuja.
 
@@ -3065,8 +3065,9 @@ alrededor. Cada argumento añade 4–6 ns y cada `let b = a` del cuerpo, 8. Tres
   los argumentos; ahora el llamado se lee bajo ellos y pasan directos a los locales.
 
 En el micro, `match` sobre enum 76,3 → 67,1 y `Option` 111,1 → 105,2; el resto, plano. En las
-sondas completas (contra 1.27.97, con todo el arco): `results` 0,67×, `traits` 0,70×, `enums`
-0,71×, `hof` 0,84× (era 0,92×), `sortst` 0,84×; **media geométrica 0,81×**.
+sondas completas (contra 1.27.97, con todo el arco y las correcciones de la revisión): `structs`
+0,64×, `results` 0,66×, `traits` 0,68×, `mandel` 0,70×, `enums` 0,71×, `hof` 0,83× (era 0,92×),
+`sortst` 0,85×; **media geométrica 0,81×**. Micro: 0,84×.
 
 **Medido y descartado:**
 

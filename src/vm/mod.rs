@@ -185,6 +185,7 @@ pub fn run(chunk: &Chunk) -> Result<Value, RuntimeError> {
         shared_consts: Vec::new(),
         externs: Vec::new(),
         field_names: Vec::new(),
+        field_same: Vec::new(),
         field_pos: Vec::new(),
     };
     run_program(&program)
@@ -762,32 +763,12 @@ impl<'a> Vm<'a> {
                 // M454: aritmética con operandos direccionados — se leen en su sitio; el caso
                 // común (dos int o dos float) no clona, no toca la pila y no pasa por `apply_binary`.
                 OpCode::Arith(op, a, b) => {
-                    let fast = match (self.src_ref(base, func, *a), self.src_ref(base, func, *b)) {
-                        (Some(l), Some(r)) => arith_fast(*op, l, r),
-                        _ => None,
-                    };
-                    let v = match fast {
-                        Some(Ok(v)) => v,
-                        _ => {
-                            let (l, r) = (self.src_value(base, func, *a), self.src_value(base, func, *b));
-                            self.arith_slow(*op, l, r, pos!().0, pos!().1)?
-                        }
-                    };
+                    let v = self.arith_addressed(*op, *a, *b, base, func, ip)?;
                     self.push(v);
                 }
                 OpCode::ArithSet(op, a, b, dst) => {
-                    let fast = match (self.src_ref(base, func, *a), self.src_ref(base, func, *b)) {
-                        (Some(l), Some(r)) => arith_fast(*op, l, r),
-                        _ => None,
-                    };
-                    let v = match fast {
-                        Some(Ok(v)) => v,
-                        _ => {
-                            let (l, r) = (self.src_value(base, func, *a), self.src_value(base, func, *b));
-                            self.arith_slow(*op, l, r, pos!().0, pos!().1)?
-                        }
-                    };
-                    self.set_local(base, *dst as usize, v);
+                    let v = self.arith_addressed(*op, *a, *b, base, func, ip)?;
+                    self.set_local(base, *dst, v);
                 }
                 OpCode::ArithStack(op, b) => {
                     let fast = match (self.cur.stack.last(), self.src_ref(base, func, *b)) {
@@ -863,45 +844,45 @@ impl<'a> Vm<'a> {
                 // Semántica idéntica a [GetLocalConst(s,c), CmpJump(op,t)]: compara local[s] con
                 // const[c] y, si es falso, salta a t — sin apilar/sacar los operandos.
                 OpCode::GetLocalConstCmpJump(s, c, op, target) => {
-                    // V11: fast-path por REFERENCIA (slot Plain(Int) + constante Int): ni clona
-                    // el HeapValue ni materializa la constante. El caso general, debajo.
-                    if let (Some(a), Some(b)) = (self.local_int(base, *s), self.const_int(func, *c)) {
-                        let res = match op {
-                            CmpOp::Less => a < b,
-                            CmpOp::LessEqual => a <= b,
-                            CmpOp::Greater => a > b,
-                            CmpOp::GreaterEqual => a >= b,
-                            CmpOp::Equal => a == b,
-                            CmpOp::NotEqual => a != b,
-                        };
-                        if !res {
-                            self.cur.frames[fi].ip = *target;
+                    // V11 + M454: por REFERENCIA, sin clonar — dos `int` o dos `float`. El resto
+                    // (local capturado, strings, uint…) materializa los valores y va a `apply_binary`.
+                    let fast = match (self.src_ref(base, func, crate::bytecode::Src::Local(*s)), self.src_ref(base, func, crate::bytecode::Src::Const(*c))) {
+                        (Some(l), Some(r)) => cmp_fast(*op, l, r),
+                        _ => None,
+                    };
+                    let res = match fast {
+                        Some(res) => res,
+                        None => {
+                            let left = self.src_value(base, func, crate::bytecode::Src::Local(*s));
+                            let right = self.src_value(base, func, crate::bytecode::Src::Const(*c));
+                            match self.apply_binary(&cmp_generic(*op), left, right, pos!().0, pos!().1)? {
+                                HeapValue::Bool(b) => b,
+                                _ => unreachable!("a comparison produces bool"),
+                            }
                         }
-                        return Ok(None);
+                    };
+                    if !res {
+                        self.cur.frames[fi].ip = *target;
                     }
-                    let left = self.get_local(base, *s);
-                    let right = self.program.functions[func].consts[*c].clone();
-                    let res = if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
-                        match op {
-                            CmpOp::Less => a < b,
-                            CmpOp::LessEqual => a <= b,
-                            CmpOp::Greater => a > b,
-                            CmpOp::GreaterEqual => a >= b,
-                            CmpOp::Equal => a == b,
-                            CmpOp::NotEqual => a != b,
-                        }
-                    } else {
-                        let legacy = match op {
-                            CmpOp::Less => &OpCode::Less,
-                            CmpOp::LessEqual => &OpCode::LessEqual,
-                            CmpOp::Greater => &OpCode::Greater,
-                            CmpOp::GreaterEqual => &OpCode::GreaterEqual,
-                            CmpOp::Equal => &OpCode::Equal,
-                            CmpOp::NotEqual => &OpCode::NotEqual,
-                        };
-                        match self.apply_binary(legacy, left, right, pos!().0, pos!().1)? {
-                            HeapValue::Bool(b) => b,
-                            _ => unreachable!("a comparison produces bool"),
+                }
+                // V9 (ronda 5): la guarda `local op local` (`i < n` con tope en variable) sin
+                // tocar la pila. Mismo fast-path entero y mismo fallback que CmpJump.
+                OpCode::LocalLocalCmpJump(a, b, op, target) => {
+                    // V11 + M454: por REFERENCIA, sin clonar — dos `int` o dos `float`. El resto
+                    // (local capturado, strings, uint…) materializa los valores y va a `apply_binary`.
+                    let fast = match (self.src_ref(base, func, crate::bytecode::Src::Local(*a)), self.src_ref(base, func, crate::bytecode::Src::Local(*b))) {
+                        (Some(l), Some(r)) => cmp_fast(*op, l, r),
+                        _ => None,
+                    };
+                    let res = match fast {
+                        Some(res) => res,
+                        None => {
+                            let left = self.src_value(base, func, crate::bytecode::Src::Local(*a));
+                            let right = self.src_value(base, func, crate::bytecode::Src::Local(*b));
+                            match self.apply_binary(&cmp_generic(*op), left, right, pos!().0, pos!().1)? {
+                                HeapValue::Bool(b) => b,
+                                _ => unreachable!("a comparison produces bool"),
+                            }
                         }
                     };
                     if !res {
@@ -911,53 +892,6 @@ impl<'a> Vm<'a> {
                 // A4 (ronda 2): la guarda de if/while en UNA instrucción. Semántica idéntica a
                 // [Cmp, JumpIfFalse(t), Pop]: saca ambos operandos, compara, y si es falso salta
                 // (el destino ya viene ajustado tras el Pop del lado else). El bool nunca se apila.
-                // V9 (ronda 5): la guarda `local op local` (`i < n` con tope en variable) sin
-                // tocar la pila. Mismo fast-path entero y mismo fallback que CmpJump.
-                OpCode::LocalLocalCmpJump(a, b, op, target) => {
-                    // V11: fast-path por referencia — dos slots Plain(Int), cero clones.
-                    if let (Some(x), Some(y)) = (self.local_int(base, *a), self.local_int(base, *b)) {
-                        let res = match op {
-                            CmpOp::Less => x < y,
-                            CmpOp::LessEqual => x <= y,
-                            CmpOp::Greater => x > y,
-                            CmpOp::GreaterEqual => x >= y,
-                            CmpOp::Equal => x == y,
-                            CmpOp::NotEqual => x != y,
-                        };
-                        if !res {
-                            self.cur.frames[fi].ip = *target;
-                        }
-                        return Ok(None);
-                    }
-                    let left = self.get_local(base, *a);
-                    let right = self.get_local(base, *b);
-                    let res = if let (HeapValue::Int(x), HeapValue::Int(y)) = (&left, &right) {
-                        match op {
-                            CmpOp::Less => x < y,
-                            CmpOp::LessEqual => x <= y,
-                            CmpOp::Greater => x > y,
-                            CmpOp::GreaterEqual => x >= y,
-                            CmpOp::Equal => x == y,
-                            CmpOp::NotEqual => x != y,
-                        }
-                    } else {
-                        let legacy = match op {
-                            CmpOp::Less => &OpCode::Less,
-                            CmpOp::LessEqual => &OpCode::LessEqual,
-                            CmpOp::Greater => &OpCode::Greater,
-                            CmpOp::GreaterEqual => &OpCode::GreaterEqual,
-                            CmpOp::Equal => &OpCode::Equal,
-                            CmpOp::NotEqual => &OpCode::NotEqual,
-                        };
-                        match self.apply_binary(legacy, left, right, pos!().0, pos!().1)? {
-                            HeapValue::Bool(b) => b,
-                            _ => unreachable!("a comparison produces bool"),
-                        }
-                    };
-                    if !res {
-                        self.cur.frames[fi].ip = *target;
-                    }
-                }
                 OpCode::CmpJump(op, target) => {
                     let right = self.pop();
                     let left = self.pop();
@@ -997,9 +931,9 @@ impl<'a> Vm<'a> {
                     }
                 }
                 OpCode::LocalField(slot, id) => {
-                    let h = self.local_obj(base, *slot as usize);
+                    let h = self.local_obj(base, *slot);
                     let s = self.as_struct(h);
-                    let pos = self.program.field_pos[*id as usize][s.struct_idx] as usize;
+                    let pos = self.program.field_at(*id, s.struct_idx);
                     let v = s.fields[pos].clone();
                     self.push(v);
                 }
@@ -1109,20 +1043,20 @@ impl<'a> Vm<'a> {
                 }
                 // M454: ligaduras y pruebas de variante leyendo el local en su sitio.
                 OpCode::CopyLocal(src, dst) => {
-                    let v = match &self.cur.locals[base + *src as usize] {
+                    let v = match &self.cur.locals[base + *src] {
                         Local::Plain(v) => v.clone(),
-                        Local::Boxed(_) => self.get_local(base, *src as usize),
+                        Local::Boxed(_) => self.get_local(base, *src),
                     };
-                    self.init_local(func, base, *dst as usize, v);
+                    self.init_local(func, base, *dst, v);
                 }
                 OpCode::EnumFieldToLocal(src, i, dst) => {
-                    let h = self.local_obj(base, *src as usize);
-                    let v = self.as_enum(h).payload[*i as usize].clone();
-                    self.init_local(func, base, *dst as usize, v);
+                    let h = self.local_obj(base, *src);
+                    let v = self.as_enum(h).payload[*i].clone();
+                    self.init_local(func, base, *dst, v);
                 }
                 OpCode::LocalTagJump(slot, tag, target) => {
-                    let h = self.local_obj(base, *slot as usize);
-                    if self.as_enum(h).tag != *tag {
+                    let h = self.local_obj(base, *slot);
+                    if self.as_enum(h).tag as usize != *tag {
                         self.cur.frames[fi].ip = *target;
                     }
                 }
@@ -5282,18 +5216,15 @@ impl<'a> Vm<'a> {
                     // no lleva nombres, TA1).
                     let h = self.pop_obj();
                     let s = self.as_struct(h);
-                    let pos = self.program.field_pos[*id][s.struct_idx] as usize;
+                    let pos = self.program.field_at(*id, s.struct_idx);
                     let v = s.fields[pos].clone();
                     self.push(v);
                 }
                 OpCode::SetField(id) => {
                     let v = self.pop();
                     let h = self.pop_obj();
-                    let program = self.program;
-                    let table = &program.field_pos[*id];
-                    let s = self.as_struct_mut(h);
-                    let pos = table[s.struct_idx] as usize;
-                    s.fields[pos] = v;
+                    let pos = self.program.field_at(*id, self.as_struct(h).struct_idx);
+                    self.as_struct_mut(h).fields[pos] = v;
                 }
 
                 OpCode::Call(idx, argc) => {
@@ -5446,9 +5377,9 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::ReturnLocal(slot) => {
                     // El marco muere aquí: el valor sale del slot (un `Boxed` se lee de su celda).
-                    let result = match &mut self.cur.locals[base + *slot as usize] {
+                    let result = match &mut self.cur.locals[base + *slot] {
                         Local::Plain(v) => std::mem::replace(v, HeapValue::Unit),
-                        Local::Boxed(_) => self.get_local(base, *slot as usize),
+                        Local::Boxed(_) => self.get_local(base, *slot),
                     };
                     return self.do_return(result);
                 }
@@ -5656,19 +5587,19 @@ impl<'a> Vm<'a> {
     #[inline(always)]
     fn src_ref(&self, base: usize, func: usize, s: crate::bytecode::Src) -> Option<&HeapValue> {
         match s {
-            crate::bytecode::Src::Local(slot) => match &self.cur.locals[base + slot as usize] {
+            crate::bytecode::Src::Local(slot) => match &self.cur.locals[base + slot] {
                 Local::Plain(v) => Some(v),
                 Local::Boxed(_) => None,
             },
-            crate::bytecode::Src::Const(c) => Some(&self.program.functions[func].consts[c as usize]),
+            crate::bytecode::Src::Const(c) => Some(&self.program.functions[func].consts[c]),
         }
     }
 
     /// M454: el valor de un operando direccionado, como lo dejarían `GetLocal`/`Constant` en la pila.
     fn src_value(&self, base: usize, func: usize, s: crate::bytecode::Src) -> HeapValue {
         match s {
-            crate::bytecode::Src::Local(slot) => self.get_local(base, slot as usize),
-            crate::bytecode::Src::Const(c) => match &self.program.functions[func].consts[c as usize] {
+            crate::bytecode::Src::Local(slot) => self.get_local(base, slot),
+            crate::bytecode::Src::Const(c) => match &self.program.functions[func].consts[c] {
                 // Como `Constant`: cada evaluación de un literal de bytes es un búfer propio (rayffi #211).
                 HeapValue::Bytes(b) => HeapValue::Bytes(std::sync::Arc::from(&b[..])),
                 v => v.clone(),
@@ -5676,34 +5607,26 @@ impl<'a> Vm<'a> {
         }
     }
 
-    /// M454: el camino general de una `Arith*` — lo que hace el opcode binario genérico con los
-    /// dos valores ya en mano (desbordamiento y división por cero incluidos).
+    /// M454: `a op b` con los dos operandos direccionados (`Arith`, `ArithSet`).
+    #[inline(always)]
+    fn arith_addressed(&mut self, op: crate::bytecode::ArithOp, a: crate::bytecode::Src, b: crate::bytecode::Src, base: usize, func: usize, ip: usize) -> Result<HeapValue, RuntimeError> {
+        if let (Some(l), Some(r)) = (self.src_ref(base, func, a), self.src_ref(base, func, b)) {
+            if let Some(Ok(v)) = arith_fast(op, l, r) {
+                return Ok(v);
+            }
+        }
+        let (l, r) = (self.src_value(base, func, a), self.src_value(base, func, b));
+        let (line, col) = self.program.functions[func].chunk.lines[ip];
+        self.arith_slow(op, l, r, line, col)
+    }
+
+    /// M454: el camino general de una `Arith*` con los dos valores ya en mano — el del opcode
+    /// binario genérico: `+` de dos arreglos concatena y todo lo demás (desbordamiento y
+    /// división por cero incluidos) es `apply_binary`, la única fuente de esos mensajes.
     #[inline(never)]
     fn arith_slow(&mut self, op: crate::bytecode::ArithOp, left: HeapValue, right: HeapValue, line: usize, col: usize) -> Result<HeapValue, RuntimeError> {
-        use crate::bytecode::ArithOp;
-        if let (HeapValue::Int(a), HeapValue::Int(b)) = (&left, &right) {
-            let (a, b) = (*a, *b);
-            let ovf = || runtime_error(line, col, "arithmetic overflow on int");
-            return Ok(HeapValue::Int(match op {
-                ArithOp::Add => a.checked_add(b).ok_or_else(ovf)?,
-                ArithOp::Sub => a.checked_sub(b).ok_or_else(ovf)?,
-                ArithOp::Mul => a.checked_mul(b).ok_or_else(ovf)?,
-                ArithOp::Div => {
-                    if b == 0 {
-                        return Err(runtime_error(line, col, "integer division by zero"));
-                    }
-                    a.checked_div(b).ok_or_else(ovf)?
-                }
-                ArithOp::Rem => {
-                    if b == 0 {
-                        return Err(runtime_error(line, col, "modulo by zero"));
-                    }
-                    a.checked_rem(b).ok_or_else(ovf)?
-                }
-            }));
-        }
         // M11.7b: `+` sobre dos arreglos los concatena en uno nuevo.
-        if let (ArithOp::Add, HeapValue::Obj(l), HeapValue::Obj(r)) = (op, &left, &right) {
+        if let (crate::bytecode::ArithOp::Add, HeapValue::Obj(l), HeapValue::Obj(r)) = (op, &left, &right) {
             let (l, r) = (*l, *r);
             let mut elems = self.as_array(l).clone();
             elems.extend(self.as_array(r).iter().cloned());

@@ -92,6 +92,10 @@ struct Transpiler {
     dict_marks: HashMap<String, std::collections::HashSet<usize>>,
     /// Nombres de los params diccionario monomorfizados de la FUNCIÓN EN CURSO.
     dict_params: std::collections::HashSet<String>,
+    /// Una closure literal que es el VALOR de una rama (`if`/`else`, brazo de `match`) se emite con
+    /// el cast explícito a `Rc<dyn Fn(…)>`: cada closure de Rust tiene su propio tipo, y sin él las
+    /// ramas no tienen tipo común (E0308). Activo solo mientras se emiten esas ramas.
+    cast_fn_literals: bool,
     /// M313: structs genéricos con campo `__ray_ph: PhantomData` (ver `phantom_structs` al construir).
     phantom_structs: std::collections::HashSet<String>,
     /// M313 (findings #71): el tipo ESPERADO de la expresión en curso (anotación de `let`, campo de un
@@ -440,6 +444,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         send_fn_params: std::collections::HashSet::new(),
         dict_marks,
         dict_params: std::collections::HashSet::new(),
+        cast_fn_literals: false,
         phantom_structs,
         expected_ty: None,
         current_ret: None,

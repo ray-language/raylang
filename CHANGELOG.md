@@ -17,6 +17,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   `struct String`, `enum Box`… rompían `ray build --native` con cientos de errores de rustc.
 - **El aviso de resultado descartado ya no salta con `join(tarea);`**: esperar una tarea se
   llama por su efecto; el aviso queda para el `join` de strings.
+- **Una closure como valor de una rama compila a nativo**: `let f = if (c) { fn(x: int) -> int
+  { … } } else { fn(x: int) -> int { … } };` (o en los brazos de un `match`) rompía `ray build
+  --native` con un error de rustc sobre el código generado.
 
 ## 1.27.95 — 2026-11-11
 

@@ -20051,3 +20051,13 @@ o de contrato interno.
 - **`join` son dos funciones** y el aviso de resultado descartado (M445) no las distinguía:
   `join(t);` espera una tarea y se llama por su efecto. Con un solo operando no avisa.
 - **Banco de sondeo** (`benchmarks/probe/`): herramienta de sesión, como `poly/`; no va a CI.
+
+## 426. Closures como valor de una rama en nativo (nov 2026)
+
+Visto al escribir el banco de sondeo del arco de rendimiento del nativo (M451). Una closure literal en la cola de una
+rama de `if`/`else` o en un brazo de `match` se emitía `Rc::new(move |…| …)` sin tipo: en Rust
+cada closure tiene el suyo y las ramas no unificaban (E0308 sobre código generado, sin mensaje de
+raylang). Ahora, y solo en esa posición, lleva el cast explícito a su `Rc<dyn Fn(…) -> …>`; una
+closure suelta en un `let` sigue con su tipo concreto (la llamada directa se inlinea). De paso,
+`tests/native_lib_cli.rs` — que solo corre en macOS y por tanto fuera del CI — llevaba roto desde
+que `std/media` entró al runtime de `ui` (1.27.58): le faltaba enlazar MediaPlayer.

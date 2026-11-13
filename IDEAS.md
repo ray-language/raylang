@@ -4689,3 +4689,24 @@ y también serviría a `notify`). `status()` da `"unsupported"` en iOS < 26, esc
 (extensión de widget), `Weekly` en `std/notify`, alarmas en macOS/Windows/Linux (no hay
 equivalente de sistema; una ventana + `std/audio` del propio programa), `pause`/`resume`
 de AlarmKit, varias alarmas simultáneas sonando en Android (el servicio atiende una).
+
+## 123. Dos huecos del binario nativo vistos en el arco de rendimiento (nov 2026) — PENDIENTE
+
+Aparecieron al escribir el banco de sondeo (`PERFORMANCE.md` §26). Ya estaban en 1.27.94; no son
+regresiones. Se anotan para decidir con calma, no se han tocado.
+
+1. **Bound `T: Eq` instanciado con un arreglo.** `fn same<T: Eq>(a: T, b: T) -> bool { a == b }`
+   llamado con `[int]` compila y corre en la VM; `ray build --native` lo rechaza con mensaje de
+   raylang («builtin/function '[]#eq' is not supported in the native backend»). El diccionario
+   `[]#eq` del prelude no se emite (`is_prelude_impl` lo salta para contenedores). **Impacto**:
+   bajo — hay diagnóstico claro y rodeo (`a == b` directo sobre el arreglo sí compila). **Coste**:
+   medio — emitir los impls de `Eq`/`Show`/`Ord` del prelude para `[T]`/`Map` como funciones
+   genéricas. Clasificación: superficie del nativo, no bloquea nada.
+2. **El error de índice fuera de rango no lleva posición en nativo.** La VM dice `runtime error at
+   39:22: index 10 out of range (length 10)` con la línea de fuente; el nativo, `runtime error:
+   index 10 out of range (length 10)`. `panic`/`assert` sí la llevan (`__ray_rt_err_at`).
+   **Impacto**: de diagnóstico, en producción (que es donde corre el nativo). **Coste**: pasar la
+   posición a `__ray_idx` es una constante más por acceso en el camino FRÍO (el `#[cold]` del
+   error), pero engorda el código de cada indexado; hay que medirlo contra `grid`/`matrixmul`
+   antes de decidir. Alternativa barata: posición solo en builds sin `--release`. **Decisión del
+   usuario pendiente** (rendimiento contra diagnóstico).

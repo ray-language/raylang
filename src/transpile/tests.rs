@@ -2042,3 +2042,15 @@ fn loops_hoist_borrows_across_control_flow_stores_and_rows() {
     assert!(rust.contains("{ let __rt_rhs = __ray_add(({ p.borrow().x.clone() }), 1i64); p.borrow_mut().x = __rt_rhs; }"), "{rust}");
     assert!(rust.contains("{ let __rt_v = 4i64; a.borrow_mut().push(__rt_v); }"), "{rust}");
 }
+
+/// Una closure literal que es el valor de una rama lleva el cast a su tipo `dyn` (las ramas de un
+/// `if`/`match` necesitan un tipo común); una closure suelta en un `let` no lo lleva.
+#[test]
+fn closure_literals_in_branches_are_cast_to_a_common_type() {
+    let rust = transpile_src(
+        "fn main() -> int { let k = 1; let f = if (k > 0) { fn(x: int) -> int { x + 1 } } else { fn(x: int) -> int { x * 2 } }; \
+         let g = fn(x: int) -> int { x - 1 }; f(g(3)) }",
+    );
+    assert_eq!(rust.matches(" as Rc<dyn Fn(i64) -> i64>)").count(), 2, "{rust}");
+    assert!(rust.contains("let g = Rc::new(move |x: i64| -> i64"), "{rust}");
+}

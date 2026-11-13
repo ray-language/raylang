@@ -1400,6 +1400,17 @@ impl Transpiler {
                 write!(out, "let {} = {}.clone(); ", mangle(c), mangle(c)).unwrap();
             }
         }
+        // El tipo `dyn` cerrado de la closure, si hay que unificarla con otra rama (ver
+        // `cast_fn_literals`); dentro de su cuerpo vuelve a ser falso.
+        let cast = if boxed && std::mem::take(&mut self.cast_fn_literals) {
+            let fty = Type::Fn(fnexpr.params.iter().map(|p| p.ty.clone()).collect(), Box::new(fnexpr.return_type.clone()));
+            rust_ty(&fty, &self.enums, &self.tparams).ok()
+        } else {
+            None
+        };
+        if cast.is_some() {
+            out.push('(');
+        }
         if boxed {
             out.push_str("Rc::new(");
         }
@@ -1450,6 +1461,10 @@ impl Transpiler {
         out.push_str(" }"); // M295: cierra el bloque del prólogo de profundidad
         if boxed {
             out.push(')');
+        }
+        if let Some(ty) = cast {
+            write!(out, " as {ty})").unwrap();
+            self.cast_fn_literals = true; // sigue valiendo para las ramas hermanas
         }
         if wrap {
             out.push_str(" }");
@@ -1708,11 +1723,14 @@ impl Transpiler {
                 out.push_str("if ");
                 self.emit_expr(out, cond)?;
                 out.push(' ');
+                let prev = self.cast_fn_literals;
+                self.cast_fn_literals = prev || else_branch.is_some() && yields_fn_literal(e);
                 self.emit_block(out, then_branch)?;
                 if let Some(eb) = else_branch {
                     out.push_str(" else ");
                     self.emit_expr(out, eb)?;
                 }
+                self.cast_fn_literals = prev;
             }
             ExprKind::While { cond, body, label } => {
                 // M308: etiqueta → `'ray_l: loop`/`'ray_l: while` (va en `head`, pegada al bucle).
@@ -2085,7 +2103,13 @@ impl Transpiler {
             // `Rc<RefCell>` comparte el estado, como las celdas del intérprete; los escalares se copian —
             // la captura MUTABLE de un escalar diverge, diferida).
             ExprKind::Func(fnexpr) => self.emit_func_literal(out, fnexpr, true)?,
-            ExprKind::Match { scrutinee, arms } => self.emit_match(out, scrutinee, arms)?,
+            ExprKind::Match { scrutinee, arms } => {
+                let prev = self.cast_fn_literals;
+                self.cast_fn_literals = prev || yields_fn_literal(e);
+                let r = self.emit_match(out, scrutinee, arms);
+                self.cast_fn_literals = prev;
+                r?
+            }
             // Operador `?`: sobre Option/Result nativos de Rust → el `?` de Rust (la fn envolvente
             // devuelve un Option/Result compatible, garantizado por el checker).
             ExprKind::Try(inner) => {
@@ -3010,4 +3034,18 @@ pub(super) fn row_key(g: &str, index: &Expr) -> Option<String> {
         }
     }
     Some(format!("{g}[{}]", text(index)?))
+}
+
+/// ¿El VALOR de `e` puede ser una closure literal? (`fn(…) {…}` en la cola de una rama de `if`/
+/// `else` o en un brazo de `match`, a cualquier profundidad de ramas anidadas.)
+fn yields_fn_literal(e: &Expr) -> bool {
+    match &e.kind {
+        ExprKind::Func(_) => true,
+        ExprKind::Block(b) => b.tail.as_deref().is_some_and(yields_fn_literal),
+        ExprKind::If { then_branch, else_branch, .. } => {
+            then_branch.tail.as_deref().is_some_and(yields_fn_literal) || else_branch.as_deref().is_some_and(yields_fn_literal)
+        }
+        ExprKind::Match { arms, .. } => arms.iter().any(|a| yields_fn_literal(&a.body)),
+        _ => false,
+    }
 }

@@ -188,12 +188,17 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // imprime el proceso al morir, en una segunda línea `  at …` que `ray test --native` muestra igual
     // que la de la VM.
     out.push_str("struct __RayErr(String, Option<String>);\n");
+    // Enums de valor (datos escalares): `Copy`, con la forma de uso de `Rc` (`::new`, `Deref`).
+    out.push_str("#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)] struct __RayVal<T>(T);\nimpl<T> __RayVal<T> { #[inline(always)] fn new(v: T) -> Self { __RayVal(v) } }\nimpl<T> std::ops::Deref for __RayVal<T> { type Target = T; #[inline(always)] fn deref(&self) -> &T { &self.0 } }\n");
     out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string(), None)) }\n");
     out.push_str("#[cold] fn __ray_rt_err_at(msg: &str, at: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string(), Some(at.to_string()))) }\n");
     // §101 #16→#14: el índice fuera de rango es un error de runtime de raylang con el texto de la VM
     // (`index 3 out of range (length 0)`), no el bounds check de Rust. `__ray_idx` hace UNA comparación
     // sin signo (un índice negativo cae también) en el camino caliente y llama al emisor frío fuera.
     out.push_str("#[cold] #[inline(never)] fn __ray_index_err(i: i64, len: usize) -> ! { __ray_rt_err(&format!(\"index {i} out of range (length {len})\")) }\n");
+    // Fila `g[i]` de un arreglo de arreglos para izar su préstamo fuera de un bucle: `None` si el
+    // índice no existe (el bucle sin izar da entonces el error donde toca).
+    out.push_str("#[inline(always)] fn __ray_row<T>(a: &Rc<std::cell::RefCell<Vec<Rc<std::cell::RefCell<Vec<T>>>>>>, i: Option<i64>) -> Option<Rc<std::cell::RefCell<Vec<T>>>> { let i = i?; let b = a.borrow(); if (i as u64) < (b.len() as u64) { Some(b[i as usize].clone()) } else { None } }\n");
     out.push_str("#[inline(always)] fn __ray_idx(i: i64, len: usize) -> usize { if (i as u64) < (len as u64) { i as usize } else { __ray_index_err(i, len) } }\n");
     // M295: profundidad de llamadas raylang — el binario nativo corta la recursión en el MISMO
     // límite y con el MISMO mensaje que la VM (`RAYLANG_MAX_DEPTH`, 1024 por defecto), en vez de

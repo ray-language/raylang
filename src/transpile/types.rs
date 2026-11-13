@@ -86,7 +86,7 @@ pub(super) fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tpa
             };
             // Multi-módulo: un tipo namespacado (`figuras::Rect`) se mangla a un identificador Rust válido.
             return Ok(if enums.contains(n) {
-                format!("Rc<{}{}>", mangle(n), sfx)
+                format!("{}<{}{}>", enum_box(n), mangle(n), sfx)
             } else {
                 format!("Rc<std::cell::RefCell<{}{}>>", mangle(n), sfx)
             });
@@ -106,7 +106,7 @@ pub(super) fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tpa
                 let ra: Vec<String> = args.iter().map(|a| rust_ty(a, enums, tparams)).collect::<Result<_, _>>()?;
                 format!("<{}>", ra.join(", "))
             };
-            return Ok(format!("Rc<{}{}>", mangle(n), sfx));
+            return Ok(format!("{}<{}{}>", enum_box(n), mangle(n), sfx));
         }
         // Tupla → tupla NATIVA de Rust (heterogénea, inmutable; sin Rc — valor, como en raylang).
         Type::Tuple(ts) => {
@@ -412,3 +412,38 @@ pub(super) fn type_has_fn(ty: &Type) -> bool {
     }
 }
 
+
+thread_local! {
+    /// Arco de rendimiento (nov 2026): los enums «de valor» del programa en curso (nombre raylang y
+    /// manglado) — sin parámetros de tipo y con todos los datos de sus variantes ESCALARES (int,
+    /// float, bool, char, enteros con tamaño) o sin datos. Se fija en `transpile_entry`.
+    static VALUE_ENUMS: std::cell::RefCell<std::collections::HashSet<String>> = std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Fija los enums de valor del programa (ver `VALUE_ENUMS`).
+pub(super) fn set_value_enums(prog: &crate::ast::Program) {
+    let scalar = |t: &Type| matches!(normalize_type(t), Type::Int | Type::Float | Type::Bool | Type::Char | Type::UInt(_));
+    let mut set = std::collections::HashSet::new();
+    for e in &prog.enums {
+        if e.name == "Option" || e.name == "Result" || !e.type_params.is_empty() {
+            continue;
+        }
+        if e.variants.iter().all(|v| v.payload.iter().all(scalar)) {
+            set.insert(e.name.clone());
+            set.insert(mangle(&e.name));
+        }
+    }
+    VALUE_ENUMS.with(|v| *v.borrow_mut() = set);
+}
+
+/// ¿Es `n` (nombre raylang o manglado) un enum de valor?
+pub(super) fn is_value_enum(n: &str) -> bool {
+    VALUE_ENUMS.with(|v| v.borrow().contains(n))
+}
+
+/// El envoltorio de un enum de usuario en el Rust generado: `Rc` (compartido, permite recursión) o,
+/// para un enum de valor, `__RayVal` — un envoltorio `Copy` con la misma forma de uso (`::new`,
+/// `Deref`), de modo que crear y pasar uno no reserva ni cuenta referencias.
+pub(super) fn enum_box(n: &str) -> &'static str {
+    if is_value_enum(n) { "__RayVal" } else { "Rc" }
+}

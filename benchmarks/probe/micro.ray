@@ -1,0 +1,460 @@
+import std/time;
+
+struct P {
+    x: int,
+    y: int,
+}
+
+struct F {
+    x: float,
+    y: float,
+}
+
+enum Op {
+    A(int),
+    B,
+    C(int, int),
+}
+
+trait Sh {
+    fn area(self) -> int;
+}
+
+impl Sh for P {
+    fn area(self) -> int { self.x * self.y }
+}
+
+fn add1(x: int) -> int { x + 1 }
+
+fn opt(x: int) -> Option<int> {
+    if (x % 7 == 0) { Option.None } else { Option.Some(x) }
+}
+
+fn res(x: int) -> Result<int, string> {
+    if (x % 7 == 0) { Result.Err("e") } else { Result.Ok(x) }
+}
+
+fn res2(x: int) -> Result<int, string> {
+    let a = res(x)?;
+    Result.Ok(a + 1)
+}
+
+fn gen_area<T: Sh>(s: T) -> int { s.area() }
+
+fn dyn_area(s: dyn Sh) -> int { s.area() }
+
+fn report(name: string, t0: int, n: int, check: int) {
+    let dt = time.monotonic_nanos() - t0;
+    print("${name}\t${dt / n}\t${dt % n * 10 / n}\t${check % 1000}");
+}
+
+fn main() {
+    let n = 2000000;
+    var t0 = time.monotonic_nanos();
+    var s = 0;
+    var i = 0;
+    while (i < n) {
+        s = s + i;
+        i = i + 1;
+    }
+    report("while_int", t0, n, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..n {
+        s = s + k;
+    }
+    report("for_range", t0, n, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    i = 0;
+    while (i < n && s >= 0) {
+        s = (s + i) % 1000003;
+        i = i + 1;
+    }
+    report("while_and_mod", t0, n, s);
+
+    t0 = time.monotonic_nanos();
+    var x = 1.0;
+    for k in 0..n {
+        x = x * 1.0000001 + 0.5;
+    }
+    report("float_arith", t0, n, x as int);
+
+    t0 = time.monotonic_nanos();
+    x = 0.0;
+    for k in 0..n {
+        x = x + (k as float) * 0.5;
+    }
+    report("int_as_float", t0, n, x as int);
+
+    t0 = time.monotonic_nanos();
+    x = 0.0;
+    var zr = 0.5;
+    var zi = 0.25;
+    for k in 0..n {
+        if (zr * zr + zi * zi < 4.0) {
+            x = x + 1.0;
+        }
+    }
+    report("float_cmp", t0, n, x as int);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..n {
+        s = s + add1(k);
+    }
+    report("call_fn", t0, n, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    let g = fn(v: int) -> int { v + 1 };
+    for k in 0..n {
+        s = s + g(k);
+    }
+    report("call_closure", t0, n, s);
+
+    let p = P { x: 3, y: 4 };
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..n {
+        s = s + p.x + p.y;
+    }
+    report("field_read", t0, n, s);
+
+    t0 = time.monotonic_nanos();
+    for k in 0..n {
+        p.x = p.x + 1;
+    }
+    report("field_write", t0, n, p.x);
+
+    let fp = F { x: 3.0, y: 4.0 };
+    t0 = time.monotonic_nanos();
+    for k in 0..n {
+        fp.x = fp.x + fp.y * 0.01;
+    }
+    report("field_float_rw", t0, n, fp.x as int);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..n {
+        let q = P { x: k, y: 1 };
+        s = s + q.x;
+    }
+    report("struct_alloc", t0, n, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..n {
+        let o = if (k % 3 == 0) { Op.A(k) } else {
+            if (k % 3 == 1) { Op.B } else { Op.C(k, 1) }
+        };
+        match (o) {
+            Op.A(v) => s = s + v,
+            Op.B => s = s + 1,
+            Op.C(a, b) => s = s + a + b,
+        }
+    }
+    report("enum_new_match", t0, n, s);
+
+    var ops: [Op] = [];
+    for k in 0..1000 {
+        ops.push(if (k % 2 == 0) { Op.A(k) } else { Op.C(k, 2) });
+    }
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for r in 0..(n / 1000) {
+        for o in ops {
+            match (o) {
+                Op.A(v) => s = s + v,
+                Op.B => s = s + 1,
+                Op.C(a, b) => s = s + a + b,
+            }
+        }
+    }
+    report("enum_match_only", t0, n, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..n {
+        s = s + opt(k).unwrap_or(0);
+    }
+    report("option_unwrap_or", t0, n, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..n {
+        match (opt(k)) {
+            Option.Some(v) => s = s + v,
+            Option.None => { },
+        }
+    }
+    report("option_match", t0, n, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..n {
+        match (res2(k)) {
+            Result.Ok(v) => s = s + v,
+            Result.Err(_) => { },
+        }
+    }
+    report("result_try", t0, n, s);
+
+    t0 = time.monotonic_nanos();
+    var xs: [int] = [];
+    for k in 0..n {
+        xs.push(k);
+    }
+    report("array_push", t0, n, xs.len());
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..n {
+        s = s + xs[k];
+    }
+    report("array_index", t0, n, s);
+
+    t0 = time.monotonic_nanos();
+    for k in 0..n {
+        xs[k] = k + 1;
+    }
+    report("array_store", t0, n, xs[5]);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for v in xs {
+        s = s + v;
+    }
+    report("array_for_in", t0, n, s);
+
+    var bs: [bool] = [];
+    for k in 0..n {
+        bs.push(k % 3 == 0);
+    }
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..n {
+        if (bs[k]) {
+            s = s + 1;
+        }
+    }
+    report("bool_array_index", t0, n, s);
+
+    var grid: [[int]] = [];
+    for y in 0..1000 {
+        var row: [int] = [];
+        for xx in 0..1000 {
+            row.push(xx + y);
+        }
+        grid.push(row);
+    }
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for y in 0..1000 {
+        for xx in 0..1000 {
+            s = s + grid[y][xx];
+        }
+    }
+    report("array2d_index", t0, 1000000, s);
+
+    t0 = time.monotonic_nanos();
+    for y in 1..1000 {
+        for xx in 0..1000 {
+            grid[y][xx] = grid[y - 1][xx] + 1;
+        }
+    }
+    report("array2d_store", t0, 999000, grid[999][5]);
+
+    var ps: [P] = [];
+    for k in 0..1000 {
+        ps.push(P { x: k, y: 2 });
+    }
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for r in 0..(n / 1000) {
+        for q in ps {
+            q.x = q.x + 1;
+            s = s + q.y;
+        }
+    }
+    report("array_struct_iter_rw", t0, n, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for r in 0..(n / 1000) {
+        for q in ps {
+            s = s + gen_area(q);
+        }
+    }
+    report("trait_static", t0, n, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for r in 0..(n / 1000) {
+        for q in ps {
+            s = (s + dyn_area(q)) % 1000003;
+        }
+    }
+    report("trait_dyn", t0, n, s);
+
+    let m = 500000;
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..m {
+        let st = "k=${k}";
+        s = s + st.len();
+    }
+    report("str_interp", t0, m, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..m {
+        s = s + to_string(k).len();
+    }
+    report("to_string_int", t0, m, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    let base = "hello";
+    for k in 0..m {
+        let st = base + " world";
+        s = s + st.len();
+    }
+    report("str_concat", t0, m, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    let line = "alpha,beta,gamma,delta,epsilon";
+    for k in 0..m {
+        s = s + line.split(",").len();
+    }
+    report("str_split5", t0, m, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..m {
+        if (line.contains("delta")) {
+            s = s + 1;
+        }
+    }
+    report("str_contains", t0, m, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..(m / 30) {
+        for c in line.chars() {
+            if (c == ',') {
+                s = s + 1;
+            }
+        }
+    }
+    report("chars_iter", t0, m, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..m {
+        s = s + parse_int("12345").unwrap_or(0);
+    }
+    report("parse_int", t0, m, s);
+
+    let mi: Map<int, int> = Map.new();
+    t0 = time.monotonic_nanos();
+    for k in 0..m {
+        mi.insert(k, k);
+    }
+    report("map_int_insert", t0, m, mi.len());
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..m {
+        s = s + mi.get(k).unwrap_or(0);
+    }
+    report("map_int_get", t0, m, s);
+
+    let ms: Map<string, int> = Map.new();
+    var keys: [string] = [];
+    for k in 0..1000 {
+        keys.push("key${k}");
+    }
+    t0 = time.monotonic_nanos();
+    for r in 0..(m / 1000) {
+        for key in keys {
+            ms.add_to(key, 1);
+        }
+    }
+    report("map_str_add_to", t0, m, ms.len());
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for r in 0..(m / 1000) {
+        for key in keys {
+            s = s + ms.get(key).unwrap_or(0);
+        }
+    }
+    report("map_str_get", t0, m, s);
+
+    let data = "0123456789abcdef".repeat(1000).to_bytes();
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for r in 0..(n / 16000) {
+        for k in 0..data.len() {
+            s = s + (data[k] as int);
+        }
+    }
+    report("bytes_index", t0, n, s);
+
+    let cn = 300000;
+    let ch: Channel<int> = Channel.bounded(64);
+    t0 = time.monotonic_nanos();
+    s = 0;
+    let prod = spawn(fn() -> int {
+        for k in 0..cn {
+            send(ch, k);
+        }
+        close(ch);
+        0
+    });
+    while (true) {
+        match (recv(ch)) {
+            Option.Some(v) => s = s + v,
+            Option.None => break,
+        }
+    }
+    let _p = join(prod);
+    report("chan_bounded64", t0, cn, s);
+
+    let ch2: Channel<int> = Channel.new();
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..cn {
+        send(ch2, k);
+    }
+    for k in 0..cn {
+        s = s + recv(ch2).unwrap_or(0);
+    }
+    report("chan_same_fiber", t0, cn, s);
+
+    let sn = 30000;
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for k in 0..sn {
+        let t = spawn(fn() -> int { k + 1 });
+        s = s + join(t);
+    }
+    report("spawn_join", t0, sn, s);
+
+    t0 = time.monotonic_nanos();
+    s = 0;
+    for r in 0..(sn / 1000) {
+        var ts: [Task<int>] = [];
+        for k in 0..1000 {
+            ts.push(spawn(fn() -> int { k + 1 }));
+        }
+        for t in ts {
+            s = s + join(t);
+        }
+    }
+    report("spawn_batch1000", t0, sn, s);
+}

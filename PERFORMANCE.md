@@ -2789,3 +2789,97 @@ clonaba dos `Arc` por trozo (cuatro atómicos) y costaba a `wordcount` en la VM 
 Leyendo los tres locales en el sitio y escribiendo el cursor sin pasar por la pila, `wordcount` queda
 en **140 ms (−19 %)** y `jsondeserialize` en 303; el resto de la VM, dentro del ruido (±2 %).
 
+
+## 26. M451 (nov 2026): el coste de las abstracciones en el nativo — el banco de sondeo
+
+**Por qué.** El banco poliglota (`benchmarks/poly/`) mide diez programas afinados durante meses, y
+el nativo empata o gana en casi todos. Lo que NO mide son los rasgos del lenguaje que esos programas
+no tocan. Para ver dónde estaba flojo se escribió un segundo banco, `benchmarks/probe/`: quince
+programas (clausuras, structs, enums, traits, strings, mapas, flotantes, `Result`, bytes, canales,
+ordenación…) en raylang, Go y Node, más `micro.ray`, que da los nanosegundos por operación en
+nativo y en VM. Máquina: M3 Pro, Go 1.23.1, Node 26; mediana de 7 corridas.
+
+**Lo que salió** (nativo ÷ Go, 1.27.95): `chan` 4,69×, `grid` 1,97×, `structs` 1,64×, `enums`
+1,57×, `sortst` 1,43×, `strscan` 1,27×, `queens` 1,26×, `results` 1,16×; por debajo de 1× (gana el
+nativo) `mapstruct` 0,28×, `strbuild` 0,59×, `hof` 0,67×, `strappend` 0,69×. Y en el micro, cuatro
+costes que el código generado pagaba sin necesidad:
+
+| Operación | Antes | Ahora | Causa |
+|---|---|---|---|
+| comparar con un literal (`s == "x"`) | 7,6 ns | 0,6 ns | el literal se creaba (`Rc::<str>::from`) en cada uso |
+| literal como argumento | ~11 ns | ~1,8 ns | ídem |
+| `contains("x")` / `m.get("k")` | 7,5 ns | 5,0 ns | ídem (ahora igual que con una variable) |
+| llamada a `fn f<T: Trait>` | 6,6 ns | 4,3 ns | el diccionario del bound era un `Rc<dyn Fn>` reservado por llamada |
+| crear un enum y hacer `match` | 5,1 ns | 0,6 ns | todo enum iba al heap (`Rc<E>`) |
+| `match` sobre un arreglo de enums | 1,4 ns | 0,6 ns | ídem |
+
+**Cuatro pasos, cada uno byte-idéntico a la VM** (`tests/native_perf_cli.rs`, corpus nativo y
+harness diferencial):
+
+1. **Literales de string.** Como valor salen de una tabla por hilo (`__ray_lit(i)`: un `Rc<str>`
+   creado una vez por hilo y luego solo clonado; una entrada por literal distinto). Donde basta el
+   texto — `==`/`!=`, `contains`, la clave de `get`/`get_or`/`contains_key` — va como `&str`. La
+   tabla sola rinde poco en macOS (el acceso por hilo cuesta casi lo que la reserva de mimalloc que
+   evita): la ganancia grande es no crear el string.
+2. **Diccionarios de bound monomorfizados.** El parámetro oculto `T#Trait#metodo` se emite como
+   genérico de Rust (`__D: Fn(…) + Clone`) y el impl viaja como ítem de función: rustc lo inlinea.
+   Siguen por `Rc<dyn Fn>` los que cruzan un `spawn` y la recursión polimórfica (una función que
+   recurre pasando un diccionario construido). Lo que queda de los 4,3 ns es tráfico de contadores
+   del argumento, no despacho.
+3. **Enums de valor.** Un enum sin parámetros de tipo cuyas variantes solo llevan escalares (o
+   nada) se emite como `__RayVal<E>`, un envoltorio `Copy` con la forma de uso de `Rc` (`::new`,
+   `Deref`). Los que llevan strings u otros objetos siguen por `Rc`: clonarlos por valor costaría
+   un contador por dato en vez de uno.
+4. **Préstamos izados.** La optimización N6b (izar el `borrow()` de un arreglo fuera de un bucle
+   puro-escalar) solo cubría lecturas en cuerpos sin control de flujo. Ahora admite `if`/`else`,
+   `while` y `for` anidados, `break`/`continue`, la escritura `a[i] = v` (préstamo izado como
+   `borrow_mut`) y las filas `g[e][i]` de un arreglo de arreglos cuando `e` no cambia en el bucle.
+   Con escrituras o filas se emite una guarda en ejecución — lo izado son objetos distintos y cada
+   fila existe — y el bucle sin izar como alternativa, así que dos nombres del mismo arreglo o un
+   índice de fila inválido se comportan como antes. El índice de una fila izada se evalúa con
+   aritmética que no puede fallar (`checked_*` → no izar): adelantarlo no adelanta un error.
+   Además `xs.push(v)`, `p.campo` y `p.campo = v` sobre una variable local ya no clonan su `Rc`.
+
+**Por secciones contra Go** (`grid` + `structs`, ms): rellenar un arreglo 6,28 → 2,2 (Go 2,25);
+criba, lectura + escritura 8,56 → 3,7 (2,91); rejilla 2D `g[y][x]` 18,9 → 12,7 (8,53); actualizar
+campos de structs 5,25 → 4,05 (2,65).
+
+**El banco de sondeo después** (nativo ms, nativo ÷ Go): `enums` 8,8 → 6,9 (1,57× → 1,22×), `grid`
+18,5 → 11,6 (1,97× → 1,26×), `structs` 6,2 → 4,9 (1,64× → 1,40×); el resto, dentro del ruido. El
+banco poliglota no cambia (sus programas no pasaban por estos caminos).
+
+**Lo que queda abierto.**
+- **Canales y `spawn` entre workers** (`chan` 4,7× Go): un mensaje entre dos workers cuesta
+  ~140 ns contra 23 ns en el mismo worker; `spawn` + `join`, 1,1 µs contra 0,3. Diagnóstico
+  (12 nov, productor y consumidor en workers distintos, 10 M de mensajes):
+
+  | Canal | macOS M3 Pro | Linux aarch64 (VM, 4 vCPU) |
+  |---|---|---|
+  | `Channel.bounded(64)` | 137–144 ns/msg | 234–240 ns/msg |
+  | `Channel.bounded(4096)` | 44 ns/msg | — |
+  | `Channel.new()` (sin límite) | 41 ns/msg | — |
+  | cualquiera, `RAYLANG_THREADS=1` | 23 ns/msg | 31 ns/msg |
+
+  No es el receptor aparcando en vacío sino el **traspaso del cerrojo del canal** entre dos hilos
+  con un búfer pequeño: con 64 huecos el canal vive lleno, emisor y receptor se turnan mensaje a
+  mensaje y cada turno es un mutex disputado (en el perfil: `psynch_mutexwait`/`swtch_pri` en
+  ambos workers); con 4096 huecos el emisor aparca rara vez y cada lado trabaja a ráfagas sin
+  disputa. **Probado y descartado**: unas vueltas de espera activa en `recv` (canal vacío) y en
+  `send` (canal lleno) antes de aparcar, solo con la fibra sola en su worker — 137 → 136 ns, sin
+  efecto: la espera activa también pasa por el cerrojo disputado. La palanca real es otra cola
+  (camino rápido sin cerrojo, o entrega por lotes), que toca rendezvous, cancelación, `select` y
+  los contadores de cesión: arco propio, con `actor_ask`/`actor_shard` como jueces. Mientras
+  tanto, la guía práctica: **un canal entre dos fibras de mucho tráfico rinde 3× más con un búfer
+  grande o sin límite que con uno de 64**. En Linux, `spawn` + `join` secuencial salió a 35 µs en
+  la VM (0,43 µs con un worker): es el despertar de un worker dormido, y hay que repetirlo en
+  metal antes de darlo por bueno.
+- **Recursión y aritmética comprobada**: `fibrec` 28,6 ms, 14,1 con `--fast`, Go 16,2. El 2× es
+  la comprobación de desbordamiento más el contador de profundidad.
+- **`dyn Trait`**: 12,7 ns cuando la conversión a `dyn` ocurre en cada llamada (reserva el objeto
+  y una clausura por método); guardado en un `[dyn T]` empata con Go.
+- **`sort_by` con clausura** (1,36× Go, 48 MB contra 30) y la iteración de structs (lo que queda
+  es el `RefCell` por campo y el contador por elemento).
+- **La VM**, en arco propio: un bucle entero simple cuesta ~25 ns por vuelta (0,2 en nativo); una
+  llamada 51 ns, `Result` con `?` ~300 ns, `map.get` 300–400 ns. Frente a Node, 18–75× más lenta
+  en el sondeo. El perfil muestra `push`/`pop` de la pila como llamadas reales, clonado y
+  destrucción de valores por instrucción y campos de struct buscados por nombre.

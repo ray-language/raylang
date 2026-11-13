@@ -1,0 +1,19 @@
+import std/time;
+
+fn main() {
+    let t0 = time.monotonic_nanos();
+    var s = "";
+    for i in 0..60000 {
+        s = s + "ab";
+    }
+    print(s.len());
+    var t = "";
+    for i in 0..200000 {
+        t = t + to_string(i % 10);
+        if (t.len() > 64) {
+            t = "";
+        }
+    }
+    print(t.len());
+    eprint("bench_ns=${time.monotonic_nanos() - t0}");
+}

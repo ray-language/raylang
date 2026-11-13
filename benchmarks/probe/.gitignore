@@ -1,0 +1,7 @@
+# Los binarios (nativo de raylang sin extensión, `-go`) los regenera `run.py --build`.
+/*/*
+!/*/*.ray
+!/*/*.go
+!/*/*.js
+/micro
+__pycache__/

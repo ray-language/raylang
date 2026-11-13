@@ -20080,3 +20080,23 @@ arco M451 había dejado en `main` (nunca publicados), y se corrigieron antes del
 - **Binarios en el repo.** La rama de las closures salió de `main` con `benchmarks/probe/` sin su
   `.gitignore` (que iba en la otra PR) y un `git add -A` versionó 31 ejecutables (42 MiB). Se
   dejan de versionar; el historial conserva ese commit.
+
+## 428. M452 — la profundidad de recursión como parámetro oculto (nov 2026)
+
+Rendimiento, con detalle y cifras en `PERFORMANCE.md` §27. Lo que importa para el contrato:
+
+- **El límite no cambia**: `RAYLANG_MAX_DEPTH` marcos (1024 por defecto), mismo mensaje, mismo
+  punto de corte que la VM. Lo que cambia es dónde vive la cuenta: en un parámetro (`__rt_dp`) de
+  las funciones que pueden recurrir, no en un contador en memoria.
+- **Dos formas por función**: `nombre__d` (el cuerpo, con la profundidad) y `nombre` (la entrada
+  con la firma de raylang). Quien toque el transpilador debe saber que una llamada directa entre
+  funciones que cuentan va a `__d`, y que cualquier cuerpo emitido FUERA del emisor de closures
+  (`spawn`, `scope`) tiene que cortar el contexto de profundidad (`emit_detached_body`): en una
+  fibra nueva la cuenta empieza de cero, y heredar el `__rt_dp` de la función que crea la fibra
+  contaba un marco de más (lo cazó `native_depth_cli`).
+- **El contador en memoria sigue existiendo** como base para las entradas de fuera y para las
+  closures (guard de M295). El invariante: siempre que corre código que no lleva la cuenta en un
+  registro, el contador vale la profundidad del marco que cuenta más cercano.
+- **Dos errores del primer intento**, cazados por la batería completa antes de empujar: una
+  variable local con el nombre de una función que cuenta (`f: fn(…)` con una `fn f` global) se
+  tomaba por la función; y el cuerpo de `spawn` heredaba la profundidad del creador.

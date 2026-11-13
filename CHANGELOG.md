@@ -4,6 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **La recursión es más rápida en los binarios nativos (M452)**: el límite de profundidad —que
+  sigue cortando en el mismo marco y con el mismo mensaje que la VM— ya no se lleva en un contador
+  en memoria sino en un parámetro oculto entre las funciones recursivas. Una función recursiva
+  pura va un 35 % más rápida (`fib(34)`: 28,5 → 18,7 ms) y recorrer un árbol, un 17 %.
+
 ## 1.27.96 — 2026-11-13
 
 - **Binarios nativos más rápidos en código con abstracciones (M451)**. Los literales de string ya

@@ -104,10 +104,21 @@ impl Transpiler {
         let dicts = self.dict_marks.get(name).cloned().unwrap_or_default();
         let expected = self.expected_ty.take(); // pertenece a ESTA llamada, no a sus argumentos
         let turbofish = self.generic_turbofish(name, eff, expected.as_ref(), marked.len() + dicts.len())?;
+        // M452: llamada directa entre funciones que cuentan → al cuerpo `__d`, con la profundidad
+        // en un registro. (`main` se emite como `ray_main`: su llamada va por el envoltorio.)
+        let depth = match self.depth_arg {
+            // Una variable local con ese nombre (un parámetro `f: fn(…)`) NO es la función global.
+            Some(arg) if name != "main" && self.lookup(name).is_none() && self.depth_fns.contains(name) => {
+                self.depth_direct = true;
+                Some(arg)
+            }
+            _ => None,
+        };
+        let callee = if depth.is_some() { format!("{}__d", mangle(name)) } else { mangle(name) };
         if eff.is_empty() {
-            out.push_str(&mangle(name));
+            out.push_str(&callee);
             out.push_str(&turbofish);
-            out.push_str("()");
+            write!(out, "({})", depth.unwrap_or("")).unwrap();
             return Ok(());
         }
         out.push_str("{ ");
@@ -141,12 +152,15 @@ impl Transpiler {
             }
             out.push_str("; ");
         }
-        write!(out, "{}{}(", mangle(name), turbofish).unwrap();
+        write!(out, "{}{}(", callee, turbofish).unwrap();
         for i in 0..eff.len() {
             if i > 0 {
                 out.push_str(", ");
             }
             write!(out, "__rt_a{}", i).unwrap();
+        }
+        if let Some(arg) = depth {
+            write!(out, ", {arg}").unwrap();
         }
         out.push_str(") }");
         Ok(())
@@ -220,6 +234,23 @@ impl Transpiler {
         self.emit_expr(out, a)?;
         write!(out, "; move |{}| __rt_d({}) }}", params.join(", "), params.join(", ")).unwrap();
         Ok(())
+    }
+
+    /// El cuerpo de una closure que se emite con `emit_block` directo (`spawn`/`scope`): corre en
+    /// otra fibra o tras una frontera de closure, así que NO hereda el contexto de profundidad de
+    /// la función que lo contiene (M452: su `__rt_dp` es de otro marco — en una fibra nueva la
+    /// cuenta empieza de cero; M295: su guard `_f` tampoco). Sus llamadas van por los envoltorios.
+    pub(super) fn emit_detached_body(&mut self, out: &mut String, body: &Block) -> Result<(), String> {
+        let saved = (
+            std::mem::take(&mut self.depth_param),
+            self.depth_arg.take(),
+            std::mem::take(&mut self.depth_direct),
+            std::mem::take(&mut self.depth_active),
+            std::mem::take(&mut self.tail_sites),
+        );
+        let r = self.emit_block(out, body);
+        (self.depth_param, self.depth_arg, self.depth_direct, self.depth_active, self.tail_sites) = saved;
+        r
     }
 
     pub(super) fn emit_call_arg(&mut self, out: &mut String, a: &Expr, marked: bool) -> Result<(), String> {
@@ -2508,7 +2539,7 @@ impl Transpiler {
                     match &eff[0].kind {
                         ExprKind::Func(fnexpr) => {
                             tmp.push_str("(|| ");
-                            self.emit_block(&mut tmp, &fnexpr.body)?;
+                            self.emit_detached_body(&mut tmp, &fnexpr.body)?;
                             tmp.push_str(")()");
                         }
                         _ => write!(tmp, "{}()", mangle(named.as_ref().unwrap())).unwrap(),
@@ -2527,7 +2558,7 @@ impl Transpiler {
                         out.push_str("(|| ");
                     }
                     match &eff[0].kind {
-                        ExprKind::Func(fnexpr) => self.emit_block(out, &fnexpr.body)?,
+                        ExprKind::Func(fnexpr) => self.emit_detached_body(out, &fnexpr.body)?,
                         _ => write!(out, "{}()", mangle(named.as_ref().unwrap())).unwrap(),
                     }
                     if iife {

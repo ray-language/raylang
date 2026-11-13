@@ -107,6 +107,39 @@ impl Transpiler {
         Ok((gdecl, ptys))
     }
 
+    /// M452: ¿puede esta llamada volver a entrar en código raylang? No, si es un builtin del
+    /// transpilador (no sombreado por una variable ni redefinido por el usuario) y ninguno de sus
+    /// argumentos es una función. Ante la duda, sí.
+    fn may_reenter(&self, callee: &Expr, args: &[Expr]) -> bool {
+        let Ok((name, recv)) = resolve_callee(callee) else { return true };
+        let name = name.strip_suffix("#prelude").unwrap_or(name);
+        if self.lookup(name).is_some() || !is_handled_builtin(name) {
+            return true;
+        }
+        // Redefinida por el usuario (misma posición de módulo raíz): su cuerpo es código raylang.
+        if self.user_overrides.contains(name) {
+            return true;
+        }
+        let is_fn = |e: &Expr| !matches!(self.type_of(e).map(|t| normalize_type(&t)), Ok(t) if !matches!(t, Type::Fn(..)));
+        recv.is_some_and(is_fn) || args.iter().any(is_fn)
+    }
+
+    /// Los nombres de los genéricos de Rust de `f`, en el orden de `fn_generics`: sus parámetros de
+    /// tipo y luego, por parámetro, `__D{i}` (diccionario monomorfizado) o `__F{i}` (cruza un spawn).
+    fn fn_generic_names(&self, f: &Function) -> Vec<String> {
+        let marked = self.fn_marks.get(&f.name).cloned().unwrap_or_default();
+        let dicts = self.dict_marks.get(&f.name).cloned().unwrap_or_default();
+        let mut names: Vec<String> = f.type_params.clone();
+        for i in 0..f.params.len() {
+            if dicts.contains(&i) {
+                names.push(format!("__D{i}"));
+            } else if marked.contains(&i) {
+                names.push(format!("__F{i}"));
+            }
+        }
+        names
+    }
+
     pub(super) fn emit_function_inner(&mut self, out: &mut String, rust_name: &str, f: &Function) -> Result<(), String> {
         // Params de tipo en ámbito (para `rust_ty` y la clasificación de `Struct(T)`→genérico).
         self.tparams = f.type_params.iter().cloned().collect();
@@ -126,22 +159,47 @@ impl Transpiler {
         // Una cadena NO recursiva intermedia (main → helper → f recursiva) no se cuenta: el corte
         // puede llegar unos marcos más tarde que en la VM, nunca antes, y la profundidad sigue
         // acotada (sin ciclos no hay recursión ilimitada).
-        let prologue = if self.depth_fns.contains(&f.name) { "let _f = __ray_enter(); " } else { "" };
-        self.depth_active = !prologue.is_empty();
-        self.tail_sites = if self.depth_active { super::analysis::tail_call_sites(&f.body) } else { Default::default() };
-        write!(
-            out,
-            "fn {}{}({}) -> {} {{ {}",
-            rust_name,
-            generics,
-            params.join(", "),
-            rust_ty(&f.return_type, &self.enums, &self.tparams)?,
-            prologue
-        )
-        .unwrap();
+        //
+        // M452: la función que cuenta se emite DOS veces en una. `nombre__d(…, __rt_dp)` es el
+        // cuerpo: recibe la profundidad de quien la llama en un registro, suma uno y compara — sin
+        // tocar memoria (fib(34): 26,7 → 17,3 ms; el contador leído, escrito y comparado en cada
+        // llamada era un tercio del tiempo). `nombre(…)` es la entrada con la firma de raylang
+        // para quien no lleva la cuenta en un registro (código que no cuenta, valores función,
+        // closures): toma la base del contador en memoria y lo restaura al volver.
+        let counts = self.depth_fns.contains(&f.name);
+        self.depth_active = false;
+        self.depth_param = counts;
+        self.tail_sites = if counts { super::analysis::tail_call_sites(&f.body) } else { Default::default() };
+        let ret = rust_ty(&f.return_type, &self.enums, &self.tparams)?;
+        if counts {
+            let names: Vec<String> = f.params.iter().map(|p| mangle(&p.name)).collect();
+            let turbofish = match self.fn_generic_names(f) {
+                g if g.is_empty() => String::new(),
+                g => format!("::<{}>", g.join(", ")),
+            };
+            writeln!(
+                out,
+                "#[inline] fn {rust_name}{generics}({}) -> {ret} {{ let __rt_b = __ray_depth_get(); let __rt_r = {rust_name}__d{turbofish}({}{}__rt_b); __ray_depth_set(__rt_b); __rt_r }}",
+                params.join(", "),
+                names.join(", "),
+                if names.is_empty() { "" } else { ", " },
+            )
+            .unwrap();
+            write!(
+                out,
+                "fn {rust_name}__d{generics}({}{}mut __rt_dp: u32) -> {ret} {{ __rt_dp += 1; __ray_depth_check(__rt_dp); ",
+                params.join(", "),
+                if params.is_empty() { "" } else { ", " },
+            )
+            .unwrap();
+        } else {
+            write!(out, "fn {}{}({}) -> {} {{ ", rust_name, generics, params.join(", "), ret).unwrap();
+        }
         let added = self.enter_cells(&f.body);
-        self.emit_block(out, &f.body)?;
+        let body = self.emit_block(out, &f.body);
         self.exit_cells(added);
+        self.depth_param = false;
+        body?;
         out.push_str(" }\n");
         self.scopes.pop();
         self.tparams.clear();
@@ -171,6 +229,15 @@ impl Transpiler {
             rust_name, generics, params.join(", "), ret, f.name
         )
         .unwrap();
+        // M452: las llamadas directas entre funciones que cuentan nombran `nombre__d`.
+        if self.depth_fns.contains(&f.name) {
+            write!(
+                out,
+                "fn {}__d{}({}{}__rt_dp: u32) -> {} {{ __ray_rt_err(\"'{}' is not supported in the native binary (Rust transpilation)\") }}\n",
+                rust_name, generics, params.join(", "), if params.is_empty() { "" } else { ", " }, ret, f.name
+            )
+            .unwrap();
+        }
         self.tparams.clear();
         Ok(())
     }
@@ -1440,6 +1507,7 @@ impl Transpiler {
         let closure_counts = self.depth_closures.contains(&fnexpr.id);
         write!(out, "| -> {} {{ {}", rust_ty(&fnexpr.return_type, &self.enums, &self.tparams)?, if closure_counts { "let _f = __ray_enter(); " } else { "" }).unwrap();
         // El guard `_f` de la closure es el suyo: el estado de cola del cuerpo exterior se repone al salir.
+        let saved_param = (std::mem::take(&mut self.depth_param), self.depth_arg.take(), std::mem::take(&mut self.depth_direct));
         let saved_depth = (self.depth_active, std::mem::take(&mut self.tail_sites));
         self.depth_active = closure_counts;
         if self.depth_active {
@@ -1467,6 +1535,7 @@ impl Transpiler {
         self.scopes.pop();
         self.depth_active = saved_depth.0;
         self.tail_sites = saved_depth.1;
+        (self.depth_param, self.depth_arg, self.depth_direct) = saved_param;
         if !send_caps.is_empty() {
             out.push_str(" }");
         }
@@ -1730,6 +1799,34 @@ impl Transpiler {
                     self.depth_active = true;
                     r?;
                     out.push_str(" }");
+                } else if self.depth_param {
+                    // M452: en el cuerpo de una función que cuenta. Una llamada DIRECTA a otra que
+                    // cuenta pasa la profundidad en un registro (`g__d(…, __rt_dp)`; en posición de
+                    // cola, `__rt_dp - 1`: el marco no cuenta). Cualquier otra que pueda volver a
+                    // entrar en código raylang (una función que no cuenta, un valor función, un
+                    // builtin que recibe una función) publica antes la profundidad en el contador,
+                    // que es de donde la toman las entradas de fuera. Un builtin sin funciones entre
+                    // sus argumentos no puede volver a entrar: no paga la escritura.
+                    let tail = self.depth_arg != Some("__rt_dp - 1") && self.tail_sites.contains(&(e.line, e.col));
+                    let arg = if tail { "__rt_dp - 1" } else { "__rt_dp" };
+                    // Las llamadas anidadas (callee/args; en una cadena UFCS comparten posición con
+                    // esta) no son de cola aunque esta lo sea.
+                    let saved_sites = if tail { Some(std::mem::take(&mut self.tail_sites)) } else { None };
+                    let prev_arg = self.depth_arg.replace(arg);
+                    let prev_direct = std::mem::replace(&mut self.depth_direct, false);
+                    let mut call = String::new();
+                    let r = self.emit_call(&mut call, callee, args);
+                    let direct = std::mem::replace(&mut self.depth_direct, prev_direct);
+                    self.depth_arg = prev_arg;
+                    if let Some(sites) = saved_sites {
+                        self.tail_sites = sites;
+                    }
+                    r?;
+                    if direct || !self.may_reenter(callee, args) {
+                        out.push_str(&call);
+                    } else {
+                        write!(out, "{{ __ray_depth_set({arg}); {call} }}").unwrap();
+                    }
                 } else {
                     self.emit_call(out, callee, args)?
                 }

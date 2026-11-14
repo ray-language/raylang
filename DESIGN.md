@@ -20334,3 +20334,23 @@ imposible de acertar a la primera (el redondeo de un binary32).
   nativo no distingue «no existe» de «no es de este tipo») queda abierto; `tls_peer_chain`
   hereda esa diferencia. Los de `net` (#370, #371) son del paquete.
 
+
+## 436. Revisión previa a 1.27.99: sitios de coerción a `dyn` con la misma posición (nov 2026)
+
+La revisión del rango `v1.27.98..main` encontró que el arreglo de #353 (§431) era parcial. Las
+tablas de coerción a `dyn` se indexan por `(línea, col)` y la regla «gana el nodo más externo de
+la cadena izquierda» cubría `f(x)`, `a.b` y `xs[i]`, pero no lo que **ya se bajó**: UFCS y los
+operadores sobrecargados dejan el receptor en `args[0]` con la posición de la propia llamada, y
+ahí un argumento sí es un sitio de coerción legítimo. El receptor se envolvía junto con la
+llamada y la función recibía el trait object donde esperaba el tipo concreto (ICE).
+
+Decisión: la clave lleva un discriminador, la **cuenta de la cadena** (`dyn_chain_count`:
+nodos compuestos que comparten posición, sin contar `Field`), que vale lo mismo antes y después
+de bajar UFCS y operadores. Solo se exige en el caso ambiguo (una llamada con el receptor en su
+posición, y ese receptor); el resto conserva la regla por posición, para no cambiar el
+comportamiento donde otras bajadas alteran la forma del árbol.
+
+Quedan abiertos, por decisión y no por olvido: `contains`/`position` sobre un `[T]` genérico en
+nativo comparan con el `Eq` del usuario y la VM compara estructuralmente (solo difieren con un
+`impl Eq` escrito a mano que no sea estructural; antes ese programa no compilaba en nativo), y
+`print` de un struct sin `Show` propio no usa el `Show` de sus campos.

@@ -840,7 +840,13 @@ const INFO_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 /// M309 (findings #51): el Info.plist del shell con las claves extra (`[app.plist]` del ray.toml y
 /// `NSLocalNetworkUsageDescription` cuando toca), insertadas antes del cierre del diccionario.
 pub fn info_plist(extra: &[(String, crate::manifest::PlistValue)]) -> String {
-    plist_with(INFO_PLIST.to_string(), extra)
+    info_plist_with(&[], extra)
+}
+
+/// El mismo Info.plist con las claves que GENERA el bundle (orientaciones, idiomas) antes de
+/// las del proyecto, que mandan si declaran la misma clave. Es el camino de `write_project`.
+fn info_plist_with(generated: &[(String, crate::manifest::PlistValue)], extra: &[(String, crate::manifest::PlistValue)]) -> String {
+    plist_with(plist_with(INFO_PLIST.to_string(), generated), extra)
 }
 
 /// Vuelca `extra` sobre `plist`. Una clave que el shell ya escribe en una sola línea
@@ -1303,16 +1309,15 @@ pub fn write_project(
         let langs = opts.localizations.iter().map(|(l, _)| l.clone()).collect();
         generated.push(("CFBundleLocalizations".to_string(), crate::manifest::PlistValue::Array(langs)));
     }
-    let info_plist = |extra: &[(String, crate::manifest::PlistValue)]| plist_with(plist_with(INFO_PLIST.to_string(), &generated), extra);
     let plist = match url_scheme {
-        Some(scheme) => info_plist(plist_extra).replacen(
+        Some(scheme) => info_plist_with(&generated, plist_extra).replacen(
             "</dict>\n</plist>",
             &format!(
                 "  <key>CFBundleURLTypes</key>\n  <array>\n    <dict>\n      <key>CFBundleURLName</key><string>{scheme}</string>\n      <key>CFBundleURLSchemes</key><array><string>{scheme}</string></array>\n    </dict>\n  </array>\n</dict>\n</plist>"
             ),
             1,
         ),
-        None => info_plist(plist_extra),
+        None => info_plist_with(&generated, plist_extra),
     };
     let plist = launch_screen(plist);
     write("Shell/Info.plist", &plist)?;

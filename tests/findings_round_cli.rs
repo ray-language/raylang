@@ -205,3 +205,72 @@ fn main() -> int {
     assert_eq!(err, "");
     assert_eq!(out, "protobuf: truncated varint of the value of field 1 at byte 1\nprotobuf: field 1 at byte 0 announces 5 bytes and 1 remain\nprotobuf: invalid field number 0 at byte 0\nprotobuf: the varint of the value of field 1 at byte 1 is longer than 10 bytes\nok 1 -1 0\nprotobuf: truncated fixed64 of field 1 at byte 1\nprotobuf: truncated fixed32 of field 1 at byte 1\nprotobuf: field 1 at byte 0 announces -1 bytes and 1 remain\nunsupported wire type: 3\nprotobuf: truncated varint of the tag at byte 0\nok 1 150 0\nok 1 0 2\nok 1 1 0\nok 1 2 0\nok 0 0 0\n300 hola\n");
 }
+
+#[test]
+fn the_result_of_a_ufcs_call_or_an_operator_coerces_to_dyn() {
+    // Secuela de #353 (revisión de 1.27.99): UFCS y los operadores sobrecargados bajan con el
+    // receptor en `args[0]`, en la MISMA posición que la llamada. Se envolvía también el
+    // receptor y la función recibía el trait object donde esperaba el tipo concreto (ICE).
+    let (out, err) = same_on_both(
+        "dyn_ufcs",
+        r#"trait Shape { fn area(self) -> int; }
+struct Sq { s: int, }
+impl Shape for Sq { fn area(self) -> int { self.s * self.s } }
+impl Add for Sq { fn add(self, o: Sq) -> Sq { Sq { s: self.s + o.s } } }
+struct Foo { n: int, }
+fn make(f: Foo) -> Sq { Sq { s: f.n } }
+fn grow(q: Sq, n: int) -> Sq { Sq { s: q.s + n } }
+fn total(s: dyn Shape) -> int { s.area() }
+fn main() -> int {
+    let foo = Foo { n: 3 };
+    let q = Sq { s: 2 };
+    let d: dyn Shape = foo.make();
+    print(d.area());
+    print(total(q.grow(1)));
+    let e: dyn Shape = q + q;
+    print(e.area());
+    let xs: [dyn Shape] = [q.grow(2), q];
+    print(xs[0].area() + xs[1].area());
+    let c: dyn Shape = q.grow(1).grow(1);
+    print(c.area());
+    print(total(grow(q, 1)));
+    0
+}
+"#,
+    );
+    assert_eq!(err, "");
+    assert_eq!(out, "9\n9\n16\n20\n16\n9\n");
+}
+
+#[test]
+fn to_string_on_a_type_parameter_only_follows_the_show_bound() {
+    // Revisión de 1.27.99: `"${x}"` con `x: T` seguía CUALQUIER trait acotado con un método
+    // `show` y tomaba su tipo de retorno: un `trait Labeled { fn show(self) -> int; }` daba un
+    // error de `+` entre string e int en vez de decir que `T` no se convierte.
+    let (out, err) = same_on_both(
+        "show_bound",
+        r#"trait Labeled { fn show(self) -> int; }
+fn lab<T: Labeled>(x: T) -> string { "v=${x}" }
+fn main() -> int { 0 }
+"#,
+    );
+    assert_eq!(out, "");
+    assert!(err.contains("to_string only converts") && err.contains("not T"), "{err}");
+}
+
+#[test]
+fn a_derive_error_names_only_the_fields_at_fault() {
+    // Revisión de 1.27.99: el campo se buscaba por subcadena y `ok: In` salía culpado porque
+    // `In` está dentro de `Inner`.
+    let (_, err) = same_on_both(
+        "derive_fields",
+        r#"struct Inner { n: int, }
+@derive(Show)
+struct In { n: int, }
+@derive(Show)
+struct Outer { a: Inner, ok: In, xs: [In], }
+fn main() -> int { 0 }
+"#,
+    );
+    assert!(err.contains("cannot derive Show for 'Outer' (field 'a'):"), "{err}");
+}

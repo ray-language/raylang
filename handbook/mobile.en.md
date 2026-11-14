@@ -534,6 +534,11 @@ And what is declared in `ray.toml`:
 | `[app] id` | the iOS bundle id and, unless another is given, the Android application id |
 | `[app] icon` | a PNG: the app icon on both systems |
 | `[app.plist]` | keys that go as they are into the iOS `Info.plist`, for example the text of a permission |
+| `[app] build` | the build number (`CFBundleVersion` and `versionCode`): the stores require a new one for every upload; `ray bundle --build N` overrides it |
+| `[app.plist.<lang>]` | the `[app.plist]` keys with their text in that language (`[app.plist.en]`): permission texts and the name show in the phone's language |
+| `[ios] devices` | `["iphone"]`, `["ipad"]` or both (both by default) |
+| `[ios] orientations` | `"portrait"`, `"upside_down"`, `"landscape_left"`, `"landscape_right"` |
+| `[ios] privacy_manifest` | your own `PrivacyInfo.xcprivacy`, instead of the one the shell generates (an app that collects data provides its own) |
 | `[ios] development_team` | the development team, to install on a real iPhone |
 | `[ios] background_audio` | audio keeps playing with the app in the background (`playback` session: opening the app stops other apps' music) |
 | `[ios] audio_session` | `"playback"` or `"playback_mix"` (the app sounds with the silent switch on WITHOUT stopping other apps' music), without the background mode |
@@ -563,5 +568,5 @@ And what is declared in `ray.toml`:
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:c4584cd1d7a7 -->
-<!-- sync: sha256:c4584cd1d7a7 -->
+<!-- sync: sha256:53931c469231 -->
+<!-- sync: sha256:53931c469231 -->

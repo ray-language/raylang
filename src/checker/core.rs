@@ -1834,7 +1834,7 @@ impl Checker {
             .and_then(|k| self.structs.get(&k))
             .map(|fs| {
                 fs.iter()
-                    .filter(|(_, ty)| !matches!(ty, Type::Int | Type::String | Type::Bool) && e.msg.contains(&ty.to_string()))
+                    .filter(|(_, ty)| mentions_type(&e.msg, &ty.to_string()))
                     .map(|(n, _)| format!("'{n}'"))
                     .collect()
             })
@@ -2443,7 +2443,7 @@ impl Checker {
                 return Ok(current);
             }
             if traits.iter().all(|t| source.contains(t)) {
-                self.dyn_upcasts.insert((line, col), traits.to_vec());
+                self.dyn_upcasts.entry((line, col)).or_default().push((dyn_chain_count(expr), traits.to_vec()));
                 return Ok(Type::Dyn(traits.to_vec()));
             }
             return Err(self.err(line, col, format!(
@@ -2472,7 +2472,7 @@ impl Checker {
                 vtable.push(self.dict_for(&current, tr, &m.name, line, col)?);
             }
         }
-        self.dyn_coercions.insert((line, col), (traits.to_vec(), vtable));
+        self.dyn_coercions.entry((line, col)).or_default().push((dyn_chain_count(expr), (traits.to_vec(), vtable)));
         Ok(Type::Dyn(traits.to_vec()))
     }
 
@@ -3565,11 +3565,12 @@ impl Checker {
             }
             // #359: `to_string(p)` (y `"${p}"`) con `p: P` y `P: Show` es `p.show()`: se llama al
             // parámetro-diccionario del bound, como hace el método escrito a mano.
+            // Solo el bound `Show`: otro trait con un método `show` no es la conversión a texto.
             if let Type::Var(tp) = &at
-                && let Some((dict, ret)) = self.resolve_bound_method(&tp.clone(), "show", &[], line, col)?
+                && self.current_fn_bounds.iter().any(|(bp, tr)| bp == tp && tr == "Show")
             {
-                self.ufcs_sites.insert((line, col, name.to_string(), usize::MAX), dict);
-                return Ok(ret);
+                self.ufcs_sites.insert((line, col, name.to_string(), usize::MAX), dict_param_name(tp, "Show", "show"));
+                return Ok(Type::String);
             }
         }
         // M316 (findings #79): `print([(1, "a")])` mostraba `[[1, a]]` (en el runtime una tupla es un
@@ -4292,4 +4293,13 @@ pub(super) fn arity_message(label: &str, expected: usize, got: usize) -> String 
         m.push_str(&format!(" ({name} is the iterator terminal; for the {which} of two values use math.{name} after import std/math)"));
     }
     m
+}
+
+/// ¿Nombra `msg` el tipo `ty` como palabra completa? `In` no es `Inner`, ni `int` es `print`:
+/// el nombre no puede ir pegado a otro carácter de identificador.
+fn mentions_type(msg: &str, ty: &str) -> bool {
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    msg.match_indices(ty).any(|(i, _)| {
+        !msg[..i].chars().next_back().is_some_and(ident) && !msg[i + ty.len()..].chars().next().is_some_and(ident)
+    })
 }

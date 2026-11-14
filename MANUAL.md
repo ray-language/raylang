@@ -1158,7 +1158,7 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    `kv` `keychain` `crypto` (+ `crypto/{md5,aes,des}`) `resilience` `net` `json` `hex` `base64`
    `url` `regex` `csv` `toml` `template` `markdown` `inflate` `deflate` `zip` `huffman` `protobuf`
    `uuid` `collections/{set,deque,stringbuilder,bytesbuilder,dict}` `image` `audio` `media` `ui` `embed`
-   `update` `ffi` `pem` `xml` `qr`
+   `update` `ffi` `pem` `xml` `qr` `charset` `binary` `locale`
    (firmas en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca-estándar-std)).
 
    Una app de escritorio (`std/ui`) habla con el sistema sin rodeos: `platform()` en la
@@ -1178,6 +1178,17 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    (o `"light"`/`"system"`; `h = 0` para toda la app) hace que los menús contextuales, los
    diálogos y la barra de título nativos lo sigan. `ui.rename_menu("File", "Archivo")` traduce la
    barra de menús sin reiniciar.
+
+   Lo que un programa suele acabar escribiendo a mano ya está: `regex.escape(s)` vuelve literal
+   un texto dentro de un patrón; `url.normalize(s)` deja dos grafías del mismo recurso iguales
+   (esquema y host en minúsculas, sin el puerto por defecto, sin `.`/`..`) y `url.escape_unsafe`
+   escapa solo lo que no puede ir en una URL; `resilience.retry_if(p, is_retryable, f)` reintenta
+   solo los errores que lo merecen y `retry_with` deja al llamador decidir la espera (un
+   `Retry-After`) o rendirse con `resilience.STOP`; `std/binary` lee y escribe enteros y floats
+   de 16/32/64 bits en los dos órdenes de octetos (`binary.u32be(data, 4)`,
+   `binary.push_u16le(b, n)`); `charset.decode_lossy` sustituye lo indescifrable y dice cuántas
+   veces; y `std/locale` da los idiomas del usuario (`locale.preferred_languages()`,
+   `locale.pick(["es", "en"], "en")`) para los textos que salen del programa y no de la página.
 
    `std/url` trocea y resuelve URLs según la RFC 3986: `url.parse(s)` da esquema, host, puerto,
    ruta, query y fragmento tal como se escribieron, y `url.resolve("https://api.x/v1/users",
@@ -1665,6 +1676,13 @@ Las ventanas, el empaquetado y todo lo que rodea a una app de escritorio o móvi
 | Frontend con Vite (React, Vue, Svelte) y `ray dev` | [App móvil](handbook/mobile.md) y [Sitio con frontend React](handbook/web-react.md) |
 | Firma, notarización, tiendas y auto-actualización (`std/update`, `ray release`) | [Distribuir](handbook/shipping.md) |
 
+Para **subir a las tiendas**, el `ray.toml` lleva lo que la validación exige: `[app] build`
+(el número de compilación, o `ray bundle --build N` desde CI), `[ios] devices` y
+`[ios] orientations`, los textos de permisos por idioma en `[app.plist.<idioma>]` y, si la app
+recoge datos, su propio `[ios] privacy_manifest` (el shell genera uno con lo que usa el runtime).
+El detalle de cada clave está en la tabla de [App móvil](handbook/mobile.md) y en
+[`REFERENCE.md`](REFERENCE.md).
+
 Las firmas de `std/ui` y `std/update` están en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca-estándar-std),
 y `ray doc std/ui` las da con su documentación.
 
@@ -1737,6 +1755,10 @@ fn main() -> int {
 ```
 
 Variantes binarias: `fs.read_file_bytes`/`fs.write_file_bytes` (→ `bytes`).
+
+Un secreto (una llave privada, un token) se crea ya con sus permisos, sin una ventana en la que
+otro usuario pueda leerlo: `fs.write_file_mode(path, text, 384)` y `fs.write_file_bytes_mode`
+(384 = `0o600`), y `fs.mkdir_mode(path, 448)` para el directorio. En Windows el modo se ignora.
 
 Para archivos **grandes** (transferencias, backups), el handle también lee **por trozos de
 bytes**, con la memoria acotada por el trozo — y `seek` permite **reanudar** en un offset:
@@ -2174,6 +2196,13 @@ la cadena, subirlas más adelante no invalida lo guardado. `password_hash_with(p
 (bájalo solo en tests). La primitiva cruda es `pbkdf2_hmac_sha256(password, salt, iterations, len)
 -> Option<bytes>` (`None` con `iterations` fuera de `1..=4294967295` o `len` fuera de `1..=1024`).
 
+Verificar lo que firmó otro (un certificado, un JWT, un webhook) no pide la llave privada:
+`crypto.ecdsa_verify(curve, public, msg, sig)` y `ecdsa_verify_asn1(curve, hash, …)` cubren
+P-256 y P-384, y `rsa_pkcs1_verify_with(hash, …)` / `rsa_pss_verify_with` aceptan SHA-256,
+SHA-384 y SHA-512. Una llave Ed25519 entra y sale en PKCS#8 (lo que escribe OpenSSL):
+`ed25519_generate()` la crea, `ed25519_seed_of(pkcs8)` y `ed25519_pkcs8_of(seed)` convierten, y
+`ed25519_sign`/`ed25519_public_key` aceptan cualquiera de las dos formas.
+
 ### Tiempo y duraciones (`std/time`)
 
 Relojes (`now()` epoch-ms, `monotonic()` para medir intervalos), `sleep(ms)` cooperativo, y las
@@ -2261,6 +2290,8 @@ primer día):
   por IP. El webserver la expone directa en `Request.remote` (+ `webserver.remote_ip(req)`).
 - `net.tls_peer_cert(h) -> Result<PeerCert, _>` — el certificado del peer: **"expira en N días"**
   por fin se escribe: `(cert.not_after_ms - time.now()) / 86400000`.
+- `net.tls_peer_chain(h) -> Result<[bytes], _>` — la cadena entera que presentó el peer, cada
+  certificado en DER y la hoja primero: para inspeccionar o fijar (pinning) un intermedio.
 - `net.shutdown_write(h)` — **half-close** (`SHUT_WR`): el peer ve EOF en su lectura y este lado
   sigue leyendo hasta su FIN. El idiom netcat/HTTP-1.0: "terminé de enviar, dreno la respuesta".
   Solo TCP (en TLS el close_notify viaja con `close`).

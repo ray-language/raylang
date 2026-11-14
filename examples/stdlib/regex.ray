@@ -902,6 +902,21 @@ fn run_full(prog: Prog, text: string) -> bool {
     }
 }
 
+/// Quotes `s` so that it matches itself literally inside a pattern: every metacharacter
+/// (`\ . * + ? | ( ) [ ] { } ^ $`) gets a backslash. For building a pattern out of text that
+/// is not yours (`compile("^" + regex.escape(prefix))`). Valid for `compile` and for `onig`.
+// raycrawl #365.
+pub fn escape(s: string) -> string {
+    var out: [string] = [];
+    for c in s {
+        if ("\\.*+?|()[]{}^$".contains(to_string(c))) {
+            out.push("\\");
+        }
+        out.push(to_string(c));
+    }
+    join(out, "")
+}
+
 // ¿Casa el patrón con TODO el texto (anclado a ambos extremos)?
 /// Tests whether the pattern matches the ENTIRE text (anchored at both ends).
 /// Thompson NFA simulation — linear time, no backtracking blowup. Supported syntax:

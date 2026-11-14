@@ -48,6 +48,31 @@ mod real {
         }
     }
 
+    /// Como `decode`, pero cada secuencia malformada se sustituye por U+FFFD (lo que hace un
+    /// navegador, WHATWG Encoding §4.1) en vez de ser `Err`. Devuelve `"<sustituciones>\n<utf8>"`.
+    pub fn decode_lossy(data: &[u8], label: &str) -> Result<Vec<u8>, String> {
+        let enc = encoding(label)?;
+        let mut decoder = enc.new_decoder_without_bom_handling();
+        let cap = decoder.max_utf8_buffer_length(data.len()).ok_or("input too large")?;
+        let mut out = String::with_capacity(cap);
+        let (mut at, mut replaced) = (0usize, 0usize);
+        loop {
+            let (result, read) = decoder.decode_to_string_without_replacement(&data[at..], &mut out, true);
+            at += read;
+            match result {
+                DecoderResult::InputEmpty => break,
+                DecoderResult::Malformed(_, _) => {
+                    out.push('\u{FFFD}');
+                    replaced += 1;
+                }
+                DecoderResult::OutputFull => return Err("decoder output buffer too small (internal)".to_string()),
+            }
+        }
+        let mut framed = format!("{replaced}\n").into_bytes();
+        framed.extend_from_slice(out.as_bytes());
+        Ok(framed)
+    }
+
     /// Codifica `text` (UTF-8) según `label`. Un carácter sin representación es `Err` con el
     /// carácter y su índice. `replacement` y UTF-16 no tienen codificador en el estándar (WHATWG
     /// los codifica como UTF-8): se rechazan para no mentir.
@@ -76,6 +101,7 @@ mod real {
     pub fn op(op: &str, label: &str, data: &[u8]) -> Result<Vec<u8>, String> {
         match op {
             "decode" => decode(data, label),
+            "decode_lossy" => decode_lossy(data, label),
             "encode" => encode(std::str::from_utf8(data).map_err(|_| "encode: the text is not UTF-8".to_string())?, label),
             "labels" => Ok(labels()),
             other => Err(format!("unknown charset op '{other}'")),
@@ -85,6 +111,17 @@ mod real {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn lossy_decoding_replaces_each_malformed_sequence() {
+            // #363: un octeto suelto no pierde la página; el resto se decodifica.
+            assert_eq!(decode_lossy(&[0x82, 0xA0, 0xFF, 0x41], "shift_jis").unwrap(), "1\nあ\u{FFFD}A".as_bytes());
+            assert_eq!(decode_lossy(b"abc", "windows-1252").unwrap(), b"0\nabc");
+            // Una secuencia cortada al final también se sustituye.
+            assert_eq!(decode_lossy(&[0x41, 0x82], "shift_jis").unwrap(), "1\nA\u{FFFD}".as_bytes());
+            assert_eq!(decode_lossy(&[0xFF, 0xFF], "utf-8").unwrap(), "2\n\u{FFFD}\u{FFFD}".as_bytes());
+            assert!(decode_lossy(b"x", "nope").is_err());
+        }
 
         #[test]
         fn single_byte_and_multibyte_round_trip() {

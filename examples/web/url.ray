@@ -435,6 +435,112 @@ fn merge_paths(base: Url, ref_path: string) -> string {
     }
 }
 
+// Normaliza los escapes de un componente (RFC 3986 §6.2.2.1–2): `%7e` → `~` (un no reservado
+// nunca va escapado) y `%3a` → `%3A` (hex en mayúscula). Un `%` suelto se deja como está.
+fn normalize_escapes(part: string) -> string {
+    let cs = part.chars();
+    var out: [string] = [];
+    var i = 0;
+    while (i < cs.len()) {
+        if (cs[i] == '%'
+            && i + 2 < cs.len()
+            && hex_val(cs[i + 1]) >= 0
+            && hex_val(cs[i + 2]) >= 0) {
+            let octet = hex_val(cs[i + 1]) * 16 + hex_val(cs[i + 2]);
+            let plain = match (char_from_code(octet)) {
+                Option.Some(c) => octet < 128 && is_unreserved(c),
+                Option.None => false,
+            };
+            if (plain) {
+                out.push(to_string(char_from_code(octet).unwrap_or('?')));
+            } else {
+                out.push("%" + hex2(octet));
+            }
+            i = i + 3;
+        } else {
+            out.push(to_string(cs[i]));
+            i = i + 1;
+        }
+    }
+    join(out, "")
+}
+
+// El puerto por defecto de un esquema (ya en minúsculas), o -1.
+fn default_port(scheme: string) -> int {
+    if (scheme == "http" || scheme == "ws") {
+        80
+    } else if (scheme == "https" || scheme == "wss") {
+        443
+    } else if (scheme == "ftp") {
+        21
+    } else {
+        0 - 1
+    }
+}
+
+/// Normalizes a URL so that two spellings of the same resource compare equal (RFC 3986 §6.2.2
+/// and §6.2.3): lowercase scheme and host, no default port (`http` 80, `https` 443, `ws`,
+/// `wss`, `ftp`), unreserved characters unescaped (`%7e` → `~`), uppercase hex in the escapes
+/// that remain, `.`/`..` segments removed and an empty path made `/` when there is a host.
+/// `HTTP://H:80/%7e/./a` → `http://h/~/a`. The query and the fragment keep their content
+/// (only their escapes are normalized). `Err` when `s` does not parse.
+// raycrawl #366.
+pub fn normalize(s: string) -> Result<string, string> {
+    let u = parse(s)?;
+    let scheme = u.scheme.to_lower();
+    let host = match (u.host) {
+        Option.Some(h) => Option.Some(normalize_escapes(h).to_lower()),
+        Option.None => Option.None,
+    };
+    let port = match (u.port) {
+        Option.Some(p) => if (p == default_port(scheme)) { Option.None } else { Option.Some(p) },
+        Option.None => Option.None,
+    };
+    var path = normalize_escapes(u.path);
+    if (scheme != "" || host.is_some()) {
+        path = remove_dot_segments(path);
+    }
+    if (path == "" && host.is_some()) {
+        path = "/";
+    }
+    Result.Ok(
+        render(
+            Url {
+                scheme: scheme,
+                userinfo: u.userinfo,
+                host: host,
+                port: port,
+                path: path,
+                query: u.query.map(normalize_escapes),
+                fragment: u.fragment.map(normalize_escapes)
+            }
+        )
+    )
+}
+
+/// Escapes only what cannot appear in a URL at all — spaces, control characters, `" < > \ ^
+/// \` { | }` and non-ASCII characters (as their UTF-8 octets) — and leaves everything else,
+/// `/ ? # & = %` included: what a browser does with an `href` written by hand
+/// (`/a b/é?q=x y` → `/a%20b/%C3%A9?q=x%20y`). The result is accepted by `parse` and
+/// `resolve`. It is not `url_encode`, which escapes a single component (`/` too).
+pub fn escape_unsafe(s: string) -> string {
+    var out: [string] = [];
+    for c in s {
+        let n = char_code(c);
+        if (n <= 32 || n >= 127 || "\"<>\\^`{|}".contains(to_string(c))) {
+            let b = to_string(c).to_bytes();
+            var j = 0;
+            while (j < b.len()) {
+                out.push("%" + hex2(b[j]));
+                j = j + 1;
+            }
+        } else {
+            out.push(to_string(c));
+        }
+    }
+    join(out, "")
+}
+
 /// Resolves `reference` (absolute or relative: `../x`, `/y`, `?q`, `#f`, `//host/p`) against
 /// the absolute URL `base` (RFC 3986 §5.2): what a browser does with a link or a `Location`
 /// header. Err if either fails to parse or `base` has no scheme.

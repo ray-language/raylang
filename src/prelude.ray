@@ -937,6 +937,8 @@ trait ResultOps<T, E> {
     fn unwrap(self) -> T;
     /// Converts to an `Option`, discarding the error: `Ok(x)` → `Some(x)`.
     fn ok(self) -> Option<T>;
+    /// Converts to an `Option` of the error, discarding the value: `Err(e)` → `Some(e)`.
+    fn err(self) -> Option<E>;
     /// Transforms the `Ok` value with `f`: `Ok(x)` → `Ok(f(x))`; an `Err` passes through.
     fn map<U>(self, f: fn(T) -> U) -> Result<U, E>;
     /// Chains a fallible step: `Ok(x)` → `f(x)`; an `Err` passes through.
@@ -978,6 +980,14 @@ impl<T, E> ResultOps<T, E> for Result<T, E> {
         match (self) {
             Result.Ok(x) => Option.Some(x),
             Result.Err(e) => Option.None,
+        }
+    }
+
+    // raycdc #409: el gemelo de `ok` (mirar el error en un test sin escribir un `match`).
+    fn err(self) -> Option<E> {
+        match (self) {
+            Result.Ok(x) => Option.None,
+            Result.Err(e) => Option.Some(e),
         }
     }
 

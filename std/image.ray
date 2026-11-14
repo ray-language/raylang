@@ -450,6 +450,64 @@ pub fn encode_png(img: Image) -> Result<bytes, string> {
     Result.Ok(bytes_of(out))
 }
 
+/// Encodes an `Image` as a PNG **without an alpha channel** (color type 2, 8-bit RGB). Each
+/// pixel is composited over `background` (`0xRRGGBB`), so an opaque image comes out unchanged
+/// and a translucent one is flattened. For files that must not carry alpha — App Store
+/// Connect rejects an app icon with an alpha channel even when every pixel is opaque.
+/// Same validation as `encode_png`.
+pub fn encode_png_rgb(img: Image, background: int) -> Result<bytes, string> {
+    if (img.width <= 0 || img.height <= 0) {
+        return Result.Err("png: invalid dimensions");
+    }
+    if (img.width * img.height > 67108864) {
+        return Result.Err("png: image too large (over 64 megapixels)");
+    }
+    if (img.pixels.len() != img.width * img.height * 4) {
+        return Result.Err("png: pixels must hold width * height * 4 bytes (RGBA8)");
+    }
+    let br = background >> 16 & 255;
+    let bg = background >> 8 & 255;
+    let bb = background & 255;
+    // Scanlines crudas: un octeto de filtro (0 = None) + la fila RGB compuesta sobre el fondo.
+    var raw: [int] = [];
+    var i = 0;
+    var y = 0;
+    while (y < img.height) {
+        raw.push(0);
+        var x = 0;
+        while (x < img.width) {
+            let a = img.pixels[i + 3];
+            if (a == 255) {
+                raw.push(img.pixels[i]);
+                raw.push(img.pixels[i + 1]);
+                raw.push(img.pixels[i + 2]);
+            } else {
+                // Redondeo al más cercano: (c * a + fondo * (255 - a) + 127) / 255.
+                raw.push((img.pixels[i] * a + br * (255 - a) + 127) / 255);
+                raw.push((img.pixels[i + 1] * a + bg * (255 - a) + 127) / 255);
+                raw.push((img.pixels[i + 2] * a + bb * (255 - a) + 127) / 255);
+            }
+            i = i + 4;
+            x = x + 1;
+        }
+        y = y + 1;
+    }
+    var ihdr: [int] = [];
+    push_be32(ihdr, img.width);
+    push_be32(ihdr, img.height);
+    ihdr.push(8);  // profundidad: 8 bits por canal
+    ihdr.push(2);  // tipo de color: RGB, sin alfa
+    ihdr.push(0);
+    ihdr.push(0);
+    ihdr.push(0);
+    let idat = deflate.zlib_compress(bytes_of(raw));
+    var out: [int] = [137, 80, 78, 71, 13, 10, 26, 10];
+    push_chunk(out, [73, 72, 68, 82], ihdr);
+    push_chunk(out, [73, 68, 65, 84], to_ints(idat));
+    push_chunk(out, [73, 69, 78, 68], []);
+    Result.Ok(bytes_of(out))
+}
+
 // Entero big-endian de 32 bits al final de `out`.
 fn push_be32(out: [int], v: int) {
     out.push(v >> 24 & 255);

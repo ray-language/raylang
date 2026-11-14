@@ -2800,7 +2800,13 @@ fn cmd_bundle(args: &[String]) {
             ios_plist.push(("UIBackgroundModes".to_string(), crate::manifest::PlistValue::Array(vec!["audio".to_string()])));
         }
         // M324 (ray808 #15): el icono se genera ANTES del proyecto, que solo lo cablea si existe.
-        let icon_ok = icon.as_deref().is_some_and(|i| write_ios_appicon(&proj, Path::new(i)));
+        // M458 (pepa #416): sin canal alfa — compuesto sobre `[ios] background`, o blanco.
+        let icon_background = manifest
+            .as_ref()
+            .and_then(|m| m.ios_background.as_deref())
+            .and_then(|c| u32::from_str_radix(c.trim_start_matches('#'), 16).ok())
+            .unwrap_or(0xFFFFFF);
+        let icon_ok = icon.as_deref().is_some_and(|i| write_ios_appicon(&proj, Path::new(i), icon_background));
         // M330 D5: el shell de desarrollo registra su bundle id como esquema URL (el QR del enlace).
         // M447 (pepa #334/#336/#331): color de arranque, sesión de audio y sonidos del manifiesto.
         let launch_color = manifest
@@ -3560,10 +3566,64 @@ fn afinfo_seconds(path: &Path) -> Option<f64> {
     line.split(':').nth(1)?.trim().split_whitespace().next()?.parse().ok()
 }
 
+/// M458 (pepa #416): el programa que aplana un PNG — lo compone sobre un fondo y lo escribe
+/// sin canal alfa (`image.encode_png_rgb`). Corre en la VM, como `ray release`.
+const FLATTEN_ICON_RAY: &str = r#"import std/image;
+import std/fs;
+
+fn main() -> int {
+    let a = args();
+    let img = match (fs.read_file_bytes(a[0])) {
+        Result.Ok(data) => match (image.decode_png(data)) {
+            Result.Ok(i) => i,
+            Result.Err(e) => { eprint(e); return 1; },
+        },
+        Result.Err(e) => { eprint(e); return 1; },
+    };
+    match (image.encode_png_rgb(img, parse_int(a[1]).unwrap_or(16777215))) {
+        Result.Ok(png) => match (fs.write_file_bytes(a[0], png)) {
+            Result.Ok(_) => 0,
+            Result.Err(e) => { eprint(e); 1 },
+        },
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}
+"#;
+
+/// M458 (pepa #416): App Store Connect rechaza un icono de 1024 con canal alfa, aunque todos
+/// sus píxeles sean opacos, y `ray bundle` copiaba el PNG tal cual. Si lo tiene, se compone
+/// sobre `background` (`[ios] background`, o blanco) y se reescribe sin alfa. `false` si no se
+/// pudo (el llamador avisa; el icono queda como estaba).
+fn flatten_icon_alpha(png: &Path, background: u32) -> bool {
+    let has_alpha = process::Command::new("sips")
+        .args(["-g", "hasAlpha"])
+        .arg(png)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("hasAlpha: yes"))
+        .unwrap_or(false);
+    if !has_alpha {
+        return true;
+    }
+    let script = png.with_extension("flatten.ray");
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ray"));
+    let ok = fs::write(&script, FLATTEN_ICON_RAY).is_ok()
+        && process::Command::new(exe)
+            .arg("run")
+            .arg(&script)
+            .arg("--")
+            .arg(png)
+            .arg(background.to_string())
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+    let _ = fs::remove_file(&script);
+    ok
+}
+
 /// `true` si el catálogo quedó escrito (y el proyecto puede cablearlo).
-fn write_ios_appicon(proj: &Path, icon: &Path) -> bool {
+fn write_ios_appicon(proj: &Path, icon: &Path, background: u32) -> bool {
     let set = proj.join("Shell/Assets.xcassets/AppIcon.appiconset");
-    let ok = fs::create_dir_all(&set).is_ok()
+    let resized = fs::create_dir_all(&set).is_ok()
         && process::Command::new("sips")
             .args(["-z", "1024", "1024"])
             .arg(icon)
@@ -3571,7 +3631,11 @@ fn write_ios_appicon(proj: &Path, icon: &Path) -> bool {
             .arg(set.join("icon_1024.png"))
             .output()
             .map(|o| o.status.success())
-            .unwrap_or(false)
+            .unwrap_or(false);
+    if resized && !flatten_icon_alpha(&set.join("icon_1024.png"), background) {
+        eprintln!("bundle: warning: the app icon has an alpha channel and could not be flattened; App Store Connect rejects it (use an opaque PNG without alpha)");
+    }
+    let ok = resized
         && fs::write(
             set.join("Contents.json"),
             "{\n  \"images\": [{ \"filename\": \"icon_1024.png\", \"idiom\": \"universal\", \"platform\": \"ios\", \"size\": \"1024x1024\" }],\n  \"info\": { \"author\": \"xcode\", \"version\": 1 }\n}\n",

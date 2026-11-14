@@ -8,7 +8,10 @@
 // (string/bytes/submensaje: varint de longitud + octetos), 5 fixed32 (4 octetos LE). Sin schema, el
 // decodificador devuelve los campos crudos (número + valor) y el llamador los interpreta.
 //
-// Cubre proto3 con varints NO negativos (los `sint`/zigzag y los negativos de int64 quedan diferidos).
+// Cubre proto3: varints con signo (un negativo son 10 octetos, el int64 en complemento a dos),
+// `sint` (zigzag), float/double, campos repetidos empaquetados y submensajes (raygrpc #389).
+import std/math;
+
 // --- Codificación (constructor de mensaje) ---
 /// A protobuf message builder: accumulates wire-format bytes as fields are written.
 /// Create with `writer()`, add fields with `write_*`, and get the bytes with `finish`.
@@ -21,16 +24,19 @@ pub fn writer() -> PbWriter {
     PbWriter { out: [] }
 }
 
-// Codifica un varint (LEB128): 7 bits por octeto, bit alto = continuación. Solo valores NO
-// negativos: en el wire real un negativo son 10 octetos (int64 en complemento a dos) y este
-// códec no los emite. M59.4 — con un negativo, panic EXPLÍCITO en vez de octetos corruptos en
-// silencio (antes el bucle no entraba y salía un solo octeto mal). Para enteros con signo usa
-// write_fixed64 (el complemento a dos de 8 octetos LE sí es correcto) o `sint`/zigzag (diferido).
+// Codifica un varint (LEB128): 7 bits por octeto, bit alto = continuación. Un negativo es su
+// int64 en complemento a dos: 10 octetos (nueve de 7 bits y el bit 63), como manda el formato
+// para `int32`/`int64` (raygrpc #389; antes era un panic que mandaba a `write_fixed64`, que es
+// OTRO tipo wire y el receptor lo descarta como campo desconocido).
 fn encode_varint(out: [int], value: int) {
     if (value < 0) {
-        panic(
-            "protobuf: negative varint not supported (use write_fixed64, or sint/zigzag — deferred)"
-        );
+        var k = 0;
+        while (k < 9) {
+            out.push(value >> k * 7 & 127 | 128);
+            k = k + 1;
+        }
+        out.push(1);
+        return;
     }
     var v = value;
     while (v >= 128) {
@@ -53,13 +59,73 @@ fn append_bytes(out: [int], b: bytes) {
 }
 
 // Campo varint (wire 0): int32/int64/uint/bool/enum.
-/// Writes a varint field (wire type 0, LEB128): int32/int64/uint/bool/enum.
-/// Only non-negative values are supported (no sint/zigzag encoding): a negative value
-/// PANICS instead of silently emitting corrupt bytes. For signed integers use
-/// `write_fixed64` (8-byte little-endian two's complement is wire-correct).
+/// Writes a varint field (wire type 0, LEB128): int32/int64/uint32/uint64/bool/enum. A
+/// negative value takes 10 bytes (the two's complement of the int64), as the format defines
+/// for `int32`/`int64`; a field declared `sint32`/`sint64` uses `write_sint` instead.
 pub fn write_varint(w: PbWriter, field: int, value: int) {
     write_tag(w.out, field, 0);
     encode_varint(w.out, value);
+}
+
+/// The zigzag encoding of a signed integer (`sint32`/`sint64`): 0, -1, 1, -2… → 0, 1, 2, 3…,
+/// so that small negative numbers stay short as varints.
+pub fn zigzag(n: int) -> int {
+    if (n < 0) { (0 - 1 - n) << 1 | 1 } else { n << 1 }
+}
+
+/// The inverse of `zigzag`: the signed value of a decoded `sint32`/`sint64` varint.
+pub fn unzigzag(n: int) -> int {
+    let half = n >> 1 & 0x7FFFFFFFFFFFFFFF;
+    if ((n & 1) == 1) { 0 - 1 - half } else { half }
+}
+
+/// Writes a `sint32`/`sint64` field: the zigzag of `value` as a varint. Read it back with
+/// `unzigzag(get_int(fields, number))`.
+pub fn write_sint(w: PbWriter, field: int, value: int) {
+    write_varint(w, field, zigzag(value));
+}
+
+/// Writes a `float` field (wire type 5): `value` rounded to single precision, 4 bytes.
+pub fn write_float(w: PbWriter, field: int, value: float) {
+    write_fixed32(w, field, math.float32_bits(value));
+}
+
+/// Writes a `double` field (wire type 1): the 8 bytes of `value`.
+pub fn write_double(w: PbWriter, field: int, value: float) {
+    write_fixed64(w, field, math.float_bits(value));
+}
+
+/// Writes a packed repeated field of varints (wire type 2: the values back to back), the
+/// default encoding of `repeated int32/int64/bool/enum` in proto3. For `sint`, pass the
+/// `zigzag` of each value. Read it back with `read_packed_varints(get_bytes(fields, number))`.
+pub fn write_packed_varints(w: PbWriter, field: int, values: [int]) {
+    var body: [int] = [];
+    for v in values {
+        encode_varint(body, v);
+    }
+    write_tag(w.out, field, 2);
+    encode_varint(w.out, body.len());
+    for octet in body {
+        w.out.push(octet);
+    }
+}
+
+/// Embeds the message built in `inner` as a nested message field (wire type 2). Read it back
+/// with `get_message(fields, number)`.
+pub fn write_message(w: PbWriter, field: int, inner: PbWriter) {
+    write_tag(w.out, field, 2);
+    encode_varint(w.out, inner.out.len());
+    for octet in inner.out {
+        w.out.push(octet);
+    }
+}
+
+/// A bare varint (no tag): the length prefix of a delimited stream, or one element of a
+/// hand-built packed field.
+pub fn varint(value: int) -> bytes {
+    var out: [int] = [];
+    encode_varint(out, value);
+    bytes_of(out)
 }
 
 // Campo length-delimited (wire 2) a partir de un string (UTF-8).
@@ -111,13 +177,29 @@ pub fn finish(w: PbWriter) -> bytes {
 // --- Decodificación ---
 // Un campo decodificado: número, wire type, y el valor (entero para varint/fixed; bytes para len-delim).
 /// A decoded protobuf field: field number, wire type, and the raw value —
-/// `int_val` for varint/fixed64/fixed32, `bytes_val` for length-delimited (wire 2).
-/// The wire format is schema-less, so interpreting the value is up to the caller.
+/// `int_val` for varint (wire 0), fixed64 (wire 1) and fixed32 (wire 5: the 32 bits, never
+/// negative), `bytes_val` for length-delimited (wire 2). The wire format is schema-less, so
+/// interpreting the value is up to the caller: `wire` tells a fixed32 from a fixed64.
+/// `show()` gives `#3 varint 150`, `#2 bytes(4)`, `#5 fixed32 1`.
 pub struct PbField {
     number: int,
     wire: int,
     int_val: int,
     bytes_val: bytes,
+}
+
+impl Show for PbField {
+    fn show(self) -> string {
+        if (self.wire == 2) {
+            "#${self.number} bytes(${self.bytes_val.len()})"
+        } else if (self.wire == 0) {
+            "#${self.number} varint ${self.int_val}"
+        } else if (self.wire == 1) {
+            "#${self.number} fixed64 ${self.int_val}"
+        } else {
+            "#${self.number} fixed32 ${self.int_val}"
+        }
+    }
 }
 
 struct VarintResult {
@@ -165,6 +247,30 @@ fn read_le(data: bytes, pos: int, nbytes: int) -> int {
         k = k + 1;
     }
     v
+}
+
+/// Reads a bare varint at `pos`: `Ok((value, next))` with the position after it, or `Err` when
+/// it is cut short or longer than 10 bytes. The cursor of a hand-written reader: a delimited
+/// stream, a packed field.
+pub fn read_varint(data: bytes, pos: int) -> Result<(int, int), string> {
+    let v = decode_varint(data, pos);
+    if (v.next < 0) {
+        return Result.Err(varint_error("value", v, pos));
+    }
+    Result.Ok((v.value, v.next))
+}
+
+/// The values of a packed repeated field of varints (the `bytes` of a wire type 2 field).
+/// `Err` when the last varint is cut short. For `sint`, `unzigzag` each value.
+pub fn read_packed_varints(body: bytes) -> Result<[int], string> {
+    var out: [int] = [];
+    var pos = 0;
+    while (pos < body.len()) {
+        let v = read_varint(body, pos)?;
+        out.push(v.0);
+        pos = v.1;
+    }
+    Result.Ok(out)
 }
 
 // Parsea un mensaje protobuf a una lista de campos crudos (sin schema).
@@ -244,6 +350,39 @@ pub fn get_int(fields: [PbField], number: int) -> int {
         i = i + 1;
     }
     0
+}
+
+/// The value of the first `float` (wire type 5) or `double` (wire type 1) field with the given
+/// number, or 0.0 if absent: the fixed bits read as IEEE 754, by the wire type of the field.
+pub fn get_float(fields: [PbField], number: int) -> float {
+    for f in fields {
+        if (f.number == number) {
+            return if (f.wire == 5) {
+                math.float32_from_bits(f.int_val)
+            } else {
+                math.float_from_bits(f.int_val)
+            };
+        }
+    }
+    0.0
+}
+
+/// Every field with the given number, in order: the occurrences of a `repeated` field that is
+/// not packed (strings, bytes, messages).
+pub fn get_all(fields: [PbField], number: int) -> [PbField] {
+    var out: [PbField] = [];
+    for f in fields {
+        if (f.number == number) {
+            out.push(f);
+        }
+    }
+    out
+}
+
+/// Parses the nested message in the first field with the given number. An absent field is an
+/// empty message (the proto3 default); `Err` when its bytes are not a valid message.
+pub fn get_message(fields: [PbField], number: int) -> Result<[PbField], string> {
+    parse(get_bytes(fields, number))
 }
 
 /// Returns the bytes value of the first field with the given number, or empty bytes if absent.

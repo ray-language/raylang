@@ -3257,6 +3257,16 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Float(f64::from_bits(n as u64)));
                 }
 
+                OpCode::Float32Bits => {
+                    let HeapValue::Float(f) = self.pop() else { unreachable!("the checker guarantees a float") };
+                    self.push(HeapValue::Int((f as f32).to_bits() as i64));
+                }
+                OpCode::Float32FromBits => {
+                    let HeapValue::Int(n) = self.pop() else { unreachable!("the checker guarantees an int") };
+                    self.push(HeapValue::Float(f32::from_bits(n as u32) as f64));
+                }
+                OpCode::SelfPid => self.push(HeapValue::Int(crate::builtins::self_pid())),
+
                 // --- SQLite embebido (M53.3): arreglo etiquetado, como los primitivos de I/O. ---
                 OpCode::SqliteOpen => {
                     let path = self.pop();
@@ -4518,6 +4528,15 @@ impl<'a> Vm<'a> {
                 }
                 // M124: el resumen del certificado del peer TLS → ["ok", subject, issuer, nb_ms,
                 // na_ms, san...] / ["err", msg]. El wrapper de std/net construye el struct PeerCert.
+                OpCode::TlsPeerChain => {
+                    let handle = match self.pop() { HeapValue::Int(h) => h, _ => unreachable!("the checker guarantees an int") };
+                    let elems = match crate::builtins::tls_peer_chain(handle) {
+                        Ok(chain) => std::iter::once(HeapValue::bytes(b"ok".to_vec())).chain(chain.into_iter().map(HeapValue::bytes)).collect(),
+                        Err(e) => vec![HeapValue::bytes(b"err".to_vec()), HeapValue::bytes(e.into_bytes())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::TlsPeerCert => {
                     let handle = match self.pop() { HeapValue::Int(h) => h, _ => unreachable!("the checker guarantees an int") };
                     let elems = match crate::builtins::tls_peer_cert(handle) {

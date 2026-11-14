@@ -108,15 +108,16 @@ pub fn hmac_sha384(key: bytes, msg: bytes) -> bytes { hmac("sha384", key, msg).u
 /// HMAC-SHA-512 (64 bytes).
 pub fn hmac_sha512(key: bytes, msg: bytes) -> bytes { hmac("sha512", key, msg).unwrap() }
 
-/// Derives the Ed25519 public key (32 bytes) from a 32-byte private seed; `None` if the seed is not
-/// exactly 32 bytes.
+/// Derives the Ed25519 public key (32 bytes) from the private key — its 32-byte seed, or the
+/// PKCS#8 DER that `ed25519_generate` and `openssl genpkey -algorithm ed25519` produce; `None`
+/// if it is neither.
 pub fn ed25519_public_key(seed: bytes) -> Option<bytes> {
     let r = __ed25519_public_key(seed);
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
 }
 
-/// Signs `msg` with the 32-byte Ed25519 seed, returning a 64-byte deterministic signature (RFC 8032);
-/// `None` if the seed is not exactly 32 bytes.
+/// Signs `msg` with the Ed25519 private key (the 32-byte seed or its PKCS#8 DER), returning a
+/// 64-byte deterministic signature (RFC 8032); `None` if the key is neither form.
 pub fn ed25519_sign(seed: bytes, msg: bytes) -> Option<bytes> {
     let r = __ed25519_sign(seed, msg);
     if (r.len() == 0) { Option.None } else { Option.Some(r[0]) }
@@ -126,6 +127,19 @@ pub fn ed25519_sign(seed: bytes, msg: bytes) -> Option<bytes> {
 pub fn ed25519_verify(pubkey: bytes, msg: bytes, sig: bytes) -> bool {
     __ed25519_verify(pubkey, msg, sig)
 }
+
+/// Generates a fresh Ed25519 private key as PKCS#8 DER (48 bytes, RFC 8410): the same envelope
+/// `p256_generate` and `rsa_generate` use and `std/pem` writes as `PRIVATE KEY`, accepted by
+/// `ed25519_sign`/`ed25519_public_key` as is.
+// raycert #381: Ed25519 iba por semilla y P-256/RSA por PKCS#8.
+pub fn ed25519_generate() -> Result<bytes, string> { pk("ed25519_generate", b"", b"", b"") }
+
+/// The 32-byte seed inside a PKCS#8 Ed25519 key (a seed is returned unchanged). `Err` if `key`
+/// is neither.
+pub fn ed25519_seed_of(key: bytes) -> Result<bytes, string> { pk("ed25519_seed", key, b"", b"") }
+
+/// Wraps a 32-byte Ed25519 seed in its PKCS#8 DER envelope (to write it as a PEM `PRIVATE KEY`).
+pub fn ed25519_pkcs8_of(seed: bytes) -> Result<bytes, string> { pk("ed25519_pkcs8", seed, b"", b"") }
 
 /// ChaCha20-Poly1305 AEAD encryption: returns ciphertext followed by the authentication tag. The key
 /// must be 32 bytes and the nonce 12; `None` if the sizes are wrong.
@@ -338,6 +352,40 @@ pub fn rsa_pkcs1_verify(pubkey: bytes, msg: bytes, sig: bytes) -> bool { pk_verd
 
 /// Verifies a PS256 signature under a PKCS#1 `RSAPublicKey` DER. Total.
 pub fn rsa_pss_verify(pubkey: bytes, msg: bytes, sig: bytes) -> bool { pk_verdict("rsa_pss_verify", pubkey, msg, sig) }
+
+/// Verifies a fixed-size `r || s` ECDSA signature (JWS) of `msg` under an uncompressed SEC1
+/// public key: `curve` is `"p256"` (ES256, SHA-256, 64 bytes) or `"p384"` (ES384, SHA-384, 96
+/// bytes). Total: `false` for anything invalid, an unknown curve included.
+// raycert #380.
+pub fn ecdsa_verify(curve: string, pubkey: bytes, msg: bytes, sig: bytes) -> bool {
+    pk_verdict("ecdsa_verify/" + curve, pubkey, msg, sig)
+}
+
+/// Verifies a DER (ASN.1 `SEQUENCE { r, s }`) ECDSA signature — what an X.509 certificate, a
+/// CRL or WebAuthn carry — with the curve of the key (`"p256"`, `"p384"`) and the hash of the
+/// signature algorithm (`"sha256"`, `"sha384"`): `ecdsa-with-SHA384` under a P-384 issuer is
+/// `ecdsa_verify_asn1("p384", "sha384", issuer_point, tbs, sig)`. Total.
+pub fn ecdsa_verify_asn1(
+    curve: string,
+    hash: string,
+    pubkey: bytes,
+    msg: bytes,
+    sig: bytes
+) -> bool {
+    pk_verdict("ecdsa_verify_asn1/" + curve + "/" + hash, pubkey, msg, sig)
+}
+
+/// `rsa_pkcs1_verify` with the hash of the signature algorithm: `"sha256"`, `"sha384"` or
+/// `"sha512"` (RS256/RS384/RS512; `sha384WithRSAEncryption` in a certificate). Total.
+pub fn rsa_pkcs1_verify_with(hash: string, pubkey: bytes, msg: bytes, sig: bytes) -> bool {
+    pk_verdict("rsa_pkcs1_verify/" + hash, pubkey, msg, sig)
+}
+
+/// `rsa_pss_verify` with the hash (`"sha256"`, `"sha384"`, `"sha512"`: PS256/PS384/PS512; the
+/// salt has the length of the hash). Total.
+pub fn rsa_pss_verify_with(hash: string, pubkey: bytes, msg: bytes, sig: bytes) -> bool {
+    pk_verdict("rsa_pss_verify/" + hash, pubkey, msg, sig)
+}
 
 // DER mínimo para `RSAPublicKey ::= SEQUENCE { modulus INTEGER, publicExponent INTEGER }`: lo que un
 // JWK (`n`, `e` en base64url, magnitudes big-endian sin signo) necesita para verificar con ring.

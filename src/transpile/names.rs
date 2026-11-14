@@ -157,7 +157,7 @@ pub(super) fn math_intercepted(f: &str) -> bool {
     matches!(
         f,
         "sqrt" | "pow" | "sin" | "cos" | "tan" | "ln" | "log10" | "log2" | "exp" | "floor" | "ceil" | "round"
-            | "trunc" | "asin" | "acos" | "atan" | "atan2" | "abs" | "min" | "max" | "float_bits" | "float_from_bits"
+            | "trunc" | "asin" | "acos" | "atan" | "atan2" | "abs" | "min" | "max" | "float_bits" | "float_from_bits" | "float32_bits" | "float32_from_bits"
             | "format_float"
     )
 }
@@ -232,6 +232,7 @@ pub(super) fn fs_wrapper_emitted(ffn: &str) -> bool {
             | "real_path" | "is_within_real" // M265: sobre el primitivo __real_path
             | "symlink" // M304: sobre __symlink
             | "read_link" | "set_mtime" // rayzip #194/#195: sobre __read_link/__set_mtime
+            | "write_file_mode" | "write_file_bytes_mode" | "mkdir_mode" // raycert #382: sobre __create_mode/__mkdir_mode
     )
 }
 

@@ -628,6 +628,14 @@ pub fn fs_tagged(op: crate::bytecode::FsOp, args: &[String]) -> Vec<String> {
             Ok(ms) => set_mtime(&args[0], ms),
             Err(_) => Err(std::io::Error::other("set_mtime: the time is not an integer")),
         },
+        FsOp::CreateMode => match args[1].parse::<i64>() {
+            Ok(mode) => create_with_mode(&args[0], mode),
+            Err(_) => Err(std::io::Error::other("write_file_mode: the mode is not an integer")),
+        },
+        FsOp::MkdirMode => match args[1].parse::<i64>() {
+            Ok(mode) => mkdir_with_mode(&args[0], mode),
+            Err(_) => Err(std::io::Error::other("mkdir_mode: the mode is not an integer")),
+        },
         // M265: ["ok", ruta_real] — `canonicalize` (symlinks seguidos, `.`/`..` resueltos; la ruta
         // debe existir). En Windows se quita el prefijo `\\?\` que añade el kernel para que la
         // ruta sea comparable con lo que el programa escribe.
@@ -1524,6 +1532,53 @@ pub fn chmod_path(path: &str, mode: i64) -> Result<(), String> {
     {
         let _ = (path, mode);
         Err("chmod is not supported on this platform".to_string())
+    }
+}
+
+/// ray-sublime #397: el pid del proceso en curso (`std/process` → `self_pid`). En wasm32 no hay
+/// procesos (y `std::process::id` aborta allí): 0.
+pub fn self_pid() -> i64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::process::id() as i64
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        0
+    }
+}
+
+/// raycert #382: deja `path` como un archivo VACÍO con exactamente los bits `mode` — lo crea ya
+/// con ellos (`open(2)` con modo: nunca existe con permisos más abiertos) y, si existía, se los
+/// fija antes de que nadie escriba el contenido. Byte-idéntico a `__ray_create_mode_prim` del
+/// nativo. Fuera de Unix no hay bits de permiso: solo crea/trunca.
+pub fn create_with_mode(path: &str, mode: i64) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let bits = (mode as u32) & 0o7777;
+        let f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(bits).open(path)?;
+        f.set_permissions(std::fs::Permissions::from_mode(bits))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+        std::fs::File::create(path).map(|_| ())
+    }
+}
+
+/// raycert #382: `mkdir -p` donde cada carpeta que se CREA nace con los bits `mode` (menos la
+/// umask, como `mkdir(2)`); una que ya existía conserva los suyos. Fuera de Unix, `mkdir -p`.
+pub fn mkdir_with_mode(path: &str, mode: i64) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().recursive(true).mode((mode as u32) & 0o7777).create(path)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+        std::fs::create_dir_all(path)
     }
 }
 
@@ -3170,6 +3225,14 @@ pub fn take_pending_tls_host(wh: i64) -> Option<String> {
 /// no bloqueante → WouldBlock espera readiness con el poller; en el intérprete bloquea.
 #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
 pub fn tls_peer_cert(h: i64) -> Result<ray_runtime::x509::CertSummary, String> {
+    ray_runtime::x509::cert_summary(&tls_peer_chain(h)?[0])
+}
+
+/// raycert #379: la cadena que presentó el peer, en DER y con la hoja primero
+/// (`net.tls_peer_chain`): huellas, clave, extensiones e intermedios quedan al alcance del
+/// programa. Conduce el handshake pendiente como `tls_peer_cert`. Nunca devuelve una cadena vacía.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn tls_peer_chain(h: i64) -> Result<Vec<Vec<u8>>, String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut reg = registry().lock().unwrap();
     match reg.open.get_mut(&h) {
@@ -3209,13 +3272,11 @@ pub fn tls_peer_cert(h: i64) -> Result<ray_runtime::x509::CertSummary, String> {
                     Err(e) => return Err(tls_io_err(&e, true)),
                 }
             }
-            let der = tc
-                .conn
+            tc.conn
                 .peer_certificates()
-                .and_then(|c| c.first())
-                .map(|c| c.to_vec())
-                .ok_or_else(|| "the peer presented no certificate".to_string())?;
-            ray_runtime::x509::cert_summary(&der)
+                .map(|c| c.iter().map(|d| d.to_vec()).collect::<Vec<_>>())
+                .filter(|c| !c.is_empty())
+                .ok_or_else(|| "the peer presented no certificate".to_string())
         }
         Some(_) => Err(format!("handle {} is not a TLS connection", h)),
         None => Err(format!("invalid handle: {}", h)),
@@ -3236,6 +3297,10 @@ pub struct CertSummary {
 
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
 pub fn tls_peer_cert(_h: i64) -> Result<CertSummary, String> {
+    Err(NET_TLS_UNAVAILABLE.to_string())
+}
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn tls_peer_chain(_h: i64) -> Result<Vec<Vec<u8>>, String> {
     Err(NET_TLS_UNAVAILABLE.to_string())
 }
 
@@ -4861,6 +4926,22 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Int { return Err((Some(0), format!("__float_from_bits expects an int, not {}", a[0]))); }
         Ok(Type::Float)
     } },
+    // raygrpc #390 / ray-daw #426: lo mismo en binary32. Totales.
+    Builtin { name: "__float32_bits", opcode: OpCode::Float32Bits, check: |a| {
+        arity(a, 1, "__float32_bits", " (the float)")?;
+        if a[0] != Type::Float { return Err((Some(0), format!("__float32_bits expects a float, not {}", a[0]))); }
+        Ok(Type::Int)
+    } },
+    Builtin { name: "__float32_from_bits", opcode: OpCode::Float32FromBits, check: |a| {
+        arity(a, 1, "__float32_from_bits", " (the 32 bits as int)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__float32_from_bits expects an int, not {}", a[0]))); }
+        Ok(Type::Float)
+    } },
+    // ray-sublime #397: __self_pid() -> int (std/process → self_pid).
+    Builtin { name: "__self_pid", opcode: OpCode::SelfPid, check: |a| {
+        nullary(a, "__self_pid")?;
+        Ok(Type::Int)
+    } },
     // --- SQLite embebido (M53.3): primitivos con arreglo etiquetado; `db/sqlite` → Result. ---
     // __sqlite_open(path) -> [string]: ["ok", handle] o ["err", msg].
     Builtin { name: "__sqlite_open", opcode: OpCode::SqliteOpen, check: |a| {
@@ -5700,6 +5781,19 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::String { return Err((Some(0), format!("__read_link expects a string (the path), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
+    // __create_mode(path, mode) / __mkdir_mode(path, mode) -> [string] (raycert #382): el modo como texto.
+    Builtin { name: "__create_mode", opcode: OpCode::FsTagged(FsOp::CreateMode), check: |a| {
+        arity(a, 2, "__create_mode", " (path, mode)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__create_mode expects a string (the path), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__create_mode expects a string (the mode bits), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    Builtin { name: "__mkdir_mode", opcode: OpCode::FsTagged(FsOp::MkdirMode), check: |a| {
+        arity(a, 2, "__mkdir_mode", " (path, mode)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__mkdir_mode expects a string (the path), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__mkdir_mode expects a string (the mode bits), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
     // __set_mtime(path, ms) -> [string] (rayzip #194): ms como texto (las ops etiquetadas son de strings).
     Builtin { name: "__set_mtime", opcode: OpCode::FsTagged(FsOp::SetMtime), check: |a| {
         arity(a, 2, "__set_mtime", " (path, ms)")?;
@@ -6196,6 +6290,12 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 1, "__peer_addr", " (handle)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__peer_addr expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __tls_peer_chain(h) -> [bytes] (raycert #379): [b"ok", der_hoja, der_intermedio…] o [b"err", msg].
+    Builtin { name: "__tls_peer_chain", opcode: OpCode::TlsPeerChain, check: |a| {
+        arity(a, 1, "__tls_peer_chain", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__tls_peer_chain expects an int (the handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     // __tls_peer_cert(h) -> [string] (M124): ["ok", subject, issuer, not_before_ms, not_after_ms,
     // san...] o ["err", msg]. std/net lo envuelve en el struct PeerCert (patrón stat M115.3).

@@ -39,6 +39,25 @@ pub fn decode(data: bytes, label: string) -> Result<string, string> {
     }
 }
 
+/// Like `decode`, but a malformed sequence becomes U+FFFD instead of an error — what a browser
+/// does with a page that has a stray byte. Returns the text and how many sequences were
+/// replaced (`0` = the input was clean). `Err` only for an unknown label.
+pub fn decode_lossy(data: bytes, label: string) -> Result<(string, int), string> {
+    let framed = call("decode_lossy", label, data)?;
+    var cut = 0;
+    while (cut < framed.len() && framed[cut] != 10) {
+        cut = cut + 1;
+    }
+    let replaced = match (from_utf8(framed.sub_bytes(0, cut))) {
+        Result.Ok(n) => n.parse_int().unwrap_or(0),
+        Result.Err(e) => 0,
+    };
+    match (from_utf8(framed.sub_bytes(cut + 1, framed.len()))) {
+        Result.Ok(s) => Result.Ok((s, replaced)),
+        Result.Err(e) => Result.Err("charset: " + e),
+    }
+}
+
 /// Encodes `text` with the charset `label`. `Err` for an unknown label, a charset without an
 /// encoder (`replacement`, `utf-16be`/`utf-16le`: the standard encodes those as UTF-8), or a
 /// character the charset cannot represent (with the character and its index) — what an editor

@@ -263,3 +263,13 @@ pub fn format_float(f: float, mode: string, precision: int) -> string { __format
 /// Builds a float from its raw IEEE 754 bits. Total: any bit pattern is a valid f64
 /// (including NaN and the infinities).
 pub fn float_from_bits(n: int) -> float { __float_from_bits(n) }
+
+/// The IEEE 754 single-precision (binary32) bits of `f`, as an int in 0..2^32: `f` is rounded to
+/// the nearest `float32` first (ties to even; a value out of range becomes an infinity). What
+/// protobuf's `float`, a WAV/`f32le` sample or any binary format with 32-bit floats carries:
+/// write the four octets of the result in the byte order of the format.
+pub fn float32_bits(f: float) -> int { __float32_bits(f) }
+
+/// The float that the 32 bits `n` represent as IEEE 754 single precision (exactly: every
+/// `float32` is a `float`). Only the low 32 bits of `n` are read. Total.
+pub fn float32_from_bits(n: int) -> float { __float32_from_bits(n) }

@@ -2050,7 +2050,7 @@ impl<'a> Interpreter<'a> {
             // M67: operaciones de fs etiquetadas (mkdir/remove_dir/file_size/rename/copy_file) —
             // el helper compartido monta el ["ok"(, dato)]/["err", msg]; aquí solo se convierte.
             "__mkdir" | "__remove_dir" | "__file_size" | "__mtime" | "__stat" | "__rename" | "__copy_file"
-            | "__remove_all" | "__temp_dir" | "__make_temp_dir" | "__real_path" | "__symlink" | "__read_link" | "__set_mtime" => {
+            | "__remove_all" | "__temp_dir" | "__make_temp_dir" | "__real_path" | "__symlink" | "__read_link" | "__set_mtime" | "__create_mode" | "__mkdir_mode" => {
                 use crate::bytecode::FsOp;
                 let op = match name {
                     "__mkdir" => FsOp::Mkdir,
@@ -2067,6 +2067,8 @@ impl<'a> Interpreter<'a> {
                     "__symlink" => FsOp::Symlink,
                     "__read_link" => FsOp::ReadLink,
                     "__set_mtime" => FsOp::SetMtime,
+                    "__create_mode" => FsOp::CreateMode,
+                    "__mkdir_mode" => FsOp::MkdirMode,
                     _ => unreachable!(),
                 };
                 let args: Vec<String> = values
@@ -2758,6 +2760,15 @@ impl<'a> Interpreter<'a> {
                 Value::Int(n) => Value::Float(f64::from_bits(*n as u64)),
                 _ => unreachable!("the checker guarantees an int"),
             },
+            "__float32_bits" => match &values[0] {
+                Value::Float(f) => Value::Int((*f as f32).to_bits() as i64),
+                _ => unreachable!("the checker guarantees a float"),
+            },
+            "__float32_from_bits" => match &values[0] {
+                Value::Int(n) => Value::Float(f32::from_bits(*n as u32) as f64),
+                _ => unreachable!("the checker guarantees an int"),
+            },
+            "__self_pid" => Value::Int(crate::builtins::self_pid()),
             // M53.3: SQLite embebido → arreglo etiquetado; el paquete `db/sqlite` lo traduce a Result.
             "__sqlite_open" => {
                 let arr = match &values[0] {
@@ -2821,6 +2832,16 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             // M124: el resumen del certificado del peer TLS → ["ok", subject, issuer, nb, na, san...].
+            "__tls_peer_chain" => {
+                let elems = match &values[0] {
+                    Value::Int(h) => match crate::builtins::tls_peer_chain(*h) {
+                        Ok(chain) => std::iter::once(Value::Bytes(Rc::new(b"ok".to_vec()))).chain(chain.into_iter().map(|d| Value::Bytes(Rc::new(d)))).collect(),
+                        Err(e) => vec![Value::Bytes(Rc::new(b"err".to_vec())), Value::Bytes(Rc::new(e.into_bytes()))],
+                    },
+                    _ => unreachable!("the checker guarantees an int"),
+                };
+                Value::Array(Rc::new(RefCell::new(elems)))
+            }
             "__tls_peer_cert" => {
                 let arr = match &values[0] {
                     Value::Int(h) => match crate::builtins::tls_peer_cert(*h) {

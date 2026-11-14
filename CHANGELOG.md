@@ -59,6 +59,40 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   que el programa tiene. Para los textos que salen del programa y no de la página:
   notificaciones programadas, alarmas, menús.
 - **`std/image`**: `image.encode_png_rgb(img, background)` escribe un PNG sin canal alfa.
+- **`Result.err()`**: el gemelo de `ok()` — el error como `Option`, para mirarlo sin un `match`.
+- **`std/resilience`: `retry_if` y `retry_with`**: se elige qué errores se reintentan (un 503 sí,
+  un 404 no), se sabe en qué intento va y se puede dar la espera (un `Retry-After`) o registrar
+  el reintento.
+- **`regex.escape(s)`**: cita un texto para usarlo literal dentro de un patrón.
+- **`std/url`: `normalize` y `escape_unsafe`**: la normalización del RFC 3986 (`HTTP://H:80/%7e`
+  → `http://h/~`), para no tratar la misma URL como dos, y el escape de un `href` escrito a mano
+  (espacios, no ASCII) sin tocar las barras.
+- **`charset.decode_lossy`**: un octeto suelto ya no pierde la página entera: se sustituye por
+  U+FFFD, como en un navegador, y la función dice cuántos sustituyó.
+- **`text.words` corta en los mismos espacios que quita `trim`**: el espacio duro (U+00A0) y los
+  demás espacios Unicode separan palabras; antes solo los ASCII.
+- **`std/fs`: archivos y carpetas con permisos desde que nacen**: `write_file_mode(p, s, 384)`
+  deja una clave privada en 0600 sin que exista un instante legible por todos, y
+  `mkdir_mode(p, 448)` crea una carpeta 0700.
+- **`net.tls_peer_chain(h)`**: la cadena de certificados que presentó el servidor, en DER —
+  huellas, clave pública, extensiones e intermedios—, con TLS 1.2 y 1.3.
+- **`std/crypto` verifica las firmas de las cadenas reales**: ECDSA P-384 (`ecdsa_verify`,
+  `ecdsa_verify_asn1`) y RSA con SHA-384/512 (`rsa_pkcs1_verify_with`, `rsa_pss_verify_with`).
+  **Ed25519 en PKCS#8**: `ed25519_sign` y `ed25519_public_key` aceptan la clave de
+  `openssl genpkey` tal cual, y hay `ed25519_generate`, `ed25519_seed_of` y `ed25519_pkcs8_of`.
+- **`std/protobuf` completo para mensajes reales**: `write_varint` acepta negativos (antes
+  abortaba y aconsejaba `write_fixed64`, que es otro tipo y el receptor lo descarta); `write_sint`
+  (zigzag), `write_float`/`write_double`, campos repetidos empaquetados, submensajes
+  (`write_message`/`get_message`), `get_all`, `read_varint`; `PbField` se puede imprimir.
+- **`std/binary` (nuevo)**: enteros de 16/24/32/64 bits y floats de 32/64 en `bytes`, little- y
+  big-endian, para leer y para escribir sobre un `BytesBuilder` — WAV, AIFF, cabeceras de red.
+  **`math.float32_bits`/`float32_from_bits`** convierten a precisión simple (el `float` de
+  protobuf, una muestra `f32le`).
+- **`process.self_pid()`**: el pid del proceso en curso, sin lanzar un shell para averiguarlo.
+- La documentación de concurrencia dice lo que faltaba: los canales cruzan dominios (así se habla
+  con una tarea de `spawn_isolated`), sus hijas heredan el dominio, `scope` espera también las de
+  `spawn_local`, y qué devuelve `try_join`. `llms.txt` nombra las firmas P-256/RSA y explica
+  `pem`, `keychain`, `qr` y `bigint`; `to_bytes` figura como método (`"RIFF".to_bytes()`).
 
 ## 1.27.98 — 2026-11-14
 

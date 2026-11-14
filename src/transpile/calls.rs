@@ -1161,6 +1161,16 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(").to_bits() as i64)");
             }
+            "float32_bits" => {
+                out.push_str("(((");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(") as f32).to_bits() as i64)");
+            }
+            "float32_from_bits" => {
+                out.push_str("(f32::from_bits((");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(") as u32) as f64)");
+            }
             "float_from_bits" => {
                 out.push_str("f64::from_bits(");
                 self.emit_expr(out, eff[0])?;
@@ -2972,6 +2982,12 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
+            "tls_peer_chain" if name.starts_with("__") && !self.exclude.contains("tls") => {
+                self.needs_rt_tls = true;
+                out.push_str("__ray_tls_peer_chain(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             "tls_accept" if name.starts_with("__") && !self.exclude.contains("tls") => {
                 self.needs_rt_tls = true;
                 out.push_str("__ray_tls_accept(");
@@ -3069,6 +3085,14 @@ impl Transpiler {
                 self.needs_fs_meta = true;
                 out.push_str("__ray_read_link_prim(&*");
                 self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "create_mode" | "mkdir_mode" if name.starts_with("__") => {
+                self.needs_fs_meta = true;
+                out.push_str(if method == "create_mode" { "__ray_create_mode_prim(&*" } else { "__ray_mkdir_mode_prim(&*" });
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
             "set_mtime" if name.starts_with("__") => {
@@ -3519,6 +3543,7 @@ impl Transpiler {
                 self.needs_locale = true;
                 out.push_str("Rc::new(std::cell::RefCell::new(__ray_locale::preferred_languages().into_iter().map(Rc::<str>::from).collect::<Vec<Rc<str>>>()))");
             }
+            "self_pid" if name.starts_with("__") => out.push_str("(std::process::id() as i64)"),
             "self_command" if name.starts_with("__") => {
                 // Nativo/bundle: el propio ejecutable. (Bajo `ray run` es la VM quien responde.)
                 // raymcp #217: el binario de `ray test --native` añade "test", como `ray test`.
@@ -3692,7 +3717,7 @@ impl Transpiler {
                 {
                     return Ok(match mfn {
                         "abs" | "min" | "max" => self.type_of(args.first().or(recv).ok_or("math without an argument")?)?,
-                        "float_bits" => Type::Int, // la reinterpretación bit a bit devuelve el patrón como int
+                        "float_bits" | "float32_bits" => Type::Int, // la reinterpretación bit a bit devuelve el patrón como int
                         "format_float" => Type::String,
                         _ => Type::Float,
                     });

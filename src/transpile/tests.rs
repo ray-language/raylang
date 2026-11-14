@@ -25,14 +25,14 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__to_bytes", "__to_lower", "__to_upper", "__trim", "__values", "__char_from_code",
     // Math (interceptados vía `std::math::*` en el sitio del wrapper).
     "__acos", "__asin", "__atan", "__atan2", "__ceil", "__cos", "__exp", "__floor", "__float_bits",
-    "__float_from_bits", "__format_float", "__ln", "__log10", "__log2", "__pow", "__round", "__sin", "__sqrt", "__tan",
+    "__float_from_bits", "__float32_bits", "__float32_from_bits", "__format_float", "__ln", "__log10", "__log2", "__pow", "__round", "__sin", "__sqrt", "__tan",
     "__trunc", "__unicode_normalize",
     // I/O de archivos + parse (interceptados vía `std::fs::*` / builtins públicos).
     "__append_file", "__append_file_bytes", "__copy_file", "__env", "__exists", "__file_size",
     "__is_dir", "__is_file", "__list_dir", "__make_temp_dir", "__mkdir", "__mtime", "__open", "__parse_float", "__parse_int",
     "__base64_decode", "__base64_decode_bytes", "__base64_encode",
     "__read_file", "__read_file_bytes", "__read_line", "__read_line_handle", "__read_bytes_handle",
-    "__remove_all", "__seek_handle", "__temp_dir", "__write_bytes_handle", "__sync_handle", "__sync_data_handle", "__try_lock_handle", "__unlock_handle", "__stat", "__real_path", "__symlink", "__read_link", "__set_mtime", "__chmod", "__watch", "__watch_next", "__remove_dir",
+    "__remove_all", "__seek_handle", "__temp_dir", "__write_bytes_handle", "__sync_handle", "__sync_data_handle", "__try_lock_handle", "__unlock_handle", "__stat", "__real_path", "__symlink", "__read_link", "__set_mtime", "__create_mode", "__mkdir_mode", "__chmod", "__watch", "__watch_next", "__remove_dir",
     "__remove_file", "__rename", "__write_file", "__write_file_bytes", "__write_handle",
     "__stdout_write", "__stderr_write", "__stdout_write_bytes", "__stdout_flush",
     "__stdin_read", "__stdin_read_timeout",
@@ -50,7 +50,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__chacha20poly1305_open", "__chacha20poly1305_seal", "__crypto_random_bytes",
     "__ed25519_public_key", "__ed25519_sign", "__ed25519_verify", "__hasher_clone", "__hasher_final", "__hasher_new", "__hasher_update", "__hmac_sha256", "__hmac", "__pk_op", "__qr_matrix", "__sha1", "__charset_op",
     "__md5", "__sha256", "__sha512", "__sqlite_exec", "__sqlite_exec_opt", "__sqlite_open", "__sqlite_query", "__sqlite_query_nulls", "__tls_accept",
-    "__tls_connect", "__tls_connect_h2", "__tls_peer_cert", "__tls_upgrade", "__tls_upgrade_insecure",
+    "__tls_connect", "__tls_connect_h2", "__tls_peer_cert", "__tls_peer_chain", "__tls_upgrade", "__tls_upgrade_insecure",
     // M114: acuerdo de claves X25519 + HKDF + comparación en tiempo constante.
     "__constant_time_eq", "__hkdf_sha256", "__x25519_public_key", "__x25519_shared_secret",
     "__pbkdf2_hmac_sha256", // M290
@@ -76,7 +76,7 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     // M264: pid y hang-up.
     "__proc_pid", "__proc_hangup",
     // M246: lanzamiento desacoplado y relanzamiento.
-    "__proc_spawn_detached", "__self_command",
+    "__proc_spawn_detached", "__self_command", "__self_pid",
     // M458: std/locale.
     "__preferred_languages",
     // M247: identidad de la app horneada.

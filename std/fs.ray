@@ -33,6 +33,27 @@ pub fn write_file_bytes(path: string, data: bytes) -> Result<int, string> {
     if (r[0] == "ok") { Result.Ok(data.len()) } else { Result.Err(r[1]) }
 }
 
+/// Like `write_file_bytes`, but the file ends with exactly the permission bits `mode` and never
+/// exists with looser ones: it is created with them (or, if it existed, set to them) BEFORE the
+/// content is written — what a private key needs (`384` is 0o600). On Windows the mode is
+/// ignored (a file inherits the access list of its folder).
+// raycert #382: `write_file` + `chmod` dejaba la clave legible por todos entre las dos llamadas.
+pub fn write_file_bytes_mode(path: string, data: bytes, mode: int) -> Result<int, string> {
+    let r = __create_mode(path, to_string(mode));
+    if (r[0] != "ok") {
+        return Result.Err(r[1]);
+    }
+    write_file_bytes(path, data)
+}
+
+/// `write_file_bytes_mode` for a string: `Ok(character count)` or `Err(message)`.
+pub fn write_file_mode(path: string, content: string, mode: int) -> Result<int, string> {
+    match (write_file_bytes_mode(path, content.to_bytes(), mode)) {
+        Result.Ok(n) => Result.Ok(content.len()),
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
 // Escribe el contenido en el archivo (lo crea/sobrescribe); Ok(nº de caracteres) u Err(mensaje).
 /// Writes the string to the file (creating or overwriting it); `Ok(character count)` or `Err(message)`.
 pub fn write_file(path: string, content: string) -> Result<int, string> {
@@ -83,6 +104,14 @@ pub fn exists(path: string) -> bool {
 /// Creates a directory, including any missing parents (like `mkdir -p`); `Ok(0)` or `Err(message)`.
 pub fn mkdir(path: string) -> Result<int, string> {
     let r = __mkdir(path);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Like `mkdir`, but every directory it CREATES gets the permission bits `mode` (minus the
+/// umask, like `mkdir(2)`): `mkdir_mode(dir, 448)` is a private 0o700 folder. One that already
+/// existed keeps its bits (`chmod` changes them). On Windows the mode is ignored.
+pub fn mkdir_mode(path: string, mode: int) -> Result<int, string> {
+    let r = __mkdir_mode(path, to_string(mode));
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 

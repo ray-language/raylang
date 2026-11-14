@@ -68,13 +68,26 @@ pub fn count(s: string, sub: string) -> int {
     n
 }
 
-// ¿Es `c` un separador de palabras? (espacio, tab, salto de línea, retorno de carro)
+// ¿Es `c` un separador de palabras? La propiedad `White_Space` de Unicode: lo mismo que quita
+// `trim` (raycrawl #367: `words` cortaba solo en ASCII y `trim` sí quitaba el NBSP).
 fn is_space(c: char) -> bool {
-    c == ' ' || c == '\t' || c == '\n' || c == '\r'
+    let n = char_code(c);
+    n >= 9 && n <= 13
+        || n == 32
+        || n == 0x85
+        || n == 0xA0
+        || n == 0x1680
+        || n >= 0x2000 && n <= 0x200A
+        || n == 0x2028
+        || n == 0x2029
+        || n == 0x202F
+        || n == 0x205F
+        || n == 0x3000
 }
 
-/// Splits `s` into words separated by whitespace (space, tab, `\n`, `\r`), discarding
-/// empty ones (consecutive separators).
+/// Splits `s` into words separated by whitespace, discarding empty ones (consecutive
+/// separators). Whitespace is Unicode's `White_Space` property — space, tab, `\n`, `\r`, the
+/// no-break space U+00A0, U+3000… — the same set `trim` removes.
 // M66: antes solo separaba por espacio (`words("a\tb")` daba 1 palabra) — el contrato
 // universal es split_whitespace.
 pub fn words(s: string) -> [string] {

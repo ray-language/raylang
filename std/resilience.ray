@@ -49,14 +49,51 @@ fn backoff_ms(p: Retry, i: int) -> int {
 // Ejecuta `f` con reintentos: devuelve el primer Ok, o el ÚLTIMO Err si se agotan.
 // Duerme (cediendo la fibra) entre intentos según la política.
 /// Runs `f` with retries: returns the first Ok, or the LAST Err once attempts are
-/// exhausted. Sleeps cooperatively (backoff + jitter) between tries.
+/// exhausted. Sleeps cooperatively (backoff + jitter) between tries. Every `Err` is retried;
+/// to choose which ones, use `retry_if` or `retry_with`.
 pub fn retry<T, E>(p: Retry, f: fn() -> Result<T, E>) -> Result<T, E> {
+    retry_with(p, fn(attempt: int, e: E) -> int { 0 - 1 }, fn(attempt: int) -> Result<T, E> { f() })
+}
+
+/// Like `retry`, but only the errors for which `is_retryable(e)` is true are retried: any
+/// other `Err` is returned at once (a 404 is final, a 503 is not).
+// raycrawl #364.
+pub fn retry_if<T, E>(
+    p: Retry,
+    is_retryable: fn(E) -> bool,
+    f: fn() -> Result<T, E>
+) -> Result<T, E> {
+    retry_with(p, fn(attempt: int, e: E) -> int {
+        if (is_retryable(e)) { 0 - 1 } else { STOP }
+    }, fn(attempt: int) -> Result<T, E> { f() })
+}
+
+/// What `on_error` returns to `retry_with` to give up: the error is returned as is.
+pub const STOP: int = 0 - 2;
+
+/// The general form. `f(attempt)` gets the 1-based attempt number. After each `Err` that is
+/// not the last attempt, `on_error(attempt, e)` decides: `STOP` gives up and returns that
+/// error; a value ≥ 0 is the delay in milliseconds before the next try (a server's
+/// `Retry-After`, not capped by the policy); any other negative value uses the policy's
+/// backoff. It is also the place to log the retry.
+pub fn retry_with<T, E>(
+    p: Retry,
+    on_error: fn(int, E) -> int,
+    f: fn(int) -> Result<T, E>
+) -> Result<T, E> {
     var i = 0;
-    var out = f();
-    while (i + 1 < p.attempts && out.is_err()) {
-        time.sleep(backoff_ms(p, i));
-        out = f();
+    var out = f(1);
+    while (i + 1 < p.attempts) {
+        let wait = match (out) {
+            Result.Ok(v) => STOP,
+            Result.Err(e) => on_error(i + 1, e),
+        };
+        if (wait == STOP) {
+            return out;
+        }
+        time.sleep(if (wait >= 0) { wait } else { backoff_ms(p, i) });
         i = i + 1;
+        out = f(i + 1);
     }
     out
 }

@@ -162,3 +162,46 @@ fn main() -> int {
     assert_eq!(err, "");
     assert_eq!(out, "P1\nB(2)\nB(P3)\n[P4, P5]\nOption.Some(P6)\nrgb 7\nRaw { n: 8 }\n[Raw { n: 9 }]\nOption.Some(3)\nP10\n11\n<red>\n<s>\nP12\n1.5\n");
 }
+
+#[test]
+fn protobuf_parse_is_total_on_malformed_input() {
+    // #388: un varint o un fixed cortado abortaba el programa (índice fuera de rango), un
+    // length-delimited cortado daba `Ok` con menos bytes, el campo 0 se aceptaba y un varint
+    // de 11 octetos daba `Ok(-1)` en la VM y un panic en nativo. Todo es `Err` con el byte.
+    let (out, err) = same_on_both(
+        "protobuf",
+        r#"import std/protobuf;
+fn show(data: [int]) {
+    match (protobuf.parse(bytes_of(data))) {
+        Result.Ok(fs) => print("ok ${fs.len()} ${protobuf.get_int(fs, 1)} ${protobuf.get_bytes(fs, 1).len()}"),
+        Result.Err(e) => print(e),
+    }
+}
+fn main() -> int {
+    show([0x08, 0x80]);
+    show([0x0A, 0x05, 0x41]);
+    show([0x00, 0x01]);
+    show([0x08, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01]);
+    show([0x08, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01]);
+    show([0x09, 0x01, 0x02]);
+    show([0x0D, 0x01]);
+    show([0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x41]);
+    show([0x0B]);
+    show([0x80]);
+    show([0x08, 0x96, 0x01]);
+    show([0x0A, 0x02, 0x41, 0x42]);
+    show([0x09, 1, 0, 0, 0, 0, 0, 0, 0]);
+    show([0x0D, 2, 0, 0, 0]);
+    show([]);
+    let w = protobuf.writer();
+    protobuf.write_varint(w, 1, 300);
+    protobuf.write_string(w, 2, "hola");
+    let fs = protobuf.parse(protobuf.finish(w)).unwrap();
+    print("${protobuf.get_int(fs, 1)} ${protobuf.get_string(fs, 2)}");
+    0
+}
+"#,
+    );
+    assert_eq!(err, "");
+    assert_eq!(out, "protobuf: truncated varint of the value of field 1 at byte 1\nprotobuf: field 1 at byte 0 announces 5 bytes and 1 remain\nprotobuf: invalid field number 0 at byte 0\nprotobuf: the varint of the value of field 1 at byte 1 is longer than 10 bytes\nok 1 -1 0\nprotobuf: truncated fixed64 of field 1 at byte 1\nprotobuf: truncated fixed32 of field 1 at byte 1\nprotobuf: field 1 at byte 0 announces -1 bytes and 1 remain\nunsupported wire type: 3\nprotobuf: truncated varint of the tag at byte 0\nok 1 150 0\nok 1 0 2\nok 1 1 0\nok 1 2 0\nok 0 0 0\n300 hola\n");
+}

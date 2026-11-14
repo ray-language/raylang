@@ -585,9 +585,9 @@ Reading and writing **on a file handle**, in pure raylang (born from rayzip): th
 | Annotation | On | Effect |
 |---|---|---|
 | `@test` | `fn () -> bool` or `fn () -> unit` | `ray test` runs it: bool passes if `true`; unit passes if it triggers no `assert`/`panic`. Each test runs isolated — on finish, ALL the OS handles it left alive are closed (listeners included; child processes are NOT killed) — it can live in any module of the project (it runs qualified: `math.t`) and use `import`; a failure reports `at module:line:col` |
-| `@derive(Eq)` | non-generic struct/enum | generates `impl Eq` (structural equality) |
+| `@derive(Eq)` | non-generic struct/enum | generates `impl Eq` (structural equality). Every field must be comparable: a `Map` or function field is not, and the error points at the `@derive` and names the field |
 | `@derive(Show)` | non-generic struct/enum | generates `impl Show` (`Name { f: v }` / `Name.Variant(v)`); supports recursive enums |
-| `@derive(Hash)` | non-generic struct/enum | generates `impl Hash` (for `Set`/`Dict` keys) |
+| `@derive(Hash)` | non-generic struct/enum | generates `impl Hash` (for `Set`/`Dict` keys). Every field must implement `Hash`: an array, `float` or `Map` field does not (`cannot derive Hash for 'V' (field 'pre'): …`), and the `impl Hash` has to be written by hand |
 | `@derive(Clone)` | non-generic struct/enum | generates `impl Clone` (`clone(self) -> Self`), a **shallow** copy: value fields are copied, reference fields (arrays, maps, structs, channels) are shared — the same as writing the literal by hand. To copy children, `impl Clone` by hand calling their `clone()` |
 | `@derive(ToJson)` | non-generic struct/enum | generates `impl ToJson` (`to_json(self) -> string`), used by the web framework's typed JSON responses. The trait lives in `std/json`: it must be in scope (`from std/json import ToJson;`). Supported fields: primitives, structs/enums with `ToJson`, and (pepa #322) `[T]` (a JSON array), `Option<T>` (`null` when empty) and `Map<string, T>` (an object with the keys in order), nested to any depth |
 
@@ -785,4 +785,4 @@ What `ray bundle --ios` / `--android` reads from the manifest (besides `[app] na
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:994d4e9a8a51 -->
+<!-- sync: sha256:3a5b0bc9c306 -->

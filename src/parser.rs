@@ -718,7 +718,13 @@ impl Parser {
                 // Bound opcional: ': Trait { + Trait }'.
                 if self.eat(&TokenKind::Colon) {
                     loop {
-                        let (tr, _, _) = self.expect_ident("a trait name in the bound")?;
+                        let (mut tr, _, _) = self.expect_ident("a trait name in the bound")?;
+                        // #391: `<T: m.Codec>` — trait calificado por módulo, como en
+                        // `impl m.Codec for A` (el loader lo resuelve igual: `rewrite_name`).
+                        if self.eat(&TokenKind::Dot) {
+                            let (t, _, _) = self.expect_ident("the trait name after 'M.'")?;
+                            tr = format!("{}.{}", tr, t);
+                        }
                         bounds.push((name.clone(), tr));
                         if !self.eat(&TokenKind::Plus) {
                             break;

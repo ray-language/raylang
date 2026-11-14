@@ -25,6 +25,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   `net = "^0.13.0"` y el proyecto `net = "^0.15.0"`, se usa 0.15 —hay una versión por paquete— y
   ahora `ray` lo dice en vez de «dependencies up to date». La referencia explica los rangos
   (`^0.13` excluye 0.15) y cómo se resuelve un conflicto.
+- **Genéricos en binarios nativos**: `xs.contains(x)` y `xs.position(x)` dentro de una función
+  genérica (`fn has<P: Eq>(xs: [P], x: P)`) y el valor que devuelve un campo función de un struct
+  genérico (`prov.deps("x")` con `Provider<P>`) ya compilan con `ray build --native`; antes solo
+  funcionaban con `ray run`.
+- **Un trait de otro módulo vale como bound con su nombre calificado**: `fn twice<T: m.Codec>(v: T)`
+  era un error de sintaxis y obligaba a `from m import Codec;`.
+- **Los errores de `@derive` señalan el `@derive`**: un campo que no se puede derivar (un
+  arreglo en `@derive(Hash)`, un `Map` en `@derive(Eq)`) daba el error en una línea inexistente
+  (`50999995:1`) y a veces atribuido a otro módulo. Ahora dice el trait, el tipo y el campo.
 
 ## 1.27.98 — 2026-11-14
 

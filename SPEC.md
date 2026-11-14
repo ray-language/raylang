@@ -187,7 +187,8 @@ nombre_trait = IDENT [ '.' IDENT ] ;                (* trait local o calificado 
 ```ebnf
 funcion  = 'fn' IDENT [ genericos ] '(' [ param { ',' param } ] ')' [ '->' tipo ] bloque ;
 param    = IDENT ':' tipo ;
-genericos= '<' IDENT [ ':' IDENT { '+' IDENT } ] { ',' … } '>' ;
+genericos= '<' IDENT [ ':' cota { '+' cota } ] { ',' … } '>' ;
+cota     = IDENT [ '.' IDENT ] ;   (* `Trait`, o `modulo.Trait` como en `impl modulo.Trait for T` *)
 struct   = 'struct' IDENT [ genericos ] '{' { IDENT ':' tipo ',' } '}' ;
 enum     = 'enum' IDENT [ genericos ] '{' variante { ',' variante } [ ',' ] '}' ;
 variante = IDENT [ '(' tipo { ',' tipo } ')' ] ;

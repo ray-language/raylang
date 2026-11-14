@@ -738,6 +738,8 @@ struct Checker {
     /// #352: los `for` sobre un iterador cuyo impl es genérico y acotado → el valor función de
     /// su `next` con los diccionarios ya rellenos (`dict_for`). Ver `lower_for_bounded`.
     for_iter_bounded: HashMap<(usize, usize), Expr>,
+    /// #360: método manglado de un `@derive` → (línea, col) de la anotación, trait y tipo.
+    derived_fns: HashMap<String, (usize, usize, String, Type)>,
     /// M28.1: sitios de sobrecarga de operadores. Clave `(línea, col, "Add"/"Sub"/…)` → el callee al
     /// que baja (`Vec2#add` como identificador). El lowering reescribe el `Binary`/`Unary` a una llamada.
     /// M418: también `"Eq"` para `==`/`!=` sobre un tipo con `impl Eq` a mano o un `T: Eq` — el callee

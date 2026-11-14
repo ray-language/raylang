@@ -1238,6 +1238,31 @@ impl Transpiler {
         Ok(())
     }
 
+    /// La comparación `__e` (referencia al elemento) contra `__rt_x` (el buscado) de
+    /// `contains`/`position` sobre el arreglo `array`. Con un elemento concreto es el `==` de
+    /// Rust. Sobre un `[T]` GENÉRICO no hay `PartialEq` que exigir (#354: E0369 en el build del
+    /// usuario): se compara con el diccionario `T#Eq#eq` que la función recibe por su bound,
+    /// como `sort` hace con `T#Ord#less`.
+    fn elem_equality(&self, array: &Expr, what: &str) -> Result<String, String> {
+        let generic = match self.type_of(array)? {
+            Type::Array(e) => match *e {
+                Type::Var(v) => Some(v),
+                Type::Struct(n, args) if args.is_empty() && self.tparams.contains(&n) => Some(n),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(v) = generic else { return Ok("*__e == __rt_x".to_string()) };
+        let dict = format!("{v}#Eq#eq");
+        if self.dict_params.contains(&dict) || self.lookup(&dict).is_some() {
+            Ok(format!("{}(__e.clone(), __rt_x.clone())", mangle(&dict)))
+        } else {
+            Err(format!(
+                "'{what}' on a generic [{v}] needs the bound '{v}: Eq' in the native backend (the comparison goes through its dictionary)"
+            ))
+        }
+    }
+
     pub(super) fn emit_call(&mut self, out: &mut String, callee: &Expr, args: &[Expr]) -> Result<(), String> {
         let (name, recv) = resolve_callee(callee)?;
         // M270 (raystream [1]): `x#prelude` llama a la función del PRELUDE `x` aunque la raíz haya
@@ -1249,6 +1274,21 @@ impl Transpiler {
         // M274 (raystream [16]): el `show` de un ARREGLO (`impl<T: Show> Show for [T]` del prelude, al
         // que baja un `@derive(Show)` con campos `[T]`) es el `ray_show` nativo del Vec: misma salida
         // `[a, b]` que la VM (es lo que ya imprime `print`), sin emitir el cuerpo genérico del prelude.
+        // #354: el `eq` de un ARREGLO (`impl<T: Eq> Eq for [T]` del prelude), que llega cuando un
+        // arreglo es el `P: Eq` de un genérico. Su def no se emite (clave `[]`): se compara aquí
+        // elemento a elemento con el diccionario `Eq` del elemento, que añade el checker.
+        if name == "[]#eq" {
+            let eff: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
+            let [a, b, dict] = eff.as_slice() else { return Err("[]#eq expects two arrays and the element dictionary".to_string()) };
+            out.push_str("{ let __rt_ed = ");
+            self.emit_expr(out, dict)?;
+            out.push_str("; let __rt_ea = ");
+            self.emit_expr(out, a)?;
+            out.push_str(".clone(); let __rt_eb = ");
+            self.emit_expr(out, b)?;
+            out.push_str(".clone(); let (__rt_ea, __rt_eb) = (__rt_ea.borrow(), __rt_eb.borrow()); __rt_ea.len() == __rt_eb.len() && __rt_ea.iter().zip(__rt_eb.iter()).all(|(__x, __y)| __rt_ed(__x.clone(), __y.clone())) }");
+            return Ok(());
+        }
         if name == "[]#show" {
             let eff: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
             let Some(first) = eff.first() else { return Err("[]#show without a receiver".to_string()) };
@@ -2220,7 +2260,8 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push_str("; ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().iter().position(|__e| *__e == __rt_x).map(|__i| __i as i64) }");
+                let same = self.elem_equality(eff[0], "position")?;
+                write!(out, ".borrow().iter().position(|__e| {same}).map(|__i| __i as i64) }}").unwrap();
             }
             "sort_prim" => {
                 out.push_str("__ray_sort_unstable(&");
@@ -2270,7 +2311,8 @@ impl Transpiler {
                     if !self.emit_shared_const(out, eff[0]) {
                         self.emit_expr(out, eff[0])?;
                     }
-                    out.push_str(".borrow().iter().any(|__e| *__e == __rt_x) }");
+                    let same = self.elem_equality(eff[0], "contains")?;
+                    write!(out, ".borrow().iter().any(|__e| {same}) }}").unwrap();
                 }
                 other => return Err(format!("contains on {:?} is not supported", other)),
             },
@@ -3630,7 +3672,11 @@ impl Transpiler {
                             .and_then(|fs| fs.iter().find(|(fnm, _)| fnm.as_str() == n))
                             .map(|(_, fty)| normalize_type(fty))
                     {
-                        return Ok(self.classify(&ret));
+                        // #355: los parámetros de tipo del struct se sustituyen por los del
+                        // receptor (`Provider<string>` → `fn(string) -> [(string, int)]`); sin
+                        // esto el retorno quedaba en `P` y sus elementos no se podían tipar.
+                        let subst = enum_subst(&self.struct_tparams, &sname, &rt);
+                        return Ok(self.classify(&subst_type(&ret, &subst)));
                     }
                 }
                 // `std::math::*`: abs/min/max preservan el tipo del primer arg (int|float); el resto

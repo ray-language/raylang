@@ -20298,3 +20298,39 @@ lo retocara después (`scripts/ios-store.ray`). Todo lo que ese guion hacía pas
   de terminal, y pepa lo quiere justo cuando no hay página.
 - **Medido.** macOS da `es-CL`; el simulador de iOS 26.5, `es-CL,en-CL`. Android y Windows
   compilan y enlazan; su valor en un dispositivo real queda por medir.
+
+## 435. M459 — ronda de stdlib sobre 1.27.95: lo que cada app reescribía (nov 2026)
+
+Quince hallazgos de seis apps (raycrawl, raycert, raygrpc, raycdc, ray-sublime, ray-daw) con la
+misma forma: la app necesitaba una pieza pequeña, no estaba, y la escribió a mano — con un
+rodeo frágil (emparejar el texto de un error), inseguro (una clave legible un instante) o
+imposible de acertar a la primera (el redondeo de un binary32).
+
+- **Sin opcodes cuando había un primitivo con operación.** `charset.decode_lossy` (#363) es una
+  operación más de `__charset_op`; las verificaciones P-384 y RSA-SHA384/512 (#380) y Ed25519 en
+  PKCS#8 (#381) son operaciones de `__pk_op` — el algoritmo viaja en el nombre
+  (`ecdsa_verify_asn1/p384/sha384`), así que una curva o un hash desconocido es `false`, no un
+  error de tipos. `write_file_mode`/`mkdir_mode` (#382) son dos `FsOp` etiquetadas. Opcodes
+  nuevos solo cuatro: `Float32Bits`, `Float32FromBits`, `SelfPid`, `TlsPeerChain`.
+- **`fs.write_file_mode` no es `O_EXCL`.** El hallazgo pedía crear en exclusiva; eso obliga a
+  borrar antes de regrabar una clave. Se crea con el modo (`open(2)` con modo: nunca existe más
+  abierto) y, si existía, se le fija con `fchmod` ANTES de escribir el contenido. El primitivo
+  solo crea el archivo vacío; el contenido lo escribe `write_file_bytes`, que conserva los bits.
+  `mkdir_mode` sigue a `mkdir(2)`: el modo vale para lo que crea, menos la umask.
+- **Ed25519: el sobre, no otra familia de funciones.** `ed25519_sign`/`ed25519_public_key`
+  aceptan la semilla o el PKCS#8 (v1 de OpenSSL, v2 de ring); la semilla se saca por posición
+  tras comprobar el prefijo del RFC 8410 y pasar la clave por ring. `ed25519_generate` emite el
+  v1 de 48 octetos, el que todo lee. Verificado contra OpenSSL 3.5: misma pública y misma firma.
+- **`retry` queda como caso de `retry_with`.** Un solo bucle; `on_error(intento, e)` devuelve
+  `STOP`, una espera en ms o «usa el backoff». No hay `delay_hint` en el error: el tipo `E` es
+  del usuario y no se le puede pedir un campo.
+- **`text.words` cambia de criterio** (#367): corta en `White_Space` de Unicode, lo que `trim`
+  ya quitaba. Es un cambio de comportamiento para textos con U+00A0, deliberado.
+- **`protobuf.write_varint` con un negativo deja de abortar** (#389): emite los 10 octetos. El
+  consejo anterior (`write_fixed64`) producía un mensaje que el receptor descartaba.
+- **`std/binary`** (#426) es raylang puro sobre `b[i]` y `bytesbuilder`; solo el binary32 baja a
+  un primitivo (`(f as f32).to_bits()`), porque es lo que se hace por muestra de audio.
+- **Fuera.** #369 (el texto del error de un handle de otro dominio difiere entre VM y nativo: el
+  nativo no distingue «no existe» de «no es de este tipo») queda abierto; `tls_peer_chain`
+  hereda esa diferencia. Los de `net` (#370, #371) son del paquete.
+

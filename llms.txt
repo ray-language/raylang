@@ -235,7 +235,12 @@ spawn(fn() { send(ch, 42); });                   // spawn returns Task<T>
 // A task that FAILS (runtime error, panic) and is never joined ends SILENTLY: no message, main
 //   goes on. `join(t)` re-raises the failure, `try_join(t) -> Result<T, string>` returns it: join
 //   (or try_join and log) every task whose failure matters, or wrap its body and eprint the error.
-// spawn_isolated(f): same, but in a fresh handle domain (cannot use other tasks' files/sockets)
+// spawn_isolated(f): same, but in a fresh handle domain (cannot use other tasks' files/sockets).
+//   CHANNELS do cross domains — that is how you talk to an isolated worker: create the channels
+//   outside, capture them, `send` work in and `recv` results out. Tasks that an isolated task
+//   starts with spawn/spawn_local INHERIT its domain and share its sockets.
+// scope(f) waits for every task started inside it, spawn_local ones included; a panic in the
+//   body (or in a child) cancels the remaining children before it propagates.
 // Native scheduler model: a fiber is pinned to its worker for life (no migration); each worker
 //   polls its own kqueue/epoll (RAYLANG_REACTOR=local, the unix default; `shared` = one reactor
 //   thread for all, the Windows model), so parking on a socket never crosses threads; a blocking
@@ -321,18 +326,23 @@ captured by `spawn`. Rule of thumb: what crosses a fiber boundary is data or a n
    `Option`/`Result` METHODS (prelude traits, no import; prefer them over a five-line `match`):
    `o.is_some() o.is_none() o.unwrap_or(d) o.unwrap_or_else(f) o.expect(msg) o.unwrap() o.map(f)
    o.and_then(f) o.ok_or(e)` (Option → Result) · `r.is_ok() r.is_err() r.unwrap_or(d)
-   r.unwrap_or_else(f) r.expect(msg) r.unwrap() r.map(f) r.and_then(f) r.map_err(f) r.ok()`
-   (Result → Option). Closures are typed in full: `o.map(fn(x: int) -> int { x * 2 })`.
+   r.unwrap_or_else(f) r.expect(msg) r.unwrap() r.map(f) r.and_then(f) r.map_err(f) r.ok() r.err()`
+   (Result → Option: of the value, of the error). Closures are typed in full: `o.map(fn(x: int) -> int { x * 2 })`.
    Searches: `s.index_of(x) s.index_of_from(x, start) s.last_index_of(x)`, `b.index_of(n)
    b.index_of_from(n, start) b.last_index_of(n)` (all `Option<int>`).
 3. **Modules, called QUALIFIED after import** — math, crypto, fs, net, time, random
    are NOT globals: `import std/math; math.sqrt(2.0)` (`pow floor ceil round abs
-   min max` too) · `crypto.sha256(b) crypto.hmac_sha256 crypto.ed25519_*
-   crypto.chacha20poly1305_seal/open crypto.random_bytes crypto.x25519_public_key/
+   min max` too) · `crypto.sha256(b) crypto.hmac_sha256 crypto.ed25519_*` (sign/verify/
+   generate; the private key is its 32-byte seed or PKCS#8) · signatures: `crypto.p256_generate/
+   p256_sign/p256_verify(_asn1)`, `crypto.rsa_generate/rsa_pkcs1_sign/rsa_pss_sign/rsa_*_verify`
+   (SHA-256), `crypto.ecdsa_verify_asn1(curve, hash, pub, msg, sig)` (`"p256"|"p384"`,
+   `"sha256"|"sha384"`: what X.509 chains use), `crypto.rsa_pkcs1_verify_with(hash, …)` /
+   `rsa_pss_verify_with` (`"sha256"|"sha384"|"sha512"`); private keys are PKCS#8 DER (`std/pem`
+   reads/writes the PEM) · `crypto.chacha20poly1305_seal/open crypto.random_bytes crypto.x25519_public_key/
    x25519_shared_secret` (raw DH → always `crypto.hkdf_sha256` before AEAD) ·
    passwords: `crypto.password_hash(p)` to store, `crypto.password_verify(p, stored)` to check
    (PBKDF2-HMAC-SHA256, never `sha256(password)`) ·
-   `fs.read_file(p) fs.write_file(p, s) fs.exists(p) fs.is_dir(p) (is_dir/is_file FOLLOW symlinks; fs.stat(p).kind == "symlink" sees one) fs.list_dir(p) fs.mkdir(p) (creates missing parents, like mkdir -p; existing dir is not an error)
+   `fs.read_file(p) fs.write_file(p, s) fs.write_file_mode(p, s, 384) (born 0o600: a private key is never world-readable; fs.mkdir_mode(p, 448) for a 0o700 folder) fs.exists(p) fs.is_dir(p) (is_dir/is_file FOLLOW symlinks; fs.stat(p).kind == "symlink" sees one) fs.list_dir(p) fs.mkdir(p) (creates missing parents, like mkdir -p; existing dir is not an error)
    fs.copy_file(a, b) fs.copy_all(src, dst) fs.remove_all(p) fs.make_temp_dir(prefix)` ·
    `time.now() time.sleep(ms)` · `random.below(n)`. There is NO `os` module: the operating
    system is the free builtin `platform()` → `"macos"` | `"linux"` | `"windows"`.
@@ -356,15 +366,23 @@ doc_int` (exact 64-bit) `doc_float doc_bool doc_pointer(d, "/a/0/b")`, `doc_of`/
 std/base64 std/url (also `url.parse(s) -> Result<url.Url,_>` with `scheme userinfo host port path
 query fragment` as written, `url.render(u)`, `url.resolve(base, ref)` — RFC 3986 §5.2, what a
 browser does with a relative link or `Location` —, `url.remove_dot_segments(p)`,
-`url.parse_query_pairs(qs) -> [(string, string)]` in order with repeats, `url.build_query_pairs`) std/regex std/csv std/toml std/template (Jinja-style; `{% if x %}`/`{% if not x %}`/`{% if a == "b" %}` only — other expressions are compile errors; objects via val_map/field, dotted paths `{{ u.name }}`; compiled `.ray.html` templates — a file `site/page.ray.html` is an importable module with
+`url.parse_query_pairs(qs) -> [(string, string)]` in order with repeats, `url.build_query_pairs`,
+`url.normalize(s) -> Result<string,_>` — RFC 3986 §6: lowercase scheme/host, no default port, `%7e` → `~`,
+dot segments removed: the key for "have I seen this URL" —, `url.escape_unsafe(s)` escapes only what
+cannot be in a URL (spaces, non-ASCII, `"<>`) and keeps `/ ? # %`: a hand-written `href` before
+`parse`/`resolve`; `url_encode` is for ONE component and escapes `/` too) std/regex (`regex.escape(s)` quotes a literal for a pattern) std/csv std/toml std/template (Jinja-style; `{% if x %}`/`{% if not x %}`/`{% if a == "b" %}` only — other expressions are compile errors; objects via val_map/field, dotted paths `{{ u.name }}`; compiled `.ray.html` templates — a file `site/page.ray.html` is an importable module with
 `pub fn render(<params>) -> string`: FIRST directive `{% params title: string, items: [model.Item] %}`,
 then `{% import site/model %}` for types of other modules (not `from … import`), then
 `{% if flag %}`/`{% for x in items %}`/`{{ x.name }}`/`{{& raw }}`; conditions must be `bool`
 (`items.len() > 0`, not the list); a sibling `page.ray` with the same name is ignored;
-`ray build --templates-only` writes the generated module to disk for inspection) std/protobuf std/uuid
+`ray build --templates-only` writes the generated module to disk for inspection) std/protobuf (`writer()` + `write_varint` (negatives too: 10 bytes) `write_sint` (zigzag) `write_float write_double write_string
+write_bytes write_fixed32/64 write_packed_varints write_message` → `finish(w)`; `parse(b) -> Result<[PbField],_>` then `get_int get_float
+get_string get_bytes get_all get_message`, `read_packed_varints`, `read_varint(b, pos)`, `unzigzag`) std/binary (fixed-width values in `bytes`:
+`binary.u16le(b, at) i16le u24be u32le i32be i64le f32le f64be…` and, onto a `bytesbuilder`, `binary.push_u16le(out, v) push_u32be push_f32le…`
+— WAV/AIFF samples, network headers; `math.float32_bits(f)`/`float32_from_bits(n)` are the binary32 conversion) std/uuid
 std/markdown std/inflate std/deflate std/zip (read-only, in memory, no ZIP64; the `zip` package reads and WRITES on disk, ZIP64, streaming) std/update std/huffman (only HPACK's static code, RFC 7541 — not for DEFLATE) std/image std/audio std/media std/notify std/ui std/embed
-std/keychain std/bigint std/pem std/qr std/xml (basic parse/serialize, namespaces, no DTD) std/locale (`preferred_languages() -> [string]`: the system's BCP 47 tags, most preferred first — `["es-CL", "en-US"]`; `pick(available, fallback)` chooses among the languages the program has texts for; `RAY_LANGUAGES="es,en"` overrides in tests) std/charset (`decode(bytes, label) -> Result<string,string>`, `encode(text, label) -> Result<bytes,string>`, `labels()`: the WHATWG tables — windows-125x, iso-8859-x, koi8-r, shift_jis, euc-jp, euc-kr, gbk, gb18030, big5, utf-16; errors carry the byte/char position; `latin1` IS windows-1252) std/crypto/{md5,aes,des} (`md5.md5(b)` one pass in Rust; `md5.md5_init()` + `crypto.hash_update/hash_final` incremental) std/collections/{set,deque,stringbuilder,bytesbuilder,dict}
-std/ffi std/resilience`. Tier-2 packages (declared in `[dependencies]`): `net`, `web`, `rpc`, `db`,
+std/keychain (`keychain.set/get/delete(service, account…)`: secrets in the OS keychain — macOS Keychain, Windows Credential Manager, Secret Service) std/bigint (arbitrary-precision non-negative integers as big-endian `bytes`: `from_int from_hex to_hex add sub mul div rem modpow modinv gcd cmp`, for RSA/DH math) std/pem (`pem.decode(text)` gives a `Block` with `label` and `der`, `decode_all` a chain, `decode_label(text, "PRIVATE KEY")` the DER of that block, `pem.encode(label, der)`: certificates and key files) std/qr (`qr.encode(text)` gives a `Code`; then `qr.to_text(c)` for a terminal, `qr.to_svg(c, module, margin)`, `qr.to_png(…)`, `qr.dark(c, x, y)`) std/xml (basic parse/serialize, namespaces, no DTD) std/locale (`preferred_languages() -> [string]`: the system's BCP 47 tags, most preferred first — `["es-CL", "en-US"]`; `pick(available, fallback)` chooses among the languages the program has texts for; `RAY_LANGUAGES="es,en"` overrides in tests) std/charset (`decode(bytes, label) -> Result<string,string>`, `decode_lossy(bytes, label) -> Result<(string, int),string>` — a malformed sequence becomes U+FFFD, like a browser; the int counts them —, `encode(text, label) -> Result<bytes,string>`, `labels()`: the WHATWG tables — windows-125x, iso-8859-x, koi8-r, shift_jis, euc-jp, euc-kr, gbk, gb18030, big5, utf-16; errors carry the byte/char position; `latin1` IS windows-1252) std/crypto/{md5,aes,des} (`md5.md5(b)` one pass in Rust; `md5.md5_init()` + `crypto.hash_update/hash_final` incremental) std/collections/{set,deque,stringbuilder,bytesbuilder,dict}
+std/ffi std/resilience (`resilience.retry(policy(attempts, base_ms, max_ms), f)`; `retry_if(p, is_retryable, f)` retries only the errors you choose — a 503, not a 404 —; `retry_with(p, on_error, f)` gets the attempt number and may return a delay in ms (`Retry-After`) or `resilience.STOP`)`. Tier-2 packages (declared in `[dependencies]`): `net`, `web`, `rpc`, `db`,
 `oidc` (OpenID Connect CLIENT: `import oidc/provider;` then `provider.discover(issuer)`; `import oidc/login;`
 then `login.begin(p, client)` gives a `Pending` (code + PKCE + nonce; redirect the browser to `pending.url`)
 and `login.finish(p, client, pending, query_map)` returns the `Tokens` with the verified ID token in
@@ -374,7 +392,7 @@ and `login.finish(p, client, pending, query_map)` returns the `Tokens` with the 
 `yaml.render(doc)`; YAML 1.2 into the same ordered `json.Doc` as `json.parse_doc`, so OpenAPI in JSON
 or YAML reads alike; net 0.12/db 0.6 also need 1.27.81: `http.request_opts(method, url, body,
 [(name, value)], o)` with `var o = http.options(); o.insecure_skip_verify = true;` accepts any
-certificate — development only, trust a CA with `SSL_CERT_FILE=ca.pem` instead —, and
+certificate — development only, trust a CA with `SSL_CERT_FILE=ca.pem` instead (its certificates are ADDED to the built-in roots, not a replacement) —, and
 `sqlite.exec_opt(c, sql, [Option<string>])` binds `None` as SQL NULL), `mcp` (Model Context Protocol client: `import mcp/mcp;` → `mcp.connect_stdio(cmd, args)`,
 `mcp.tools(c)`, `mcp.call_json(c, tool, json_text)`, `mcp.close(c)`; server side: `import mcp/serve;` →
 `serve.provider(name, version)`, `serve.tool(p, name, description, schema_json_text, run)` where `run` takes the
@@ -575,7 +593,7 @@ your own with `ui.popup_menu`), and use `-webkit-user-select: none` (WebKit igno
 
 Frozen naming (no overloading): `index_of` (string) vs `position` (arrays); `fetch`
 for HTTP (because `get` belongs to Map — note `fetch` lives in the Tier-2 package `net`,
-`import net/http;` after `ray add net`, not in `std/net`); `bytes_of([int])` vs `to_bytes(string)`; `+` on `bytes` copies the whole result every call — join many chunks with `bytes_concat([bytes])` or `std/collections/bytesbuilder`, never `acc = acc + chunk` in a loop;
+`import net/http;` after `ray add net`, not in `std/net`); `bytes_of([int])` (a function) vs `s.to_bytes()` (a METHOD of string: `"RIFF".to_bytes()`, never `to_bytes("RIFF")`); `+` on `bytes` copies the whole result every call — join many chunks with `bytes_concat([bytes])` or `std/collections/bytesbuilder`, never `acc = acc + chunk` in a loop;
 `join(arr, sep)` vs `join(task)` and `close` (file handle/channel) are the only
 arity/type dualities.
 

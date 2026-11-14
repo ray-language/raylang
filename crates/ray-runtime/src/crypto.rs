@@ -484,3 +484,41 @@ pub fn pk_op(op: &str, a: &[u8], b: &[u8], c: &[u8]) -> Result<Vec<u8>, String> 
 pub fn pk_op(_op: &str, _a: &[u8], _b: &[u8], _c: &[u8]) -> Result<Vec<u8>, String> {
     Err("public-key crypto is not available in this build (feature 'crypto')".to_string())
 }
+
+#[cfg(all(test, feature = "crypto"))]
+mod ed25519_pkcs8_tests {
+    use super::*;
+    use ring::signature::KeyPair;
+
+    #[test]
+    fn both_pkcs8_versions_and_the_bare_seed_are_the_same_key() {
+        // raycert #381: el v2 (con la pública detrás) es lo que escribe ring; el v1 de 48
+        // octetos, lo que escriben OpenSSL y `ed25519_generate`.
+        let rng = ring::rand::SystemRandom::new();
+        let v2 = ring::signature::Ed25519KeyPair::generate_pkcs8(&rng).unwrap();
+        let v2 = v2.as_ref();
+        let public = ring::signature::Ed25519KeyPair::from_pkcs8(v2).unwrap().public_key().as_ref().to_vec();
+        let seed = ed25519_seed(v2).expect("un PKCS#8 v2 es una clave").to_vec();
+        assert_eq!(seed.len(), 32);
+        assert_eq!(ed25519_public_key(v2), Some(public.clone()));
+        assert_eq!(ed25519_public_key(&seed), Some(public.clone()));
+        let v1 = pk_op("ed25519_pkcs8", &seed, &[], &[]).unwrap();
+        assert_eq!(v1.len(), 48);
+        assert_eq!(ed25519_public_key(&v1), Some(public));
+        assert_eq!(ed25519_sign(&v1, b"m"), ed25519_sign(v2, b"m"));
+        assert_eq!(pk_op("ed25519_seed", &v1, &[], &[]).unwrap(), seed);
+        // Ni una semilla de otro tamaño, ni un sobre cortado, ni el PKCS#8 de otra familia.
+        assert!(ed25519_seed(&seed[..31]).is_none());
+        assert!(ed25519_seed(&v1[..47]).is_none());
+        let mut other = v1.clone();
+        other[11] = 0x71; // 1.3.101.113 (Ed448)
+        assert!(ed25519_seed(&other).is_none());
+        let p256 = pk_op("p256_generate", &[], &[], &[]).unwrap();
+        assert!(ed25519_seed(&p256).is_none() && ed25519_sign(&p256, b"m").is_none());
+        // Un v2 cuya pública no corresponde a la semilla se rechaza.
+        let mut forged = v2.to_vec();
+        let last = forged.len() - 1;
+        forged[last] ^= 1;
+        assert!(ed25519_seed(&forged).is_none());
+    }
+}

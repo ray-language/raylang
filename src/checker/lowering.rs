@@ -828,16 +828,31 @@ pub(super) fn lower_dyn_block(block: &mut Block, coercions: &CoercionMap, dispat
 }
 
 pub(super) fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchSet, upcasts: &UpcastMap, tm: &HashMap<String, Vec<String>>, counter: &mut usize) {
+    lower_dyn_node(expr, coercions, dispatch, upcasts, tm, counter, true);
+}
+
+/// `own` = este nodo es el DUEÑO de su posición. Una coerción o un upcast se registran por
+/// `(línea, col)`, y un nodo compuesto comparte la suya con su hijo izquierdo (`f(x)` con `f`,
+/// `a.b` con `a`, `xs[i]` con `xs`, `e?` con `e`…). El hijo izquierdo nunca es un sitio de
+/// coerción —no hay tipo esperado ahí—, así que gana el nodo MÁS EXTERNO de la cadena (#353):
+/// antes se envolvía también el callee o el objeto (ICE, o un valor equivocado en silencio).
+fn lower_dyn_node(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchSet, upcasts: &UpcastMap, tm: &HashMap<String, Vec<String>>, counter: &mut usize, own: bool) {
+    let here = (expr.line, expr.col);
+    // El hijo izquierdo solo es dueño si su posición difiere de la de este nodo.
+    let left = |child: &mut Expr, counter: &mut usize| {
+        let owns = (child.line, child.col) != here;
+        lower_dyn_node(child, coercions, dispatch, upcasts, tm, counter, owns);
+    };
     // Recorrer los sub-nodos primero (post-orden): así los despachos/coerciones anidados
     // (en el receptor y los argumentos) ya están bajados cuando reescribimos este nodo.
     match &mut expr.kind {
-        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => lower_dyn_expr(inner, coercions, dispatch, upcasts, tm, counter),
-        ExprKind::Binary { left, right, .. } => {
-            lower_dyn_expr(left, coercions, dispatch, upcasts, tm, counter);
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => left(inner, counter),
+        ExprKind::Binary { left: lhs, right, .. } => {
+            left(lhs, counter);
             lower_dyn_expr(right, coercions, dispatch, upcasts, tm, counter);
         }
         ExprKind::Call { callee, args } => {
-            lower_dyn_expr(callee, coercions, dispatch, upcasts, tm, counter);
+            left(callee, counter);
             for a in args.iter_mut() {
                 lower_dyn_expr(a, coercions, dispatch, upcasts, tm, counter);
             }
@@ -854,7 +869,7 @@ pub(super) fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch:
             }
         }
         ExprKind::Index { array, index } => {
-            lower_dyn_expr(array, coercions, dispatch, upcasts, tm, counter);
+            left(array, counter);
             lower_dyn_expr(index, coercions, dispatch, upcasts, tm, counter);
         }
         ExprKind::StructLit { fields, .. } => {
@@ -867,7 +882,7 @@ pub(super) fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch:
                 lower_dyn_expr(a, coercions, dispatch, upcasts, tm, counter);
             }
         }
-        ExprKind::Field { object, .. } => lower_dyn_expr(object, coercions, dispatch, upcasts, tm, counter),
+        ExprKind::Field { object, .. } => left(object, counter),
         ExprKind::Func(fe) => lower_dyn_block(&mut fe.body, coercions, dispatch, upcasts, tm, counter),
         ExprKind::Match { scrutinee, arms } => {
             lower_dyn_expr(scrutinee, coercions, dispatch, upcasts, tm, counter);
@@ -875,7 +890,7 @@ pub(super) fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch:
                 lower_dyn_expr(&mut arm.body, coercions, dispatch, upcasts, tm, counter); if let Some(g) = &mut arm.guard { lower_dyn_expr(g, coercions, dispatch, upcasts, tm, counter); }
             }
         }
-        ExprKind::Try(inner) => lower_dyn_expr(inner, coercions, dispatch, upcasts, tm, counter),
+        ExprKind::Try(inner) => left(inner, counter),
         ExprKind::If { cond, then_branch, else_branch } => {
             lower_dyn_expr(cond, coercions, dispatch, upcasts, tm, counter);
             lower_dyn_block(then_branch, coercions, dispatch, upcasts, tm, counter);
@@ -930,7 +945,7 @@ pub(super) fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch:
     // función de la vtable los calculó el checker con `dict_for` (M9.4) — método manglado plano o
     // closure anidado para un impl genérico acotado—, así que `dyn` funciona también sobre impls
     // genéricos. Van en el orden de los métodos del trait, igual que `tm`.
-    if let Some((set, vtable)) = coercions.get(&(line, col)) {
+    if let Some((set, vtable)) = coercions.get(&(line, col)).filter(|_| own) {
         let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::DEC));
         let inner = Expr { kind: taken, line, col };
         let mut fields = vec![("data".to_string(), inner)];
@@ -944,7 +959,7 @@ pub(super) fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch:
     // Upcasting `dyn S1` → `dyn S2` (S2 ⊆ S1, M9.5b): reconstruir el struct menor proyectando los
     // campos del mayor. Necesita un temp porque el origen se referencia varias veces:
     // `{ let __dynup = <obj>; __dyn_S2 { data: __dynup.data, m: __dynup.m, … } }`.
-    if let Some(target) = upcasts.get(&(line, col)) {
+    if let Some(target) = upcasts.get(&(line, col)).filter(|_| own) {
         let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::DEC));
         let source = Expr { kind: taken, line, col };
         let tmp = format!("__dynup#{}", *counter);

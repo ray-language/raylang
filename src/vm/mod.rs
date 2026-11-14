@@ -3429,7 +3429,7 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Obj(h));
                 }
                 OpCode::PreferredLanguages => {
-                    let items: Vec<HeapValue> = ray_runtime::locale::preferred_languages().into_iter().map(|a| HeapValue::Str(a.into())).collect();
+                    let items: Vec<HeapValue> = crate::builtins::preferred_languages().into_iter().map(|a| HeapValue::Str(a.into())).collect();
                     let h = self.cur.heap.allocate(Obj::Array(items));
                     self.push(HeapValue::Obj(h));
                 }

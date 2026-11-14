@@ -1735,7 +1735,7 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             "__preferred_languages" => {
-                let arr = ray_runtime::locale::preferred_languages().into_iter().map(|s| Value::Str(s.into())).collect();
+                let arr = crate::builtins::preferred_languages().into_iter().map(|s| Value::Str(s.into())).collect();
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             "__proc_spawn_pty" => {

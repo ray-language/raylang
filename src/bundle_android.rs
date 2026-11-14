@@ -2000,7 +2000,7 @@ final class RayScheme {
 /// secretos en ray.toml ni en este archivo; sin el properties, el bloque no aplica y el debug
 /// keystore de Gradle sigue mandando. `rootProject.file(...)` resuelve `storeFile` relativo a
 /// la raíz (donde el README manda crear ambos; el bundle los preserva al regenerar).
-fn app_build_gradle(app_id: &str, version: &str, abis: &str) -> String {
+fn app_build_gradle(app_id: &str, version: &str, build: u32, abis: &str) -> String {
     format!(
         r#"plugins {{
     id 'com.android.application' version '9.0.0' // compatible con Gradle 9.x (AGP 8.x usa una API interna retirada en 9.6)
@@ -2020,7 +2020,7 @@ android {{
         applicationId "{app_id}"
         minSdk 24
         targetSdk 35
-        versionCode 1
+        versionCode {build}
         versionName "{version}"
         ndk {{
             abiFilters {abis}
@@ -2123,7 +2123,7 @@ mod devtools_tests {
         let base = std::env::temp_dir().join(format!("ray_android_devtools_{}", std::process::id()));
         for (devtools, want) in [(true, true), (false, false)] {
             let _ = std::fs::remove_dir_all(&base);
-            super::write_project(&base, "App", "org.example.app", "1.0.0", "arm64-v8a", false, devtools, false, None, false, false).unwrap();
+            super::write_project(&base, "App", "org.example.app", "1.0.0", 1, "arm64-v8a", false, devtools, false, None, false, false).unwrap();
             let src = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
             assert_eq!(src.contains("setWebContentsDebuggingEnabled(true)"), want, "devtools={devtools}");
             assert!(!src.contains("/*RAY_DEVTOOLS*/"), "el marcador no queda en el proyecto");
@@ -2137,6 +2137,8 @@ pub fn write_project(
     name: &str,
     app_id: &str,
     version: &str,
+    // M458 (pepa #412): `[app] build` → `versionCode` (Play exige uno mayor en cada subida).
+    build: u32,
     abis: &str,
     icon: bool,
     devtools: bool,
@@ -2154,7 +2156,7 @@ pub fn write_project(
     };
     write("settings.gradle", &settings_gradle(name))?;
     write("gradle.properties", GRADLE_PROPERTIES)?;
-    write("app/build.gradle", &app_build_gradle(app_id, version, abis))?;
+    write("app/build.gradle", &app_build_gradle(app_id, version, build, abis))?;
     write("app/src/main/AndroidManifest.xml", &android_manifest(icon, background_audio, url_scheme, exact_alarms, alarm))?;
     write("app/src/main/res/xml/network_security_config.xml", NETWORK_SECURITY_XML)?;
     write("app/src/main/res/values/strings.xml", &strings_xml(name))?;
@@ -2228,12 +2230,12 @@ mod tests {
         // M323 (ray808 #12): el shim como script de inicio de documento, con fallback a onPageStarted.
         assert!(MAIN_ACTIVITY_JAVA.contains("WebViewCompat.addDocumentStartJavaScript(web, RAY_SHIM, Collections.singleton(\"*\"))"));
         assert!(MAIN_ACTIVITY_JAVA.contains("if (!shimInjected) {\n                    v.evaluateJavascript(RAY_SHIM, null);"));
-        assert!(app_build_gradle("org.raylang.demo", "1.0.0", "'arm64-v8a'").contains("implementation 'androidx.webkit:webkit:1.12.1'"));
+        assert!(app_build_gradle("org.raylang.demo", "1.0.0", 1, "'arm64-v8a'").contains("implementation 'androidx.webkit:webkit:1.12.1'"));
         assert!(android_manifest(false, false, None, false, false)
             .contains("android:networkSecurityConfig=\"@xml/network_security_config\""));
         assert!(NETWORK_SECURITY_XML.contains("127.0.0.1"));
         assert!(!android_manifest(false, false, None, false, false).contains("usesCleartextTraffic"));
-        let gradle = app_build_gradle("org.raylang.demo", "1.0.0", "'arm64-v8a'");
+        let gradle = app_build_gradle("org.raylang.demo", "1.0.0", 1, "'arm64-v8a'");
         assert!(gradle.contains("namespace 'org.raylang.shell'"), "{gradle}");
         assert!(gradle.contains("applicationId \"org.raylang.demo\""), "{gradle}");
         assert!(gradle.contains("abiFilters 'arm64-v8a'"), "{gradle}");
@@ -2348,7 +2350,7 @@ mod tests {
         let base = std::env::temp_dir().join(format!("ray_android_audio_{}", std::process::id()));
         for (bg, want) in [(true, true), (false, false)] {
             let _ = std::fs::remove_dir_all(&base);
-            write_project(&base, "App", "org.example.app", "1.0.0", "'arm64-v8a'", false, false, bg, None, false, false).unwrap();
+            write_project(&base, "App", "org.example.app", "1.0.0", 1, "'arm64-v8a'", false, false, bg, None, false, false).unwrap();
             let main = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
             assert_eq!(main.contains("RAY_BACKGROUND_AUDIO = true;"), want, "bg={bg}");
             assert!(!main.contains("/*RAY_BACKGROUND_AUDIO*/"), "sin marcador");
@@ -2363,7 +2365,7 @@ mod tests {
     fn the_release_signing_is_conditional_and_holds_no_secrets() {
         // M160: el bloque de firma existe pero SOLO aplica con keystore.properties presente;
         // ni una contraseña literal en la plantilla.
-        let gradle = app_build_gradle("org.raylang.demo", "1.0.0", "'arm64-v8a'");
+        let gradle = app_build_gradle("org.raylang.demo", "1.0.0", 1, "'arm64-v8a'");
         assert!(gradle.contains("rootProject.file('keystore.properties')"), "{gradle}");
         assert!(gradle.contains("signingConfigs"), "{gradle}");
         assert!(gradle.contains("signingConfig signingConfigs.release"), "{gradle}");
@@ -2388,14 +2390,14 @@ mod tests {
         let base = std::env::temp_dir().join(format!("ray-android-devlink-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
-        write_project(&base, "App", "org.example.app.dev", "1.0.0", "'arm64-v8a'", false, true, false, Some("org.example.app.dev"), false, false).unwrap();
+        write_project(&base, "App", "org.example.app.dev", "1.0.0", 1, "'arm64-v8a'", false, true, false, Some("org.example.app.dev"), false, false).unwrap();
         let main = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
         assert!(main.contains("rayDevLink(getIntent());"));
         assert!(main.contains("protected void onNewIntent(Intent intent)"));
         assert!(main.contains("\"org.example.app.dev\".equals(data.getScheme())"));
         let bridge = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/RayBridge.java")).unwrap();
         assert!(bridge.contains("public static native void devLink(String url);"));
-        write_project(&base, "App", "org.example.app", "1.0.0", "'arm64-v8a'", false, false, false, None, false, false).unwrap();
+        write_project(&base, "App", "org.example.app", "1.0.0", 1, "'arm64-v8a'", false, false, false, None, false, false).unwrap();
         let main = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
         assert!(!main.contains("rayDevLink"));
         assert!(main.contains("protected void onNewIntent(Intent intent)"), "M442: onNewIntent existe siempre");
@@ -2432,7 +2434,7 @@ mod tests {
         let base = std::env::temp_dir().join(format!("ray_android_alarm_{}", std::process::id()));
         for alarm in [true, false] {
             let _ = std::fs::remove_dir_all(&base);
-            write_project(&base, "App", "org.example.app", "1.0.0", "'arm64-v8a'", false, false, false, None, false, alarm).unwrap();
+            write_project(&base, "App", "org.example.app", "1.0.0", 1, "'arm64-v8a'", false, false, false, None, false, alarm).unwrap();
             let java = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/RayAlarm.java")).unwrap();
             assert_eq!(java.contains("static final boolean ENABLED = true;"), alarm);
             for f in ["RayAlarmReceiver.java", "RayAlarmService.java", "RayAlarmActivity.java"] {
@@ -2490,7 +2492,7 @@ mod tests {
         let base = std::env::temp_dir().join(format!("ray_android_notify_{}", std::process::id()));
         for (exact, want) in [(true, "EXACT_ALARMS = true;"), (false, "EXACT_ALARMS = false;")] {
             let _ = std::fs::remove_dir_all(&base);
-            write_project(&base, "App", "org.example.app", "1.0.0", "'arm64-v8a'", false, false, false, None, exact, false).unwrap();
+            write_project(&base, "App", "org.example.app", "1.0.0", 1, "'arm64-v8a'", false, false, false, None, exact, false).unwrap();
             let notify = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/RayNotify.java")).unwrap();
             assert!(notify.contains(want) && !notify.contains("/*RAY_EXACT_ALARMS*/"), "exact={exact}");
             assert!(base.join("app/src/main/java/org/raylang/shell/RayNotifyReceiver.java").is_file());

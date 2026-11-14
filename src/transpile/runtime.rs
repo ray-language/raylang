@@ -1018,6 +1018,12 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         out.push_str(include_str!("../../crates/ray-runtime/src/md5.rs"));
         out.push_str("}\n");
     }
+    // M458 (pepa #418): los idiomas del sistema — la fuente de la VM, sin depender del crate.
+    if t.needs_locale {
+        out.push_str("#[allow(dead_code)]\nmod __ray_locale {\n");
+        out.push_str(include_str!("../../crates/ray-runtime/src/locale.rs"));
+        out.push_str("}\n");
+    }
     if t.needs_b64 {
         // M380: una sola fuente de verdad — el módulo del runtime, sin depender del crate.
         out.push_str("#[allow(dead_code)]\nmod __ray_b64 {\n");

@@ -735,6 +735,22 @@ pub fn char_index_of(s: &str, sub: &str) -> Option<usize> {
     (0..=chars.len() - sub.len()).find(|&i| chars[i..i + sub.len()] == sub[..])
 }
 
+/// M458 (pepa #418): los idiomas preferidos del sistema (`std/locale`). La implementación vive en
+/// `ray-runtime/src/locale.rs`; en wasm32 el crate no se enlaza y el archivo entra como módulo
+/// propio (allí no hay sistema que consultar: lista vacía, o `RAY_LANGUAGES`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn preferred_languages() -> Vec<String> {
+    ray_runtime::locale::preferred_languages()
+}
+#[cfg(target_arch = "wasm32")]
+#[path = "../crates/ray-runtime/src/locale.rs"]
+#[allow(dead_code)]
+mod locale_impl;
+#[cfg(target_arch = "wasm32")]
+pub fn preferred_languages() -> Vec<String> {
+    locale_impl::preferred_languages()
+}
+
 /// raysql #299: formateo de un float con modo y precisión (`e` | `f` | `g` | `shortest`); la
 /// implementación vive en `ray-runtime/src/float_fmt.rs`, la misma que pega el transpilador en el
 /// runtime nativo (una sola fuente, byte-idéntica en los tres motores).
@@ -6127,6 +6143,12 @@ static BUILTINS: &[Builtin] = &[
     // M246: __self_command() -> [string]: cómo relanzar este programa (std/process → self_command).
     Builtin { name: "__self_command", opcode: OpCode::SelfCommand, check: |a| {
         nullary(a, "__self_command")?;
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // M458 (pepa #418): __preferred_languages() -> [string]: etiquetas BCP 47 del sistema, por
+    // orden de preferencia (std/locale → preferred_languages).
+    Builtin { name: "__preferred_languages", opcode: OpCode::PreferredLanguages, check: |a| {
+        nullary(a, "__preferred_languages")?;
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __embed_list() -> [string] (M147): ["ok", clave…] (orden lexicográfico) o ["err", msg].

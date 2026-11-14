@@ -1734,6 +1734,10 @@ impl<'a> Interpreter<'a> {
                 let arr = crate::runtime::self_command().into_iter().map(Value::Str).collect();
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            "__preferred_languages" => {
+                let arr = crate::builtins::preferred_languages().into_iter().map(|s| Value::Str(s.into())).collect();
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             "__proc_spawn_pty" => {
                 let (Value::Str(program), Value::Array(args), Value::Str(dir), Value::Array(env),
                     Value::Bool(env_clear), Value::Int(cols), Value::Int(rows)) =

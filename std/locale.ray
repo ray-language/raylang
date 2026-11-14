@@ -1,0 +1,41 @@
+//! The languages the user prefers, as the operating system knows them.
+//!
+//! ```raylang
+//! import std/locale;
+//!
+//! let langs = locale.preferred_languages();   // ["es-CL", "en-US"]
+//! let lang = locale.pick(["en", "es"], "en");  // "es"
+//! ```
+//!
+//! This is what the PROGRAM can know without a page: for texts that leave it on their own
+//! (scheduled notifications, alarms, a tray menu), where `navigator.language` is not at hand.
+
+/// The user's preferred languages as BCP 47 tags (`"es-CL"`, `"en-US"`, `"zh-Hans-CN"`), most
+/// preferred first, without repeats. The source is the system setting: the language order of
+/// macOS and iOS, the system locale of Android, the display languages of Windows, and
+/// `LANGUAGE` / `LC_ALL` / `LC_MESSAGES` / `LANG` elsewhere. `RAY_LANGUAGES="es-CL,en"` in the
+/// environment overrides all of them (tests, services without a user session). Never fails:
+/// an empty array when the system says nothing.
+pub fn preferred_languages() -> [string] { __preferred_languages() }
+
+/// Picks, among the languages a program has texts for (`available`, e.g. `["en", "es"]`), the
+/// one the user prefers most; `fallback` when none matches. A preferred `"es-CL"` matches an
+/// available `"es-CL"` first and then `"es"` (its language without the region); the
+/// comparison ignores case.
+pub fn pick(available: [string], fallback: string) -> string {
+    for wanted in preferred_languages() {
+        let exact = wanted.to_lower();
+        for have in available {
+            if (have.to_lower() == exact) {
+                return have;
+            }
+        }
+        let base = exact.split("-")[0];
+        for have in available {
+            if (have.to_lower() == base) {
+                return have;
+            }
+        }
+    }
+    fallback
+}

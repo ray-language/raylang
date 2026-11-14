@@ -158,6 +158,22 @@ pub struct Manifest {
     /// M447 (pepa #331): `[ios] sounds = ["assets/alarm.caf"]` — archivos de sonido copiados al
     /// bundle, para `Notification.sound_name` de std/notify.
     pub ios_sounds: Vec<String>,
+    /// M458 (pepa #412): `[app] build = 42` — el número de compilación: `CFBundleVersion` en iOS y
+    /// `versionCode` en Android. Las tiendas exigen uno nuevo en cada subida de la misma versión.
+    /// `None` = 1.
+    pub app_build: Option<u32>,
+    /// M458 (pepa #414): `[ios] devices = ["iphone"]` — las familias que declara el shell
+    /// (`iphone`, `ipad`). Vacío = las dos, como hasta ahora.
+    pub ios_devices: Vec<String>,
+    /// M458 (pepa #414): `[ios] orientations = ["portrait"]` — `portrait`, `upside_down`,
+    /// `landscape_left`, `landscape_right`. Vacío = las que pasan la validación de la tienda.
+    pub ios_orientations: Vec<String>,
+    /// M458 (pepa #413): `[ios] privacy_manifest = "assets/PrivacyInfo.xcprivacy"` — sustituye al
+    /// manifiesto de privacidad que `ray bundle --ios` genera con lo que usa el runtime.
+    pub ios_privacy_manifest: Option<String>,
+    /// M458 (pepa #417): `[app.plist.<idioma>]` — los textos del Info.plist en ese idioma
+    /// (`<idioma>.lproj/InfoPlist.strings`), en orden de declaración.
+    pub app_plist_localized: Vec<(String, Vec<(String, String)>)>,
     /// M447 (pepa #331): `[android] sounds = ["assets/alarm.ogg"]` — a `res/raw/`, para `Channel.sound`.
     pub android_sounds: Vec<String>,
     /// M324 (ray808 #18): `[android] background_audio = true` — al pasar a segundo plano el shell
@@ -260,6 +276,11 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut ios_background_dark = None;
     let mut ios_audio_session = None;
     let mut ios_sounds = Vec::new();
+    let mut app_build = None;
+    let mut ios_devices: Vec<String> = Vec::new();
+    let mut ios_orientations: Vec<String> = Vec::new();
+    let mut ios_privacy_manifest = None;
+    let mut app_plist_localized: Vec<(String, Vec<(String, String)>)> = Vec::new();
     let mut android_sounds = Vec::new();
     let mut app_copyright = None;
     let mut app_name = None;
@@ -385,6 +406,16 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "name" => app_name = Some(as_string()?),
                 "icon" => app_icon = Some(as_string()?),
                 "id" => app_id = Some(as_string()?),
+                // M458 (pepa #412): el número de compilación de las tiendas.
+                "build" => {
+                    app_build = Some(
+                        value_raw
+                            .parse::<u32>()
+                            .ok()
+                            .filter(|n| *n > 0)
+                            .ok_or_else(|| err(num, "build must be a positive integer without quotes, e.g. build = 42"))?,
+                    );
+                }
                 // M247: clave pública Ed25519 (hex) del manifiesto de actualización.
                 "public_key" => app_public_key = Some(as_string()?),
                 // M249: firma y notarización del bundle.
@@ -432,6 +463,22 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 }
                 // M447 (pepa #331): sonidos de notificación copiados al bundle.
                 "sounds" => ios_sounds = parse_string_array(value_raw).ok_or_else(|| err(num, "sounds must be an array of paths"))?,
+                // M458 (pepa #414): familias de dispositivo y orientaciones del shell.
+                "devices" => {
+                    ios_devices = parse_string_array(value_raw).ok_or_else(|| err(num, "devices must be an array, e.g. [\"iphone\"]"))?;
+                    if ios_devices.is_empty() || ios_devices.iter().any(|d| d != "iphone" && d != "ipad") {
+                        return Err(err(num, "devices takes \"iphone\" and/or \"ipad\""));
+                    }
+                }
+                "orientations" => {
+                    ios_orientations = parse_string_array(value_raw).ok_or_else(|| err(num, "orientations must be an array, e.g. [\"portrait\"]"))?;
+                    let known = ["portrait", "upside_down", "landscape_left", "landscape_right"];
+                    if ios_orientations.is_empty() || ios_orientations.iter().any(|o| !known.contains(&o.as_str())) {
+                        return Err(err(num, "orientations takes \"portrait\", \"upside_down\", \"landscape_left\" and/or \"landscape_right\""));
+                    }
+                }
+                // M458 (pepa #413): un manifiesto de privacidad propio.
+                "privacy_manifest" => ios_privacy_manifest = Some(as_string()?),
                 _ => {} // otras claves de [ios] se ignoran por ahora (extensibilidad)
             },
             // M440 (rayreq #309): firma por plataforma.
@@ -457,6 +504,18 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                     _ => PlistValue::Str(as_string()?),
                 };
                 app_plist.push((key.to_string(), value));
+            }
+            // M458 (pepa #417): `[app.plist.es]` — los textos del Info.plist en ese idioma.
+            localized if localized.starts_with("app.plist.") => {
+                let lang = &localized["app.plist.".len()..];
+                if lang.is_empty() || !lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                    return Err(err(num, "the section is [app.plist.<language>], e.g. [app.plist.es]"));
+                }
+                let text = as_string()?;
+                match app_plist_localized.iter_mut().find(|(l, _)| l == lang) {
+                    Some((_, keys)) => keys.push((key.to_string(), text)),
+                    None => app_plist_localized.push((lang.to_string(), vec![(key.to_string(), text)])),
+                }
             }
             "" => return Err(err(num, "key outside any section (missing '[package]')")),
             _ => {} // otras secciones se ignoran por ahora
@@ -491,6 +550,11 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         ios_background_dark,
         ios_audio_session,
         ios_sounds,
+        app_build,
+        ios_devices,
+        ios_orientations,
+        ios_privacy_manifest,
+        app_plist_localized,
         android_sounds,
         android_background_audio,
         android_exact_alarms,
@@ -795,6 +859,34 @@ mod tests {
     }
 
     /// M447 (pepa #334/#336/#331): las claves nuevas de `[ios]` y `[android]`, con su validación.
+    #[test]
+    fn store_keys_are_parsed() {
+        // M458 (pepa #412/#413/#414/#417): número de compilación, dispositivos, orientaciones,
+        // manifiesto de privacidad y textos localizados del Info.plist.
+        let m = parse(
+            "[package]\nname = \"demo\"\nversion = \"1.0.0\"\n\n[app]\nbuild = 42\n\n[ios]\ndevices = [\"iphone\"]\norientations = [\"portrait\", \"landscape_left\"]\nprivacy_manifest = \"assets/PrivacyInfo.xcprivacy\"\n\n[app.plist]\nNSCameraUsageDescription = \"Scan\"\n\n[app.plist.es]\nNSCameraUsageDescription = \"Escanear\"\nCFBundleDisplayName = \"Demo\"\n\n[app.plist.pt-BR]\nNSCameraUsageDescription = \"Digitalizar\"\n",
+            PathBuf::from("/x"),
+        )
+        .unwrap();
+        assert_eq!(m.app_build, Some(42));
+        assert_eq!(m.ios_devices, vec!["iphone"]);
+        assert_eq!(m.ios_orientations, vec!["portrait", "landscape_left"]);
+        assert_eq!(m.ios_privacy_manifest.as_deref(), Some("assets/PrivacyInfo.xcprivacy"));
+        assert_eq!(m.app_plist.len(), 1);
+        assert_eq!(
+            m.app_plist_localized,
+            vec![
+                ("es".to_string(), vec![("NSCameraUsageDescription".to_string(), "Escanear".to_string()), ("CFBundleDisplayName".to_string(), "Demo".to_string())]),
+                ("pt-BR".to_string(), vec![("NSCameraUsageDescription".to_string(), "Digitalizar".to_string())]),
+            ]
+        );
+        let bad = |text: &str| parse(&format!("[package]\nname = \"d\"\nversion = \"1.0.0\"\n\n{text}\n"), PathBuf::from("/x")).unwrap_err();
+        assert!(bad("[app]\nbuild = \"42\"").contains("build must be a positive integer"));
+        assert!(bad("[app]\nbuild = 0").contains("build must be a positive integer"));
+        assert!(bad("[ios]\ndevices = [\"watch\"]").contains("devices takes"));
+        assert!(bad("[ios]\norientations = [\"sideways\"]").contains("orientations takes"));
+    }
+
     #[test]
     fn ios_launch_background_audio_session_and_sounds_are_parsed() {
         let m = parse_src(

@@ -43,6 +43,22 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   (`admin`, el `authSource`) y operan en otra. Antes había que conectar con `"admin"` y las
   escrituras acababan en `admin.<colección>` sin aviso.
 - La referencia ya no atribuye a `db/mongo` un `pool_tx` que no existe.
+- **`ray bundle --ios` genera un proyecto que App Store Connect acepta**:
+  - `[app] build = 42` (o `--build N`) es el número de compilación (`CFBundleVersion`; en Android,
+    `versionCode`), que la tienda exige distinto en cada subida. Antes era siempre 1.
+  - El proyecto lleva el manifiesto de privacidad (`PrivacyInfo.xcprivacy`) con lo que usa el
+    runtime; `[ios] privacy_manifest` aporta uno propio.
+  - `[ios] devices = ["iphone"]` y `[ios] orientations = ["portrait"]` eligen dispositivos y
+    orientaciones. **Cambio**: el Info.plist declara ahora las orientaciones (en el iPhone,
+    vertical y los dos apaisados; en el iPad, las cuatro), que antes no declaraba.
+  - `[app.plist.en]`, `[app.plist.es]`… dan los textos de permisos y el nombre en cada idioma.
+  - Una clave de `[app.plist]` que el shell ya escribe la sustituye; antes quedaba duplicada.
+  - El icono sale sin canal alfa (compuesto sobre `[ios] background`, o blanco).
+- **`std/locale`**: `locale.preferred_languages()` da los idiomas del sistema (`["es-CL", "en-US"]`)
+  en macOS, iOS, Android, Windows y Linux, y `locale.pick(["en", "es"], "en")` elige entre los
+  que el programa tiene. Para los textos que salen del programa y no de la página:
+  notificaciones programadas, alarmas, menús.
+- **`std/image`**: `image.encode_png_rgb(img, background)` escribe un PNG sin canal alfa.
 
 ## 1.27.98 — 2026-11-14
 

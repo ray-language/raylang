@@ -2285,7 +2285,7 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 /// codesign ad-hoc best-effort) o un directorio con `.desktop` en Linux. En Windows (M180): directorio con `<name>.exe` (subsistema WINDOWS, icono y VERSIONINFO embebidos) y `<name>.lnk`, en `src/bundle_windows.rs`. Sin firma/notarización
 /// en v1 (documentado en el help). Tooling puro: no toca los motores.
 const BUNDLE_USAGE: &str = "usage: ray bundle [file] [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list] \
-[--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]] [--dev] [--devtools] \
+[--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]] [--build N] [--dev] [--devtools] \
 [--allow-stubs] [--sign IDENTITY] [--notary PROFILE] [--entitlements plist]\n\
   --sign: macOS codesign with hardened runtime + timestamp (Developer ID identity), Windows signtool (subject or .pfx, \
 password in RAY_SIGN_PFX_PASSWORD); --sign none (or \"\") disables signing even when [app] sign is set — on Windows an \
@@ -2326,6 +2326,8 @@ fn cmd_bundle(args: &[String]) {
     // cdylib en jniLibs); `--android-abi arm64|x86_64|all` elige los .so (espejo --ios-target).
     let mut android = false;
     let mut android_abi_arg: Option<String> = None;
+    // M458 (pepa #412): `--build N` — el número de compilación (manda sobre `[app] build`).
+    let mut build_arg: Option<String> = None;
     // M231: `--devtools` — el webview del shell móvil inspeccionable desde el escritorio.
     let mut devtools = false;
     let mut stubs = StubPolicy::Auto;
@@ -2361,6 +2363,7 @@ fn cmd_bundle(args: &[String]) {
             "--entitlements" => value(&mut entitlements_arg, &mut i),
             "--ios-target" => value(&mut ios_target_arg, &mut i),
             "--android-abi" => value(&mut android_abi_arg, &mut i),
+            "--build" => value(&mut build_arg, &mut i),
             "--ios" => {
                 ios = true;
                 i += 1;
@@ -2409,6 +2412,14 @@ fn cmd_bundle(args: &[String]) {
     };
     let entry_dir = entry_dir.canonicalize().unwrap_or(entry_dir);
     let manifest = Manifest::load(&entry_dir).ok().flatten();
+    // M458 (pepa #412): `--build N` manda sobre `[app] build`.
+    let build_number: Option<u32> = build_arg.map(|b| match b.parse::<u32>() {
+        Ok(n) if n > 0 => n,
+        _ => {
+            eprintln!("'--build' takes a positive integer, not '{b}'\n{BUNDLE_USAGE}");
+            process::exit(64);
+        }
+    });
     // M208: `--name`/`--icon`/`--id` → `[app] name/icon/id` del ray.toml → defaults. El icono del
     // manifiesto es relativo a la raíz del proyecto (el bundle puede correrse desde cualquier cwd).
     let name = name_arg
@@ -2582,7 +2593,7 @@ fn cmd_bundle(args: &[String]) {
         }
         let abis = abis.join(", ");
         if let Err(e) =
-            crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis, mipmaps.is_some(), devtools, manifest.as_ref().is_some_and(|m| m.android_background_audio), if dev { Some(app_id.as_str()) } else { None }, manifest.as_ref().is_some_and(|m| m.android_exact_alarms), dev || uses_module(&path, "std/alarm"))
+            crate::bundle_android::write_project(&proj, &name, &app_id, &version, build_number.or(manifest.as_ref().and_then(|m| m.app_build)).unwrap_or(1), &abis, mipmaps.is_some(), devtools, manifest.as_ref().is_some_and(|m| m.android_background_audio), if dev { Some(app_id.as_str()) } else { None }, manifest.as_ref().is_some_and(|m| m.android_exact_alarms), dev || uses_module(&path, "std/alarm"))
         {
             eprintln!("bundle: could not write the Gradle project: {e}");
             process::exit(74);
@@ -2789,7 +2800,13 @@ fn cmd_bundle(args: &[String]) {
             ios_plist.push(("UIBackgroundModes".to_string(), crate::manifest::PlistValue::Array(vec!["audio".to_string()])));
         }
         // M324 (ray808 #15): el icono se genera ANTES del proyecto, que solo lo cablea si existe.
-        let icon_ok = icon.as_deref().is_some_and(|i| write_ios_appicon(&proj, Path::new(i)));
+        // M458 (pepa #416): sin canal alfa — compuesto sobre `[ios] background`, o blanco.
+        let icon_background = manifest
+            .as_ref()
+            .and_then(|m| m.ios_background.as_deref())
+            .and_then(|c| u32::from_str_radix(c.trim_start_matches('#'), 16).ok())
+            .unwrap_or(0xFFFFFF);
+        let icon_ok = icon.as_deref().is_some_and(|i| write_ios_appicon(&proj, Path::new(i), icon_background));
         // M330 D5: el shell de desarrollo registra su bundle id como esquema URL (el QR del enlace).
         // M447 (pepa #334/#336/#331): color de arranque, sesión de audio y sonidos del manifiesto.
         let launch_color = manifest
@@ -2804,7 +2821,24 @@ fn cmd_bundle(args: &[String]) {
         if alarm && !ios_plist.iter().any(|(k, _)| k == "NSAlarmKitUsageDescription") {
             ios_plist.push(("NSAlarmKitUsageDescription".to_string(), crate::manifest::PlistValue::Str(format!("{name} rings the alarms you set."))));
         }
-        let opts = crate::bundle_ios::ShellOptions { devtools, icon: icon_ok, background_audio, launch_color, audio_session, sounds, alarm, url_scheme: dev.then(|| bundle_id.clone()) };
+        // M458 (pepa #412–#417): número de compilación, dispositivos, orientaciones, manifiesto de
+        // privacidad e idiomas del Info.plist.
+        let privacy_manifest = manifest.as_ref().and_then(|m| m.ios_privacy_manifest.as_ref().map(|p| m.root.join(p)));
+        let opts = crate::bundle_ios::ShellOptions {
+            devtools,
+            icon: icon_ok,
+            background_audio,
+            launch_color,
+            audio_session,
+            sounds,
+            alarm,
+            build: build_number.or(manifest.as_ref().and_then(|m| m.app_build)),
+            devices: manifest.as_ref().map(|m| m.ios_devices.clone()).unwrap_or_default(),
+            orientations: manifest.as_ref().map(|m| m.ios_orientations.clone()).unwrap_or_default(),
+            privacy_manifest,
+            localizations: manifest.as_ref().map(|m| m.app_plist_localized.clone()).unwrap_or_default(),
+            url_scheme: dev.then(|| bundle_id.clone()),
+        };
         if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing, opts, &ios_plist) {
             eprintln!("bundle: could not write the Xcode project: {e}");
             process::exit(74);
@@ -3532,10 +3566,64 @@ fn afinfo_seconds(path: &Path) -> Option<f64> {
     line.split(':').nth(1)?.trim().split_whitespace().next()?.parse().ok()
 }
 
+/// M458 (pepa #416): el programa que aplana un PNG — lo compone sobre un fondo y lo escribe
+/// sin canal alfa (`image.encode_png_rgb`). Corre en la VM, como `ray release`.
+const FLATTEN_ICON_RAY: &str = r#"import std/image;
+import std/fs;
+
+fn main() -> int {
+    let a = args();
+    let img = match (fs.read_file_bytes(a[0])) {
+        Result.Ok(data) => match (image.decode_png(data)) {
+            Result.Ok(i) => i,
+            Result.Err(e) => { eprint(e); return 1; },
+        },
+        Result.Err(e) => { eprint(e); return 1; },
+    };
+    match (image.encode_png_rgb(img, parse_int(a[1]).unwrap_or(16777215))) {
+        Result.Ok(png) => match (fs.write_file_bytes(a[0], png)) {
+            Result.Ok(_) => 0,
+            Result.Err(e) => { eprint(e); 1 },
+        },
+        Result.Err(e) => { eprint(e); 1 },
+    }
+}
+"#;
+
+/// M458 (pepa #416): App Store Connect rechaza un icono de 1024 con canal alfa, aunque todos
+/// sus píxeles sean opacos, y `ray bundle` copiaba el PNG tal cual. Si lo tiene, se compone
+/// sobre `background` (`[ios] background`, o blanco) y se reescribe sin alfa. `false` si no se
+/// pudo (el llamador avisa; el icono queda como estaba).
+fn flatten_icon_alpha(png: &Path, background: u32) -> bool {
+    let has_alpha = process::Command::new("sips")
+        .args(["-g", "hasAlpha"])
+        .arg(png)
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("hasAlpha: yes"))
+        .unwrap_or(false);
+    if !has_alpha {
+        return true;
+    }
+    let script = png.with_extension("flatten.ray");
+    let exe = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("ray"));
+    let ok = fs::write(&script, FLATTEN_ICON_RAY).is_ok()
+        && process::Command::new(exe)
+            .arg("run")
+            .arg(&script)
+            .arg("--")
+            .arg(png)
+            .arg(background.to_string())
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+    let _ = fs::remove_file(&script);
+    ok
+}
+
 /// `true` si el catálogo quedó escrito (y el proyecto puede cablearlo).
-fn write_ios_appicon(proj: &Path, icon: &Path) -> bool {
+fn write_ios_appicon(proj: &Path, icon: &Path, background: u32) -> bool {
     let set = proj.join("Shell/Assets.xcassets/AppIcon.appiconset");
-    let ok = fs::create_dir_all(&set).is_ok()
+    let resized = fs::create_dir_all(&set).is_ok()
         && process::Command::new("sips")
             .args(["-z", "1024", "1024"])
             .arg(icon)
@@ -3543,7 +3631,11 @@ fn write_ios_appicon(proj: &Path, icon: &Path) -> bool {
             .arg(set.join("icon_1024.png"))
             .output()
             .map(|o| o.status.success())
-            .unwrap_or(false)
+            .unwrap_or(false);
+    if resized && !flatten_icon_alpha(&set.join("icon_1024.png"), background) {
+        eprintln!("bundle: warning: the app icon has an alpha channel and could not be flattened; App Store Connect rejects it (use an opaque PNG without alpha)");
+    }
+    let ok = resized
         && fs::write(
             set.join("Contents.json"),
             "{\n  \"images\": [{ \"filename\": \"icon_1024.png\", \"idiom\": \"universal\", \"platform\": \"ios\", \"size\": \"1024x1024\" }],\n  \"info\": { \"author\": \"xcode\", \"version\": 1 }\n}\n",
@@ -4754,6 +4846,7 @@ const RT_B64_RS: &str = include_str!("../crates/ray-runtime/src/b64.rs"); // M38
 const RT_KEYCHAIN_RS: &str = include_str!("../crates/ray-runtime/src/keychain.rs"); // M266
 const RT_MD5_RS: &str = include_str!("../crates/ray-runtime/src/md5.rs"); // rayblob #282
 const RT_FLOAT_FMT_RS: &str = include_str!("../crates/ray-runtime/src/float_fmt.rs"); // raysql #299
+const RT_LOCALE_RS: &str = include_str!("../crates/ray-runtime/src/locale.rs"); // M458 (pepa #418)
 const RT_MEDIA_RS: &str = include_str!("../crates/ray-runtime/src/media.rs"); // M403
 const RT_NOTIFY_RS: &str = include_str!("../crates/ray-runtime/src/notify.rs"); // M442
 const RT_ALARM_RS: &str = include_str!("../crates/ray-runtime/src/alarm.rs"); // M448
@@ -4896,6 +4989,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         ("ray-runtime/src/keychain.rs", RT_KEYCHAIN_RS),
         ("ray-runtime/src/md5.rs", RT_MD5_RS),
         ("ray-runtime/src/float_fmt.rs", RT_FLOAT_FMT_RS),
+        ("ray-runtime/src/locale.rs", RT_LOCALE_RS),
         ("ray-runtime/src/media.rs", RT_MEDIA_RS),
         ("ray-runtime/src/notify.rs", RT_NOTIFY_RS),
         ("ray-runtime/src/alarm.rs", RT_ALARM_RS),

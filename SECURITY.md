@@ -464,6 +464,13 @@ documentada:
   a sus firmas variádicas (lista de atributos terminada en NULL) y liberación con
   `secret_password_free`/`g_error_free`; en Windows, `CredWriteW`/`CredReadW`/`CredDeleteW` sobre un
   `CREDENTIALW` propio y `CredFree` del buffer devuelto. Todos los buffers viven durante la llamada.
+- **`crates/ray-runtime/src/locale.rs`** — los idiomas del sistema (`std/locale`, M458), **sin
+  crates**: en macOS e iOS, `CFLocaleCopyPreferredLanguages` y la copia de cada `CFString` a un
+  búfer del tamaño que CoreFoundation pide (el arreglo se libera con `CFRelease`); en Android,
+  `__system_property_get` sobre un búfer de `PROP_VALUE_MAX`; en Windows,
+  `GetUserPreferredUILanguages` en dos llamadas (tamaño, luego datos). Solo lectura, sin
+  punteros que sobrevivan a la llamada. El transpilador pega este mismo archivo en el binario
+  nativo.
 - **`src/transpile/`** — el mismo tipo de código, pero **emitido** dentro del binario nativo
   generado (FFI, poller, fibras, procesos). Se audita en la plantilla, que es única.
 

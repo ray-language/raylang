@@ -455,7 +455,7 @@ A type of yours becomes iterable by implementing `Iterator<T>` (only `next`); it
 | `std/qr` | **QR codes** (M347; TOTP enrollment): `encode(text)` / `encode_level(text, "L"\|"M"\|"Q"\|"H") -> Result<Code, string>` (`Code { size, modules: [bool] }`; `Err` if it does not fit or the build is `--without qr`) · `dark(code, x, y) -> bool` · `to_text(code) -> string` (Unicode half blocks, for the terminal) · `to_svg(code, module_px, margin_modules) -> string` · `to_png(code, module_px, margin_modules) -> Result<bytes, string>` (via `std/image`). The matrix comes from the runtime (`qrcode` crate); the rendering is raylang and matches on the VM and natively |
 | `std/image` | **images**: `decode_png(data: bytes) -> Result<Image, string>` with `Image { width, height, pixels: bytes }` — the output is ALWAYS **RGBA8** (4 octets/pixel, rows top to bottom), whatever the PNG contains. Supports color types 0/2/3/4/6 and depths 1/2/4/8/16 (16 bits → high octet), palette + `tRNS` (palette alpha and color-key for 0/2 at 8/16), None/Sub/Up/Average/Paeth filters, CRC verified per chunk and an anti-bomb cap in the zlib (via `std/inflate`). Interlaced (Adam7) → a clear `Err` (deferred). Corrupt/truncated input = `Err`, never a crash. **Encoding**: `encode_png(img: Image) -> Result<bytes, string>` — writes the RGBA8 `Image` as PNG (color type 6, 8 bits, no interlacing, None filter, zlib from `std/deflate`); `decode_png(encode_png(img))` returns the same pixels; `Err` if `pixels.len() != width * height * 4` or the dimensions are not positive. With `term.draw_png` or `fs.write_file_bytes` it closes the loop: generating sprites/captures from raylang without external tools |
 | `std/huffman` | `huffman_encode huffman_decode`: only the **static HPACK** Huffman code (RFC 7541, HTTP/2 headers) over `[int]` — not usable for DEFLATE |
-| `std/protobuf` | `PbWriter`: `writer write_varint write_string write_bytes write_fixed64 write_fixed32 finish` · `parse -> Result<[PbField], _>` `get_int get_bytes get_string` · gRPC framing: `grpc_frame grpc_unframe` |
+| `std/protobuf` | `PbWriter`: `writer write_varint write_string write_bytes write_fixed64 write_fixed32 finish` · `parse -> Result<[PbField], _>` (total: malformed input —a truncated or over-10-byte varint, a value running past the end, field 0— is always an `Err` that names the byte) `get_int get_bytes get_string` · gRPC framing: `grpc_frame grpc_unframe` |
 | `std/uuid` | `uuid_v4() -> string` · `is_uuid_v4` · `uuid_v7()`/`uuid_v7_at(ms)` (RFC 9562, time-sortable) · `is_uuid_v7` |
 | `std/ffi` | `errno() -> int`: the thread's `errno` — the reason of the last failure of a POSIX-style extern C function (`fopen`/`unlink`…). **Read it immediately** after the call, with no I/O in between (§13). On wasm: 0 · `buffer(n) -> bytes`: n zero bytes, the output buffer of an extern (§13) |
 
@@ -469,6 +469,16 @@ The interface of `std/ui` apps has its own package: `elements` ([ray-elements](h
 web components with tokens and light/dark theme; `ray add elements` + `import elements/bridge;`
 serves `@raylang/elements` to the page by its npm name, without npm, and gives the components
 native dialogs, confirmations and menus; `@raylang/react` and `@raylang/vue` wrappers).
+
+**Version ranges and conflicts.** `"1.2.0"` (or `"=1.2.0"`) is exact; `"^1.2.3"` accepts
+`[1.2.3, 2.0.0)` and, below 1.0, only the same minor: `"^0.13.0"` is `[0.13.0, 0.14.0)` and
+**excludes 0.15**; `"~1.2.3"` accepts patches only (`[1.2.3, 1.3.0)`); `"*"` is the highest
+published. There is **one version per package** in the whole project (`.ray-deps/<name>`): when two
+requesters ask for different versions of the same dependency, the **highest one requested** is
+used. If that version falls outside the range of one of them, `ray` warns (`warning: 'net'
+resolves to v0.15.0 …, outside the range '^0.13.0' that db asks for`): that package is compiled
+against a version it declared incompatible, and the fix is to update it or lower the other
+dependency.
 
 **How a dependency is imported (M383).** The first segment of the `import` is the **key** in
 `[dependencies]` and what follows is the module file at the **package root** (not under `src/`):
@@ -775,4 +785,4 @@ What `ray bundle --ios` / `--android` reads from the manifest (besides `[app] na
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:e0cc03b37f3a -->
+<!-- sync: sha256:994d4e9a8a51 -->

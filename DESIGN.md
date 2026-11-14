@@ -20155,3 +20155,48 @@ tipo» (§429) y la medición lo reorientó antes de escribir código:
   un solo sitio que mantener); los operandos `u32` de las instrucciones nuevas (no encogían
   `OpCode` y obligaban a convertir) son `usize` como el resto; y las instrucciones nuevas tienen
   prueba de que SE EMITEN (`src/vm/tests.rs`), no solo de que dan lo mismo.
+
+## 431. M455 — ronda de hallazgos urgentes sobre 1.27.95 (nov 2026)
+
+De los 71 hallazgos abiertos de la campaña 1.27.95 (raysolve, rayfocus, raygrpc, raycdc…), los
+seis que corrompen o abortan sin avisar. Tres comparten causa: **una tabla indexada por
+`(línea, col)` no identifica un nodo**, porque un nodo compuesto hereda la posición de su hijo
+izquierdo.
+
+- **#372, `ray fmt` borraba el sufijo de una interpolación.** El formateador reconocía la raíz
+  de una interpolación desazucarada por la posición de su primera pieza y el NÚMERO de piezas
+  del spine de `+`. `"${x}".len()` (un `Call(Field)` en la posición de la pieza, una hoja) y
+  `"id-${n}".to_upper() + "!"` (dos hojas, como la interpolación) pasaban la prueba y se
+  reemitían como la cadena sola. Ahora `is_interp_root` compara pieza a pieza con lo que emite
+  `Parser::build_interp` (`Str` igual al literal, `to_string(e)` con el mismo `e`). Una sola
+  pieza entre paréntesis se ancla al callee `to_string`, que el paréntesis no re-posiciona.
+- **#353, coerción a `dyn` de una expresión compuesta.** `lower_dyn_expr` recorre en post-orden
+  y aplicaba la coerción al PRIMER nodo de esa posición: el callee de `square(2)`, el objeto de
+  `b.sq`, el arreglo de `xs[0]`. Con la llamada y el índice era un ICE; con el campo, un valor
+  equivocado en silencio (se envolvía `b` y luego se leía `.sq` del envoltorio). El hijo
+  izquierdo nunca es un sitio de coerción —no hay tipo esperado ahí—, así que gana el nodo más
+  externo de la cadena que comparte posición (`lower_dyn_node`, parámetro `own`). Vale igual
+  para los upcasts.
+- **#352, `for` sobre un iterador con impl acotado.** `ForIter::Iter` llama al `next` manglado
+  con solo el receptor, y el de un `impl<V: Ord> Iterator<V>` lleva parámetros-diccionario. En
+  vez de enseñar a los tres motores a llamar un valor función, el checker baja ese `for` a
+  construcciones que ya existen (`lower_for_bounded`): `{ let it = …; let next = <closure de
+  dict_for>; while (true) { match (next(it)) { Option.Some(x) => { cuerpo }, _ => { break; } } } }`.
+  El closure sale de `dict_for`, el mismo que arma las vtables de `dyn`; su retorno se fija al
+  elemento concreto porque el nativo tipa el binding por él. Solo los impls acotados pagan el
+  closure: el resto sigue por `ForIter::Iter`.
+- **#359, `print` y el `Show` del usuario.** `print` solo pasaba por el diccionario `Show`
+  cuando el tipo contenía una tupla (M316); ahora también cuando lleva un `impl Show` del
+  usuario a cualquier profundidad, o es un parámetro de tipo. `to_string(p)` con `P: Show` se
+  resuelve al parámetro-diccionario, como `p.show()`. En nativo, `[]#show` usaba el `ray_show`
+  del `Vec` (la forma por defecto) e ignoraba el diccionario del elemento: ahora lo usa.
+- **#388, `std/protobuf`.** `parse` es total: `decode_varint` no lee fuera del búfer ni
+  desplaza más de 63 bits (era `Ok(-1)` en la VM y un panic en nativo con 11 octetos), y se
+  comprueban la longitud de un length-delimited, los fixed cortados y el campo 0.
+- **#405, rangos de dependencias.** La caché es plana y el MVS elige la versión más alta
+  pedida; un rango (`^0.13`) que esa versión no cumple quedaba sin avisar. Se guardan todos los
+  requisitos por nombre y al final se avisa de los rangos no satisfechos (`unsatisfied_ranges`).
+  Aviso y no error: con una versión por paquete no hay resolución alternativa, y fallar dejaría
+  sin salida a quien usa `db` con un `net` nuevo hasta que `db` se republique.
+- **Pendiente.** El receptor de una llamada UFCS no se coacciona a `dyn` (`sq.describe()` con
+  `fn describe(s: dyn Shape)` es un error de tipos), y `to_string` sigue sin aceptar un arreglo.

@@ -125,23 +125,35 @@ struct VarintResult {
     next: int,
 }
 
-// Decodifica un varint desde `pos`; devuelve el valor y la posición siguiente.
+// Decodifica un varint desde `pos`; devuelve el valor y la posición siguiente. `next` vale -1 si
+// el varint se corta antes de su último octeto, y -2 si pasa de 10 octetos (64 bits): `parse` es
+// total y esto viene de la red (#388).
 fn decode_varint(data: bytes, pos: int) -> VarintResult {
     var result = 0;
     var shift = 0;
     var p = pos;
-    var keep_going = true;
-    while (keep_going) {
+    let n = data.len();
+    while (p < n) {
+        if (shift > 63) {
+            return VarintResult { value: 0, next: -2 };
+        }
         let b = data[p];
         result = result | (b & 127) << shift;
         p = p + 1;
         if ((b & 128) == 0) {
-            keep_going = false;
-        } else {
-            shift = shift + 7;
+            return VarintResult { value: result, next: p };
         }
+        shift = shift + 7;
     }
-    VarintResult { value: result, next: p }
+    VarintResult { value: 0, next: -1 }
+}
+
+fn varint_error(what: string, v: VarintResult, pos: int) -> string {
+    if (v.next == -2) {
+        "protobuf: the varint of the ${what} at byte ${pos} is longer than 10 bytes"
+    } else {
+        "protobuf: truncated varint of the ${what} at byte ${pos}"
+    }
 }
 
 // Lee `nbytes` octetos little-endian como entero desde `pos`.
@@ -157,55 +169,64 @@ fn read_le(data: bytes, pos: int, nbytes: int) -> int {
 
 // Parsea un mensaje protobuf a una lista de campos crudos (sin schema).
 /// Parses a protobuf message into its raw fields (schema-less: number + wire type + value).
-/// Supports wire types 0 (varint), 1 (fixed64), 2 (length-delimited), and 5 (fixed32);
-/// returns `Err` on any other wire type.
+/// Supports wire types 0 (varint), 1 (fixed64), 2 (length-delimited), and 5 (fixed32).
+/// Total: malformed input is always an `Err` that names the byte — a truncated or over-long
+/// varint, a value that runs past the end of the data, field number 0, or any other wire type.
 pub fn parse(data: bytes) -> Result<[PbField], string> {
     var fields: [PbField] = [];
     var pos = 0;
     let n = data.len();
     while (pos < n) {
+        let at = pos;
         let tag = decode_varint(data, pos);
+        if (tag.next < 0) {
+            return Result.Err(varint_error("tag", tag, at));
+        }
         pos = tag.next;
         let number = tag.value >> 3;
         let wire = tag.value & 7;
+        if (number <= 0) {
+            return Result.Err("protobuf: invalid field number ${number} at byte ${at}");
+        }
         if (wire == 0) {
             let v = decode_varint(data, pos);
+            if (v.next < 0) {
+                return Result.Err(varint_error("value of field ${number}", v, pos));
+            }
             pos = v.next;
             fields.push(PbField { number: number, wire: 0, int_val: v.value, bytes_val: b"" });
-        } else {
-            if (wire == 2) {
-                let lenv = decode_varint(data, pos);
-                pos = lenv.next;
-                let b = data.sub_bytes(pos, pos + lenv.value);
-                pos = pos + lenv.value;
-                fields.push(PbField { number: number, wire: 2, int_val: 0, bytes_val: b });
-            } else {
-                if (wire == 1) {
-                    fields.push(
-                        PbField {
-                            number: number,
-                            wire: 1,
-                            int_val: read_le(data, pos, 8),
-                            bytes_val: b""
-                        }
-                    );
-                    pos = pos + 8;
-                } else {
-                    if (wire == 5) {
-                        fields.push(
-                            PbField {
-                                number: number,
-                                wire: 5,
-                                int_val: read_le(data, pos, 4),
-                                bytes_val: b""
-                            }
-                        );
-                        pos = pos + 4;
-                    } else {
-                        return Result.Err("unsupported wire type: " + to_string(wire));
-                    }
-                }
+        } else if (wire == 2) {
+            let lenv = decode_varint(data, pos);
+            if (lenv.next < 0) {
+                return Result.Err(varint_error("length of field ${number}", lenv, pos));
             }
+            pos = lenv.next;
+            if (lenv.value < 0 || lenv.value > n - pos) {
+                return Result.Err(
+                    "protobuf: field ${number} at byte ${at} announces ${lenv.value} bytes and ${n - pos} remain"
+                );
+            }
+            let b = data.sub_bytes(pos, pos + lenv.value);
+            pos = pos + lenv.value;
+            fields.push(PbField { number: number, wire: 2, int_val: 0, bytes_val: b });
+        } else if (wire == 1 || wire == 5) {
+            let width = if (wire == 1) { 8 } else { 4 };
+            if (width > n - pos) {
+                return Result.Err(
+                    "protobuf: truncated fixed${width * 8} of field ${number} at byte ${pos}"
+                );
+            }
+            fields.push(
+                PbField {
+                    number: number,
+                    wire: wire,
+                    int_val: read_le(data, pos, width),
+                    bytes_val: b""
+                }
+            );
+            pos = pos + width;
+        } else {
+            return Result.Err("unsupported wire type: " + to_string(wire));
         }
     }
     Result.Ok(fields)

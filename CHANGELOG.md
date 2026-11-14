@@ -4,6 +4,28 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **`ray fmt` ya no borra código tras una cadena interpolada**: `"id-${n}".to_upper() + "!"`
+  quedaba en `"id-${n}"` y `"${x}".len()` en `"${x}"` — a veces el programa seguía compilando y
+  hacía otra cosa. Se conservan la llamada, el índice y el `+` que siguen a la cadena.
+- **Convertir a `dyn` el resultado de una llamada, un campo o un índice funciona**:
+  `let s: dyn Shape = square(2)` daba un error interno, y con un campo (`let s: dyn Shape = b.sq`)
+  el programa corría con un valor equivocado. También en binarios nativos.
+- **`for` sobre un iterador propio cuyo `impl` lleva bounds** (`impl<V: Ord> Iterator<V> for …`):
+  daba un error interno en `ray run` y no compilaba en nativo.
+- **`print` usa el `impl Show` del tipo**: imprimía la forma por defecto (`Plain { n: 1 }`) aunque
+  `to_string` y `"${x}"` usaran `show`; también dentro de arreglos, `Option` y `Result`. Y
+  `to_string(p)` y `"${p}"` aceptan un `p: P` con `P: Show` en código genérico.
+- **`std/protobuf`: `parse` nunca aborta el programa**: una entrada cortada o malformada (varint
+  truncado o de más de 10 octetos, un valor que pasa del final, el campo 0) es siempre un `Err`
+  que dice el byte, igual en `ray run` y en nativo. Antes un mensaje de la red podía tumbar un
+  servidor, y un campo cortado se aceptaba con menos bytes.
+- **Aviso cuando una dependencia queda fuera del rango que pide otro paquete**: si `db` pide
+  `net = "^0.13.0"` y el proyecto `net = "^0.15.0"`, se usa 0.15 —hay una versión por paquete— y
+  ahora `ray` lo dice en vez de «dependencies up to date». La referencia explica los rangos
+  (`^0.13` excluye 0.15) y cómo se resuelve un conflicto.
+
 ## 1.27.98 — 2026-11-14
 
 - **La VM es más rápida en bucles, structs y `match` (M454)**. La aritmética sobre variables

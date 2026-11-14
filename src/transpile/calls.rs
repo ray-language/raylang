@@ -1252,6 +1252,17 @@ impl Transpiler {
         if name == "[]#show" {
             let eff: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
             let Some(first) = eff.first() else { return Err("[]#show without a receiver".to_string()) };
+            // #359: con el diccionario `Show` del elemento a mano (lo añade el checker) se usa ÉL:
+            // el `ray_show` del Vec es la forma por defecto e ignoraba un `impl Show` del usuario
+            // (`[Plain { n: 4 }]` donde la VM da `[P4]`).
+            if let Some(dict) = eff.get(1) {
+                out.push_str("{ let __rt_sd = ");
+                self.emit_expr(out, dict)?;
+                out.push_str("; let __rt_sv = ");
+                self.emit_expr(out, first)?;
+                out.push_str(".clone(); let __rt_sp: Vec<String> = __rt_sv.borrow().iter().map(|__e| __rt_sd(__e.clone()).to_string()).collect(); Rc::<str>::from(format!(\"[{}]\", __rt_sp.join(\", \"))) }");
+                return Ok(());
+            }
             out.push_str("Rc::<str>::from(");
             self.emit_expr(out, first)?;
             out.push_str(".ray_show())");

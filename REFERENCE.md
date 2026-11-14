@@ -457,7 +457,7 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 | `std/qr` | **códigos QR** (M347; el alta de TOTP): `encode(text)` / `encode_level(text, "L"\|"M"\|"Q"\|"H") -> Result<Code, string>` (`Code { size, modules: [bool] }`; `Err` si no cabe o el build va `--without qr`) · `dark(code, x, y) -> bool` · `to_text(code) -> string` (medios bloques Unicode, para la terminal) · `to_svg(code, module_px, margin_modules) -> string` · `to_png(code, module_px, margin_modules) -> Result<bytes, string>` (vía `std/image`). La matriz la calcula el runtime (crate `qrcode`); el render es raylang y da lo mismo en VM y nativo |
 | `std/image` | **imágenes**: `decode_png(data: bytes) -> Result<Image, string>` con `Image { width, height, pixels: bytes }` — la salida SIEMPRE es **RGBA8** (4 octetos/píxel, filas de arriba a abajo), venga lo que venga en el PNG. Soporta tipos de color 0/2/3/4/6 y profundidades 1/2/4/8/16 (16 bits → octeto alto), paleta + `tRNS` (alfa de paleta y color-key de 0/2 en 8/16), filtros None/Sub/Up/Average/Paeth, CRC verificado por chunk y tope anti-bomba en el zlib (vía `std/inflate`). Entrelazado (Adam7) → `Err` claro (diferido). Input corrupto/truncado = `Err`, nunca un crash. **Codificar**: `encode_png(img: Image) -> Result<bytes, string>` — escribe el `Image` RGBA8 como PNG (tipo de color 6, 8 bits, sin entrelazado, filtro None, zlib de `std/deflate`); `decode_png(encode_png(img))` devuelve los mismos píxeles; `Err` si `pixels.len() != width * height * 4` o las dimensiones no son positivas. Con `term.draw_png` o `fs.write_file_bytes` cierra el ciclo: generar sprites/capturas desde raylang sin herramientas externas |
 | `std/huffman` | `huffman_encode huffman_decode`: solo el código Huffman **estático de HPACK** (RFC 7541, cabeceras HTTP/2) sobre `[int]` — no sirve para DEFLATE |
-| `std/protobuf` | `PbWriter`: `writer write_varint write_string write_bytes write_fixed64 write_fixed32 finish` · `parse -> Result<[PbField], _>` `get_int get_bytes get_string` · framing gRPC: `grpc_frame grpc_unframe` |
+| `std/protobuf` | `PbWriter`: `writer write_varint write_string write_bytes write_fixed64 write_fixed32 finish` · `parse -> Result<[PbField], _>` (total: una entrada malformada —varint cortado o de más de 10 octetos, valor que pasa del final, campo 0— es siempre `Err` con el byte) `get_int get_bytes get_string` · framing gRPC: `grpc_frame grpc_unframe` |
 | `std/uuid` | `uuid_v4() -> string` · `is_uuid_v4` · `uuid_v7()`/`uuid_v7_at(ms)` (RFC 9562, ordenables por tiempo) · `is_uuid_v7` |
 | `std/ffi` | `errno() -> int`: el `errno` del hilo — el motivo del último fallo de una extern C estilo POSIX (`fopen`/`unlink`…). **Leerlo inmediatamente** tras la llamada, sin E/S en medio (§13). En wasm: 0 · `buffer(n) -> bytes`: n octetos a cero, el búfer de salida de una extern (§13) |
 
@@ -471,6 +471,15 @@ a la raíz) o `geo = "git+https://host/geo@v1.0"`; sin tablas inline— y se imp
 con tokens y tema claro/oscuro; `ray add elements` + `import elements/bridge;` sirve
 `@raylang/elements` a la página por su nombre npm, sin npm, y da a los componentes diálogos,
 confirmaciones y menús nativos; envoltorios `@raylang/react` y `@raylang/vue`).
+
+**Rangos de versión y conflictos.** `"1.2.0"` (o `"=1.2.0"`) es exacta; `"^1.2.3"` admite
+`[1.2.3, 2.0.0)` y, por debajo de 1.0, solo el mismo menor: `"^0.13.0"` es `[0.13.0, 0.14.0)` y
+**excluye 0.15**; `"~1.2.3"` admite solo parches (`[1.2.3, 1.3.0)`); `"*"` es la más alta
+publicada. Hay **una versión por paquete** en todo el proyecto (`.ray-deps/<nombre>`): si dos
+solicitantes piden versiones distintas de la misma dependencia, se usa la **más alta pedida**. Si
+esa versión queda fuera del rango de uno de ellos, `ray` lo avisa (`warning: 'net' resolves to
+v0.15.0 …, outside the range '^0.13.0' that db asks for`): ese paquete se compila contra una
+versión que declaró incompatible, y lo que toca es actualizarlo o bajar la otra dependencia.
 
 **Cómo se importa una dependencia (M383).** El primer segmento del `import` es la **clave** de
 `[dependencies]` y lo que sigue, el archivo de módulo en la **raíz del paquete** (no bajo `src/`):

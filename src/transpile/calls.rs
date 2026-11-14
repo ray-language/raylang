@@ -2982,6 +2982,12 @@ impl Transpiler {
                 self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
+            "tls_peer_chain" if name.starts_with("__") && !self.exclude.contains("tls") => {
+                self.needs_rt_tls = true;
+                out.push_str("__ray_tls_peer_chain(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             "tls_accept" if name.starts_with("__") && !self.exclude.contains("tls") => {
                 self.needs_rt_tls = true;
                 out.push_str("__ray_tls_accept(");

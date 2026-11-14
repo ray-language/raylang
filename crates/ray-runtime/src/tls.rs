@@ -78,6 +78,24 @@ mod imp {
         /// 10 s): con fibras, WouldBlock aparca la fibra (`wait_ready`); sin fibras el socket es
         /// bloqueante y `complete_io` simplemente bloquea.
         pub fn peer_cert_summary(&mut self) -> Result<crate::x509::CertSummary, String> {
+            self.finish_handshake()?;
+            let der = self.peer_cert_der().ok_or_else(|| "the peer presented no certificate".to_string())?;
+            crate::x509::cert_summary(&der)
+        }
+
+        /// raycert #379: la cadena que presentó el peer, en DER y con la hoja primero
+        /// (`net.tls_peer_chain`). Conduce el handshake pendiente como `peer_cert_summary`.
+        pub fn peer_chain_der(&mut self) -> Result<Vec<Vec<u8>>, String> {
+            self.finish_handshake()?;
+            let chain = match self {
+                TlsStream::Client(s) => s.conn.peer_certificates().map(|c| c.iter().map(|d| d.to_vec()).collect::<Vec<_>>()),
+                TlsStream::Server(s) => s.conn.peer_certificates().map(|c| c.iter().map(|d| d.to_vec()).collect::<Vec<_>>()),
+            };
+            chain.filter(|c| !c.is_empty()).ok_or_else(|| "the peer presented no certificate".to_string())
+        }
+
+        /// Conduce el handshake si sigue pendiente (acotado a 10 s).
+        fn finish_handshake(&mut self) -> Result<(), String> {
             #[cfg(feature = "fibers")]
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             while self.is_handshaking() {
@@ -99,8 +117,7 @@ mod imp {
                     Err(e) => return Err(e.to_string()),
                 }
             }
-            let der = self.peer_cert_der().ok_or_else(|| "the peer presented no certificate".to_string())?;
-            crate::x509::cert_summary(&der)
+            Ok(())
         }
 
         /// Lee hasta `buf.len()` octetos de texto plano (descifra; conduce el handshake si hace falta).
@@ -480,6 +497,9 @@ mod stub {
             match self.0 {}
         }
         pub fn peer_cert_summary(&mut self) -> Result<crate::x509::CertSummary, String> {
+            match self.0 {}
+        }
+        pub fn peer_chain_der(&mut self) -> Result<Vec<Vec<u8>>, String> {
             match self.0 {}
         }
         pub fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {

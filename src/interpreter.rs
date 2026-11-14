@@ -2832,6 +2832,16 @@ impl<'a> Interpreter<'a> {
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             // M124: el resumen del certificado del peer TLS → ["ok", subject, issuer, nb, na, san...].
+            "__tls_peer_chain" => {
+                let elems = match &values[0] {
+                    Value::Int(h) => match crate::builtins::tls_peer_chain(*h) {
+                        Ok(chain) => std::iter::once(Value::Bytes(Rc::new(b"ok".to_vec()))).chain(chain.into_iter().map(|d| Value::Bytes(Rc::new(d)))).collect(),
+                        Err(e) => vec![Value::Bytes(Rc::new(b"err".to_vec())), Value::Bytes(Rc::new(e.into_bytes()))],
+                    },
+                    _ => unreachable!("the checker guarantees an int"),
+                };
+                Value::Array(Rc::new(RefCell::new(elems)))
+            }
             "__tls_peer_cert" => {
                 let arr = match &values[0] {
                     Value::Int(h) => match crate::builtins::tls_peer_cert(*h) {

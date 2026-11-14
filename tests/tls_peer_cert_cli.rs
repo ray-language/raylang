@@ -71,6 +71,11 @@ fn main() -> int {
             return 1;
         },
     };
+    // raycert #379: la cadena en DER (la hoja primero); conduce el handshake como tls_peer_cert.
+    match (net.tls_peer_chain(h)) {
+        Result.Ok(chain) => print("chain ${chain.len()} ${chain[0].len()} ${chain[0][0]}"),
+        Result.Err(e) => print("chain err: " + e),
+    }
     match (net.tls_peer_cert(h)) {
         Result.Ok(cert) => {
             print(cert.subject);
@@ -87,7 +92,14 @@ fn main() -> int {
 }
 "#;
 
-const EXPECTED: &[&str] = &["CN=localhost", "CN=raylang-test-ca", "[localhost]", "true", "true"];
+/// La cadena que sirve el servidor de juguete es la del fixture: tantos certificados, y la hoja
+/// con su longitud en DER (una SEQUENCE: primer octeto 0x30 = 48).
+fn expected() -> Vec<String> {
+    let chain: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(CERT_PEM.as_bytes()).collect::<Result<_, _>>().unwrap();
+    let mut lines = vec![format!("chain {} {} 48", chain.len(), chain[0].len())];
+    lines.extend(["CN=localhost", "CN=raylang-test-ca", "[localhost]", "true", "true"].map(String::from));
+    lines
+}
 
 fn run_client(flags: &[&str], port: u16) -> Vec<String> {
     let mut path = std::env::temp_dir();
@@ -113,13 +125,13 @@ fn run_client(flags: &[&str], port: u16) -> Vec<String> {
 #[test]
 fn tls_peer_cert_interpreter() {
     let port = launch_tls_server();
-    assert_eq!(run_client(&[], port), EXPECTED);
+    assert_eq!(run_client(&[], port), expected());
 }
 
 #[test]
 fn tls_peer_cert_vm() {
     let port = launch_tls_server();
-    assert_eq!(run_client(&["--vm"], port), EXPECTED);
+    assert_eq!(run_client(&["--vm"], port), expected());
 }
 
 /// El binario NATIVO (sabor default): mismo cliente, misma salida byte a byte (el parseo X.509 es
@@ -151,5 +163,5 @@ fn tls_peer_cert_native() {
         String::from_utf8_lossy(&out.stderr)
     );
     let lines: Vec<String> = String::from_utf8_lossy(&out.stdout).lines().map(|l| l.to_string()).collect();
-    assert_eq!(lines, EXPECTED, "el nativo diverge en tls_peer_cert");
+    assert_eq!(lines, expected(), "el nativo diverge en tls_peer_cert");
 }

@@ -1827,6 +1827,14 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "                v.extend(s.san.into_iter().map(Rc::<str>::from)); Rc::new(std::cell::RefCell::new(v)) }\n",
             "            Err(e) => __ray_tls_tag_err(e) }\n",
             "        None => __ray_tls_tag_err(format!(\"handle {} is not a TLS connection\", h)) } }\n",
+            // raycert #379: la cadena del peer en DER → [b\"ok\", der…] / [b\"err\", msg].
+            "fn __ray_tls_peer_chain(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
+            "    let r = match __ray_tls_get(h) {\n",
+            "        Some(t) => t.lock().unwrap().peer_chain_der(),\n",
+            "        None => Err(format!(\"handle {} is not a TLS connection\", h)) };\n",
+            "    Rc::new(std::cell::RefCell::new(match r {\n",
+            "        Ok(chain) => std::iter::once(Rc::<[u8]>::from(&b\"ok\"[..])).chain(chain.into_iter().map(Rc::<[u8]>::from)).collect(),\n",
+            "        Err(e) => vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(e.into_bytes())] })) }\n",
         ));
     }
     // Helpers de SQLite (P2.b Paso 2), solo si el programa usa SQLite. Los primitivos devuelven arreglos

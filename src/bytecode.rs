@@ -884,6 +884,9 @@ pub enum OpCode {
     SocketShutdownWrite,
     /// M124: el resumen del certificado del peer de una conexión TLS.
     TlsPeerCert,
+    /// raycert #379: `__tls_peer_chain(h)` → `[b"ok", der…]` / `[b"err", msg]` (la cadena del
+    /// peer en DER, la hoja primero).
+    TlsPeerChain,
     /// Saca `port` (int) y `host` (string); abre una conexión **TLS** (rustls) y empuja un `[string]`
     /// etiquetado. Primitivo `__tls_connect` (M19.4a); el prelude → `Result<int,string>`. El handle se
     /// lee/escribe con los mismos `socket_*` (desvían a TLS) y se cierra con `close`.

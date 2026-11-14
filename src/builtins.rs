@@ -3225,6 +3225,14 @@ pub fn take_pending_tls_host(wh: i64) -> Option<String> {
 /// no bloqueante → WouldBlock espera readiness con el poller; en el intérprete bloquea.
 #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
 pub fn tls_peer_cert(h: i64) -> Result<ray_runtime::x509::CertSummary, String> {
+    ray_runtime::x509::cert_summary(&tls_peer_chain(h)?[0])
+}
+
+/// raycert #379: la cadena que presentó el peer, en DER y con la hoja primero
+/// (`net.tls_peer_chain`): huellas, clave, extensiones e intermedios quedan al alcance del
+/// programa. Conduce el handshake pendiente como `tls_peer_cert`. Nunca devuelve una cadena vacía.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn tls_peer_chain(h: i64) -> Result<Vec<Vec<u8>>, String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut reg = registry().lock().unwrap();
     match reg.open.get_mut(&h) {
@@ -3264,13 +3272,11 @@ pub fn tls_peer_cert(h: i64) -> Result<ray_runtime::x509::CertSummary, String> {
                     Err(e) => return Err(tls_io_err(&e, true)),
                 }
             }
-            let der = tc
-                .conn
+            tc.conn
                 .peer_certificates()
-                .and_then(|c| c.first())
-                .map(|c| c.to_vec())
-                .ok_or_else(|| "the peer presented no certificate".to_string())?;
-            ray_runtime::x509::cert_summary(&der)
+                .map(|c| c.iter().map(|d| d.to_vec()).collect::<Vec<_>>())
+                .filter(|c| !c.is_empty())
+                .ok_or_else(|| "the peer presented no certificate".to_string())
         }
         Some(_) => Err(format!("handle {} is not a TLS connection", h)),
         None => Err(format!("invalid handle: {}", h)),
@@ -3291,6 +3297,10 @@ pub struct CertSummary {
 
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
 pub fn tls_peer_cert(_h: i64) -> Result<CertSummary, String> {
+    Err(NET_TLS_UNAVAILABLE.to_string())
+}
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn tls_peer_chain(_h: i64) -> Result<Vec<Vec<u8>>, String> {
     Err(NET_TLS_UNAVAILABLE.to_string())
 }
 
@@ -6280,6 +6290,12 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 1, "__peer_addr", " (handle)")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__peer_addr expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // __tls_peer_chain(h) -> [bytes] (raycert #379): [b"ok", der_hoja, der_intermedio…] o [b"err", msg].
+    Builtin { name: "__tls_peer_chain", opcode: OpCode::TlsPeerChain, check: |a| {
+        arity(a, 1, "__tls_peer_chain", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__tls_peer_chain expects an int (the handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     // __tls_peer_cert(h) -> [string] (M124): ["ok", subject, issuer, not_before_ms, not_after_ms,
     // san...] o ["err", msg]. std/net lo envuelve en el struct PeerCert (patrón stat M115.3).

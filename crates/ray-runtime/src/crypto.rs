@@ -86,9 +86,49 @@ pub fn hmac(_alg: &str, _key: &[u8], _msg: &[u8]) -> Option<Vec<u8>> { None }
 #[cfg(feature = "crypto")]
 pub fn ed25519_public_key(seed: &[u8]) -> Option<Vec<u8>> {
     use ring::signature::KeyPair;
-    ring::signature::Ed25519KeyPair::from_seed_unchecked(seed)
+    ring::signature::Ed25519KeyPair::from_seed_unchecked(ed25519_seed(seed)?)
         .ok()
         .map(|kp| kp.public_key().as_ref().to_vec())
+}
+
+/// El sobre PKCS#8 de una clave Ed25519 (RFC 8410) hasta la semilla: `SEQUENCE { version,
+/// AlgorithmIdentifier { 1.3.101.112 }, OCTET STRING { OCTET STRING(32) } }`. El octeto 1 es la
+/// longitud total y el 4 la versión (0 = lo que escribe `openssl genpkey`; 1 = con la pública
+/// detrás, lo que escribe ring).
+#[cfg(feature = "crypto")]
+const ED25519_PKCS8_PREFIX: [u8; 16] = [0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20];
+
+/// raycert #381: la semilla de 32 octetos de una clave Ed25519 dada como semilla o como PKCS#8
+/// (v1 de 48 octetos o v2 con la pública), para que las tres familias de clave se lean igual de
+/// un PEM `PRIVATE KEY`. `None` si no es ninguna de las dos.
+#[cfg(feature = "crypto")]
+pub fn ed25519_seed(key: &[u8]) -> Option<&[u8]> {
+    if key.len() == 32 {
+        return Some(key);
+    }
+    let p = &ED25519_PKCS8_PREFIX;
+    let envelope = key.len() >= 48
+        && key[0] == p[0]
+        && usize::from(key[1]) == key.len() - 2
+        && key[2..4] == p[2..4]
+        && key[4] <= 1
+        && key[5..16] == p[5..16]
+        && (key.len() == 48 || key[4] == 1);
+    if !envelope {
+        return None;
+    }
+    // La clave completa pasa por ring (comprueba la pública de un v2 contra la semilla).
+    ring::signature::Ed25519KeyPair::from_pkcs8_maybe_unchecked(key).ok()?;
+    Some(&key[16..48])
+}
+
+/// raycert #381: el PKCS#8 v1 (48 octetos, el de `openssl genpkey -algorithm ed25519`) de una
+/// semilla de 32.
+#[cfg(feature = "crypto")]
+fn ed25519_pkcs8(seed: &[u8]) -> Vec<u8> {
+    let mut der = ED25519_PKCS8_PREFIX.to_vec();
+    der.extend_from_slice(seed);
+    der
 }
 #[cfg(not(feature = "crypto"))]
 pub fn ed25519_public_key(_seed: &[u8]) -> Option<Vec<u8>> { None }
@@ -97,7 +137,7 @@ pub fn ed25519_public_key(_seed: &[u8]) -> Option<Vec<u8>> { None }
 /// **determinista** (RFC 8032: el nonce se deriva por hash) → misma entrada, misma firma → el oráculo vale.
 #[cfg(feature = "crypto")]
 pub fn ed25519_sign(seed: &[u8], msg: &[u8]) -> Option<Vec<u8>> {
-    ring::signature::Ed25519KeyPair::from_seed_unchecked(seed)
+    ring::signature::Ed25519KeyPair::from_seed_unchecked(ed25519_seed(seed)?)
         .ok()
         .map(|kp| kp.sign(msg).as_ref().to_vec())
 }
@@ -402,6 +442,41 @@ pub fn pk_op(op: &str, a: &[u8], b: &[u8], c: &[u8]) -> Result<Vec<u8>, String> 
         }
         "rsa_pkcs1_verify" => verdict(signature::UnparsedPublicKey::new(&signature::RSA_PKCS1_2048_8192_SHA256, a).verify(b, c).is_ok()),
         "rsa_pss_verify" => verdict(signature::UnparsedPublicKey::new(&signature::RSA_PSS_2048_8192_SHA256, a).verify(b, c).is_ok()),
+        // raycert #380: las cadenas X.509 reales firman con P-384 y con SHA-384/512. La
+        // operación lleva el algoritmo: `ecdsa_verify/<curva>` (firma fija r||s, el hash de la
+        // curva: ES256/ES384), `ecdsa_verify_asn1/<curva>/<hash>` (DER, lo de un certificado) y
+        // `rsa_pkcs1_verify/<hash>`, `rsa_pss_verify/<hash>`. Un nombre desconocido es `Err`.
+        _ if op.starts_with("ecdsa_verify") || op.starts_with("rsa_pkcs1_verify/") || op.starts_with("rsa_pss_verify/") => {
+            let alg: &dyn signature::VerificationAlgorithm = match op {
+                "ecdsa_verify/p256" => &signature::ECDSA_P256_SHA256_FIXED,
+                "ecdsa_verify/p384" => &signature::ECDSA_P384_SHA384_FIXED,
+                "ecdsa_verify_asn1/p256/sha256" => &signature::ECDSA_P256_SHA256_ASN1,
+                "ecdsa_verify_asn1/p256/sha384" => &signature::ECDSA_P256_SHA384_ASN1,
+                "ecdsa_verify_asn1/p384/sha256" => &signature::ECDSA_P384_SHA256_ASN1,
+                "ecdsa_verify_asn1/p384/sha384" => &signature::ECDSA_P384_SHA384_ASN1,
+                "rsa_pkcs1_verify/sha256" => &signature::RSA_PKCS1_2048_8192_SHA256,
+                "rsa_pkcs1_verify/sha384" => &signature::RSA_PKCS1_2048_8192_SHA384,
+                "rsa_pkcs1_verify/sha512" => &signature::RSA_PKCS1_2048_8192_SHA512,
+                "rsa_pss_verify/sha256" => &signature::RSA_PSS_2048_8192_SHA256,
+                "rsa_pss_verify/sha384" => &signature::RSA_PSS_2048_8192_SHA384,
+                "rsa_pss_verify/sha512" => &signature::RSA_PSS_2048_8192_SHA512,
+                _ => return Err(format!("unsupported signature algorithm '{op}' (curves p256/p384, hashes sha256/sha384/sha512)")),
+            };
+            verdict(signature::UnparsedPublicKey::new(alg, a).verify(b, c).is_ok())
+        }
+        // raycert #381: Ed25519 con el mismo sobre que P-256 y RSA.
+        "ed25519_generate" => {
+            let mut seed = [0u8; 32];
+            ring::rand::SecureRandom::fill(&rng, &mut seed).map_err(|_| "ed25519: key generation failed".to_string())?;
+            Ok(ed25519_pkcs8(&seed))
+        }
+        "ed25519_seed" => ed25519_seed(a).map(<[u8]>::to_vec).ok_or_else(|| "ed25519: not a 32-byte seed or a PKCS#8 Ed25519 key".to_string()),
+        "ed25519_pkcs8" => {
+            if a.len() != 32 {
+                return Err("ed25519: the seed must be 32 bytes".to_string());
+            }
+            Ok(ed25519_pkcs8(a))
+        }
         _ => Err(format!("unknown public-key operation '{op}'")),
     }
 }

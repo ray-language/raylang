@@ -85,36 +85,36 @@ print('WIRE OK')
     assert!(String::from_utf8_lossy(&py.stdout).contains("WIRE OK"));
 }
 
-/// M59.4 — un varint negativo debe PANICAR (antes emitía octetos corruptos en silencio: el
-/// bucle LEB128 no entraba con negativos y salía un solo octeto mal).
+/// raygrpc #389 — un varint negativo son los 10 octetos del int64 en complemento a dos, como
+/// define el formato para `int32`/`int64`. (M59.4 lo dejó en panic y mandaba a `write_fixed64`,
+/// que es otro tipo wire: el receptor lo descartaba como campo desconocido.)
 #[test]
-fn negative_varint_panics_instead_of_corrupting() {
+fn a_negative_varint_is_the_ten_bytes_of_its_int64() {
     let mut dir = std::env::temp_dir();
-    dir.push("ray_pb_negativo");
+    dir.push(format!("ray_pb_negative_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("crea dir");
     let driver = dir.join("main.ray");
     std::fs::write(
         &driver,
         r#"
-from std/protobuf import writer, write_varint;
+import std/protobuf;
 fn main() {
-    let w = writer();
-    w.write_varint(1, 0 - 1);
+    let w = protobuf.writer();
+    protobuf.write_varint(w, 1, 0 - 1);
+    protobuf.write_sint(w, 2, 0 - 3);
+    let b = protobuf.finish(w);
+    print(b);
+    let fs = protobuf.parse(b).unwrap();
+    print(protobuf.get_int(fs, 1));
+    print(protobuf.unzigzag(protobuf.get_int(fs, 2)));
 }
 "#,
     )
     .expect("escribe driver");
-    for flags in [&[][..], &["--vm"][..]] {
-        let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
-            .args(flags)
-            .arg(&driver)
-            .output()
-            .expect("ejecuta driver");
-        assert!(!out.status.success(), "debería fallar (flags {flags:?})");
-        let err = String::from_utf8_lossy(&out.stderr);
-        assert!(
-            err.contains("protobuf: negative varint not supported"),
-            "stderr inesperado (flags {flags:?}): {err}"
-        );
+    for flags in [&["--interp"][..], &["--vm"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_raylang")).args(flags).arg(&driver).output().expect("ejecuta driver");
+        assert!(out.status.success(), "flags {flags:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "08ffffffffffffffffff011005\n-1\n-3\n", "flags {flags:?}");
     }
+    let _ = std::fs::remove_dir_all(&dir);
 }

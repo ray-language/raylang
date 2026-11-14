@@ -66,6 +66,7 @@ const MODULES: &[(&str, &str)] = &[
     ("std/pem", include_str!("../std/pem.ray")), // M347 (rayauth R1)
     ("std/xml", include_str!("../std/xml.ray")), // M353 (rayauth R8)
     ("std/charset", include_str!("../std/charset.ray")), // M446 (ray-sublime #317)
+    ("std/binary", include_str!("../std/binary.ray")), // ray-daw #426
     ("std/locale", include_str!("../std/locale.ray")), // M458 (pepa #418)
     // Revisión FFI jul 2026: helpers de la frontera C (errno).
     ("std/ffi", include_str!("../std/ffi.ray")),

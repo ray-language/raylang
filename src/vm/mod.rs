@@ -3257,6 +3257,16 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Float(f64::from_bits(n as u64)));
                 }
 
+                OpCode::Float32Bits => {
+                    let HeapValue::Float(f) = self.pop() else { unreachable!("the checker guarantees a float") };
+                    self.push(HeapValue::Int((f as f32).to_bits() as i64));
+                }
+                OpCode::Float32FromBits => {
+                    let HeapValue::Int(n) = self.pop() else { unreachable!("the checker guarantees an int") };
+                    self.push(HeapValue::Float(f32::from_bits(n as u32) as f64));
+                }
+                OpCode::SelfPid => self.push(HeapValue::Int(crate::builtins::self_pid())),
+
                 // --- SQLite embebido (M53.3): arreglo etiquetado, como los primitivos de I/O. ---
                 OpCode::SqliteOpen => {
                     let path = self.pop();

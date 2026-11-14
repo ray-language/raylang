@@ -1,0 +1,130 @@
+//! Fixed-width integers and IEEE 754 floats in `bytes`, little- and big-endian: readers
+//! (`u16le(b, at)`, `i24be`, `u32le`, `i64be`, `f32le`, `f64be`…) and writers onto a
+//! `BytesBuilder` (`push_u16le(out, v)`, `push_f32le`…). What a WAV/AIFF file, a network header
+//! or any binary format is made of. A read past the end panics like `b[i]`.
+// std/binary (ray-daw #426): toda app de audio o de formatos binarios reescribía estas
+// funciones octeto a octeto, y el binary32 a mano con su redondeo y sus subnormales.
+import std/math;
+import std/collections/bytesbuilder;
+from std/collections/bytesbuilder import BytesBuilder;
+
+/// The unsigned 16-bit integer at `at`, little-endian.
+pub fn u16le(b: bytes, at: int) -> int { b[at] | b[at + 1] << 8 }
+
+/// The unsigned 16-bit integer at `at`, big-endian.
+pub fn u16be(b: bytes, at: int) -> int { b[at] << 8 | b[at + 1] }
+
+/// The unsigned 24-bit integer at `at`, little-endian.
+pub fn u24le(b: bytes, at: int) -> int { b[at] | b[at + 1] << 8 | b[at + 2] << 16 }
+
+/// The unsigned 24-bit integer at `at`, big-endian.
+pub fn u24be(b: bytes, at: int) -> int { b[at] << 16 | b[at + 1] << 8 | b[at + 2] }
+
+/// The unsigned 32-bit integer at `at`, little-endian.
+pub fn u32le(b: bytes, at: int) -> int { b[at] | b[at + 1] << 8 | b[at + 2] << 16 | b[at + 3] << 24 }
+
+/// The unsigned 32-bit integer at `at`, big-endian.
+pub fn u32be(b: bytes, at: int) -> int { b[at] << 24 | b[at + 1] << 16 | b[at + 2] << 8 | b[at + 3] }
+
+// El valor con signo de los `bits` bajos de `n` (complemento a dos).
+fn signed(n: int, bits: int) -> int {
+    if (n >= 1 << bits - 1) { n - (1 << bits) } else { n }
+}
+
+/// The signed 16-bit integer at `at`, little-endian (a `s16le` audio sample).
+pub fn i16le(b: bytes, at: int) -> int { signed(u16le(b, at), 16) }
+
+/// The signed 16-bit integer at `at`, big-endian.
+pub fn i16be(b: bytes, at: int) -> int { signed(u16be(b, at), 16) }
+
+/// The signed 24-bit integer at `at`, little-endian.
+pub fn i24le(b: bytes, at: int) -> int { signed(u24le(b, at), 24) }
+
+/// The signed 24-bit integer at `at`, big-endian.
+pub fn i24be(b: bytes, at: int) -> int { signed(u24be(b, at), 24) }
+
+/// The signed 32-bit integer at `at`, little-endian.
+pub fn i32le(b: bytes, at: int) -> int { signed(u32le(b, at), 32) }
+
+/// The signed 32-bit integer at `at`, big-endian.
+pub fn i32be(b: bytes, at: int) -> int { signed(u32be(b, at), 32) }
+
+/// The 64-bit integer at `at`, little-endian (`int` is 64-bit two's complement: an unsigned
+/// value ≥ 2^63 reads as negative).
+pub fn i64le(b: bytes, at: int) -> int { u32le(b, at) | u32le(b, at + 4) << 32 }
+
+/// The 64-bit integer at `at`, big-endian.
+pub fn i64be(b: bytes, at: int) -> int { u32be(b, at) << 32 | u32be(b, at + 4) }
+
+/// The single-precision float at `at`, little-endian (a `f32le` audio sample).
+pub fn f32le(b: bytes, at: int) -> float { math.float32_from_bits(u32le(b, at)) }
+
+/// The single-precision float at `at`, big-endian.
+pub fn f32be(b: bytes, at: int) -> float { math.float32_from_bits(u32be(b, at)) }
+
+/// The double-precision float at `at`, little-endian.
+pub fn f64le(b: bytes, at: int) -> float { math.float_from_bits(i64le(b, at)) }
+
+/// The double-precision float at `at`, big-endian.
+pub fn f64be(b: bytes, at: int) -> float { math.float_from_bits(i64be(b, at)) }
+
+/// Appends the low 16 bits of `v`, little-endian (signed or unsigned: the same octets).
+pub fn push_u16le(out: BytesBuilder, v: int) {
+    bytesbuilder.push_byte(out, v);
+    bytesbuilder.push_byte(out, v >> 8);
+}
+
+/// Appends the low 16 bits of `v`, big-endian.
+pub fn push_u16be(out: BytesBuilder, v: int) {
+    bytesbuilder.push_byte(out, v >> 8);
+    bytesbuilder.push_byte(out, v);
+}
+
+/// Appends the low 24 bits of `v`, little-endian.
+pub fn push_u24le(out: BytesBuilder, v: int) {
+    push_u16le(out, v);
+    bytesbuilder.push_byte(out, v >> 16);
+}
+
+/// Appends the low 24 bits of `v`, big-endian.
+pub fn push_u24be(out: BytesBuilder, v: int) {
+    bytesbuilder.push_byte(out, v >> 16);
+    push_u16be(out, v);
+}
+
+/// Appends the low 32 bits of `v`, little-endian.
+pub fn push_u32le(out: BytesBuilder, v: int) {
+    push_u16le(out, v);
+    push_u16le(out, v >> 16);
+}
+
+/// Appends the low 32 bits of `v`, big-endian.
+pub fn push_u32be(out: BytesBuilder, v: int) {
+    push_u16be(out, v >> 16);
+    push_u16be(out, v);
+}
+
+/// Appends the 64 bits of `v`, little-endian.
+pub fn push_i64le(out: BytesBuilder, v: int) {
+    push_u32le(out, v);
+    push_u32le(out, v >> 32);
+}
+
+/// Appends the 64 bits of `v`, big-endian.
+pub fn push_i64be(out: BytesBuilder, v: int) {
+    push_u32be(out, v >> 32);
+    push_u32be(out, v);
+}
+
+/// Appends `f` as a single-precision float, little-endian (rounded to the nearest `float32`):
+/// one `f32le` sample for `audio.open_format(…, "f32le", …)`.
+pub fn push_f32le(out: BytesBuilder, f: float) { push_u32le(out, math.float32_bits(f)) }
+
+/// Appends `f` as a single-precision float, big-endian.
+pub fn push_f32be(out: BytesBuilder, f: float) { push_u32be(out, math.float32_bits(f)) }
+
+/// Appends `f` as a double-precision float, little-endian.
+pub fn push_f64le(out: BytesBuilder, f: float) { push_i64le(out, math.float_bits(f)) }
+
+/// Appends `f` as a double-precision float, big-endian.
+pub fn push_f64be(out: BytesBuilder, f: float) { push_i64be(out, math.float_bits(f)) }

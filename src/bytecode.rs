@@ -39,6 +39,11 @@ pub enum FsOp {
     ReadLink,
     /// rayzip #194: fija la fecha de modificación (`fs.set_mtime(path, ms)`; el ms viaja como texto).
     SetMtime,
+    /// raycert #382: crea (o trunca) un archivo con sus bits de permiso (`fs.write_file_mode`;
+    /// el modo viaja como texto).
+    CreateMode,
+    /// raycert #382: `mkdir -p` con los bits de permiso de lo que crea (`fs.mkdir_mode`).
+    MkdirMode,
 }
 
 impl FsOp {
@@ -46,7 +51,7 @@ impl FsOp {
     pub fn argc(self) -> usize {
         match self {
             FsOp::Mkdir | FsOp::RemoveDir | FsOp::FileSize | FsOp::Mtime | FsOp::Stat | FsOp::RemoveAll | FsOp::MakeTempDir | FsOp::RealPath | FsOp::ReadLink => 1,
-            FsOp::Rename | FsOp::CopyFile | FsOp::Symlink | FsOp::SetMtime => 2,
+            FsOp::Rename | FsOp::CopyFile | FsOp::Symlink | FsOp::SetMtime | FsOp::CreateMode | FsOp::MkdirMode => 2,
             FsOp::TempDir => 0,
         }
     }
@@ -380,6 +385,13 @@ pub enum OpCode {
     /// complemento). Primitivo `__float_bits`; `std/math` → `float_bits`. Lo pide el `double` de
     /// BSON (y serviría a protobuf).
     FloatBits,
+    /// raygrpc #390 / ray-daw #426: el binary32 de un float. `__float32_bits(f)` → los 32 bits
+    /// (0..2^32) del `f` redondeado a precisión simple; `__float32_from_bits(n)` → el float que
+    /// esos 32 bits (los bajos de `n`) representan.
+    Float32Bits,
+    Float32FromBits,
+    /// ray-sublime #397: `__self_pid()` → el pid del proceso en curso.
+    SelfPid,
     /// raysql #299: `__format_float(f, mode, precision)` → string.
     FormatFloat,
     /// rayblob #282: `__md5(bytes)` → bytes (16).

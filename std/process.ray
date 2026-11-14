@@ -59,6 +59,10 @@ pub struct Cmd {
 /// (since 1.27.66). `cmd(c[0], c.sub(1)).spawn_detached()` relaunches.
 pub fn self_command() -> [string] { __self_command() }
 
+/// The process id of the running program (`getpid`): what a lock file or a log line carries so
+/// that others can tell a live process from one that died. Total.
+pub fn self_pid() -> int { __self_pid() }
+
 /// How this program was launched: `"native"` (a binary or bundled app), `"run"` (`ray run` /
 /// `ray dev`), `"test"` (a `@test` under `ray test`; the environment also carries `RAY_TEST=1`,
 /// inherited by the processes the suite spawns). Derived from `self_command`, which is the

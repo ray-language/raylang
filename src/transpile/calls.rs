@@ -3514,6 +3514,11 @@ impl Transpiler {
                 }
                 out.push(')');
             }
+            // M458 (pepa #418): la misma fuente que la VM, pegada como módulo (`__ray_locale`).
+            "preferred_languages" if name.starts_with("__") => {
+                self.needs_locale = true;
+                out.push_str("Rc::new(std::cell::RefCell::new(__ray_locale::preferred_languages().into_iter().map(Rc::<str>::from).collect::<Vec<Rc<str>>>()))");
+            }
             "self_command" if name.starts_with("__") => {
                 // Nativo/bundle: el propio ejecutable. (Bajo `ray run` es la VM quien responde.)
                 // raymcp #217: el binario de `ray test --native` añade "test", como `ray test`.

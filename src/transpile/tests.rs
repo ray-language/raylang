@@ -77,6 +77,8 @@ const NATIVE_TRACKED_BUILTINS: &[&str] = &[
     "__proc_pid", "__proc_hangup",
     // M246: lanzamiento desacoplado y relanzamiento.
     "__proc_spawn_detached", "__self_command",
+    // M458: std/locale.
+    "__preferred_languages",
     // M247: identidad de la app horneada.
     "__app_info",
     // M263: la URL del dev server del frontend (literal vacío en el nativo).

@@ -170,6 +170,8 @@ struct Transpiler {
     needs_format_float: bool,
     /// rayblob #282: emite el módulo MD5 solo si el programa lo usa.
     needs_md5: bool,
+    /// M458 (pepa #418): el programa usa `std/locale` → pega `ray-runtime/src/locale.rs`.
+    pub(super) needs_locale: bool,
     /// ¿Usa TLS (`__tls_connect`/`__tls_connect_h2`/`__tls_accept`/`__tls_upgrade`)? El binario transpilado
     /// hace I/O TLS **bloqueante** (hilos reales; `ray_runtime::tls::TlsStream` sobre `StreamOwned`). Añade
     /// la variante `Tls` al registro de handles inline y el despacho en `socket_read/write`. Implica
@@ -473,6 +475,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         needs_rt_crypto: false,
         needs_format_float: false,
         needs_md5: false,
+        needs_locale: false,
         needs_rt_bigint: false,
         needs_rt_charset: false,
         needs_rt_keychain: false,

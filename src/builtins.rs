@@ -6129,6 +6129,12 @@ static BUILTINS: &[Builtin] = &[
         nullary(a, "__self_command")?;
         Ok(Type::Array(Box::new(Type::String)))
     } },
+    // M458 (pepa #418): __preferred_languages() -> [string]: etiquetas BCP 47 del sistema, por
+    // orden de preferencia (std/locale → preferred_languages).
+    Builtin { name: "__preferred_languages", opcode: OpCode::PreferredLanguages, check: |a| {
+        nullary(a, "__preferred_languages")?;
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
     // __embed_list() -> [string] (M147): ["ok", clave…] (orden lexicográfico) o ["err", msg].
     Builtin { name: "__embed_list", opcode: OpCode::EmbedList, check: |a| {
         nullary(a, "__embed_list")?;

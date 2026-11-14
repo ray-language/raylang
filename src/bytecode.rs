@@ -812,6 +812,8 @@ pub enum OpCode {
     /// M246: `__self_command()` → la línea de comandos que reproduce este programa (la fija la
     /// toolchain: `[ray, "run", entrada]` bajo `ray run`; el nativo emite `[exe]`).
     SelfCommand,
+    /// M458 (pepa #418): `__preferred_languages() -> [string]` (std/locale).
+    PreferredLanguages,
     /// M237: `__proc_resize(h_pty, cols, rows)` (['ok'] / ['err', msg]).
     ProcResize,
     /// M264: `__proc_pid(h)` → el pid del SO del hijo (-1 si ya cosechado).

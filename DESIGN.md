@@ -20252,3 +20252,49 @@ diagnósticos que señalaban a ninguna parte.
   checker valida la clave en la anotación y deja pasar un parámetro de tipo sin comprobar con
   qué se instancia. El arreglo es una restricción implícita que se propague por las llamadas
   genéricas (y su cota de Rust en nativo): diseño propio, no un parche de esta ronda.
+
+## 434. M458 — lo que la tienda exige al shell de iOS (nov 2026)
+
+Hallazgos de pepa (#412–#418) al preparar su subida al App Store: el proyecto que genera
+`ray bundle --ios` compilaba y corría, pero no pasaba la validación sin un guion propio que
+lo retocara después (`scripts/ios-store.ray`). Todo lo que ese guion hacía pasa al bundle.
+
+- **Número de compilación (#412).** `CFBundleVersion` era `1` fijo. Ahora es
+  `$(CURRENT_PROJECT_VERSION)` y el valor vive en `App.xcconfig`, que es donde el README manda
+  afinar: se cambia sin regenerar el proyecto. Sale de `--build N` o de `[app] build`, y es
+  también el `versionCode` de Android.
+- **`[app.plist]` sustituye (#415).** Las claves extra se añadían al final, y una que el shell
+  ya escribía quedaba dos veces: un diccionario ambiguo. `plist_with` sustituye las entradas de
+  UNA línea del shell y añade el resto; las de varias líneas (`UIApplicationSceneManifest`,
+  ATS) son estructura del shell y no se pisan desde `ray.toml`. Lo que el propio bundle genera
+  (orientaciones, idiomas) entra por la misma función ANTES que `[app.plist]`, así que el
+  usuario siempre manda.
+- **Dispositivos y orientaciones (#414).** `[ios] devices` → `TARGETED_DEVICE_FAMILY`.
+  El shell no declaraba orientaciones, y una app de iPad con multitarea debe declarar las
+  cuatro o pedir pantalla completa. Los valores por defecto son los de la plantilla de Xcode
+  (iPhone: vertical y dos apaisados; iPad: las cuatro); con `[ios] orientations`, un iPad con
+  menos de cuatro lleva `UIRequiresFullScreen`. Es un cambio de lo que el plist declara para
+  las apps existentes, y va dicho en el CHANGELOG.
+- **Manifiesto de privacidad (#413).** El runtime usa `stat`/`fstat`, una «required reason
+  API» que la app no controla; el bundle genera el `PrivacyInfo.xcprivacy` que lo declara
+  (C617.1, sin rastreo ni datos). `[ios] privacy_manifest` lo SUSTITUYE entero: fundir dos
+  manifiestos exigiría entender el del usuario, y quien recoge datos ya escribe el suyo.
+- **Idiomas (#417).** `[app.plist.<idioma>]` → `<idioma>.lproj/InfoPlist.strings`, añadido al
+  proyecto como referencia de CARPETA: se copia tal cual a la raíz del bundle, que es donde
+  iOS lo busca, sin grupos de variantes en el pbxproj. Verificado con `xcodebuild` para el
+  simulador: el `.app` lleva las dos carpetas y `CFBundleLocalizations`.
+- **Icono sin alfa (#416).** App Store Connect rechaza un icono de 1024 con canal alfa aunque
+  sea opaco. El bundle lo detecta (`sips -g hasAlpha`) y lo aplana con un programa raylang
+  embebido que corre en la VM (como `ray release`): `image.decode_png` +
+  `image.encode_png_rgb`, nueva, que escribe el tipo de color 2. Sin dependencias nuevas, y la
+  función sirve a cualquier programa.
+- **`std/locale` (#418).** `preferred_languages()` da etiquetas BCP 47 por orden de
+  preferencia. La implementación es UN archivo (`ray-runtime/src/locale.rs`) que usa la VM y
+  que el transpilador pega en el binario nativo, como `float_fmt.rs`: funciona también en el
+  `rustc` pelado. macOS/iOS por `CFLocaleCopyPreferredLanguages`; Android por la propiedad del
+  sistema (sin JNI: no ve el idioma por app de Android 13); Windows por
+  `GetUserPreferredUILanguages`; el resto por las variables de gettext. `RAY_LANGUAGES` manda
+  en todas partes, para pruebas. Módulo propio y no `std/ui`: lo necesita también un programa
+  de terminal, y pepa lo quiere justo cuando no hay página.
+- **Medido.** macOS da `es-CL`; el simulador de iOS 26.5, `es-CL,en-CL`. Android y Windows
+  compilan y enlazan; su valor en un dispositivo real queda por medir.

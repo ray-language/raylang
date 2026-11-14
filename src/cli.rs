@@ -4846,6 +4846,7 @@ const RT_B64_RS: &str = include_str!("../crates/ray-runtime/src/b64.rs"); // M38
 const RT_KEYCHAIN_RS: &str = include_str!("../crates/ray-runtime/src/keychain.rs"); // M266
 const RT_MD5_RS: &str = include_str!("../crates/ray-runtime/src/md5.rs"); // rayblob #282
 const RT_FLOAT_FMT_RS: &str = include_str!("../crates/ray-runtime/src/float_fmt.rs"); // raysql #299
+const RT_LOCALE_RS: &str = include_str!("../crates/ray-runtime/src/locale.rs"); // M458 (pepa #418)
 const RT_MEDIA_RS: &str = include_str!("../crates/ray-runtime/src/media.rs"); // M403
 const RT_NOTIFY_RS: &str = include_str!("../crates/ray-runtime/src/notify.rs"); // M442
 const RT_ALARM_RS: &str = include_str!("../crates/ray-runtime/src/alarm.rs"); // M448
@@ -4988,6 +4989,7 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
         ("ray-runtime/src/keychain.rs", RT_KEYCHAIN_RS),
         ("ray-runtime/src/md5.rs", RT_MD5_RS),
         ("ray-runtime/src/float_fmt.rs", RT_FLOAT_FMT_RS),
+        ("ray-runtime/src/locale.rs", RT_LOCALE_RS),
         ("ray-runtime/src/media.rs", RT_MEDIA_RS),
         ("ray-runtime/src/notify.rs", RT_NOTIFY_RS),
         ("ray-runtime/src/alarm.rs", RT_ALARM_RS),

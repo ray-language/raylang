@@ -20201,6 +20201,31 @@ izquierdo.
 - **Pendiente.** El receptor de una llamada UFCS no se coacciona a `dyn` (`sq.describe()` con
   `fn describe(s: dyn Shape)` es un error de tipos), y `to_string` sigue sin aceptar un arreglo.
 
+## 432. M456 — `db` 0.8.0: lo que `db/mysql` y `db/mongo` perdían en silencio (nov 2026)
+
+Hallazgos de raycdc (#398–#400, #403; #404 de paso), medidos contra mysqld 8.0.46 y mongod.
+
+- **utf8mb4 (#398).** El `HandshakeResponse41` anunciaba el charset 33 (`utf8mb3`) y el servidor
+  degradaba a `?` todo carácter de 4 octetos. Ahora 45 (`utf8mb4_general_ci`): existe desde
+  MySQL 5.5 y en MariaDB; 255 (`utf8mb4_0900_ai_ci`) solo desde 8.0.
+- **NULL y binarios (#399).** Las dos rutas (texto y preparada) producen ahora
+  `[[Option<bytes>]]`, y sobre eso se montan `query_bytes` (la celda cruda), `query_opt`
+  (`Option<string>`) y `query` (`NULL` → `""`, como siempre). Un valor que no es UTF-8 leído
+  como texto es `Err` con fila y columna: devolver `""` era perder un BLOB sin que nadie se
+  enterase. Es un cambio de comportamiento a propósito y la razón de la versión menor.
+  `exec_opt` enlaza `NULL` por el bitmap de `COM_STMT_EXECUTE`. Mismos nombres y formas que
+  `db/postgres` y `db/sqlite`.
+- **BIGINT UNSIGNED (#400).** `hi * 2^32 + lo` desbordaba el `int` y abortaba el programa; el
+  README decía «se muestra envuelto». `u64_text` compone el decimal por división larga entre
+  10^9 sin pasar de 2^62.
+- **authSource (#403).** `session` recibe la base de autenticación y la de trabajo por
+  separado: el `hello` y el SCRAM van contra la primera, `Conn.db` es la segunda. `connect`
+  sigue usando la misma para las dos (compatibilidad); `connect_auth`/`pool_auth` las separan.
+- **Pruebas.** Los servidores de juguete de `tests/mysql_cli.rs` y `tests/mongo_cli.rs` cubren
+  los casos nuevos (el de MySQL comprueba además el charset del handshake y el bitmap de NULLs).
+- **Fuera de alcance**: #401 (cliente de réplica, RSA-OAEP público) y #402 (Decimal128 y
+  subtipos de BSON) son API nueva y van en su propia ronda.
+
 ## 433. M457 — genéricos en nativo y errores de `@derive` (nov 2026)
 
 Hallazgos de raysolve y raygrpc sobre 1.27.95: lo que la VM aceptaba y el nativo no, y dos

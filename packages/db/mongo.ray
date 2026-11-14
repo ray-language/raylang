@@ -205,7 +205,9 @@ fn check_ok(fields: [bson.Field]) -> Result<int, string> {
 
 // ── Conexión ─────────────────────────────────────────────────────────────────
 /// Connects and authenticates with SCRAM-SHA-256 (`hello`, then `saslStart`/`saslContinue`).
-/// The nonce must be random in production. Authenticates against `database`.
+/// The nonce must be random in production. `database` is BOTH the database the user is defined
+/// in and the one every operation runs on; for a user defined elsewhere (commonly `admin`) use
+/// `connect_auth`.
 pub fn connect(
     host: string,
     port: int,
@@ -214,8 +216,22 @@ pub fn connect(
     database: string,
     nonce: string
 ) -> Result<Conn, string> {
+    connect_auth(host, port, user, password, database, database, nonce)
+}
+
+/// Like `connect`, but authenticates against `auth_db` (the `authSource` of a connection
+/// string: where the user is defined) and operates on `database`. Needs db 0.8.
+pub fn connect_auth(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    auth_db: string,
+    database: string,
+    nonce: string
+) -> Result<Conn, string> {
     let handle = net.tcp_connect(host, port)?;
-    session(handle, user, password, database, nonce)
+    session(handle, user, password, auth_db, database, nonce)
 }
 
 /// Like `connect`, over TLS. MongoDB encrypts from byte zero (no STARTTLS): the socket is a TLS
@@ -229,8 +245,21 @@ pub fn connect_tls(
     database: string,
     nonce: string
 ) -> Result<Conn, string> {
+    connect_tls_auth(host, port, user, password, database, database, nonce)
+}
+
+/// `connect_auth` over TLS. Needs db 0.8.
+pub fn connect_tls_auth(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    auth_db: string,
+    database: string,
+    nonce: string
+) -> Result<Conn, string> {
     let handle = net.tls_connect(host, port)?;
-    session(handle, user, password, database, nonce)
+    session(handle, user, password, auth_db, database, nonce)
 }
 
 // hello + SCRAM sobre un handle ya conectado (plano o TLS: el I/O se desvía por el tipo del handle).
@@ -238,15 +267,17 @@ fn session(
     handle: int,
     user: string,
     password: string,
+    auth_db: string,
     database: string,
     nonce: string
 ) -> Result<Conn, string> {
+    // #403: el `hello` y el SCRAM van contra `auth_db`; el CRUD, contra `database` (`c.db`).
     let c = Conn { handle: handle, buf: b"", req_id: 1, db: database };
 
     // 1. hello: presentación. v1 solo exige ok (sin negociar compresión/versiones).
     let hr = run_command(
         c,
-        [bson.field("hello", bson.Bson.Int(1)), bson.field("$db", bson.Bson.Str(database))]
+        [bson.field("hello", bson.Bson.Int(1)), bson.field("$db", bson.Bson.Str(auth_db))]
     )?;
     if (!is_ok(hr)) {
         close(handle);
@@ -267,7 +298,7 @@ fn session(
             bson.field("saslStart", bson.Bson.Int(1)),
             bson.field("mechanism", bson.Bson.Str("SCRAM-SHA-256")),
             bson.field("payload", bson.Bson.Bin(cf.to_bytes())),
-            bson.field("$db", bson.Bson.Str(database))
+            bson.field("$db", bson.Bson.Str(auth_db))
         ]
     )?;
     if (!is_ok(r1)) {
@@ -297,7 +328,7 @@ fn session(
             bson.field("saslContinue", bson.Bson.Int(1)),
             bson.field("conversationId", bson.Bson.Int32(conv)),
             bson.field("payload", bson.Bson.Bin(final_msg.to_bytes())),
-            bson.field("$db", bson.Bson.Str(database))
+            bson.field("$db", bson.Bson.Str(auth_db))
         ]
     )?;
     // M309: MongoDB 6+ exige el conversationId como int32 (el int64 da "BSON field
@@ -330,7 +361,7 @@ fn session(
                 bson.field("saslContinue", bson.Bson.Int(1)),
                 bson.field("conversationId", bson.Bson.Int32(conv)),
                 bson.field("payload", bson.Bson.Bin(b"")),
-                bson.field("$db", bson.Bson.Str(database))
+                bson.field("$db", bson.Bson.Str(auth_db))
             ]
         )?;
         if (!is_ok(last)) {
@@ -510,6 +541,7 @@ pub struct PoolConfig {
     port: int,
     user: string,
     password: string,
+    auth_db: string,
     database: string,
     tls: bool,
 }
@@ -530,12 +562,27 @@ pub fn pool(
     database: string,
     size: int
 ) -> Pool {
+    pool_auth(host, port, user, password, database, database, size)
+}
+
+/// Like `pool`, authenticating against `auth_db` and operating on `database` (see
+/// `connect_auth`). Needs db 0.8.
+pub fn pool_auth(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    auth_db: string,
+    database: string,
+    size: int
+) -> Pool {
     Pool {
         cfg: PoolConfig {
             host: host,
             port: port,
             user: user,
             password: password,
+            auth_db: auth_db,
             database: database,
             tls: false
         },
@@ -552,12 +599,26 @@ pub fn pool_tls(
     database: string,
     size: int
 ) -> Pool {
+    pool_tls_auth(host, port, user, password, database, database, size)
+}
+
+/// `pool_auth` over TLS. Needs db 0.8.
+pub fn pool_tls_auth(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    auth_db: string,
+    database: string,
+    size: int
+) -> Pool {
     Pool {
         cfg: PoolConfig {
             host: host,
             port: port,
             user: user,
             password: password,
+            auth_db: auth_db,
             database: database,
             tls: true
         },
@@ -568,9 +629,9 @@ pub fn pool_tls(
 fn pool_dial(p: Pool) -> Result<Conn, string> {
     let c = p.cfg;
     if (c.tls) {
-        connect_tls(c.host, c.port, c.user, c.password, c.database, client_nonce())
+        connect_tls_auth(c.host, c.port, c.user, c.password, c.auth_db, c.database, client_nonce())
     } else {
-        connect(c.host, c.port, c.user, c.password, c.database, client_nonce())
+        connect_auth(c.host, c.port, c.user, c.password, c.auth_db, c.database, client_nonce())
     }
 }
 

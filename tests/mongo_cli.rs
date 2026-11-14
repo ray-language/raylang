@@ -147,7 +147,9 @@ fn handle_stream<S: Read + Write>(s: &mut S) {
         let reply = if contains(&msg, b"hello") {
             doc(&[elem_double("ok", 1.0)])
         } else if contains(&msg, b"saslStart") {
-            if contains(&msg, CLIENT_FIRST) {
+            // #403: el usuario vive en `authdb`; autenticarse contra `shopdb` (la base de
+            // trabajo) falla, como en un mongod real.
+            if contains(&msg, CLIENT_FIRST) && !contains(&msg, b"shopdb") {
                 doc(&[
                     elem_i32("conversationId", 1),
                     elem_bool("done", false),
@@ -168,6 +170,13 @@ fn handle_stream<S: Read + Write>(s: &mut S) {
                 elem_bin("payload", SERVER_FINAL),
                 elem_double("ok", 1.0),
             ])
+        } else if contains(&msg, b"routed") {
+            // #403: el CRUD viaja con `$db` = la base de trabajo, no la de autenticación.
+            if contains(&msg, b"shopdb") && !contains(&msg, b"authdb") {
+                doc(&[elem_i32("n", 1), elem_double("ok", 1.0)])
+            } else {
+                doc(&[elem_double("ok", 0.0), elem_str("errmsg", "operación en la base equivocada")])
+            }
         } else if contains(&msg, b"no_existe") {
             // Cualquier operación sobre la colección "no_existe" → error del servidor.
             doc(&[elem_double("ok", 0.0), elem_str("errmsg", "ns not found"), elem_i32("code", 26)])
@@ -271,6 +280,7 @@ fn project(base: &std::path::Path, port: u16) -> std::path::PathBuf {
     .unwrap();
     let main = format!(
         r#"import db/mongo;
+import db/bson;
 
 fn main() -> int {{
     // 1. Credenciales correctas: hello + SCRAM completo (con verificación de la firma del servidor).
@@ -288,6 +298,19 @@ fn main() -> int {{
     match (mongo.connect("127.0.0.1", {port}, "other", "secret", "test", "clientnonce123456")) {{
         Result.Ok(_) => {{ print("no debería"); return 1; }},
         Result.Err(e) => {{ print("mal user: " + e); }},
+    }}
+    // 4. #403: el usuario está definido en `authdb` y los datos en `shopdb`. `connect` autentica
+    //    contra la base de trabajo y falla; `connect_auth` separa las dos.
+    match (mongo.connect("127.0.0.1", {port}, "raylang", "secret", "shopdb", "clientnonce123456")) {{
+        Result.Ok(_) => {{ print("no debería"); return 1; }},
+        Result.Err(e) => {{ print("sin authSource: " + e); }},
+    }}
+    match (mongo.connect_auth("127.0.0.1", {port}, "raylang", "secret", "authdb", "shopdb", "clientnonce123456")) {{
+        Result.Ok(c) => {{
+            print(mongo.insert(c, "routed", [[bson.field("name", bson.Bson.Str("tea"))]]));
+            mongo.disconnect(c);
+        }},
+        Result.Err(e) => {{ print("no debería: " + e); return 1; }},
     }}
     0
 }}
@@ -312,7 +335,9 @@ fn run(app: &std::path::Path, flags: &[&str]) -> String {
 
 const EXPECTED: &str = "conectado\n\
 mala clave: mongo: the server signature does not verify (authentication failed)\n\
-mal user: mongo: Authentication failed.\n";
+mal user: mongo: Authentication failed.\n\
+sin authSource: mongo: Authentication failed.\n\
+Result.Ok(1)\n";
 
 #[test]
 fn mongo_hello_scram_and_auth_errors() {

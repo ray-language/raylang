@@ -20200,3 +20200,30 @@ izquierdo.
   sin salida a quien usa `db` con un `net` nuevo hasta que `db` se republique.
 - **Pendiente.** El receptor de una llamada UFCS no se coacciona a `dyn` (`sq.describe()` con
   `fn describe(s: dyn Shape)` es un error de tipos), y `to_string` sigue sin aceptar un arreglo.
+
+## 433. M457 — genéricos en nativo y errores de `@derive` (nov 2026)
+
+Hallazgos de raysolve y raygrpc sobre 1.27.95: lo que la VM aceptaba y el nativo no, y dos
+diagnósticos que señalaban a ninguna parte.
+
+- **#354, `contains`/`position` sobre `[P]`.** El nativo emitía `*__e == __rt_x`, y un parámetro
+  de tipo no lleva `PartialEq` (ni puede: el bound universal se instancia con closures). Con un
+  elemento genérico se compara con el diccionario `P#Eq#eq` que la función ya recibe por su
+  bound (`elem_equality`), como `sort` hace con `P#Ord#less` desde M280. Sin el bound `P: Eq`
+  el nativo lo dice en vez de dejar el E0369 de rustc. Un arreglo como `P` pedía `[]#eq`, cuya
+  def no se emite: se compara elemento a elemento con el diccionario del elemento.
+- **#355, campo `fn` de un struct genérico.** `type_of` de `r.f(args)` devolvía el retorno
+  declarado del campo sin sustituir los parámetros de tipo del struct por los del receptor
+  (`enum_subst` + `subst_type`, lo mismo que ya hace el acceso a campo).
+- **#391, bound calificado.** `type_params_with_bounds` acepta `IDENT '.' IDENT`, igual que
+  `impl_block`; el loader ya resolvía los nombres de los bounds (`rewrite_name`). SPEC §gramática.
+- **#360/#432, errores de `@derive`.** El cuerpo generado lleva posiciones sintéticas (banda de
+  50M) para que las tablas por posición no colisionen, y un error en él salía ahí. El impl
+  derivado lleva ahora la posición de su anotación, el checker recuerda qué funciones mangladas
+  son de un derive (`derived_fns`) y al fallar su cuerpo reescribe el error (`derive_error`):
+  posición del `@derive`, trait, tipo y los campos cuyo tipo menciona el mensaje.
+- **#356, apartado.** `Map<P, V>` con `P` genérico no es solo un fallo del nativo: instanciado
+  con `float` o con un struct, la VM muere con «the checker guarantees a hashable key». El
+  checker valida la clave en la anotación y deja pasar un parámetro de tipo sin comprobar con
+  qué se instancia. El arreglo es una restricción implícita que se propague por las llamadas
+  genéricas (y su cota de Rust en nativo): diseño propio, no un parche de esta ronda.

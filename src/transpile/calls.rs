@@ -3672,7 +3672,11 @@ impl Transpiler {
                             .and_then(|fs| fs.iter().find(|(fnm, _)| fnm.as_str() == n))
                             .map(|(_, fty)| normalize_type(fty))
                     {
-                        return Ok(self.classify(&ret));
+                        // #355: los parámetros de tipo del struct se sustituyen por los del
+                        // receptor (`Provider<string>` → `fn(string) -> [(string, int)]`); sin
+                        // esto el retorno quedaba en `P` y sus elementos no se podían tipar.
+                        let subst = enum_subst(&self.struct_tparams, &sname, &rt);
+                        return Ok(self.classify(&subst_type(&ret, &subst)));
                     }
                 }
                 // `std::math::*`: abs/min/max preservan el tipo del primer arg (int|float); el resto

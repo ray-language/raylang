@@ -581,9 +581,9 @@ Lectura y escritura **sobre un handle de archivo**, en raylang puro (nace de ray
 | Anotación | Sobre | Efecto |
 |---|---|---|
 | `@test` | `fn () -> bool` o `fn () -> unit` | la corre `ray test`: bool pasa si `true`; unit pasa si no dispara `assert`/`panic`. Cada test corre aislado — al terminar se cierran TODOS los handles del SO que dejó vivos (listeners incluidos; los procesos hijos NO se matan) — puede vivir en cualquier módulo del proyecto (corre calificada: `math.t`) y usar `import`; un fallo reporta `at módulo:línea:col` |
-| `@derive(Eq)` | struct/enum no genérico | genera `impl Eq` (igualdad estructural) |
+| `@derive(Eq)` | struct/enum no genérico | genera `impl Eq` (igualdad estructural). Cada campo debe ser comparable: un campo `Map` o función no lo es, y el error señala el `@derive` y nombra el campo |
 | `@derive(Show)` | struct/enum no genérico | genera `impl Show` (`Nombre { c: v }` / `Nombre.Variante(v)`); soporta enums recursivos |
-| `@derive(Hash)` | struct/enum no genérico | genera `impl Hash` (para claves de `Set`/`Dict`) |
+| `@derive(Hash)` | struct/enum no genérico | genera `impl Hash` (para claves de `Set`/`Dict`). Cada campo debe implementar `Hash`: un campo arreglo, `float` o `Map` no lo hace (`cannot derive Hash for 'V' (field 'pre'): …`) y hay que escribir el `impl Hash` a mano |
 | `@derive(Clone)` | struct/enum no genérico | genera `impl Clone` (`clone(self) -> Self`), copia **superficial**: los campos por valor se copian, los de referencia (arreglos, mapas, structs, canales) se comparten — lo mismo que escribir el literal a mano. Para copiar hijos, `impl Clone` a mano llamando a sus `clone()` |
 | `@derive(ToJson)` | struct/enum no genérico | genera `impl ToJson` (`to_json(self) -> string`), que usan las respuestas JSON tipadas del framework web. El trait vive en `std/json`: hay que tenerlo en ámbito (`from std/json import ToJson;`). Campos admitidos: primitivos, structs/enums con `ToJson`, y (pepa #322) `[T]` (array JSON), `Option<T>` (`null` si vacío) y `Map<string, T>` (objeto con las claves en orden), anidados a cualquier profundidad |
 

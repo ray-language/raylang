@@ -155,6 +155,7 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                 continue;
             }
             validate_derive(a, &s.name, &s.type_params)?;
+            let first_new = new_impls.len();
             for trait_arg in &a.args {
                 if !existentes.insert((trait_arg.clone(), s.name.clone())) {
                     continue; // ya existe ese impl → idempotente
@@ -178,6 +179,7 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                     _ => crate::ice!("validate_derive guarantees a known trait"),
                 }
             }
+            anchor_to_annotation(&mut new_impls[first_new..], a);
         }
     }
     for e in &program.enums {
@@ -186,6 +188,7 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                 continue;
             }
             validate_derive(a, &e.name, &e.type_params)?;
+            let first_new = new_impls.len();
             for trait_arg in &a.args {
                 if !existentes.insert((trait_arg.clone(), e.name.clone())) {
                     continue;
@@ -203,6 +206,7 @@ pub fn generate_derives(program: &mut Program) -> Result<(), TypeError> {
                     _ => crate::ice!("validate_derive guarantees a known trait"),
                 }
             }
+            anchor_to_annotation(&mut new_impls[first_new..], a);
         }
     }
     // M40.3a: dar a cada cuerpo derivado posiciones **sintéticas únicas y globales**. Cada impl se
@@ -383,6 +387,16 @@ pub(super) fn struct_tojson_body(a: &Annotation, fields: &[(String, Type)]) -> R
 }
 
 /// Construye y parsea `impl Trait for <name> {{ <firma> {{ body }} }}` para un derive.
+/// #360/#432: un impl derivado lleva la posición de su `@derive`. El cuerpo generado tiene
+/// posiciones sintéticas (banda de 50M), y un error en él —un campo que no implementa el
+/// trait— salía en una línea inexistente; el checker lo re-ancla aquí (`derive_error`).
+fn anchor_to_annotation(impls: &mut [ImplBlock], a: &Annotation) {
+    for imp in impls {
+        imp.line = a.line;
+        imp.col = a.col;
+    }
+}
+
 pub(super) fn parse_derived_impl(trait_name: &str, name: &str, signature: &str, body: &str) -> ImplBlock {
     let src = format!(
         "impl {trait_name} for {name} {{\n    {signature} {{\n{body}\n    }}\n}}"

@@ -36,6 +36,7 @@ impl Checker {
             pub_functions: HashSet::new(),
             for_iter_sites: HashMap::new(),
             for_iter_bounded: HashMap::new(),
+            derived_fns: HashMap::new(),
             op_sites: HashMap::new(),
             concat_sites: HashSet::new(),
             trait_tparams: HashMap::new(),
@@ -374,6 +375,7 @@ impl Checker {
             let depth = self.scopes.len();
             self.current_fn_is_root = !f.name.contains("::") && !f.name.contains('#') && f.line < crate::prelude::LINE_BASE;
             if let Err(e) = self.check_function(f) {
+                let e = self.derive_error(&f.name, e);
                 if !self.accumulate {
                     return Err(e);
                 }
@@ -617,6 +619,11 @@ impl Checker {
                     )));
                 }
                 self.methods.insert((key.clone(), m.name.clone()), mangled.clone());
+                // #360: los métodos de un `@derive` (sintético, fuera del prelude) recuerdan su
+                // anotación para re-anclar un error de su cuerpo generado.
+                if imp.synthetic && imp.line < crate::prelude::LINE_BASE {
+                    self.derived_fns.insert(mangled.clone(), (imp.line, imp.col, imp.trait_name.clone(), target.clone()));
+                }
                 self.impl_fn_self.insert(mangled, target.clone());
             }
             // M9.3a: los métodos por defecto no redefinidos también van a la tabla de
@@ -1814,6 +1821,35 @@ impl Checker {
             self.for_iter_bounded.insert((line, col), next);
         }
         Ok(())
+    }
+
+    /// #360/#432: un error en el cuerpo GENERADO por un `@derive` (un campo que no implementa
+    /// el trait) se reporta en el `@derive`, nombrando el trait, el tipo y los campos de ese tipo.
+    /// Antes salía en una posición sintética (`50999995:1`) y, entre módulos, atribuido a otro.
+    fn derive_error(&self, fn_name: &str, e: TypeError) -> TypeError {
+        let Some((line, col, trait_name, target)) = self.derived_fns.get(fn_name) else { return e };
+        let leaf = trait_name.rsplit("::").next().unwrap_or(trait_name);
+        // Los campos cuyo tipo menciona el mensaje: lo que hay que cambiar.
+        let fields: Vec<String> = type_key_of(target)
+            .and_then(|k| self.structs.get(&k))
+            .map(|fs| {
+                fs.iter()
+                    .filter(|(_, ty)| !matches!(ty, Type::Int | Type::String | Type::Bool) && e.msg.contains(&ty.to_string()))
+                    .map(|(n, _)| format!("'{n}'"))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let hint = match fields.len() {
+            0 => String::new(),
+            1 => format!(" (field {})", fields[0]),
+            _ => format!(" (fields {})", fields.join(", ")),
+        };
+        TypeError {
+            msg: format!("cannot derive {leaf} for '{target}'{hint}: {}", e.msg),
+            line: *line,
+            col: *col,
+            len: "@derive".len(),
+        }
     }
 
     /// ¿Lleva `t` un `Show` que la forma por defecto de `print` no conoce? Un struct o enum con

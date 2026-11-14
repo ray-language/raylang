@@ -815,7 +815,7 @@ const INFO_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
   <key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
   <key>UILaunchScreen</key><dict/>
   <key>UIApplicationSceneManifest</key>
   <dict>
@@ -840,9 +840,14 @@ const INFO_PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 /// M309 (findings #51): el Info.plist del shell con las claves extra (`[app.plist]` del ray.toml y
 /// `NSLocalNetworkUsageDescription` cuando toca), insertadas antes del cierre del diccionario.
 pub fn info_plist(extra: &[(String, crate::manifest::PlistValue)]) -> String {
-    if extra.is_empty() {
-        return INFO_PLIST.to_string();
-    }
+    plist_with(INFO_PLIST.to_string(), extra)
+}
+
+/// Vuelca `extra` sobre `plist`. Una clave que el shell ya escribe en una sola línea
+/// (`CFBundleDevelopmentRegion`, `CFBundleVersion`, las orientaciones…) se SUSTITUYE; el resto
+/// se añade al final. M458 (pepa #415): antes se añadía siempre, y el Info.plist salía con la
+/// clave dos veces — un diccionario ambiguo donde el valor que gana depende de quién lo lea.
+fn plist_with(mut plist: String, extra: &[(String, crate::manifest::PlistValue)]) -> String {
     let esc = |t: &str| t.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;");
     let mut keys = String::new();
     for (k, v) in extra {
@@ -855,9 +860,84 @@ pub fn info_plist(extra: &[(String, crate::manifest::PlistValue)]) -> String {
                 format!("<array>{items}</array>")
             }
         };
-        keys.push_str(&format!("  <key>{}</key>{value}\n", esc(k)));
+        let line = format!("  <key>{}</key>{value}\n", esc(k));
+        let head = format!("  <key>{}</key>", esc(k));
+        // Solo las entradas de UNA línea (clave y valor juntos): las de varias líneas del shell
+        // (`UIApplicationSceneManifest`, ATS) son su estructura y no se pisan desde ray.toml.
+        let existing = plist.find(&head).and_then(|at| {
+            let end = at + plist[at..].find('\n')? + 1;
+            (end - 1 > at + head.len()).then_some((at, end))
+        });
+        match existing {
+            Some((at, end)) => plist.replace_range(at..end, &line),
+            None => keys.push_str(&line),
+        }
     }
-    INFO_PLIST.replacen("</dict>\n</plist>", &format!("{keys}</dict>\n</plist>"), 1)
+    if keys.is_empty() {
+        plist
+    } else {
+        plist.replacen("</dict>\n</plist>", &format!("{keys}</dict>\n</plist>"), 1)
+    }
+}
+
+/// M458 (pepa #414): las claves de orientación del Info.plist. App Store Connect rechaza una
+/// app de iPad con multitarea que no declare las cuatro orientaciones o pantalla completa, y el
+/// shell no declaraba ninguna. Sin `[ios] orientations`: en el iPhone, vertical y los dos
+/// apaisados; en el iPad, las cuatro. Con ellas: las elegidas en los dos, y en el iPad
+/// `UIRequiresFullScreen` si no son las cuatro.
+fn orientation_keys(devices: &[String], orientations: &[String]) -> Vec<(String, crate::manifest::PlistValue)> {
+    use crate::manifest::PlistValue;
+    let ios_name = |o: &str| match o {
+        "portrait" => "UIInterfaceOrientationPortrait",
+        "upside_down" => "UIInterfaceOrientationPortraitUpsideDown",
+        "landscape_left" => "UIInterfaceOrientationLandscapeLeft",
+        _ => "UIInterfaceOrientationLandscapeRight",
+    };
+    let names = |list: &[&str]| PlistValue::Array(list.iter().map(|o| ios_name(o).to_string()).collect());
+    let chosen: Vec<&str> = orientations.iter().map(String::as_str).collect();
+    let has = |d: &str| devices.is_empty() || devices.iter().any(|x| x == d);
+    let mut keys = Vec::new();
+    if has("iphone") {
+        let phone: &[&str] = if chosen.is_empty() { &["portrait", "landscape_left", "landscape_right"] } else { &chosen };
+        keys.push(("UISupportedInterfaceOrientations".to_string(), names(phone)));
+    }
+    if has("ipad") {
+        let all = ["portrait", "upside_down", "landscape_left", "landscape_right"];
+        let pad: &[&str] = if chosen.is_empty() { &all } else { &chosen };
+        keys.push(("UISupportedInterfaceOrientations~ipad".to_string(), names(pad)));
+        if !all.iter().all(|o| pad.contains(o)) {
+            keys.push(("UIRequiresFullScreen".to_string(), PlistValue::Bool(true)));
+        }
+    }
+    keys
+}
+
+/// M458 (pepa #413): el manifiesto de privacidad del shell. Apple lo exige a toda app que use
+/// una «required reason API», y el runtime de raylang usa una que la app no controla:
+/// `stat`/`fstat` (marcas de tiempo de archivos, razón C617.1: archivos del contenedor de la
+/// app). No rastrea ni recoge datos. `[ios] privacy_manifest` lo sustituye por uno propio.
+pub const PRIVACY_MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>NSPrivacyTracking</key><false/>
+  <key>NSPrivacyTrackingDomains</key><array/>
+  <key>NSPrivacyCollectedDataTypes</key><array/>
+  <key>NSPrivacyAccessedAPITypes</key>
+  <array>
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key><string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key><array><string>C617.1</string></array>
+    </dict>
+  </array>
+</dict>
+</plist>
+"#;
+
+/// M458 (pepa #417): el `InfoPlist.strings` de un idioma (`"Clave" = "texto";`).
+fn info_plist_strings(keys: &[(String, String)]) -> String {
+    let esc = |t: &str| t.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+    keys.iter().map(|(k, v)| format!("\"{}\" = \"{}\";\n", esc(k), esc(v))).collect()
 }
 
 /// M151 (raydesk #9): la firma que el xcconfig generado debe llevar. `team` viene de
@@ -908,6 +988,16 @@ pub struct ShellOptions {
     /// M448b (IDEAS §122): el programa importa `std/alarm` → `RayAlarm.swift` (AlarmKit, iOS 26)
     /// entra al target y el shell atiende las peticiones `alarm_*`.
     pub alarm: bool,
+    /// M458 (pepa #412): `[app] build` → `CURRENT_PROJECT_VERSION` (`CFBundleVersion`). `None` = 1.
+    pub build: Option<u32>,
+    /// M458 (pepa #414): `[ios] devices` (`iphone`, `ipad`; vacío = los dos) y `[ios] orientations`.
+    pub devices: Vec<String>,
+    pub orientations: Vec<String>,
+    /// M458 (pepa #413): un `PrivacyInfo.xcprivacy` propio (`[ios] privacy_manifest`); sin él va
+    /// el del runtime ([`PRIVACY_MANIFEST`]).
+    pub privacy_manifest: Option<std::path::PathBuf>,
+    /// M458 (pepa #417): `[app.plist.<idioma>]` → `<idioma>.lproj/InfoPlist.strings`.
+    pub localizations: Vec<(String, Vec<(String, String)>)>,
     /// M330 D5: el shell de DESARROLLO registra este esquema URL (su bundle id) y entrega a la
     /// librería de desarrollo (`ray_dev_link`) toda URL con él — el QR de `ray dev --device`
     /// escaneado con la cámara del sistema abre exactamente esta app.
@@ -937,17 +1027,26 @@ fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing, opts:
     if opts.alarm {
         sign.push_str("SWIFT_VERSION = 5.0\nSWIFT_OBJC_INTERFACE_HEADER_NAME = RayShell-Swift.h\n");
     }
+    // M458 (pepa #412/#414): número de compilación y familias de dispositivo.
+    let build = opts.build.unwrap_or(1);
+    let has = |d: &str| opts.devices.is_empty() || opts.devices.iter().any(|x| x == d);
+    let family = match (has("iphone"), has("ipad")) {
+        (true, false) => "1",
+        (false, true) => "2",
+        _ => "1,2",
+    };
     format!(
         "// Generado por `ray bundle --ios` — ajusta aquí, no en el pbxproj.\n\
          PRODUCT_NAME = {name}\n\
          PRODUCT_BUNDLE_IDENTIFIER = {bundle_id}\n\
          MARKETING_VERSION = {version}\n\
+         CURRENT_PROJECT_VERSION = {build}\n\
          IPHONEOS_DEPLOYMENT_TARGET = 15.0\n\
          // Solo arm64: dispositivo y simulador moderno (el .a no trae x86_64; un Mac Intel\n\
          // exigiría además el target x86_64-apple-ios — fuera del v1).\n\
          ARCHS = arm64\n\
          INFOPLIST_FILE = Shell/Info.plist\n\
-         TARGETED_DEVICE_FAMILY = 1,2\n\
+         TARGETED_DEVICE_FAMILY = {family}\n\
          SDKROOT = iphoneos\n\
          CLANG_ENABLE_MODULES = YES\n\
          CLANG_ENABLE_OBJC_ARC = YES\n\
@@ -965,7 +1064,7 @@ fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing, opts:
 /// todo lo que Xcode exige); objectVersion 56 (aceptado por Xcode 14+). M324 (ray808 #15): con
 /// icono, `Assets.xcassets` entra en el grupo Shell y en la fase Resources — antes el catálogo se
 /// escribía pero nada lo compilaba y la app salía con el icono genérico.
-fn pbxproj(name: &str, assets: bool, sounds: &[String], alarm: bool) -> String {
+fn pbxproj(name: &str, assets: bool, sounds: &[String], alarm: bool, extra_resources: &[(String, &str)]) -> String {
     // M448b: `RayAlarm.swift` (std/alarm) como una fuente más del target.
     let (swift_build, swift_file, swift_source, swift_child) = if alarm {
         (
@@ -992,6 +1091,19 @@ fn pbxproj(name: &str, assets: bool, sounds: &[String], alarm: bool) -> String {
         let fref = format!("00000000000000000000{:04X}", 0x5000 + i);
         let bfile = format!("00000000000000000000{:04X}", 0x6000 + i);
         res_file.push_str(&format!("\t\t{fref} /* {file} */ = {{isa = PBXFileReference; lastKnownFileType = audio; path = \"{file}\"; sourceTree = \"<group>\"; }};\n"));
+        res_build.push_str(&format!("\t\t{bfile} /* {file} in Resources */ = {{isa = PBXBuildFile; fileRef = {fref} /* {file} */; }};\n"));
+        res_child.push_str(&format!(", {fref}"));
+        if !res_files.is_empty() {
+            res_files.push_str(", ");
+        }
+        res_files.push_str(&bfile);
+    }
+    // M458 (pepa #413/#417): el manifiesto de privacidad y las carpetas `<idioma>.lproj`
+    // (referencias de carpeta: se copian tal cual a la raíz del bundle, donde iOS las busca).
+    for (i, (file, kind)) in extra_resources.iter().enumerate() {
+        let fref = format!("00000000000000000000{:04X}", 0x7000 + i);
+        let bfile = format!("00000000000000000000{:04X}", 0x8000 + i);
+        res_file.push_str(&format!("\t\t{fref} /* {file} */ = {{isa = PBXFileReference; lastKnownFileType = {kind}; path = \"{file}\"; sourceTree = \"<group>\"; }};\n"));
         res_build.push_str(&format!("\t\t{bfile} /* {file} in Resources */ = {{isa = PBXBuildFile; fileRef = {fref} /* {file} */; }};\n"));
         res_child.push_str(&format!(", {fref}"));
         if !res_files.is_empty() {
@@ -1105,7 +1217,7 @@ pub fn write_project(
     opts: ShellOptions,
     plist_extra: &[(String, crate::manifest::PlistValue)],
 ) -> Result<(), String> {
-    let ShellOptions { devtools, icon, background_audio, launch_color, ref audio_session, ref sounds, alarm, ref url_scheme } = opts;
+    let ShellOptions { devtools, icon, background_audio, launch_color, ref audio_session, ref sounds, alarm, ref url_scheme, .. } = opts;
     let write = |rel: &str, content: &str| -> Result<(), String> {
         let p = dir.join(rel);
         if let Some(parent) = p.parent() {
@@ -1184,6 +1296,14 @@ pub fn write_project(
         }
     };
     // M330 D5: el shell de desarrollo registra su esquema URL (CFBundleURLTypes).
+    // M458 (pepa #414/#417): las orientaciones y los idiomas van ANTES que `[app.plist]`, que
+    // manda si declara la misma clave (`plist_with` sustituye).
+    let mut generated = orientation_keys(&opts.devices, &opts.orientations);
+    if !opts.localizations.is_empty() {
+        let langs = opts.localizations.iter().map(|(l, _)| l.clone()).collect();
+        generated.push(("CFBundleLocalizations".to_string(), crate::manifest::PlistValue::Array(langs)));
+    }
+    let info_plist = |extra: &[(String, crate::manifest::PlistValue)]| plist_with(plist_with(INFO_PLIST.to_string(), &generated), extra);
     let plist = match url_scheme {
         Some(scheme) => info_plist(plist_extra).replacen(
             "</dict>\n</plist>",
@@ -1207,7 +1327,22 @@ pub fn write_project(
     if alarm {
         write("Shell/RayAlarm.swift", RAY_ALARM_SWIFT)?;
     }
-    write(&format!("{name}.xcodeproj/project.pbxproj"), &pbxproj(name, icon || launch_color, &sound_names, alarm))?;
+    // M458 (pepa #413): el manifiesto de privacidad — el del runtime o el del proyecto.
+    let mut extra_resources: Vec<(String, &str)> = Vec::new();
+    match &opts.privacy_manifest {
+        Some(src) => {
+            let text = std::fs::read_to_string(src).map_err(|e| format!("could not read the privacy manifest {}: {e}", src.display()))?;
+            write("Shell/PrivacyInfo.xcprivacy", &text)?;
+        }
+        None => write("Shell/PrivacyInfo.xcprivacy", PRIVACY_MANIFEST)?,
+    }
+    extra_resources.push(("PrivacyInfo.xcprivacy".to_string(), "text.xml"));
+    // M458 (pepa #417): un `<idioma>.lproj/InfoPlist.strings` por `[app.plist.<idioma>]`.
+    for (lang, keys) in &opts.localizations {
+        write(&format!("Shell/{lang}.lproj/InfoPlist.strings"), &info_plist_strings(keys))?;
+        extra_resources.push((format!("{lang}.lproj"), "folder"));
+    }
+    write(&format!("{name}.xcodeproj/project.pbxproj"), &pbxproj(name, icon || launch_color, &sound_names, alarm, &extra_resources))?;
     write("README.md", &readme(name))?;
     Ok(())
 }
@@ -1293,12 +1428,12 @@ mod tests {
     /// xcconfig nombra el AppIcon; sin icono, ni rastro (un catálogo referenciado y ausente rompe el build).
     #[test]
     fn the_icon_is_wired_into_the_project_only_when_present() {
-        let with = pbxproj("Demo", true, &[], false);
+        let with = pbxproj("Demo", true, &[], false, &[]);
         assert!(with.contains("PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (0000000000000000000000B4)"), "{with}");
         assert!(with.contains("path = Assets.xcassets; sourceTree"), "{with}");
         assert!(with.contains("0000000000000000000000F4, 0000000000000000000000F9); path = Shell"), "{with}");
         assert!(with.contains("buildPhases = (0000000000000000000000E2, 0000000000000000000000E1, 0000000000000000000000E3)"), "{with}");
-        let without = pbxproj("Demo", false, &[], false);
+        let without = pbxproj("Demo", false, &[], false, &[]);
         assert!(!without.contains("Assets.xcassets"), "{without}");
         assert!(without.contains("PBXResourcesBuildPhase; buildActionMask = 2147483647; files = ()"), "{without}");
         let opts = ShellOptions { icon: true, ..Default::default() };
@@ -1457,4 +1592,68 @@ mod tests {
         assert!(!scene.contains("ray_dev_link"));
         let _ = std::fs::remove_dir_all(&base);
     }
+    /// M458 (pepa #412–#417): lo que App Store Connect exige al shell.
+    #[test]
+    fn the_shell_carries_what_the_store_validates() {
+        use crate::manifest::PlistValue;
+        let base = std::env::temp_dir().join(format!("ray_ios_m458_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let read = |rel: &str| std::fs::read_to_string(base.join(rel)).unwrap();
+
+        // Por defecto: build 1, iPhone + iPad, las orientaciones que pasan la validación y el
+        // manifiesto de privacidad del runtime.
+        write_project(&base, "App", "org.example.app", "1.0.0", &Signing::default(), ShellOptions::default(), &[]).unwrap();
+        let (plist, cfg, pbx) = (read("Shell/Info.plist"), read("App.xcconfig"), read("App.xcodeproj/project.pbxproj"));
+        assert!(plist.contains("<key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>"), "{plist}");
+        assert!(cfg.contains("CURRENT_PROJECT_VERSION = 1\n") && cfg.contains("TARGETED_DEVICE_FAMILY = 1,2\n"), "{cfg}");
+        assert!(plist.contains("<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>"), "{plist}");
+        assert!(plist.contains("<key>UISupportedInterfaceOrientations~ipad</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string>"), "{plist}");
+        assert!(!plist.contains("UIRequiresFullScreen") && !plist.contains("CFBundleLocalizations"), "{plist}");
+        assert_eq!(read("Shell/PrivacyInfo.xcprivacy"), PRIVACY_MANIFEST);
+        assert!(pbx.contains("/* PrivacyInfo.xcprivacy in Resources */"), "{pbx}");
+
+        // Con las claves del ray.toml: solo iPhone y vertical, build 42, manifiesto propio, dos
+        // idiomas, y una clave de `[app.plist]` que SUSTITUYE a la del shell (#415).
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        let own = base.join("own.xcprivacy");
+        std::fs::write(&own, "<plist>own</plist>").unwrap();
+        let opts = ShellOptions {
+            build: Some(42),
+            devices: vec!["iphone".to_string()],
+            orientations: vec!["portrait".to_string()],
+            privacy_manifest: Some(own),
+            localizations: vec![
+                ("en".to_string(), vec![("NSCameraUsageDescription".to_string(), "Scan the \"box\"".to_string())]),
+                ("es".to_string(), vec![("NSCameraUsageDescription".to_string(), "Escanear".to_string())]),
+            ],
+            ..Default::default()
+        };
+        let extra = vec![
+            ("CFBundleDevelopmentRegion".to_string(), PlistValue::Str("es".to_string())),
+            ("NSCameraUsageDescription".to_string(), PlistValue::Str("Escanear".to_string())),
+        ];
+        write_project(&base, "App", "org.example.app", "1.0.0", &Signing::default(), opts, &extra).unwrap();
+        let (plist, cfg, pbx) = (read("Shell/Info.plist"), read("App.xcconfig"), read("App.xcodeproj/project.pbxproj"));
+        assert!(cfg.contains("CURRENT_PROJECT_VERSION = 42\n") && cfg.contains("TARGETED_DEVICE_FAMILY = 1\n"), "{cfg}");
+        assert!(plist.contains("<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>"), "{plist}");
+        assert!(!plist.contains("~ipad") && !plist.contains("UIRequiresFullScreen"), "{plist}");
+        assert_eq!(plist.matches("<key>CFBundleDevelopmentRegion</key>").count(), 1, "{plist}");
+        assert!(plist.contains("<key>CFBundleDevelopmentRegion</key><string>es</string>"), "{plist}");
+        assert!(plist.contains("<key>CFBundleLocalizations</key><array><string>en</string><string>es</string></array>"), "{plist}");
+        assert_eq!(read("Shell/PrivacyInfo.xcprivacy"), "<plist>own</plist>");
+        assert_eq!(read("Shell/en.lproj/InfoPlist.strings"), "\"NSCameraUsageDescription\" = \"Scan the \\\"box\\\"\";\n");
+        assert_eq!(read("Shell/es.lproj/InfoPlist.strings"), "\"NSCameraUsageDescription\" = \"Escanear\";\n");
+        assert!(pbx.contains("lastKnownFileType = folder; path = \"en.lproj\"") && pbx.contains("/* es.lproj in Resources */"), "{pbx}");
+
+        // Un iPad con menos de las cuatro orientaciones pide pantalla completa.
+        let _ = std::fs::remove_dir_all(&base);
+        let opts = ShellOptions { devices: vec!["ipad".to_string()], orientations: vec!["landscape_left".to_string(), "landscape_right".to_string()], ..Default::default() };
+        write_project(&base, "App", "org.example.app", "1.0.0", &Signing::default(), opts, &[]).unwrap();
+        let (plist, cfg) = (read("Shell/Info.plist"), read("App.xcconfig"));
+        assert!(cfg.contains("TARGETED_DEVICE_FAMILY = 2\n"), "{cfg}");
+        assert!(plist.contains("<key>UIRequiresFullScreen</key><true/>") && !plist.contains("<key>UISupportedInterfaceOrientations</key>"), "{plist}");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
 }

@@ -2285,7 +2285,7 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 /// codesign ad-hoc best-effort) o un directorio con `.desktop` en Linux. En Windows (M180): directorio con `<name>.exe` (subsistema WINDOWS, icono y VERSIONINFO embebidos) y `<name>.lnk`, en `src/bundle_windows.rs`. Sin firma/notarización
 /// en v1 (documentado en el help). Tooling puro: no toca los motores.
 const BUNDLE_USAGE: &str = "usage: ray bundle [file] [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list] \
-[--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]] [--dev] [--devtools] \
+[--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]] [--build N] [--dev] [--devtools] \
 [--allow-stubs] [--sign IDENTITY] [--notary PROFILE] [--entitlements plist]\n\
   --sign: macOS codesign with hardened runtime + timestamp (Developer ID identity), Windows signtool (subject or .pfx, \
 password in RAY_SIGN_PFX_PASSWORD); --sign none (or \"\") disables signing even when [app] sign is set — on Windows an \
@@ -2326,6 +2326,8 @@ fn cmd_bundle(args: &[String]) {
     // cdylib en jniLibs); `--android-abi arm64|x86_64|all` elige los .so (espejo --ios-target).
     let mut android = false;
     let mut android_abi_arg: Option<String> = None;
+    // M458 (pepa #412): `--build N` — el número de compilación (manda sobre `[app] build`).
+    let mut build_arg: Option<String> = None;
     // M231: `--devtools` — el webview del shell móvil inspeccionable desde el escritorio.
     let mut devtools = false;
     let mut stubs = StubPolicy::Auto;
@@ -2361,6 +2363,7 @@ fn cmd_bundle(args: &[String]) {
             "--entitlements" => value(&mut entitlements_arg, &mut i),
             "--ios-target" => value(&mut ios_target_arg, &mut i),
             "--android-abi" => value(&mut android_abi_arg, &mut i),
+            "--build" => value(&mut build_arg, &mut i),
             "--ios" => {
                 ios = true;
                 i += 1;
@@ -2409,6 +2412,14 @@ fn cmd_bundle(args: &[String]) {
     };
     let entry_dir = entry_dir.canonicalize().unwrap_or(entry_dir);
     let manifest = Manifest::load(&entry_dir).ok().flatten();
+    // M458 (pepa #412): `--build N` manda sobre `[app] build`.
+    let build_number: Option<u32> = build_arg.map(|b| match b.parse::<u32>() {
+        Ok(n) if n > 0 => n,
+        _ => {
+            eprintln!("'--build' takes a positive integer, not '{b}'\n{BUNDLE_USAGE}");
+            process::exit(64);
+        }
+    });
     // M208: `--name`/`--icon`/`--id` → `[app] name/icon/id` del ray.toml → defaults. El icono del
     // manifiesto es relativo a la raíz del proyecto (el bundle puede correrse desde cualquier cwd).
     let name = name_arg
@@ -2582,7 +2593,7 @@ fn cmd_bundle(args: &[String]) {
         }
         let abis = abis.join(", ");
         if let Err(e) =
-            crate::bundle_android::write_project(&proj, &name, &app_id, &version, &abis, mipmaps.is_some(), devtools, manifest.as_ref().is_some_and(|m| m.android_background_audio), if dev { Some(app_id.as_str()) } else { None }, manifest.as_ref().is_some_and(|m| m.android_exact_alarms), dev || uses_module(&path, "std/alarm"))
+            crate::bundle_android::write_project(&proj, &name, &app_id, &version, build_number.or(manifest.as_ref().and_then(|m| m.app_build)).unwrap_or(1), &abis, mipmaps.is_some(), devtools, manifest.as_ref().is_some_and(|m| m.android_background_audio), if dev { Some(app_id.as_str()) } else { None }, manifest.as_ref().is_some_and(|m| m.android_exact_alarms), dev || uses_module(&path, "std/alarm"))
         {
             eprintln!("bundle: could not write the Gradle project: {e}");
             process::exit(74);
@@ -2804,7 +2815,24 @@ fn cmd_bundle(args: &[String]) {
         if alarm && !ios_plist.iter().any(|(k, _)| k == "NSAlarmKitUsageDescription") {
             ios_plist.push(("NSAlarmKitUsageDescription".to_string(), crate::manifest::PlistValue::Str(format!("{name} rings the alarms you set."))));
         }
-        let opts = crate::bundle_ios::ShellOptions { devtools, icon: icon_ok, background_audio, launch_color, audio_session, sounds, alarm, url_scheme: dev.then(|| bundle_id.clone()) };
+        // M458 (pepa #412–#417): número de compilación, dispositivos, orientaciones, manifiesto de
+        // privacidad e idiomas del Info.plist.
+        let privacy_manifest = manifest.as_ref().and_then(|m| m.ios_privacy_manifest.as_ref().map(|p| m.root.join(p)));
+        let opts = crate::bundle_ios::ShellOptions {
+            devtools,
+            icon: icon_ok,
+            background_audio,
+            launch_color,
+            audio_session,
+            sounds,
+            alarm,
+            build: build_number.or(manifest.as_ref().and_then(|m| m.app_build)),
+            devices: manifest.as_ref().map(|m| m.ios_devices.clone()).unwrap_or_default(),
+            orientations: manifest.as_ref().map(|m| m.ios_orientations.clone()).unwrap_or_default(),
+            privacy_manifest,
+            localizations: manifest.as_ref().map(|m| m.app_plist_localized.clone()).unwrap_or_default(),
+            url_scheme: dev.then(|| bundle_id.clone()),
+        };
         if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing, opts, &ios_plist) {
             eprintln!("bundle: could not write the Xcode project: {e}");
             process::exit(74);

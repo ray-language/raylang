@@ -1816,6 +1816,21 @@ impl Checker {
         Ok(())
     }
 
+    /// ¿Lleva `t` un `Show` que la forma por defecto de `print` no conoce? Un struct o enum con
+    /// `impl Show` (en cualquier profundidad) o un parámetro de tipo (su bound decide en `dict_for`).
+    fn has_user_show(&self, t: &Type) -> bool {
+        match t {
+            Type::Var(_) => true,
+            Type::Array(e) => self.has_user_show(e),
+            Type::Struct(_, args) | Type::Enum(_, args) => {
+                let own = !matches!(t, Type::Enum(n, _) if n == "Option" || n == "Result")
+                    && type_key_of(t).is_some_and(|k| self.methods.contains_key(&(k, "show".to_string())));
+                own || args.iter().any(|a| self.has_user_show(a))
+            }
+            _ => false,
+        }
+    }
+
     pub(super) fn iterator_of(&self, ty: &Type) -> Option<(Type, String)> {
         let key = type_key_of(ty)?;
         if !self.impl_traits.contains(&(key.clone(), "Iterator".to_string())) {
@@ -3512,6 +3527,14 @@ impl Checker {
                 self.ufcs_sites.insert((line, col, name.to_string(), usize::MAX), show);
                 return Ok(ty);
             }
+            // #359: `to_string(p)` (y `"${p}"`) con `p: P` y `P: Show` es `p.show()`: se llama al
+            // parámetro-diccionario del bound, como hace el método escrito a mano.
+            if let Type::Var(tp) = &at
+                && let Some((dict, ret)) = self.resolve_bound_method(&tp.clone(), "show", &[], line, col)?
+            {
+                self.ufcs_sites.insert((line, col, name.to_string(), usize::MAX), dict);
+                return Ok(ret);
+            }
         }
         // M316 (findings #79): `print([(1, "a")])` mostraba `[[1, a]]` (en el runtime una tupla es un
         // arreglo) mientras `to_string`/`assert_eq` daban `(1, a)` por el diccionario `Show` de M302.
@@ -3519,7 +3542,9 @@ impl Checker {
         // `print({ let __ps = dict; __ps(x) })` (`lower_print_shows`): la misma forma en los tres motores.
         if (name == "print" || name == "eprint") && args.len() == 1 {
             let at = self.check_expr(&args[0])?;
-            if type_contains_tuple(&at)
+            // #359: lo mismo si el tipo lleva un `Show` del usuario (o es un `P: Show`): `print`
+            // mostraba la forma por defecto (`Plain { n: 1 }`) e ignoraba el `impl Show`.
+            if (type_contains_tuple(&at) || self.has_user_show(&at))
                 && let Ok(dict) = self.dict_for(&at, "Show", "show", line, col)
             {
                 self.print_show_sites.insert((line, col), dict);

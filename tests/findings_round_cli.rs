@@ -117,3 +117,48 @@ fn main() -> int {
     assert_eq!(err, "");
     assert_eq!(out, "5\n9\nz0\nm0\n1:10\n2:20\n4\n2\n");
 }
+
+#[test]
+fn print_and_to_string_use_the_show_of_the_user() {
+    // #359: `print` mostraba la forma por defecto (`Plain { n: 1 }`) aunque el tipo tuviera
+    // `impl Show`, y `to_string(p)`/`"${p}"` rechazaban un `p: P` con `P: Show`. Un tipo sin
+    // `impl Show` conserva la forma por defecto.
+    let (out, err) = same_on_both(
+        "show",
+        r#"struct Plain { n: int, }
+impl Show for Plain { fn show(self) -> string { "P${self.n}" } }
+struct Boxed<T> { v: T, }
+impl<T: Show> Show for Boxed<T> { fn show(self) -> string { "B(${self.v.show()})" } }
+struct Raw { n: int, }
+enum Color { Red, Rgb(int), }
+impl Show for Color {
+    fn show(self) -> string {
+        match (self) { Color.Red => "red", Color.Rgb(n) => "rgb ${n}", }
+    }
+}
+fn label<P: Show>(p: P) -> string { to_string(p) }
+fn quoted<P: Show>(p: P) -> string { "<${p}>" }
+fn shout<P: Show>(p: P) { print(p); }
+fn main() -> int {
+    print(Plain { n: 1 });
+    print(Boxed { v: 2 });
+    print(Boxed { v: Plain { n: 3 } });
+    print([Plain { n: 4 }, Plain { n: 5 }]);
+    print(Option.Some(Plain { n: 6 }));
+    print(Color.Rgb(7));
+    print(Raw { n: 8 });
+    print([Raw { n: 9 }]);
+    print(Option.Some(3));
+    print(label(Plain { n: 10 }));
+    print(label(11));
+    print(quoted(Color.Red));
+    print(quoted("s"));
+    shout(Plain { n: 12 });
+    shout(1.5);
+    0
+}
+"#,
+    );
+    assert_eq!(err, "");
+    assert_eq!(out, "P1\nB(2)\nB(P3)\n[P4, P5]\nOption.Some(P6)\nrgb 7\nRaw { n: 8 }\n[Raw { n: 9 }]\nOption.Some(3)\nP10\n11\n<red>\n<s>\nP12\n1.5\n");
+}

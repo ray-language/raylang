@@ -472,6 +472,15 @@ con tokens y tema claro/oscuro; `ray add elements` + `import elements/bridge;` s
 `@raylang/elements` a la página por su nombre npm, sin npm, y da a los componentes diálogos,
 confirmaciones y menús nativos; envoltorios `@raylang/react` y `@raylang/vue`).
 
+**Rangos de versión y conflictos.** `"1.2.0"` (o `"=1.2.0"`) es exacta; `"^1.2.3"` admite
+`[1.2.3, 2.0.0)` y, por debajo de 1.0, solo el mismo menor: `"^0.13.0"` es `[0.13.0, 0.14.0)` y
+**excluye 0.15**; `"~1.2.3"` admite solo parches (`[1.2.3, 1.3.0)`); `"*"` es la más alta
+publicada. Hay **una versión por paquete** en todo el proyecto (`.ray-deps/<nombre>`): si dos
+solicitantes piden versiones distintas de la misma dependencia, se usa la **más alta pedida**. Si
+esa versión queda fuera del rango de uno de ellos, `ray` lo avisa (`warning: 'net' resolves to
+v0.15.0 …, outside the range '^0.13.0' that db asks for`): ese paquete se compila contra una
+versión que declaró incompatible, y lo que toca es actualizarlo o bajar la otra dependencia.
+
 **Cómo se importa una dependencia (M383).** El primer segmento del `import` es la **clave** de
 `[dependencies]` y lo que sigue, el archivo de módulo en la **raíz del paquete** (no bajo `src/`):
 `ray_ds = "path:../lib/ray-ds"` → `import ray_ds/bridge;` es `lib/ray-ds/bridge.ray`, se llame como

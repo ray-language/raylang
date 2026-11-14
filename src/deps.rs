@@ -446,6 +446,9 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
     // sustitución ocurría en silencio).
     let mut queue: std::collections::VecDeque<(String, GitSpec, String, String)> = std::collections::VecDeque::new();
     let mut requested: std::collections::HashMap<String, (String, String)> = std::collections::HashMap::new();
+    // #405: TODOS los requisitos vistos por nombre (quién y qué pidió), para avisar al final de
+    // los rangos que la versión elegida no cumple.
+    let mut all_requests: std::collections::HashMap<String, Vec<(String, String)>> = std::collections::HashMap::new();
     let mut downloaded = 0usize;
     let enqueue = |n: &str,
                    s: &str,
@@ -472,6 +475,10 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
     }
 
     while let Some((name, spec, by, req)) = queue.pop_front() {
+        let seen = all_requests.entry(name.clone()).or_default();
+        if !seen.iter().any(|(b, r)| *b == by && *r == req) {
+            seen.push((by.clone(), req.clone()));
+        }
         // Elegir el spec: nuevo, o MVS con el ya elegido si difieren (conflicto).
         let chosen_spec = match chosen.get(&name) {
             None => spec,
@@ -554,6 +561,22 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
         }
     }
 
+    // #405: la caché es plana (una versión por nombre) y ante un conflicto gana la más alta
+    // pedida. Si esa versión queda FUERA del rango de otro solicitante (`db` pide `net = "^0.13"`
+    // y el proyecto `^0.15`), ese paquete se compila contra algo que declaró incompatible: se
+    // avisa, que antes pasaba en silencio («dependencies up to date»).
+    let mut names: Vec<&String> = chosen.keys().collect();
+    names.sort();
+    for name in names {
+        let requests = all_requests.get(name).map(Vec::as_slice).unwrap_or(&[]);
+        for (by, req) in unsatisfied_ranges(requests, &chosen[name].git_ref) {
+            eprintln!(
+                "  warning: '{name}' resolves to {} (the newest version requested), outside the range '{req}' that {by} asks for; {by} may not work with it",
+                chosen[name].git_ref
+            );
+        }
+    }
+
     // Verificar el hash de cada paquete elegido contra el lock y reescribir `ray.lock`.
     let mut new_lock: Vec<LockEntry> = Vec::new();
     for (name, spec) in &chosen {
@@ -624,6 +647,19 @@ fn mvs(name: &str, a: &GitSpec, b: &GitSpec) -> Result<GitSpec, String> {
          irreconcilable (different URLs or non-semver refs). Pin a single version.",
         a.url, a.git_ref, b.url, b.git_ref
     ))
+}
+
+/// #405: de los requisitos `(quién, qué)` de un paquete, los RANGOS del índice (`^1.2`, `~1.2`)
+/// que la versión elegida `git_ref` no cumple. Los exactos no entran: el MVS ya deja su nota al
+/// sustituirlos. Sin ref semver (un commit, una rama) no hay nada que comparar.
+fn unsatisfied_ranges<'a>(requests: &'a [(String, String)], git_ref: &str) -> Vec<(&'a str, &'a str)> {
+    let Some(version) = semver(git_ref) else { return Vec::new() };
+    requests
+        .iter()
+        .filter(|(_, req)| crate::index::is_registry_spec(req) && !is_exact_requirement(req))
+        .filter(|(_, req)| crate::semver::VersionReq::parse(req).is_ok_and(|r| !r.matches(&version)))
+        .map(|(by, req)| (by.as_str(), req.as_str()))
+        .collect()
 }
 
 /// ¿El requisito fija UNA versión (una dep git `git+…@ref`, o `=X.Y.Z`/`X.Y.Z` del índice), en vez
@@ -1391,6 +1427,22 @@ mod tests {
         assert!(semver("v2.0.0-rc1") < semver("v2.0.0"));
         assert_eq!(semver("main"), None);
         assert_eq!(semver("abc123def"), None); // un commit no es semver
+    }
+
+    #[test]
+    fn a_version_outside_a_requested_range_is_reported() {
+        // #405: `db` pide `net = "^0.13.0"` y el proyecto `^0.15.0` → se usa 0.15 y `db` se entera.
+        let requests = vec![
+            ("ray.toml".to_string(), "^0.15.0".to_string()),
+            ("db".to_string(), "^0.13.0".to_string()),
+            ("llm".to_string(), "0.5.0".to_string()), // exacto: lo cubre la nota del MVS
+            ("geo".to_string(), "git+https://host/net@v0.1.0".to_string()),
+            ("web".to_string(), "*".to_string()),
+        ];
+        assert_eq!(unsatisfied_ranges(&requests, "v0.15.0"), vec![("db", "^0.13.0")]);
+        assert_eq!(unsatisfied_ranges(&requests, "v0.13.4"), vec![("ray.toml", "^0.15.0")]);
+        // Un ref que no es semver no se compara.
+        assert!(unsatisfied_ranges(&requests, "main").is_empty());
     }
 
     #[test]

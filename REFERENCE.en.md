@@ -470,6 +470,16 @@ web components with tokens and light/dark theme; `ray add elements` + `import el
 serves `@raylang/elements` to the page by its npm name, without npm, and gives the components
 native dialogs, confirmations and menus; `@raylang/react` and `@raylang/vue` wrappers).
 
+**Version ranges and conflicts.** `"1.2.0"` (or `"=1.2.0"`) is exact; `"^1.2.3"` accepts
+`[1.2.3, 2.0.0)` and, below 1.0, only the same minor: `"^0.13.0"` is `[0.13.0, 0.14.0)` and
+**excludes 0.15**; `"~1.2.3"` accepts patches only (`[1.2.3, 1.3.0)`); `"*"` is the highest
+published. There is **one version per package** in the whole project (`.ray-deps/<name>`): when two
+requesters ask for different versions of the same dependency, the **highest one requested** is
+used. If that version falls outside the range of one of them, `ray` warns (`warning: 'net'
+resolves to v0.15.0 …, outside the range '^0.13.0' that db asks for`): that package is compiled
+against a version it declared incompatible, and the fix is to update it or lower the other
+dependency.
+
 **How a dependency is imported (M383).** The first segment of the `import` is the **key** in
 `[dependencies]` and what follows is the module file at the **package root** (not under `src/`):
 `ray_ds = "path:../lib/ray-ds"` → `import ray_ds/bridge;` is `lib/ray-ds/bridge.ray`, whatever the
@@ -775,4 +785,4 @@ What `ray bundle --ios` / `--android` reads from the manifest (besides `[app] na
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:222f0f9deb61 -->
+<!-- sync: sha256:994d4e9a8a51 -->

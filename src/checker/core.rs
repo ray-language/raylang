@@ -35,6 +35,7 @@ impl Checker {
             local_callee_sites: HashSet::new(),
             pub_functions: HashSet::new(),
             for_iter_sites: HashMap::new(),
+            for_iter_bounded: HashMap::new(),
             op_sites: HashMap::new(),
             concat_sites: HashSet::new(),
             trait_tparams: HashMap::new(),
@@ -987,6 +988,7 @@ impl Checker {
                             // M40.2: un tipo que implementa `Iterator<T>` → se itera llamando a `next`.
                             (other, ForPat::Single(n)) => match self.iterator_of(other) {
                                 Some((elem, next_fn)) => {
+                                    self.note_bounded_iterator(other, &elem, stmt.line, stmt.col)?;
                                     self.for_iter_sites.insert((stmt.line, stmt.col), next_fn);
                                     vec![(n.clone(), elem)]
                                 }
@@ -1003,6 +1005,7 @@ impl Checker {
                                             "the {}-variable pattern does not match the iterator element {}",
                                             names.len(), elem))),
                                     };
+                                    self.note_bounded_iterator(other, &elem, stmt.line, stmt.col)?;
                                     self.for_iter_sites.insert((stmt.line, stmt.col), next_fn);
                                     names.iter().zip(comps)
                                         .filter_map(|(name, ty)| name.as_ref().map(|n| (n.clone(), ty)))
@@ -1796,6 +1799,23 @@ impl Checker {
     /// Si `ty` implementa `Iterator<T>` (M40.2), devuelve `(T, next_manglado)`: el tipo de elemento
     /// (el argumento de `Option` en el retorno de `next`) y el nombre manglado de su método `next`,
     /// para que `for x in it` lo consuma. `None` si el tipo no es un iterador.
+    /// #352: si el `impl Iterator` de `ty` es genérico y acotado, guarda para el `for` de
+    /// `(line, col)` el valor función de su `next` con los diccionarios del bound rellenos.
+    fn note_bounded_iterator(&mut self, ty: &Type, elem: &Type, line: usize, col: usize) -> Result<(), TypeError> {
+        let Some(key) = type_key_of(ty) else { return Ok(()) };
+        let bounded = self.generic_impls.get(&(key, "Iterator".to_string())).is_some_and(|gi| !gi.bounds.is_empty());
+        if bounded {
+            let mut next = self.dict_for(ty, "Iterator", "next", line, col)?;
+            // El closure sale con el retorno del MÉTODO DEL TRAIT (`Option<T>`, con la `T` de
+            // `Iterator<T>` sin fijar); el nativo necesita el elemento concreto para tipar el binding.
+            if let ExprKind::Func(fe) = &mut next.kind {
+                fe.return_type = Type::Enum("Option".to_string(), vec![elem.clone()]);
+            }
+            self.for_iter_bounded.insert((line, col), next);
+        }
+        Ok(())
+    }
+
     pub(super) fn iterator_of(&self, ty: &Type) -> Option<(Type, String)> {
         let key = type_key_of(ty)?;
         if !self.impl_traits.contains(&(key.clone(), "Iterator".to_string())) {

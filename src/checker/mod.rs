@@ -229,7 +229,7 @@ pub fn check(program: &mut Program) -> Result<(), TypeError> {
     lower_operators(program, &checker.op_sites);
     lower_ufcs(program, &checker.ufcs_sites);
     // M40.2: reescribir `for x in it` (sobre un iterador) a `ForIter::Iter`, con el `next` manglado.
-    lower_for_iters(program, &checker.for_iter_sites);
+    lower_for_iters(program, &ForSites { marks: &checker.for_iter_sites, bounded: &checker.for_iter_bounded });
     // Paso 5 (M9.2): añadir los parámetros-diccionario a las funciones con bounds y los
     // argumentos correspondientes en cada sitio de llamada. Diccionarios = valores función;
     // el runtime no cambia.
@@ -735,6 +735,9 @@ struct Checker {
     /// M40.2: `for x in it` sobre un iterador → posición del `for` (línea, col) → nombre manglado de
     /// su método `next`. Un pase lo baja reescribiendo `ForIter::In` a `ForIter::Iter`.
     for_iter_sites: HashMap<(usize, usize), String>,
+    /// #352: los `for` sobre un iterador cuyo impl es genérico y acotado → el valor función de
+    /// su `next` con los diccionarios ya rellenos (`dict_for`). Ver `lower_for_bounded`.
+    for_iter_bounded: HashMap<(usize, usize), Expr>,
     /// M28.1: sitios de sobrecarga de operadores. Clave `(línea, col, "Add"/"Sub"/…)` → el callee al
     /// que baja (`Vec2#add` como identificador). El lowering reescribe el `Binary`/`Unary` a una llamada.
     /// M418: también `"Eq"` para `==`/`!=` sobre un tipo con `impl Eq` a mano o un `T: Eq` — el callee

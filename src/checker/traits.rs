@@ -1043,8 +1043,16 @@ pub(super) const FOR_TUPLE_ARRAY: &str = "#for-tuple-array";
 /// una vez y cada octeto es un `int`, como al indexar.
 pub(super) const FOR_BYTES: &str = "#for-bytes";
 
-pub(super) fn lower_for_iters(program: &mut Program, sites: &HashMap<(usize, usize), String>) {
-    if sites.is_empty() {
+/// Los sitios de `for` que hay que bajar: `marks` (posición → `next` manglado o una marca
+/// `FOR_*`) y `bounded` (#352: posición → el VALOR función de `next` cuando el impl de
+/// `Iterator` es genérico y acotado).
+pub(super) struct ForSites<'a> {
+    pub marks: &'a HashMap<(usize, usize), String>,
+    pub bounded: &'a HashMap<(usize, usize), Expr>,
+}
+
+pub(super) fn lower_for_iters(program: &mut Program, sites: &ForSites) {
+    if sites.marks.is_empty() {
         return;
     }
     for f in &mut program.functions {
@@ -1052,15 +1060,20 @@ pub(super) fn lower_for_iters(program: &mut Program, sites: &HashMap<(usize, usi
     }
 }
 
-pub(super) fn lower_for_iters_block(block: &mut Block, sites: &HashMap<(usize, usize), String>) {
+pub(super) fn lower_for_iters_block(block: &mut Block, sites: &ForSites) {
     for stmt in &mut block.statements {
         let pos = (stmt.line, stmt.col);
-        if sites.get(&pos).is_some_and(|m| m == FOR_BYTES) && matches!(&stmt.kind, StmtKind::For { iter: ForIter::In(_), .. }) {
+        if sites.marks.get(&pos).is_some_and(|m| m == FOR_BYTES) && matches!(&stmt.kind, StmtKind::For { iter: ForIter::In(_), .. }) {
             lower_for_bytes(stmt);
+        }
+        if let Some(next) = sites.bounded.get(&pos) {
+            if matches!(&stmt.kind, StmtKind::For { iter: ForIter::In(_), .. }) {
+                lower_for_bounded(stmt, next);
+            }
         }
         match &mut stmt.kind {
             StmtKind::For { pat, iter, body, .. } => {
-                match (sites.get(&pos), &*iter) {
+                match (sites.marks.get(&pos), &*iter) {
                     (Some(mark), ForIter::In(_)) if mark == FOR_TUPLE_ARRAY => {
                         // M345: `for (a, b) in xs` sobre `[(A, B)]` → `for __ft in xs { let (a, b) = __ft; … }`.
                         if let ForPat::Tuple(names) = std::mem::replace(pat, ForPat::Single(String::new())) {
@@ -1143,7 +1156,85 @@ fn lower_for_bytes(stmt: &mut Stmt) {
     stmt.kind = StmtKind::Expr(at(ExprKind::Block(Block { statements: vec![bind, range_for], tail: None, line, col, end_line: line })));
 }
 
-pub(super) fn lower_for_iters_expr(expr: &mut Expr, sites: &HashMap<(usize, usize), String>) {
+/// #352: `for x in it` cuando el `impl Iterator` de `it` es genérico y ACOTADO. Su `next`
+/// manglado lleva parámetros-diccionario, así que no se puede llamar plano con solo el
+/// receptor (`ForIter::Iter`): ICE en la VM y E0061 en nativo. `next` es aquí el closure que
+/// rellena los diccionarios (`dict_for`), y el bucle se baja a construcciones ordinarias:
+///
+/// ```text
+/// { let __fit = it; let __fnx = <closure>;
+///   while (true) { match (__fnx(__fit)) { Option.Some(x) => { cuerpo }, _ => { break; } } } }
+/// ```
+///
+/// El `break`/`continue` del cuerpo siguen apuntando al bucle (el `match` no es un bucle) y la
+/// etiqueta pasa al `while`.
+fn lower_for_bounded(stmt: &mut Stmt, next: &Expr) {
+    let (line, col) = (stmt.line, stmt.col);
+    let at = |kind: ExprKind| Expr { kind, line, col };
+    let block = |statements: Vec<Stmt>| Block { statements, tail: None, line, col, end_line: line };
+    let old = std::mem::replace(&mut stmt.kind, StmtKind::Break { label: None });
+    let StmtKind::For { pat, iter: ForIter::In(src), body, label } = old else {
+        crate::ice!("a bounded iterator site is a `for … in`");
+    };
+    let it = format!("__fit#{line}_{col}");
+    let nx = format!("__fnx#{line}_{col}");
+    // El cuerpo va como sentencia: su valor se descarta y los dos brazos quedan en unit.
+    let body_stmt = Stmt { kind: StmtKind::Expr(at(ExprKind::Block(body))), line, col };
+    let (binding, arm_body) = match pat {
+        ForPat::Single(name) => (name, vec![body_stmt]),
+        ForPat::Tuple(names) => {
+            let elem = format!("__fel#{line}_{col}");
+            let destructure = Stmt {
+                kind: StmtKind::LetTuple { names, value: at(ExprKind::Ident(elem.clone())), mutable: false },
+                line,
+                col,
+            };
+            (elem, vec![destructure, body_stmt])
+        }
+    };
+    let some = MatchArm {
+        pattern: Pattern {
+            kind: PatternKind::Variant {
+                enum_name: "Option".to_string(),
+                variant: "Some".to_string(),
+                subpatterns: vec![Pattern { kind: PatternKind::Binding(binding), line, col }],
+            },
+            line,
+            col,
+        },
+        guard: None,
+        body: at(ExprKind::Block(block(arm_body))),
+        line,
+        col,
+    };
+    let none = MatchArm {
+        pattern: Pattern { kind: PatternKind::Wildcard, line, col },
+        guard: None,
+        body: at(ExprKind::Block(block(vec![Stmt { kind: StmtKind::Break { label: None }, line, col }]))),
+        line,
+        col,
+    };
+    let step = at(ExprKind::Match {
+        scrutinee: Box::new(at(ExprKind::Call {
+            callee: Box::new(at(ExprKind::Ident(nx.clone()))),
+            args: vec![at(ExprKind::Ident(it.clone()))],
+        })),
+        arms: vec![some, none],
+    });
+    let looped = at(ExprKind::While {
+        cond: Box::new(at(ExprKind::Bool(true))),
+        body: block(vec![Stmt { kind: StmtKind::Expr(step), line, col }]),
+        label,
+    });
+    let bind = |name: String, value: Expr| Stmt { kind: StmtKind::Let { name, ty: None, value, mutable: false }, line, col };
+    stmt.kind = StmtKind::Expr(at(ExprKind::Block(block(vec![
+        bind(it, src),
+        bind(nx, next.clone()),
+        Stmt { kind: StmtKind::Expr(looped), line, col },
+    ]))));
+}
+
+pub(super) fn lower_for_iters_expr(expr: &mut Expr, sites: &ForSites) {
     match &mut expr.kind {
         ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } | ExprKind::Try(inner) => lower_for_iters_expr(inner, sites),
         ExprKind::Binary { left, right, .. } => { lower_for_iters_expr(left, sites); lower_for_iters_expr(right, sites); }

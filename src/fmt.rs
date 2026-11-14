@@ -1435,7 +1435,7 @@ fn fmt_expr(cur: &mut Cur, e: &Expr, min_prec: u8) -> String {
     // primer argumento (`Expr` es `PartialEq`).
     let leaf = interp_leaf_key(e);
     if let Some(segs) = cur.interp.remove(&leaf) {
-        if interp_spine_pieces(e) == segs.len() {
+        if is_interp_root(e, &segs) {
             let template = cur.is_template(leaf.0, leaf.1);
             let mut keep = cur.source_escapes(leaf.0, leaf.1);
             let s = fmt_interp(cur, &segs, template, &mut keep); // una cadena interpolada es primaria → sin paréntesis
@@ -1549,7 +1549,7 @@ fn bin_chain<'a>(cur: &Cur, e: &'a Expr) -> Option<(BinaryOp, Vec<&'a Expr>)> {
         }
         // M316 (findings #82): una interpolación desazucarada (`"a ${x} b"` = `"a " + to_string(x)
         // + " b"`) es UN operando: aplanarla la reescribía como sus piezas (`+ to_string(x)`).
-        if cur.interp.get(&interp_leaf_key(node)).is_some_and(|segs| segs.len() == interp_spine_pieces(node)) {
+        if cur.interp.get(&interp_leaf_key(node)).is_some_and(|segs| is_interp_root(node, segs)) {
             break;
         }
         operands.push(right);
@@ -1565,7 +1565,7 @@ fn bin_chain<'a>(cur: &Cur, e: &'a Expr) -> Option<(BinaryOp, Vec<&'a Expr>)> {
     // índice o `a + b` en una fórmula no son eso.
     let is_text = |o: &Expr| {
         matches!(o.kind, ExprKind::Str(_))
-            || cur.interp.get(&interp_leaf_key(o)).is_some_and(|segs| segs.len() == interp_spine_pieces(o))
+            || cur.interp.get(&interp_leaf_key(o)).is_some_and(|segs| is_interp_root(o, segs))
     };
     if *op == BinaryOp::Add && operands.len() < 4 && !operands.iter().any(|o| is_text(o)) {
         return None;
@@ -1643,20 +1643,41 @@ fn interp_leaf_key(e: &Expr) -> (usize, usize) {
     while let ExprKind::Binary { op: BinaryOp::Add, left, .. } = &node.kind {
         node = left;
     }
+    // Una interpolación que es UNA sola pieza `${e}` entre paréntesis: el paréntesis re-posiciona
+    // el `to_string(e)` raíz al `(`, pero su callee conserva la posición del sitio (#372).
+    if let ExprKind::Call { callee, .. } = &node.kind {
+        if matches!(&callee.kind, ExprKind::Ident(n) if n == "to_string") {
+            return (callee.line, callee.col);
+        }
+    }
     (node.line, node.col)
 }
 
-/// Cuenta las PIEZAS (hojas) del spine izquierdo de `+` de `e`. Una interpolación pura tiene
-/// tantas piezas como segmentos; un `+` exterior suma una de más y un sub-spine se queda corto —
-/// el discriminador que identifica al nodo dueño del sitio.
-fn interp_spine_pieces(e: &Expr) -> usize {
-    let mut pieces = 1;
-    let mut node = e;
-    while let ExprKind::Binary { op: BinaryOp::Add, left, .. } = &node.kind {
-        pieces += 1;
-        node = left;
+/// ¿Es `e` EXACTAMENTE el desazucarado de `segs`? El conteo de piezas no basta (#372): una
+/// llamada o un índice sobre la cadena (`"${x}".len()`, `"id-${n}".to_upper() + "!"`) comparte
+/// posición con la primera pieza y puede sumar las mismas hojas, y al tomarlo por la raíz se
+/// borraba el sufijo. Se compara pieza a pieza con lo que emite `Parser::build_interp`.
+fn is_interp_root(e: &Expr, segs: &[InterpSeg]) -> bool {
+    fn piece_matches(piece: &Expr, seg: &InterpSeg) -> bool {
+        match (seg, &piece.kind) {
+            (InterpSeg::Lit(s), ExprKind::Str(t)) => s == t,
+            (InterpSeg::Expr(inner), ExprKind::Call { callee, args }) => {
+                matches!(&callee.kind, ExprKind::Ident(n) if n == "to_string") && args.len() == 1 && &args[0] == inner
+            }
+            _ => false,
+        }
     }
-    pieces
+    let mut node = e;
+    for (i, seg) in segs.iter().enumerate().rev() {
+        if i == 0 {
+            return piece_matches(node, seg);
+        }
+        match &node.kind {
+            ExprKind::Binary { op: BinaryOp::Add, left, right } if piece_matches(right, seg) => node = left,
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// Reemite una cadena interpolada desde sus segmentos de superficie (M29.3): `"a${x}b"`. Las partes
@@ -3072,6 +3093,28 @@ mod tests {
         // Un `${` literal (`\${no}`) se conserva escapado (no reabre interpolación).
         assert!(out.contains("\\${no}"), "'${{' literal escapado: {out:?}");
         assert_eq!(out, fmt(&out), "idempotente");
+    }
+
+    #[test]
+    fn a_suffix_after_an_interpolation_survives() {
+        // #372: una llamada, un índice o un `+` tras la cadena comparten posición con su primera
+        // pieza; el formateador los tomaba por la raíz de la interpolación y borraba el sufijo.
+        let lines = [
+            "let a = \"${x}\".len();",
+            "let d = \"${x}\"[0];",
+            "let s = \"id-${x}\".to_upper() + \"!\";",
+            "let t = \"BEGIN ${x}\\r\\n\".to_bytes() + bytes_of([1]) + b\"END\";",
+            "let u = \"a ${x}\" + \" tail\";",
+            "let v = (\"x${x}y\" + \"${x}\").len();",
+            "let w = \"${\"${x}\".len()}\";",
+        ];
+        let src = format!("fn main() -> int {{\n    let x = 1;\n    {}\n    0\n}}\n", lines.join("\n    "));
+        let out = fmt(&src);
+        assert_eq!(out, src, "nada se pierde ni se reescribe");
+        // Entre paréntesis, la interpolación de una sola pieza conserva su azúcar y su sufijo.
+        let paren = fmt("fn main() -> int {\n    let x = 1;\n    (\"${x}\").len()\n}\n");
+        assert!(paren.contains("\"${x}\".len()"), "{paren:?}");
+        assert_eq!(paren, fmt(&paren), "idempotente");
     }
 
     #[test]

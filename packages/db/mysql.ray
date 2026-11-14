@@ -498,7 +498,9 @@ fn connect_opts(
     pre.push(caps >> 16 & 255);
     pre.push(caps >> 24 & 255);
     pre = pre + [0, 0, 0, 1];  // paquete máximo 16 MiB (LE)
-    pre.push(33);  // charset utf8_general_ci
+    // utf8mb4_general_ci (45): con 33 (utf8mb3) el servidor degradaba a `?` todo carácter de 4
+    // octetos (#398). 45 existe desde MySQL 5.5 y en MariaDB; 255 solo desde 8.0.
+    pre.push(45);
     k = 0;
     while (k < 23) {
         pre.push(0);  // reservado
@@ -602,12 +604,64 @@ fn send_query(c: Conn, sql: string) -> Result<[int], string> {
 
 /// Runs a query that returns rows. With `params` the statement is prepared and the `?` markers
 /// are bound apart from the SQL (binary protocol → injection-proof); with `[]` it goes through
-/// the classic text protocol. Rows arrive as text either way (a NULL becomes `""`).
+/// the classic text protocol. Rows arrive as text either way; a `NULL` becomes `""` (use
+/// `query_opt` to tell them apart). A value that is not valid UTF-8 (a BLOB) is an `Err`: read
+/// it with `query_bytes`.
 pub fn query(c: Conn, sql: string, params: [string]) -> Result<[[string]], string> {
+    let rows = query_opt(c, sql, params)?;
+    var out: [[string]] = [];
+    for row in rows {
+        var cells: [string] = [];
+        for cell in row {
+            cells.push(cell.unwrap_or(""));
+        }
+        out.push(cells);
+    }
+    Result.Ok(out)
+}
+
+/// Like `query`, but every cell is an `Option<string>`: `None` for SQL `NULL`, `Some(text)`
+/// otherwise — the way to tell a `NULL` from an empty string (same shape as
+/// `db/postgres.query_opt` and `db/sqlite.query_opt`). Needs db 0.8.
+pub fn query_opt(c: Conn, sql: string, params: [string]) -> Result<[[Option<string>]], string> {
+    let rows = query_bytes(c, sql, params)?;
+    var out: [[Option<string>]] = [];
+    var r = 0;
+    while (r < rows.len()) {
+        var cells: [Option<string>] = [];
+        var k = 0;
+        while (k < rows[r].len()) {
+            match (rows[r][k]) {
+                Option.None => cells.push(Option.None),
+                Option.Some(raw) => match (from_utf8(raw)) {
+                    Result.Ok(text) => cells.push(Option.Some(text)),
+                    Result.Err(_) => {
+                        return Result.Err(
+                            "mysql: row ${r + 1}, column ${k + 1} is not valid UTF-8 (a binary value); read it with query_bytes"
+                        );
+                    },
+                },
+            }
+            k = k + 1;
+        }
+        out.push(cells);
+        r = r + 1;
+    }
+    Result.Ok(out)
+}
+
+/// Like `query_opt`, but every cell is the raw `bytes` of the value: the way to read a
+/// BLOB/BINARY column, which is not text. Numbers and dates still arrive as their text, in
+/// bytes. Needs db 0.8.
+pub fn query_bytes(c: Conn, sql: string, params: [string]) -> Result<[[Option<bytes>]], string> {
     if (params.len() == 0) {
         return query_text(c, sql);
     }
-    query_prepared(c, sql, params)
+    var bound: [Option<string>] = [];
+    for p in params {
+        bound.push(Option.Some(p));
+    }
+    query_prepared(c, sql, bound)
 }
 
 /// Runs a statement that returns no rows (INSERT/UPDATE/DELETE/DDL); returns the affected-row
@@ -616,11 +670,24 @@ pub fn exec(c: Conn, sql: string, params: [string]) -> Result<int, string> {
     if (params.len() == 0) {
         return exec_text(c, sql);
     }
+    var bound: [Option<string>] = [];
+    for p in params {
+        bound.push(Option.Some(p));
+    }
+    exec_prepared(c, sql, bound)
+}
+
+/// Like `exec`, but a parameter can be SQL `NULL`: `None` binds `NULL`, `Some(text)` the value
+/// (same shape as `db/postgres.exec_opt`). Needs db 0.8.
+pub fn exec_opt(c: Conn, sql: string, params: [Option<string>]) -> Result<int, string> {
+    if (params.len() == 0) {
+        return exec_text(c, sql);
+    }
     exec_prepared(c, sql, params)
 }
 
 // El camino clásico de texto (COM_QUERY), para consultas sin parámetros.
-fn query_text(c: Conn, sql: string) -> Result<[[string]], string> {
+fn query_text(c: Conn, sql: string) -> Result<[[Option<bytes>]], string> {
     let first = send_query(c, sql)?;
     if (first[0] == 255) {
         return Result.Err(err_msg(first));
@@ -641,7 +708,7 @@ fn query_text(c: Conn, sql: string) -> Result<[[string]], string> {
         return Result.Err("mysql: expected EOF after the columns");
     }
     // Filas hasta el EOF final.
-    var rows: [[string]] = [];
+    var rows: [[Option<bytes>]] = [];
     var follow = true;
     while (follow) {
         let p = read_packet(c)?;
@@ -651,12 +718,12 @@ fn query_text(c: Conn, sql: string) -> Result<[[string]], string> {
             if (p[0] == 255) {
                 return Result.Err(err_msg(p));
             }
-            var row: [string] = [];
+            var row: [Option<bytes>] = [];
             var i = 0;
             var col = 0;
             while (col < ncols) {
                 if (at(p, i)? == 251) {
-                    row.push("");  // NULL
+                    row.push(Option.None);  // NULL
                     i = i + 1;
                 } else {
                     let ln = lenc_int(p, i)?;
@@ -669,10 +736,7 @@ fn query_text(c: Conn, sql: string) -> Result<[[string]], string> {
                         j = j + 1;
                     }
                     i = i + ln.0;
-                    row.push(match (from_utf8(bytes_of(cell))) {
-                        Result.Ok(s) => s,
-                        Result.Err(_) => "",
-                    });
+                    row.push(Option.Some(bytes_of(cell)));
                 }
                 col = col + 1;
             }
@@ -753,10 +817,9 @@ fn stmt_prepare(c: Conn, sql: string) -> Result<(int, int), string> {
     return Result.Ok((stmt_id, nparams));
 }
 
-// COM_STMT_EXECUTE (0x17): todos los parámetros como VAR_STRING (0xfd). El bitmap de NULLs va a
-// cero (la API no distingue NULL de ""; mismo compromiso que las celdas). Devuelve el primer
-// paquete de la respuesta.
-fn stmt_execute(c: Conn, stmt_id: int, params: [string]) -> Result<[int], string> {
+// COM_STMT_EXECUTE (0x17): todos los parámetros como VAR_STRING (0xfd). Un parámetro `None` es
+// NULL: marca su bit en el bitmap y no lleva valor. Devuelve el primer paquete de la respuesta.
+fn stmt_execute(c: Conn, stmt_id: int, params: [Option<string>]) -> Result<[int], string> {
     c.seq = 0;
     var out: [int] = [23];
     out.push(stmt_id & 255);
@@ -769,7 +832,16 @@ fn stmt_execute(c: Conn, stmt_id: int, params: [string]) -> Result<[int], string
         var k = 0;
         let nb = (params.len() + 7) / 8;
         while (k < nb) {
-            out.push(0);  // bitmap de NULLs: ninguno
+            // Bitmap de NULLs: el bit `j` del octeto `k` es el parámetro `k * 8 + j`.
+            var mask = 0;
+            var j = 0;
+            while (j < 8 && k * 8 + j < params.len()) {
+                if (params[k * 8 + j].is_none()) {
+                    mask = mask | 1 << j;
+                }
+                j = j + 1;
+            }
+            out.push(mask);
             k = k + 1;
         }
         out.push(1);  // new-params-bound
@@ -781,8 +853,13 @@ fn stmt_execute(c: Conn, stmt_id: int, params: [string]) -> Result<[int], string
         }
         k = 0;
         while (k < params.len()) {
-            let pb = params[k].to_bytes();
-            out = out + lenc_of(pb.len()) + bytes_to_ints(pb);
+            match (params[k]) {
+                Option.Some(text) => {
+                    let pb = text.to_bytes();
+                    out = out + lenc_of(pb.len()) + bytes_to_ints(pb);
+                },
+                Option.None => { },
+            }
             k = k + 1;
         }
     }
@@ -934,7 +1011,50 @@ fn dec_time(p: [int], i: int, ln: int) -> Result<string, string> {
     Result.Ok(s)
 }
 
-// Una celda de la fila binaria, por tipo de columna → (texto, nueva posición). Falla como valor
+// El texto decimal del entero SIN signo de 64 bits `hi * 2^32 + lo` (mitades de 32 bits), por
+// división larga entre 10^9: ningún intermedio pasa de 2^62.
+fn u64_text(hi: int, lo: int) -> string {
+    let d = 1000000000;
+    let t = hi % d * 4294967296 + lo;
+    let q = hi / d * 4294967296 + t / d;
+    if (q == 0) {
+        return to_string(t % d);
+    }
+    let tail = to_string(t % d);
+    to_string(q) + "0".repeat(9 - tail.len()) + tail
+}
+
+// La forma con la que `query_bytes` entrega una celda: los octetos del valor (o de su texto).
+fn bin_value(p: [int], i: int, t: int, flags: int) -> Result<(bytes, int), string> {
+    // Los tipos de longitud fija (enteros, floats, fechas) se entregan como su texto.
+    if (t == 1
+        || t == 2
+        || t == 13
+        || t == 3
+        || t == 9
+        || t == 8
+        || t == 4
+        || t == 5
+        || t == 10
+        || t == 7
+        || t == 12
+        || t == 11) {
+        let cell = bin_cell(p, i, t, flags)?;
+        return Result.Ok((cell.0.to_bytes(), cell.1));
+    }
+    // El resto (DECIMAL/NEWDECIMAL/VARCHAR/BIT/ENUM/SET/BLOB/TEXT/STRING/JSON…): length-encoded.
+    let ln = lenc_int(p, i)?;
+    let _ = at(p, i + ln.1 + ln.0 - 1)?;  // valida el rango completo del valor (si ln.0 > 0)
+    var cell: [int] = [];
+    var j = 0;
+    while (j < ln.0) {
+        cell.push(p[i + ln.1 + j]);
+        j = j + 1;
+    }
+    Result.Ok((bytes_of(cell), i + ln.1 + ln.0))
+}
+
+// Una celda de LONGITUD FIJA de la fila binaria, por tipo de columna → (texto, nueva posición). Falla como valor
 // ante un paquete truncado (toda lectura pasa por `at`/`int_le`/`lenc_int`, que chequean límites).
 fn bin_cell(p: [int], i: int, t: int, flags: int) -> Result<(string, int), string> {
     let unsigned = (flags & 32) != 0;
@@ -948,11 +1068,15 @@ fn bin_cell(p: [int], i: int, t: int, flags: int) -> Result<(string, int), strin
         return int_cell(p, i, 4, unsigned);  // LONG / INT24
     }
     if (t == 8) {
-        // LONGLONG: por mitades (b7<<56 desbordaría). Un BIGINT UNSIGNED ≥ 2^63 no cabe en el
-        // int de raylang y se muestra envuelto (limitación documentada).
+        // LONGLONG: por mitades (b7<<56 desbordaría).
         let lo = int_le(p, i, 4)?;
         var hi = int_le(p, i + 4, 4)?;
-        if (!unsigned && hi >= 2147483648) {
+        if (unsigned) {
+            // Un BIGINT UNSIGNED ≥ 2^63 no cabe en el int de raylang: su texto decimal se
+            // compone sin pasar por él (#400: `hi * 2^32 + lo` abortaba el programa).
+            return Result.Ok((u64_text(hi, lo), i + 8));
+        }
+        if (hi >= 2147483648) {
             hi = hi - 4294967296;
         }
         return Result.Ok((to_string(hi * 4294967296 + lo), i + 8));
@@ -983,24 +1107,15 @@ fn bin_cell(p: [int], i: int, t: int, flags: int) -> Result<(string, int), strin
         let ln = at(p, i)?;
         return Result.Ok((dec_time(p, i + 1, ln)?, i + 1 + ln));
     }
-    // El resto (DECIMAL/NEWDECIMAL/VARCHAR/BIT/ENUM/SET/BLOB/TEXT/STRING/JSON…): length-encoded.
-    let ln = lenc_int(p, i)?;
-    let _ = at(p, i + ln.1 + ln.0 - 1)?;  // valida el rango completo del valor (si ln.0 > 0)
-    var cell: [int] = [];
-    var j = 0;
-    while (j < ln.0) {
-        cell.push(p[i + ln.1 + j]);
-        j = j + 1;
-    }
-    let s = match (from_utf8(bytes_of(cell))) {
-        Result.Ok(x) => x,
-        Result.Err(_) => "",
-    };
-    return Result.Ok((s, i + ln.1 + ln.0));
+    Result.Err("mysql: column type ${t} is not a fixed-length type")
 }
 
 // SELECT preparado: execute → definiciones de columna (capturando tipo+flags) → filas binarias.
-fn query_prepared(c: Conn, sql: string, params: [string]) -> Result<[[string]], string> {
+fn query_prepared(
+    c: Conn,
+    sql: string,
+    params: [Option<string>]
+) -> Result<[[Option<bytes>]], string> {
     let pr = stmt_prepare(c, sql)?;
     let first = stmt_execute(c, pr.0, params)?;
     if (first[0] == 255) {
@@ -1028,7 +1143,7 @@ fn query_prepared(c: Conn, sql: string, params: [string]) -> Result<[[string]], 
         stmt_close(c, pr.0);
         return Result.Err("mysql: expected EOF after the columns");
     }
-    var rows: [[string]] = [];
+    var rows: [[Option<bytes>]] = [];
     var follow = true;
     while (follow) {
         let p = read_packet(c)?;
@@ -1040,16 +1155,16 @@ fn query_prepared(c: Conn, sql: string, params: [string]) -> Result<[[string]], 
                 return Result.Err(err_msg(p));
             }
             // Fila binaria: [0x00][bitmap de NULLs, desplazado 2 bits][valores por tipo].
-            var row: [string] = [];
+            var row: [Option<bytes>] = [];
             var i = 1 + (ncols + 9) / 8;
             var col = 0;
             while (col < ncols) {
                 let bit = col + 2;
                 if ((at(p, 1 + bit / 8)? >> bit % 8 & 1) == 1) {
-                    row.push("");  // NULL
+                    row.push(Option.None);  // NULL
                 } else {
-                    let cell = bin_cell(p, i, types[col], cflags[col])?;
-                    row.push(cell.0);
+                    let cell = bin_value(p, i, types[col], cflags[col])?;
+                    row.push(Option.Some(cell.0));
                     i = cell.1;
                 }
                 col = col + 1;
@@ -1062,7 +1177,7 @@ fn query_prepared(c: Conn, sql: string, params: [string]) -> Result<[[string]], 
 }
 
 // Sentencia sin filas preparada: la respuesta al execute es un OK ordinario.
-fn exec_prepared(c: Conn, sql: string, params: [string]) -> Result<int, string> {
+fn exec_prepared(c: Conn, sql: string, params: [Option<string>]) -> Result<int, string> {
     let pr = stmt_prepare(c, sql)?;
     let first = stmt_execute(c, pr.0, params)?;
     stmt_close(c, pr.0);
@@ -1172,6 +1287,47 @@ pub fn pool_exec(p: Pool, sql: string, params: [string]) -> Result<int, string> 
         fn() -> Result<Conn, string> { pool_dial(p) },
         fn(c: Conn) { disconnect(c) },
         fn(c: Conn) -> Result<int, string> { exec(c, sql, params) },
+        false
+    )
+}
+
+/// `query_opt` through the pool (a `NULL` is `None`): the same single retry as `pool_query`.
+pub fn pool_query_opt(
+    p: Pool,
+    sql: string,
+    params: [string]
+) -> Result<[[Option<string>]], string> {
+    pool.run(
+        p.slots,
+        fn() -> Result<Conn, string> { pool_dial(p) },
+        fn(c: Conn) { disconnect(c) },
+        fn(c: Conn) -> Result<[[Option<string>]], string> { query_opt(c, sql, params) },
+        true
+    )
+}
+
+/// `query_bytes` through the pool (raw cells, for BLOBs): the same single retry as `pool_query`.
+pub fn pool_query_bytes(
+    p: Pool,
+    sql: string,
+    params: [string]
+) -> Result<[[Option<bytes>]], string> {
+    pool.run(
+        p.slots,
+        fn() -> Result<Conn, string> { pool_dial(p) },
+        fn(c: Conn) { disconnect(c) },
+        fn(c: Conn) -> Result<[[Option<bytes>]], string> { query_bytes(c, sql, params) },
+        true
+    )
+}
+
+/// `exec_opt` through the pool (a `None` parameter is `NULL`). Never retries, like `pool_exec`.
+pub fn pool_exec_opt(p: Pool, sql: string, params: [Option<string>]) -> Result<int, string> {
+    pool.run(
+        p.slots,
+        fn() -> Result<Conn, string> { pool_dial(p) },
+        fn(c: Conn) { disconnect(c) },
+        fn(c: Conn) -> Result<int, string> { exec_opt(c, sql, params) },
         false
     )
 }

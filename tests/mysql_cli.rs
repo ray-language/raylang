@@ -74,6 +74,10 @@ fn col_def(name: &str) -> Vec<u8> {
 }
 
 fn col_def_ty(name: &str, ty: u8) -> Vec<u8> {
+    col_def_flags(name, ty, 0)
+}
+
+fn col_def_flags(name: &str, ty: u8, flags: u16) -> Vec<u8> {
     let mut p = Vec::new();
     p.extend_from_slice(&lenc("def")); // catálogo
     for _ in 0..3 {
@@ -85,7 +89,7 @@ fn col_def_ty(name: &str, ty: u8) -> Vec<u8> {
     p.extend_from_slice(&[33, 0]); // charset
     p.extend_from_slice(&[255, 0, 0, 0]); // longitud de columna
     p.push(ty);
-    p.extend_from_slice(&[0, 0]); // flags
+    p.extend_from_slice(&flags.to_le_bytes()); // flags (32 = UNSIGNED)
     p.push(0); // decimales
     p.extend_from_slice(&[0, 0]); // relleno
     p
@@ -98,6 +102,8 @@ fn handle(mut s: TcpStream) {
     s.write_all(&pkt(0, &handshake_v10())).unwrap();
     let (_seq, resp) = read_pkt(&mut s);
     // HandshakeResponse41: capacidades(4) + max(4) + charset(1) + reservado(23) + user NUL + auth.
+    // #398: el cliente pide utf8mb4 (45), no utf8mb3 (33).
+    assert_eq!(resp[8], 45, "charset del HandshakeResponse41");
     let mut i = 4 + 4 + 1 + 23;
     let user_start = i;
     while resp[i] != 0 {
@@ -158,10 +164,16 @@ fn command_phase<S: Read + Write>(s: &mut S) {
                 assert_eq!(id, 7, "stmt id");
                 let mut params: Vec<String> = Vec::new();
                 if prep_nparams > 0 {
-                    let mut i = 1 + 4 + 1 + 4 + (prep_nparams + 7) / 8;
+                    let bitmap = 1 + 4 + 1 + 4;
+                    let mut i = bitmap + (prep_nparams + 7) / 8;
                     assert_eq!(payload[i], 1, "new-params-bound");
                     i += 1 + prep_nparams * 2; // tipos (2 por parámetro)
-                    for _ in 0..prep_nparams {
+                    for k in 0..prep_nparams {
+                        // Un parámetro NULL marca su bit y no lleva valor.
+                        if payload[bitmap + k / 8] >> (k % 8) & 1 == 1 {
+                            params.push("<NULL>".to_string());
+                            continue;
+                        }
                         let l = payload[i] as usize; // lenc corto (los tests no pasan de 250)
                         i += 1;
                         params.push(String::from_utf8_lossy(&payload[i..i + l]).into_owned());
@@ -172,6 +184,22 @@ fn command_phase<S: Read + Write>(s: &mut S) {
                     let mut err = vec![0xffu8, 0x7a, 0x04];
                     err.extend_from_slice(b"#42S02la tabla no existe");
                     s.write_all(&pkt(1, &err)).unwrap();
+                } else if prep_sql.starts_with("WIDE") {
+                    // #399/#400: BIGINT UNSIGNED en el tope, un BLOB que no es UTF-8 y un NULL.
+                    s.write_all(&pkt(1, &[3])).unwrap();
+                    s.write_all(&pkt(2, &col_def_flags("n", 8, 32))).unwrap(); // LONGLONG UNSIGNED
+                    s.write_all(&pkt(3, &col_def_ty("b", 0xfc))).unwrap(); // BLOB
+                    s.write_all(&pkt(4, &col_def("s"))).unwrap();
+                    s.write_all(&pkt(5, &EOF)).unwrap();
+                    let mut f = vec![0u8, 0b0001_0000]; // la 3.ª columna (bit 4) es NULL
+                    f.extend_from_slice(&u64::MAX.to_le_bytes());
+                    f.extend_from_slice(&[2, 0xff, 0x00]);
+                    s.write_all(&pkt(6, &f)).unwrap();
+                    s.write_all(&pkt(7, &EOF)).unwrap();
+                } else if prep_sql.starts_with("NULLS") {
+                    // OK con tantas filas afectadas como parámetros NULL llegaron.
+                    let nulls = params.iter().filter(|p| *p == "<NULL>").count() as u8;
+                    s.write_all(&pkt(1, &[0x00, nulls, 0, 0, 0, 0, 0])).unwrap();
                 } else if prep_sql.starts_with("SELECT") {
                     // Result set BINARIO: 4 columnas que ejercitan la decodificación por tipo.
                     s.write_all(&pkt(1, &[4])).unwrap();
@@ -215,6 +243,15 @@ fn command_phase<S: Read + Write>(s: &mut S) {
                     let mut row2 = lenc("grace");
                     row2.push(0xfb); // NULL
                     s.write_all(&pkt(6, &row2)).unwrap();
+                    s.write_all(&pkt(7, &EOF)).unwrap();
+                } else if sql.starts_with("RAW") {
+                    // #399: una celda vacía, un NULL y un binario que no es UTF-8, por texto.
+                    s.write_all(&pkt(1, &[3])).unwrap();
+                    for (i, name) in ["e", "n", "b"].iter().enumerate() {
+                        s.write_all(&pkt(2 + i as u8, &col_def(name))).unwrap();
+                    }
+                    s.write_all(&pkt(5, &EOF)).unwrap();
+                    s.write_all(&pkt(6, &[0, 0xfb, 2, 0xff, 0x41])).unwrap();
                     s.write_all(&pkt(7, &EOF)).unwrap();
                 } else if sql.starts_with("TRUNC") {
                     // M77: fila MALFORMADA — el string length-encoded declara 200 octetos pero el
@@ -562,4 +599,62 @@ fn mysql_protocol_binary_prepared() {
     assert_eq!(out_vm, EXPECTED_BIN, "VM");
     let (out_interp, _) = run(&app, &["--interp"]);
     assert_eq!(out_interp, EXPECTED_BIN, "intérprete");
+}
+
+/// #399/#400: `query_opt` distingue NULL de `""`, `query_bytes` entrega un binario, `query`
+/// rechaza lo que no es UTF-8 en vez de dar `""`, un parámetro `None` viaja como NULL y un
+/// BIGINT UNSIGNED ≥ 2^63 sale con su texto decimal en vez de abortar el programa.
+fn project_cells(base: &std::path::Path, port: u16) -> std::path::PathBuf {
+    let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");
+    let app = base.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(
+        app.join("ray.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n[dependencies]\ndb = \"path:{}\"\n",
+            db.display()
+        ),
+    )
+    .unwrap();
+    let main = format!(
+        r#"import db/mysql;
+
+fn main() -> int {{
+    let c = mysql.connect("127.0.0.1", {port}, "raylang", "secret", "demo").unwrap();
+    print(mysql.query_opt(c, "SELECT name, nota FROM t", []));
+    print(mysql.query_bytes(c, "RAW", []));
+    print(mysql.query(c, "RAW", []));
+    print(mysql.query_bytes(c, "WIDE ?", ["x"]));
+    print(mysql.query(c, "WIDE ?", ["x"]));
+    print(mysql.exec_opt(c, "NULLS ? ? ?", [Option.None, Option.Some("a"), Option.None]));
+    print(mysql.exec(c, "NULLS ? ?", ["a", ""]));
+    mysql.disconnect(c);
+    0
+}}
+"#
+    );
+    std::fs::write(app.join("src/main.ray"), main).unwrap();
+    app
+}
+
+const EXPECTED_CELLS: &str = "Result.Ok([[Option.Some(ada), Option.Some(36)], [Option.Some(grace), Option.None]])\n\
+Result.Ok([[Option.Some(), Option.None, Option.Some(ff41)]])\n\
+Result.Err(mysql: row 1, column 3 is not valid UTF-8 (a binary value); read it with query_bytes)\n\
+Result.Ok([[Option.Some(3138343436373434303733373039353531363135), Option.Some(ff00), Option.None]])\n\
+Result.Err(mysql: row 1, column 2 is not valid UTF-8 (a binary value); read it with query_bytes)\n\
+Result.Ok(2)\n\
+Result.Ok(0)\n";
+
+#[test]
+fn mysql_null_binary_and_unsigned_cells() {
+    let base = std::env::temp_dir().join("ray_mysql_cli_cells");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let port = launch_server();
+    let app = project_cells(&base, port);
+
+    let (out_vm, _) = run(&app, &[]);
+    assert_eq!(out_vm, EXPECTED_CELLS, "VM");
+    let (out_interp, _) = run(&app, &["--interp"]);
+    assert_eq!(out_interp, EXPECTED_CELLS, "intérprete");
 }

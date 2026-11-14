@@ -34,6 +34,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 - **Los errores de `@derive` señalan el `@derive`**: un campo que no se puede derivar (un
   arreglo en `@derive(Hash)`, un `Map` en `@derive(Eq)`) daba el error en una línea inexistente
   (`50999995:1`) y a veces atribuido a otro módulo. Ahora dice el trait, el tipo y el campo.
+- **Paquete `db` 0.8.0 — `db/mysql`**: la sesión negocia `utf8mb4` (los emoji volvían como `?`);
+  `query_opt` distingue un `NULL` de `''` y `exec_opt` escribe un `NULL`, como en postgres y
+  sqlite; `query_bytes` lee columnas BLOB/BINARY, y un valor que no es UTF-8 leído con `query`
+  es un error en vez de una cadena vacía sin aviso; un `BIGINT UNSIGNED` ≥ 2^63 en una consulta
+  con parámetros ya no aborta el programa.
+- **Paquete `db` 0.8.0 — `db/mongo`**: `connect_auth` y `pool_auth` autentican contra una base
+  (`admin`, el `authSource`) y operan en otra. Antes había que conectar con `"admin"` y las
+  escrituras acababan en `admin.<colección>` sin aviso.
+- La referencia ya no atribuye a `db/mongo` un `pool_tx` que no existe.
 
 ## 1.27.98 — 2026-11-14
 

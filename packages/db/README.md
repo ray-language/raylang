@@ -16,7 +16,7 @@ Queda declarado en tu `ray.toml` (y fijado en `ray.lock`):
 
 ```toml
 [dependencies]
-db = "^0.7"
+db = "^0.8"
 ```
 
 Dentro del monorepo de raylang, los ejemplos y tests pueden usar la ruta (`db = "path:../ruta/a/packages/db"`).
@@ -55,6 +55,16 @@ fn main() -> int {
 - **API**: `connect(host, port, user, password, database) -> Result<Conn, string>` ·
   `query(c, sql, params) -> Result<[[string]], string>` (filas como texto; `NULL` → `""`) ·
   `exec(c, sql, params) -> Result<int, string>` (filas afectadas) · `disconnect(c)`.
+- **`NULL` y binarios** (0.8.0, raycdc #399): `query_opt(c, sql, params) ->
+  Result<[[Option<string>]], string>` (`None` = `NULL`, la forma de distinguirlo de `''`, como
+  en postgres y sqlite) · `query_bytes(c, sql, params) -> Result<[[Option<bytes>]], string>` (la
+  celda cruda: para columnas BLOB/BINARY; números y fechas llegan como su texto) ·
+  `exec_opt(c, sql, [Option<string>])` (`Option.None` enlaza `NULL`) · por el pool,
+  `pool_query_opt`/`pool_query_bytes`/`pool_exec_opt`. Un valor que no es UTF-8 leído con
+  `query`/`query_opt` es un `Err` que nombra la fila y la columna (antes llegaba como `""`, sin
+  aviso).
+- **Charset** (0.8.0, raycdc #398): la sesión negocia `utf8mb4`. Con `utf8mb3` el servidor
+  devolvía `?` por cada carácter de 4 octetos (emoji); ya no hace falta `SET NAMES utf8mb4`.
 - **Pool** (M318, findings #68): `pool(host, port, user, password, database, size) -> Pool` (o
   `pool_tls`) · `pool_query(p, sql, params)` (reintenta una vez sobre una conexión fresca si la
   reutilizada falla por el cable — un servidor reiniciado sana solo) · `pool_exec` (sin reintento)
@@ -77,7 +87,9 @@ fn main() -> int {
   binaria se decodifica por tipo (ints con/sin signo, FLOAT/DOUBLE, DATE/DATETIME/TIME, texto);
   con `[]` va por el protocolo de texto clásico. Misma API `[[string]]` en ambos casos.
 - **Diferido**: sentencias preparadas con estado (hoy una ronda prepare/execute/close por
-  llamada), full-path sin TLS (intercambio RSA), BIGINT UNSIGNED ≥ 2^63 (se muestra envuelto).
+  llamada). Un BIGINT UNSIGNED ≥ 2^63 llega con su texto decimal exacto
+  (`18446744073709551615`; 0.8.0, raycdc #400: en una consulta con parámetros abortaba el
+  programa); no cabe en un `int`, así que `parse_int` sobre él da `None`.
 
 ### `db/postgres` (M53.2)
 
@@ -254,6 +266,11 @@ filter)` (reintento único si la conexión reutilizada falla por el cable) · `p
   `tls_connect` + la misma sesión (cert verificado contra `host`).
 - **Fechas**: `Bson.Date` (epoch-ms; `dump` la muestra como ISO 8601) y `Bson.Timestamp` (interno)
   se decodifican/codifican; una colección real con fechas ya no da "tipo no soportado".
+- **`authSource`** (0.8.0, raycdc #403): `connect(…, database, nonce)` autentica contra
+  `database` **y opera en ella**. Para un usuario definido en otra base (lo habitual: `admin`),
+  `connect_auth(host, port, user, password, auth_db, database, nonce)` — y `connect_tls_auth`,
+  `pool_auth`, `pool_tls_auth`— autentica contra `auth_db` y opera en `database`. Antes había
+  que conectar con `"admin"` y las escrituras acababan en `admin.<colección>` sin aviso.
 - **Sin auth** (M309): con `user = ""` la sesión se abre tras el `hello`, sin SCRAM — un servidor
   de desarrollo o un contenedor sin `--auth`.
 - **MongoDB 6+** (M309): el `saslContinue` lleva `conversationId` como int32 (`Bson.Int32`, solo

@@ -292,14 +292,15 @@ pub(super) fn generic_decl(tparams: &[String], bounds: &[(String, String)]) -> S
     format!("<{}>", ps.join(", "))
 }
 
-/// ¿La clave de `Map` de tipo `k` se guarda CONVERTIDA (M461)? Sí un tipo de usuario (su
+/// ¿La clave de `Map` de tipo `k` se guarda CONVERTIDA (M461)? Sí una tupla y un `Option`
+/// (M462: pueden llevar dentro un tipo de usuario), un tipo de usuario (su
 /// `Rc<RefCell<…>>` mutable no puede ser clave de un `HashMap`: se copia a un `__RayKey`) y un
 /// parámetro de tipo (el código genérico no sabe cuál de los dos casos le tocará). Un
 /// primitivo se guarda tal cual, como siempre.
 pub(super) fn key_is_converted(k: &Type) -> bool {
     match normalize_type(k) {
-        Type::Var(_) => true,
-        Type::Struct(n, _) | Type::Enum(n, _) => n != "Option" && n != "Result",
+        Type::Var(_) | Type::Tuple(_) => true,
+        Type::Struct(n, _) | Type::Enum(n, _) => n != "Result",
         _ => false,
     }
 }
@@ -310,7 +311,8 @@ pub(super) fn key_rust_ty(k: &Type, enums: &std::collections::HashSet<String>, t
     match normalize_type(k) {
         Type::Var(n) => Ok(format!("<{n} as __RayKeyed>::Key")),
         Type::Struct(n, args) if args.is_empty() && tparams.contains(&n) => Ok(format!("<{n} as __RayKeyed>::Key")),
-        Type::Struct(n, _) | Type::Enum(n, _) if n != "Option" && n != "Result" => Ok("__RayKey".to_string()),
+        Type::Struct(n, _) | Type::Enum(n, _) if n != "Result" => Ok("__RayKey".to_string()),
+        Type::Tuple(_) => Ok("__RayKey".to_string()),
         other => rust_ty(&other, enums, tparams),
     }
 }

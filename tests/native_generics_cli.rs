@@ -137,3 +137,33 @@ fn a_derive_that_cannot_be_generated_points_at_the_annotation() {
     assert!(err.contains("type error at 1:1: cannot derive Eq for 'Outer' (field 'inner'): "), "{err}");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn a_local_closure_shadows_a_generic_function_of_the_same_name() {
+    // Una función genérica `f` del programa hacía que la llamada a un PARÁMETRO `f: fn() -> …`
+    // saliera con los argumentos de tipo de la global (`f::<…>()`: E0109 de rustc). La local
+    // tapa a la global, como en el checker y en la VM.
+    let d = project(
+        "shadow",
+        &[(
+            "src/main.ray",
+            r#"fn f<T: Show>(x: T) -> string { "<${x}>" }
+fn g<T>(x: T) -> T { x }
+fn apply(f: fn() -> [string]) -> [string] { f() }
+fn twice(g: fn(int) -> int, n: int) -> int { g(g(n)) }
+fn main() -> int {
+    print(f(1));
+    var out: [[string]] = [];
+    out.push(apply(fn() -> [string] { ["a"] }));
+    print(out);
+    print(twice(fn(n: int) -> int { n * 3 }, 2));
+    let f = fn(s: string) -> string { s + "!" };
+    print(f("hi"));
+    print(g("z"));
+    0
+}
+"#,
+        )],
+    );
+    same_everywhere(&d, "<1>\n[[a]]\n18\nhi!\nz\n");
+}

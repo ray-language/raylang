@@ -336,11 +336,23 @@ trait Hash {
 // y ordena sus claves por estructura dentro del runtime, sin llamar a código del programa. Un
 // `impl MapKey` a mano se rechaza fuera del prelude; el checker lo concede a los tipos de usuario
 // con `@derive(Eq, Hash)` cuyos campos son claves (`grant_map_keys`).
-/// A type that can be the key of a built-in `Map`: `int`, `string`, `char`, `bool`, `bytes`, and
-/// any non-generic struct or enum with `@derive(Eq, Hash)` whose fields are themselves keys.
+/// A type that can be the key of a built-in `Map`: `int`, `string`, `char`, `bool`, `bytes`, a
+/// tuple or an `Option` of keys, and any non-generic struct or enum with `@derive(Eq, Hash)`
+/// whose fields are themselves keys.
 /// Generic code that uses a type parameter as a key declares it: `fn count<P: MapKey>(xs: [P])`.
 /// It has no methods and cannot be implemented by hand.
 trait MapKey { }
+
+// Un `Option` de algo hashable lo es: lo necesita un tipo con un campo `Option<…>` para
+// derivar `Hash` (y con él, ser clave de `Map`).
+impl<T: Hash> Hash for Option<T> {
+    fn hash(self) -> int {
+        match (self) {
+            Option.Some(v) => 31 + (v.hash() & 4294967295) & 4294967295,
+            Option.None => 0,
+        }
+    }
+}
 
 // `bytes` es clave de `Map`, así que un tipo con un campo `bytes` debe poder derivar `Hash`.
 // Mismo polinomio acotado a 32 bits que el de `string`.

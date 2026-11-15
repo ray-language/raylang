@@ -547,7 +547,7 @@ fn __ray_substring(s: &Rc<str>, i: i64, j: i64) -> Rc<str> {\n");
         "  fn __from_send(s: __RaySend) -> Self { match s { __RaySend::I(x) => __RayKeyPart::I(x), __RaySend::S(x) => __RayKeyPart::S(Rc::<str>::from(&*x)), __RaySend::C(x) => __RayKeyPart::C(x), __RaySend::B(x) => __RayKeyPart::B(x), __RaySend::By(x) => __RayKeyPart::By(Rc::<[u8]>::from(&*x)), other => __RayKeyPart::K(Box::new(__RayKey::__from_send(other))) } } }\n",
         "impl __RaySendConv for __RayKey { fn __to_send(self) -> __RaySend { __RaySend::K(self.rank, self.show, self.fields.iter().map(|p| p.__to_send()).collect()) }\n",
         "  fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::K(rank, show, fields) => __RayKey { rank, show, fields: fields.into_iter().map(__RayKeyPart::__from_send).collect() }, _ => unreachable!() } } }\n",
-        "trait __RayKeyed: Sized { type Key: Clone + std::hash::Hash + Eq + Ord + RayShow + __RaySendConv + 'static; fn __key(&self) -> Self::Key; fn __unkey(k: &Self::Key) -> Self; }\n",
+        "trait __RayKeyed: Sized + __RayKeyField { type Key: Clone + std::hash::Hash + Eq + Ord + RayShow + __RaySendConv + 'static; fn __key(&self) -> Self::Key; fn __unkey(k: &Self::Key) -> Self; }\n",
         "trait __RayKeyField: Sized { fn __part(&self) -> __RayKeyPart; fn __unpart(p: &__RayKeyPart) -> Self; }\n",
         "impl __RayKeyed for i64 { type Key = i64; fn __key(&self) -> i64 { *self } fn __unkey(k: &i64) -> i64 { *k } }\n",
         "impl __RayKeyed for char { type Key = char; fn __key(&self) -> char { *self } fn __unkey(k: &char) -> char { *k } }\n",
@@ -559,6 +559,10 @@ fn __ray_substring(s: &Rc<str>, i: i64, j: i64) -> Rc<str> {\n");
         "impl __RayKeyField for bool { fn __part(&self) -> __RayKeyPart { __RayKeyPart::B(*self) } fn __unpart(p: &__RayKeyPart) -> Self { match p { __RayKeyPart::B(x) => *x, _ => unreachable!() } } }\n",
         "impl __RayKeyField for Rc<str> { fn __part(&self) -> __RayKeyPart { __RayKeyPart::S(self.clone()) } fn __unpart(p: &__RayKeyPart) -> Self { match p { __RayKeyPart::S(x) => x.clone(), _ => unreachable!() } } }\n",
         "impl __RayKeyField for Rc<[u8]> { fn __part(&self) -> __RayKeyPart { __RayKeyPart::By(self.clone()) } fn __unpart(p: &__RayKeyPart) -> Self { match p { __RayKeyPart::By(x) => x.clone(), _ => unreachable!() } } }\n",
+        // M462: `Option` de una clave. `None` (rank 0) va antes que `Some` (rank 1), como en la VM.
+        "fn __ray_key_show_opt<T: __RayKeyed + RayShow + 'static>(k: &__RayKey) -> String { <Option<T> as __RayKeyed>::__unkey(k).ray_show() }\n",
+        "impl<T: __RayKeyed + RayShow + 'static> __RayKeyed for Option<T> { type Key = __RayKey; fn __key(&self) -> __RayKey { match self { None => __RayKey { rank: 0, fields: vec![], show: __ray_key_show_opt::<T> }, Some(x) => __RayKey { rank: 1, fields: vec![x.__part()], show: __ray_key_show_opt::<T> } } } fn __unkey(k: &__RayKey) -> Self { if k.rank == 0 { None } else { Some(T::__unpart(&k.fields[0])) } } }\n",
+        "impl<T: __RayKeyed + RayShow + 'static> __RayKeyField for Option<T> { fn __part(&self) -> __RayKeyPart { __RayKeyPart::K(Box::new(__RayKeyed::__key(self))) } fn __unpart(p: &__RayKeyPart) -> Self { match p { __RayKeyPart::K(k) => <Self as __RayKeyed>::__unkey(k), _ => unreachable!() } } }\n",
         "fn __ray_keys_of<T: __RayKeyed, V>(m: &Rc<std::cell::RefCell<__RayMap<T::Key, V>>>) -> Rc<std::cell::RefCell<Vec<T>>> {\n",
         "    let b = m.borrow(); let mut ks: Vec<&T::Key> = b.keys().collect(); ks.sort();\n",
         "    Rc::new(std::cell::RefCell::new(ks.into_iter().map(T::__unkey).collect()))\n}\n",
@@ -566,6 +570,25 @@ fn __ray_substring(s: &Rc<str>, i: i64, j: i64) -> Rc<str> {\n");
         "    let b = m.borrow(); let mut ks: Vec<&T::Key> = b.keys().collect(); ks.sort();\n",
         "    ks.into_iter().map(|k| (T::__unkey(k), b[k].clone())).collect()\n}\n",
     ));
+    // M462: tuplas de claves (2 a 8 elementos, como los impls de `__RaySendConv`): una clave
+    // compuesta con un campo por elemento, en orden.
+    for arity in 2..=8usize {
+        let names: Vec<String> = (0..arity).map(|i| format!("__T{i}")).collect();
+        let gens: Vec<String> = names.iter().map(|n| format!("{n}: __RayKeyed + RayShow + 'static")).collect();
+        let (gens, tys, turbo) = (gens.join(", "), format!("({},)", names.join(", ")), names.join(", "));
+        let parts: Vec<String> = (0..arity).map(|i| format!("self.{i}.__part()")).collect();
+        let unparts: Vec<String> = names.iter().enumerate().map(|(i, n)| format!("{n}::__unpart(&k.fields[{i}])")).collect();
+        writeln!(out, "fn __ray_key_show_t{arity}<{gens}>(k: &__RayKey) -> String {{ <{tys} as __RayKeyed>::__unkey(k).ray_show() }}").unwrap();
+        writeln!(
+            out,
+            "impl<{gens}> __RayKeyed for {tys} {{ type Key = __RayKey; fn __key(&self) -> __RayKey {{ __RayKey {{ rank: 0, fields: vec![{}], show: __ray_key_show_t{arity}::<{turbo}> }} }} fn __unkey(k: &__RayKey) -> Self {{ ({},) }} }}",
+            parts.join(", "), unparts.join(", ")
+        ).unwrap();
+        writeln!(
+            out,
+            "impl<{gens}> __RayKeyField for {tys} {{ fn __part(&self) -> __RayKeyPart {{ __RayKeyPart::K(Box::new(__RayKeyed::__key(self))) }} fn __unpart(p: &__RayKeyPart) -> Self {{ match p {{ __RayKeyPart::K(k) => <Self as __RayKeyed>::__unkey(k), _ => unreachable!() }} }} }}"
+        ).unwrap();
+    }
     // M313: Map en la conversión Send por trait (ver `__RaySendConv`).
     out.push_str("impl<K: __RaySendConv + Clone + std::hash::Hash + Eq, V: __RaySendConv + Clone> __RaySendConv for Rc<std::cell::RefCell<__RayMap<K, V>>> { fn __to_send(self) -> __RaySend { __RaySend::M(self.borrow().iter().map(|(__k, __v)| (__k.clone().__to_send(), __v.clone().__to_send())).collect()) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::M(__sm) => Rc::new(std::cell::RefCell::new(__sm.into_iter().map(|(__k, __v)| (K::__from_send(__k), V::__from_send(__v))).collect::<__RayMap<_, _>>())), _ => unreachable!() } } }\n");
     out.push_str("fn __ray_sort<T: Ord + Clone>(a: &Rc<std::cell::RefCell<Vec<T>>>) -> Rc<std::cell::RefCell<Vec<T>>> {\n");

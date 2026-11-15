@@ -128,6 +128,17 @@ pub struct KeyShape {
     pub field_names: Vec<String>,
     /// VM: índice del struct en `CompiledProgram.structs`, o el `enum_id`. El intérprete no lo usa.
     pub vm_type: u32,
+    /// VM: el tag de la variante. No siempre es el `rank`: en `Option` el orden de las claves
+    /// es `None < Some` (el convencional, y el de Rust) aunque el prelude declare `Some` antes.
+    pub vm_tag: u32,
+    /// Una TUPLA (en el runtime, un arreglo): sin nombre de tipo ni de campos.
+    pub tuple: bool,
+}
+
+/// La posición con la que una variante ordena las claves: su índice de declaración, salvo en
+/// `Option`, donde `None` va antes que `Some`.
+pub fn key_rank(enum_name: &str, tag: u32) -> u32 {
+    if enum_name == "Option" { 1 - tag } else { tag }
 }
 
 impl PartialEq for CompositeKey {
@@ -173,9 +184,25 @@ impl MapKey {
                         variant: None,
                         field_names: s.fields.iter().map(|(n, _)| n.clone()).collect(),
                         vm_type: 0,
+                        vm_tag: 0,
+                        tuple: false,
                     }),
                 }))
             }
+            // Una tupla es un arreglo en el runtime; el checker garantiza que aquí solo llega
+            // una tupla (un arreglo no es clave).
+            Value::Array(elems) => MapKey::Composite(Box::new(CompositeKey {
+                rank: 0,
+                fields: elems.borrow().iter().map(|f| MapKey::from_value(f, rank)).collect(),
+                shape: std::sync::Arc::new(KeyShape {
+                    type_name: String::new(),
+                    variant: None,
+                    field_names: Vec::new(),
+                    vm_type: 0,
+                    vm_tag: 0,
+                    tuple: true,
+                }),
+            })),
             Value::Enum(e) => MapKey::Composite(Box::new(CompositeKey {
                 rank: rank(&e.enum_name, &e.variant),
                 fields: e.payload.iter().map(|f| MapKey::from_value(f, rank)).collect(),
@@ -184,6 +211,8 @@ impl MapKey {
                     variant: Some(e.variant.clone()),
                     field_names: Vec::new(),
                     vm_type: 0,
+                    vm_tag: 0,
+                    tuple: false,
                 }),
             })),
             Value::Int(n) => MapKey::Int(*n),
@@ -206,6 +235,9 @@ impl MapKey {
             // Un valor NUEVO en cada llamada: quien recibe la clave no comparte nada con el mapa.
             MapKey::Composite(c) => {
                 let fields = c.fields.iter().map(|f| f.to_value());
+                if c.shape.tuple {
+                    return Value::Array(Rc::new(RefCell::new(fields.collect())));
+                }
                 match &c.shape.variant {
                     Some(variant) => Value::Enum(Rc::new(EnumInstance {
                         enum_name: c.shape.type_name.clone(),

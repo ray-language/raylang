@@ -2155,11 +2155,20 @@ impl Transpiler {
                 // Mismo izado que ArrayLit (clase RefCell-en-args, IDEAS §64): claves y valores en
                 // orden de evaluación (k0, v0, k1, v1, …) — un par cuenta como 2 exprs.
                 let hoist = !pairs.is_empty(); // un par ya son 2 exprs (clave y valor)
+                // El tipo de la clave: el esperado (la anotación del `let`, el campo…) o, sin
+                // él, el del propio literal.
+                let lit_key_ty = match self.expected_ty.clone().map(|t| self.classify(&t)) {
+                    Some(Type::Map(k, _)) => Some(*k),
+                    _ => match self.type_of(e) {
+                        Ok(Type::Map(k, _)) if !matches!(*k, Type::Unit) => Some(*k),
+                        _ => None,
+                    },
+                };
                 if hoist {
                     out.push_str("{ ");
                     for (i, (k, v)) in pairs.iter().enumerate() {
                         write!(out, "let __rt_k{} = ", i).unwrap();
-                        self.emit_map_key(out, k)?;
+                        self.emit_map_key(out, k, lit_key_ty.as_ref())?;
                         out.push_str("; ");
                         write!(out, "let __rt_v{} = ", i).unwrap();
                         self.emit_expr(out, v)?;

@@ -282,20 +282,40 @@ pub(super) fn composite_key(
     h: crate::gc::Handle,
 ) -> MapKey {
     use crate::runtime::{CompositeKey, KeyShape};
+    let tuple_shape = |shapes: &mut KeyShapes| {
+        shapes
+            .entry((2, 0, 0))
+            .or_insert_with(|| std::sync::Arc::new(KeyShape { type_name: String::new(), variant: None, field_names: Vec::new(), vm_type: 0, vm_tag: 0, tuple: true }))
+            .clone()
+    };
     let (kind, type_idx, tag, values): (u8, u32, u32, &[HeapValue]) = match heap.get(h) {
         Obj::Struct(s) => (0, s.struct_idx as u32, 0, &s.fields),
         Obj::Enum(e) => (1, e.enum_id, e.tag, &e.payload),
+        // Una tupla es un arreglo (con todos los elementos int, su forma especializada).
+        Obj::Array(elems) => (2, 0, 0, elems),
+        Obj::IntArray(xs) => {
+            let fields = xs.iter().map(|&n| MapKey::Int(n)).collect();
+            return MapKey::Composite(Box::new(CompositeKey { rank: 0, fields, shape: tuple_shape(shapes) }));
+        }
         _ => unreachable!("the checker guarantees a Map key"),
     };
+    if kind == 2 {
+        let shape = tuple_shape(shapes);
+        let fields = values.iter().map(|v| match v {
+            HeapValue::Obj(inner) => composite_key(heap, structs, enums, shapes, *inner),
+            prim => heap_to_key(prim.clone()),
+        }).collect();
+        return MapKey::Composite(Box::new(CompositeKey { rank: 0, fields, shape }));
+    }
     let shape = shapes
         .entry((kind, type_idx, tag))
         .or_insert_with(|| {
             std::sync::Arc::new(if kind == 0 {
                 let def = &structs[type_idx as usize];
-                KeyShape { type_name: def.name.clone(), variant: None, field_names: def.fields.clone(), vm_type: type_idx }
+                KeyShape { type_name: def.name.clone(), variant: None, field_names: def.fields.clone(), vm_type: type_idx, vm_tag: 0, tuple: false }
             } else {
                 let (ename, vname) = enum_names(enums, type_idx as usize, tag as usize);
-                KeyShape { type_name: ename.to_string(), variant: Some(vname.to_string()), field_names: Vec::new(), vm_type: type_idx }
+                KeyShape { type_name: ename.to_string(), variant: Some(vname.to_string()), field_names: Vec::new(), vm_type: type_idx, vm_tag: tag, tuple: false }
             })
         })
         .clone();
@@ -306,7 +326,8 @@ pub(super) fn composite_key(
             prim => heap_to_key(prim.clone()),
         });
     }
-    MapKey::Composite(Box::new(CompositeKey { rank: tag, fields, shape }))
+    let rank = if kind == 1 { crate::runtime::key_rank(&shape.type_name, tag) } else { 0 };
+    MapKey::Composite(Box::new(CompositeKey { rank, fields, shape }))
 }
 
 /// Reconstruye el valor de la VM a partir de una clave de Map (para `keys`, M13.1b).
@@ -315,8 +336,11 @@ pub(super) fn key_to_heap(heap: &mut Heap, k: &MapKey) -> HeapValue {
         // Un objeto NUEVO por llamada: quien recibe la clave no comparte nada con el mapa.
         MapKey::Composite(c) => {
             let fields: Vec<HeapValue> = c.fields.iter().map(|f| key_to_heap(heap, f)).collect();
+            if c.shape.tuple {
+                return HeapValue::Obj(heap.allocate(Obj::Array(fields)));
+            }
             let obj = match c.shape.variant {
-                Some(_) => Obj::Enum(crate::gc::VmEnum { enum_id: c.shape.vm_type, tag: c.rank, payload: fields }),
+                Some(_) => Obj::Enum(crate::gc::VmEnum { enum_id: c.shape.vm_type, tag: c.shape.vm_tag, payload: fields }),
                 None => Obj::Struct(crate::gc::VmStruct { struct_idx: c.shape.vm_type as usize, fields }),
             };
             HeapValue::Obj(heap.allocate(obj))

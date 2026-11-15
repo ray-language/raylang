@@ -118,7 +118,7 @@ fn a_key_that_is_not_a_map_key_is_a_type_error() {
     rejected(
         "by_hand",
         "struct Pos { x: int, }\nimpl MapKey for Pos {}\nfn main() -> int { 0 }\n",
-        "type error at 2:1: 'MapKey' cannot be implemented by hand: it is granted to int/string/char/bool/bytes and to types with @derive(Eq, Hash) whose fields are Map keys",
+        "type error at 2:1: 'MapKey' cannot be implemented by hand: it is granted to int/string/char/bool/bytes, to tuples and Options of keys, and to types with @derive(Eq, Hash) whose fields are Map keys",
     );
 }
 
@@ -255,7 +255,7 @@ fn main() -> int {
 
 #[test]
 fn a_user_type_that_is_not_a_key_says_why() {
-    let head = "a Map key must be int/string/char/bool/bytes or a type with @derive(Eq, Hash) whose fields are Map keys";
+    let head = "a Map key must be int/string/char/bool/bytes, a tuple or Option of keys, or a type with @derive(Eq, Hash) whose fields are Map keys";
     // Un `Eq`/`Hash` a mano no cuenta: el `Map` compara por estructura, no con ese código.
     rejected(
         "by_hand_impls",
@@ -264,18 +264,23 @@ fn a_user_type_that_is_not_a_key_says_why() {
     );
     rejected(
         "nested_field",
-        "@derive(Eq, Hash)\nstruct In { a: Option<int>, }\n@derive(Eq, Hash)\nstruct P { i: In, }\nfn main() -> int {\n    let m: Map<P, int> = Map.new();\n    m.len()\n}\n",
+        "@derive(Eq, Hash)\nstruct In { a: u8, }\n@derive(Eq, Hash)\nstruct P { i: In, }\nfn main() -> int {\n    let m: Map<P, int> = Map.new();\n    m.len()\n}\n",
         &format!("type error at 6:5: {head}, not P (field 'i' of 'P' has type In, which is not a Map key)"),
     );
     rejected(
         "variant",
-        "@derive(Eq, Hash)\nenum E { A, B(Option<int>), }\nstruct W { m: Map<E, int>, }\nfn main() -> int { 0 }\n",
-        &format!("type error at 3:15: {head}, not E (variant 'B' of 'E' has type Option<int>, which is not a Map key)"),
+        "@derive(Eq, Hash)\nenum E { A, B(u8), }\nstruct W { m: Map<E, int>, }\nfn main() -> int { 0 }\n",
+        &format!("type error at 3:15: {head}, not E (variant 'B' of 'E' has type u8, which is not a Map key)"),
     );
     rejected(
         "tuple",
-        "fn main() -> int {\n    let m: Map<(int, int), int> = Map.new();\n    m.len()\n}\n",
-        &format!("type error at 2:5: {head}, not (int, int)"),
+        "fn main() -> int {\n    let m: Map<(int, float), int> = Map.new();\n    m.len()\n}\n",
+        &format!("type error at 2:5: {head}, not (int, float)"),
+    );
+    rejected(
+        "array",
+        "fn main() -> int {\n    let m: Map<[int], int> = Map.new();\n    m.len()\n}\n",
+        &format!("type error at 2:5: {head}, not [int]"),
     );
 }
 
@@ -283,7 +288,7 @@ fn a_user_type_that_is_not_a_key_says_why() {
 fn the_marker_bound_is_checked_on_every_path() {
     // Revisión de 1.27.100: tres caminos por los que un tipo que no es clave llegaba al `Map`
     // (pánico interno en la VM, error de rustc en nativo).
-    let head = "a Map key must be int/string/char/bool/bytes or a type with @derive(Eq, Hash) whose fields are Map keys";
+    let head = "a Map key must be int/string/char/bool/bytes, a tuple or Option of keys, or a type with @derive(Eq, Hash) whose fields are Map keys";
     // Los `impl Eq`/`Hash` de `u8`/`u32`/`u64` del prelude van marcados como derivados.
     rejected(
         "unsigned",
@@ -322,8 +327,13 @@ fn the_marker_bound_is_checked_on_every_path() {
     // El consejo del derive solo donde sirve.
     rejected(
         "option",
-        "fn main() -> int {\n    let m: Map<Option<int>, int> = Map.new();\n    m.len()\n}\n",
-        &format!("type error at 2:5: {head}, not Option<int>"),
+        "fn main() -> int {\n    let m: Map<Option<float>, int> = Map.new();\n    m.len()\n}\n",
+        &format!("type error at 2:5: {head}, not Option<float> (an Option is a Map key when its content is)"),
+    );
+    rejected(
+        "result",
+        "fn main() -> int {\n    let m: Map<Result<int, string>, int> = Map.new();\n    m.len()\n}\n",
+        &format!("type error at 2:5: {head}, not Result<int, string>"),
     );
     rejected(
         "generic_type",
@@ -362,5 +372,85 @@ fn main() -> int {
 }
 "#,
         "2\nOption.Some(2)\n1\n1\n1\n",
+    );
+}
+
+#[test]
+fn tuples_and_options_are_keys_in_the_three_engines() {
+    // M462: una tupla y un `Option` de claves son clave, sueltos, anidados, como campo de un
+    // tipo derivado y en código genérico. Orden: tuplas elemento a elemento; `None` antes que
+    // `Some`.
+    same_everywhere(
+        "tuples_options",
+        r#"@derive(Eq, Hash, Show)
+struct Pos { x: int, y: int, }
+@derive(Eq, Hash)
+struct Cell { at: (int, int), owner: Option<string>, tag: Option<(int, Pos)>, }
+fn count<P: MapKey>(xs: [P]) -> int {
+    var seen: Map<P, int> = Map.new();
+    for x in xs { seen.add_to(x, 1); }
+    seen.len()
+}
+fn pairs<A: MapKey, B: MapKey>(xs: [A], ys: [B]) -> Map<(A, B), int> {
+    var m: Map<(A, B), int> = Map.new();
+    for x in xs { for y in ys { m.insert((x, y), 1); } }
+    m
+}
+fn main() -> int {
+    var grid: Map<(int, int), string> = Map.new();
+    grid.insert((2, 1), "c");
+    grid.insert((1, 9), "b");
+    grid.insert((1, 2), "a");
+    grid.insert((1, 2), "A");
+    print(grid.len());
+    print(grid.keys());
+    print(grid.get((1, 2)));
+    print(grid.contains_key((9, 9)));
+    for (rc, v) in grid { print("${rc.0},${rc.1}=${v}"); }
+    var mixed: Map<(string, Pos), int> = [("a", Pos { x: 1, y: 1 }): 1, ("a", Pos { x: 0, y: 5 }): 2];
+    print(mixed.keys());
+    var opt: Map<Option<int>, string> = [Option.Some(3): "three", Option.None: "none", Option.Some(1): "one"];
+    print(opt.keys());
+    print(opt.get(Option.None));
+    print(opt.get_or(Option.Some(3), "?"));
+    print(opt.remove(Option.None));
+    var cells: Map<Cell, int> = Map.new();
+    cells.insert(Cell { at: (1, 1), owner: Option.None, tag: Option.Some((7, Pos { x: 0, y: 0 })) }, 1);
+    cells.insert(Cell { at: (1, 1), owner: Option.Some("x"), tag: Option.None }, 2);
+    cells.insert(Cell { at: (0, 9), owner: Option.Some("x"), tag: Option.None }, 3);
+    print(cells.get(Cell { at: (1, 1), owner: Option.Some("x"), tag: Option.None }));
+    for (c, n) in cells { print("${c.at.0},${c.at.1} ${n}"); }
+    print(count([(1, "a"), (1, "a"), (2, "a")]));
+    let os: [Option<int>] = [Option.Some(1), Option.None, Option.None];
+    print(count(os));
+    let ps = pairs([1, 2], ["x", "y"]);
+    print(ps.keys());
+    let nested: Map<((int, int), bool), int> = [((1, 2), true): 1];
+    print(nested.get(((1, 2), true)));
+    0
+}
+"#,
+        concat!(
+            "3\n",
+            "[(1, 2), (1, 9), (2, 1)]\n",
+            "Option.Some(A)\n",
+            "false\n",
+            "1,2=A\n",
+            "1,9=b\n",
+            "2,1=c\n",
+            "[(a, Pos { x: 0, y: 5 }), (a, Pos { x: 1, y: 1 })]\n",
+            "[Option.None, Option.Some(1), Option.Some(3)]\n",
+            "Option.Some(none)\n",
+            "three\n",
+            "Option.Some(none)\n",
+            "Option.Some(2)\n",
+            "0,9 3\n",
+            "1,1 1\n",
+            "1,1 2\n",
+            "2\n",
+            "2\n",
+            "[(1, x), (1, y), (2, x), (2, y)]\n",
+            "Option.Some(1)\n",
+        ),
     );
 }

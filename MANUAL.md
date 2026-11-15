@@ -504,8 +504,21 @@ Los enums pueden ser **recursivos** (a través de payloads con arreglos u otros 
 
 ### `Map<K, V>`
 
-Tabla clave→valor. Claves *hashables*: int/u\*/string/char/bool/bytes (**no** float). Los recorridos van
+Tabla clave→valor. Claves *hashables*: int/string/char/bool/bytes (**no** float ni `u*`). Los recorridos van
 **en orden de clave** — deterministas.
+
+En código genérico, el parámetro que hace de clave lo declara con el bound `MapKey`:
+
+```rust
+fn count<P: MapKey>(xs: [P]) -> int {
+    var seen: Map<P, int> = Map.new();
+    for x in xs { seen.insert(x, 1); }
+    seen.len()
+}
+```
+
+`MapKey` es un trait marcador: no tiene métodos y no se implementa a mano. Llamar a `count` con
+un tipo que no es clave es un error de tipos en la llamada.
 
 ```rust
 var edades: Map<string, int> = Map.new();

@@ -803,6 +803,9 @@ struct Checker {
     /// (nombre pelado y posición real)? Solo ahí aplica el override de una función del prelude;
     /// un módulo (`std::json`, `catalog::store`) o el propio prelude siguen viendo la del prelude.
     current_fn_is_root: bool,
+    /// #356: mientras se validan los destinos de los alias de tipo, un parámetro de tipo puede
+    /// ser clave de `Map` sin bound (un alias no los declara; lo valida cada uso).
+    key_params_allowed: bool,
     /// M270: nombres de funciones del prelude que el usuario REDEFINIÓ en la raíz; el prelude quedó
     /// inyectado bajo el alias `nombre#prelude` para los módulos.
     overridden_prelude: HashSet<String>,

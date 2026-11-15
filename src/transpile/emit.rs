@@ -66,7 +66,7 @@ impl Transpiler {
         let mut gens: Vec<String> = f
             .type_params
             .iter()
-            .map(|t| format!("{}: {}", t, GENERIC_BOUND))
+            .map(|t| format!("{}: {}", t, param_bound(t, &f.bounds)))
             .collect();
         let mut ptys = Vec::new();
         self.send_fn_params.clear();
@@ -2256,7 +2256,7 @@ impl Transpiler {
                 writeln!(out, "impl RayShow for Rc<std::cell::RefCell<{}>> {{ fn ray_show(&self) -> String {{ \"<dyn {}>\".to_string() }} }}", mangle(&s.name), tr.replace("__", " + ")).unwrap();
                 continue;
             }
-            let gens = generic_decl(&s.type_params);
+            let gens = generic_decl(&s.type_params, &s.bounds);
             let sfx = type_args(&s.type_params);
             // El nombre del TIPO en Rust va manglado (multi-módulo); en la cadena de Display, el nombre
             // COMPLETO namespacado (`geo::Punto`), como el render default de `print` en la VM.
@@ -2283,7 +2283,7 @@ impl Transpiler {
             if e.name == "Option" || e.name == "Result" {
                 continue;
             }
-            let gens = generic_decl(&e.type_params);
+            let gens = generic_decl(&e.type_params, &e.bounds);
             let sfx = type_args(&e.type_params);
             // Rust manglado; Display con el nombre COMPLETO (como el render default de `print` en la VM).
             let em = mangle(&e.name);

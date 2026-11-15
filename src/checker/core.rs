@@ -54,6 +54,7 @@ impl Checker {
             current_self: None,
             current_fn_bounds: Vec::new(),
             current_fn_is_root: true,
+            key_params_allowed: false,
             overridden_prelude: HashSet::new(),
             dict_calls: HashMap::new(),
             dyn_coercions: HashMap::new(),
@@ -224,6 +225,7 @@ impl Checker {
         // usa, no la cabecera del enum/struct (160 líneas más arriba en el caso real).
         for e in &program.enums {
             self.type_params = e.type_params.iter().cloned().collect();
+            self.current_fn_bounds = e.bounds.clone();
             let variants = self.enums.get(&e.name).unwrap_or_else(|| crate::ice!("enum '{}' just registered is not in the table", e.name)).clone();
             for (i, (_, payload)) in variants.iter().enumerate() {
                 let (line, col) = e.variants.get(i).map(|v| (v.line, v.col)).unwrap_or((e.line, e.col));
@@ -234,6 +236,7 @@ impl Checker {
         }
         for s in &program.structs {
             self.type_params = s.type_params.iter().cloned().collect();
+            self.current_fn_bounds = s.bounds.clone();
             let fields = self.structs.get(&s.name).unwrap_or_else(|| crate::ice!("struct '{}' just registered is not in the table", s.name)).clone();
             for (i, (_, ty)) in fields.iter().enumerate() {
                 let (line, col) = s.field_type_pos.get(i).copied().unwrap_or((s.line, s.col));
@@ -242,10 +245,19 @@ impl Checker {
         }
         // M311: el destino de cada alias se valida con sus parámetros en ámbito (los usos solo
         // comprueban la aridad: `ensure_type`).
+        self.current_fn_bounds = Vec::new();
+        // Un alias no declara bounds: su parámetro puede ser clave y lo valida cada USO, que
+        // se expande al `Map<…>` concreto (o al `P: MapKey` de quien lo usa).
+        self.key_params_allowed = true;
         for a in &program.type_aliases {
             self.type_params = a.type_params.iter().cloned().collect();
-            self.ensure_type(&a.target, a.line, a.col)?;
+            let checked = self.ensure_type(&a.target, a.line, a.col);
+            if checked.is_err() {
+                self.key_params_allowed = false;
+            }
+            checked?;
         }
+        self.key_params_allowed = false;
         self.type_params.clear();
 
         // --- Pre-pasada (M9): registrar traits y validar impls ---
@@ -639,6 +651,13 @@ impl Checker {
                     self.methods.insert((key.clone(), tm.name.clone()), mangled.clone());
                     self.impl_fn_self.insert(mangled, target.clone());
                 }
+            }
+            // #356: `MapKey` lo concede el lenguaje (el runtime compara las claves por
+            // estructura); un impl a mano prometería una igualdad que el `Map` no usa.
+            if imp.trait_name == MAP_KEY_TRAIT && imp.line < crate::prelude::LINE_BASE {
+                return Err(self.err(imp.line, imp.col, format!(
+                    "'{MAP_KEY_TRAIT}' cannot be implemented by hand: it is granted to int/string/char/bool/bytes"
+                )));
             }
             // Registrar que este tipo implementa este trait (M9.2: verificación de bounds).
             if imp.synthetic {
@@ -1204,6 +1223,20 @@ impl Checker {
                         "a Map key must be int/string/char/bool/bytes, not {}", k
                     )));
                 }
+                // #356: un parámetro de tipo solo es clave si lleva el bound `MapKey`, que se
+                // verifica en cada instanciación. Sin él, `Map<P, V>` pasaba el checker y el
+                // programa moría en la VM (o no compilaba en nativo) al instanciar `P` con un
+                // tipo que no es clave. El prelude (posiciones por encima de `LINE_BASE`) queda
+                // fuera: sus operaciones de `Map` son genéricas sobre cualquier clave ya validada.
+                if let Type::Var(tp) = &**k
+                    && line < crate::prelude::LINE_BASE
+                    && !self.key_params_allowed
+                    && !self.current_fn_bounds.iter().any(|(bp, tr)| bp == tp && tr == MAP_KEY_TRAIT)
+                {
+                    return Err(self.err(line, col, format!(
+                        "the type parameter '{tp}' is used as a Map key but is not bounded by '{MAP_KEY_TRAIT}' (declare it as '{tp}: {MAP_KEY_TRAIT}')"
+                    )));
+                }
                 self.ensure_type(k, line, col)?;
                 self.ensure_type(v, line, col)
             }
@@ -1280,7 +1313,11 @@ impl Checker {
                 }
                 // M311: un alias solo comprueba la aridad aquí (su destino se validó al declararlo).
                 if let Some((params, _)) = self.aliases.get(name) {
-                    return self.ensure_type_args(name, params.len(), args, line, col);
+                    self.ensure_type_args(name, params.len(), args, line, col)?;
+                    // #356: lo que el alias EXPANDE con estos argumentos sí se valida en el uso:
+                    // `type M<K> = Map<K, int>` con `M<Pos>` (o con un `T` sin `MapKey`).
+                    let expanded = self.resolve_type(ty);
+                    return if expanded == *ty { Ok(()) } else { self.ensure_type(&expanded, line, col) };
                 }
                 let arity = self.struct_tparams.get(name)
                     .or_else(|| self.enum_tparams.get(name));
@@ -3933,6 +3970,14 @@ impl Checker {
         for (tp, trait_name) in bounds {
             let concrete = sigma.get(tp).cloned().unwrap_or_else(|| Type::Var(tp.clone()));
             let methods = self.traits.get(trait_name).cloned().unwrap_or_default();
+            // Un trait marcador (`MapKey`) no tiene diccionarios que pasar, pero el bound se
+            // verifica igual: sin esto solo lo comprobaba `dict_for`, método a método.
+            if methods.is_empty() && !self.satisfies_bound(&concrete, trait_name) {
+                return Err(self.err(line, col, match &concrete {
+                    Type::Var(u) => format!("the type parameter '{u}' is not bounded by '{trait_name}' (required by the call)"),
+                    _ => format!("{concrete} does not implement '{trait_name}' (required by the call)"),
+                }));
+            }
             for m in &methods {
                 dicts.push(self.dict_for(&concrete, trait_name, &m.name, line, col)?);
             }

@@ -332,6 +332,24 @@ trait Hash {
     fn hash(self) -> int;
 }
 
+// #356: lo que puede ser clave de un `Map`. Es un trait MARCADOR (sin métodos): el `Map` compara
+// y ordena sus claves por estructura dentro del runtime, sin llamar a código del programa. Un
+// `impl MapKey` a mano se rechaza fuera del prelude.
+/// A type that can be the key of a built-in `Map`: `int`, `string`, `char`, `bool` and `bytes`.
+/// Generic code that uses a type parameter as a key declares it: `fn count<P: MapKey>(xs: [P])`.
+/// It has no methods and cannot be implemented by hand.
+trait MapKey { }
+
+impl MapKey for int { }
+
+impl MapKey for string { }
+
+impl MapKey for char { }
+
+impl MapKey for bool { }
+
+impl MapKey for bytes { }
+
 impl Hash for int {
     fn hash(self) -> int { self }
 }

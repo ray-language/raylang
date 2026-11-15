@@ -284,8 +284,23 @@ pub(super) fn ffi_c_ret_ty(t: &Type) -> Result<&'static str, String> {
     })
 }
 
-pub(super) fn generic_decl(tparams: &[String]) -> String {
-    generic_bound(tparams, GENERIC_BOUND)
+pub(super) fn generic_decl(tparams: &[String], bounds: &[(String, String)]) -> String {
+    if tparams.is_empty() {
+        return String::new();
+    }
+    let ps: Vec<String> = tparams.iter().map(|t| format!("{}: {}", t, param_bound(t, bounds))).collect();
+    format!("<{}>", ps.join(", "))
+}
+
+/// El bound de Rust de UN parámetro de tipo: el común, más lo que el `HashMap` del runtime y
+/// `keys()` (ordenadas) exigen a una clave cuando el parámetro lleva `MapKey` (#356: sin esto
+/// `Map<P, V>` genérico no compilaba, E0599).
+pub(super) fn param_bound(tparam: &str, bounds: &[(String, String)]) -> String {
+    if bounds.iter().any(|(p, tr)| p == tparam && tr == "MapKey") {
+        format!("{GENERIC_BOUND} + std::hash::Hash + Eq + Ord")
+    } else {
+        GENERIC_BOUND.to_string()
+    }
 }
 
 /// M313: todo parámetro de tipo lleva también `__RaySendConv` (conversión Send por trait, para que

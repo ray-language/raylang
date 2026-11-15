@@ -20354,3 +20354,37 @@ Quedan abiertos, por decisión y no por olvido: `contains`/`position` sobre un `
 nativo comparan con el `Eq` del usuario y la VM compara estructuralmente (solo difieren con un
 `impl Eq` escrito a mano que no sea estructural; antes ese programa no compilaba en nativo), y
 `print` de un struct sin `Show` propio no usa el `Show` de sus campos.
+
+## 437. M460 — `MapKey`: las claves de `Map` en código genérico (nov 2026)
+
+raysolve (#356) escribió `fn count<P: Hash + Eq>(xs: [P])` con un `Map<P, int>` dentro. El
+checker aceptaba **cualquier** parámetro de tipo como clave, sin mirar con qué se instanciaba, y
+los bounds `Hash + Eq` no intervenían: el `Map` del runtime indexa por un enum cerrado de cinco
+primitivos y nunca llama a `hash` ni a `eq`. Resultado: nativo no compilaba ni con `int` (E0599:
+al `HashMap<P, …>` le faltaban los bounds de Rust), y la VM moría con «the checker guarantees a
+hashable key» al instanciar `P` con un struct.
+
+Decisiones (del usuario, 14 nov 2026):
+
+- **La igualdad de las claves es estructural.** El `Map` compara, hashea y ordena dentro del
+  runtime, sin llamar a código del programa. Es rápido en la VM, en nativo es el `derive` de
+  Rust, y coincide con `contains`/`position`. Un `Hash`/`Eq` escrito a mano no cambia cómo
+  compara el `Map`; para igualdad a medida sigue `std/collections/dict`.
+- **El requisito se declara con un bound**, `MapKey`: un trait marcador del prelude, sin
+  métodos, que no admite un `impl` fuera del prelude. Se descartó reutilizar `Hash + Eq`
+  (prometería una igualdad que el `Map` no usa) e inferirlo (el requisito no se vería en la
+  firma). El nombre no es `Key` porque cuatro apps ya tienen un tipo `Key` y un trait del
+  prelude con ese nombre las rompería.
+
+Mecánica: `ensure_type` exige el bound a un `Var` usado como clave (funciones, campos de
+struct/enum con sus bounds en ámbito, literales de `Map`); el prelude queda fuera por posición
+(`LINE_BASE`); un alias de tipo no declara bounds y se valida en cada USO, expandido.
+`record_dict_args` verifica ahora los traits sin métodos, que antes solo se comprobaban método a
+método en `dict_for`. El transpilador añade `std::hash::Hash + Eq + Ord` a los parámetros con
+`MapKey` (`param_bound`). Es un cambio que rompe el `Map<P, V>` genérico sin bound; no se
+encontró ninguno en la stdlib, los paquetes ni las apps.
+
+El espejo selfhost no se tocó: es un validador de un subconjunto que no conoce `Hash` ni
+`bytes`, y su regla de claves ya difería.
+
+Segundo paso (M461): que los tipos de usuario con `@derive(Eq, Hash)` cumplan `MapKey`.

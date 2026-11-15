@@ -533,7 +533,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
             continue;
         }
         let eq = if eq_types.contains(&s.name) { ", PartialEq" } else { "" };
-        writeln!(out, "#[derive(Clone{eq})]\nstruct {}{} {{", mangle(&s.name), generic_decl(&s.type_params)).unwrap();
+        writeln!(out, "#[derive(Clone{eq})]\nstruct {}{} {{", mangle(&s.name), generic_decl(&s.type_params, &s.bounds)).unwrap();
         for (fname, fty) in &s.fields {
             // El nombre de campo puede ser palabra reservada de Rust (`type`, `ref`, …): mismo mangle
             // que en literal/acceso/asignación → consistente.
@@ -552,7 +552,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         t.tparams = e.type_params.iter().cloned().collect();
         let eq = if eq_types.contains(&e.name) { ", PartialEq" } else { "" };
         let eq = if is_value_enum(&e.name) { format!(", Copy{eq}") } else { eq.to_string() };
-        writeln!(out, "#[derive(Clone{eq})]\nenum {}{} {{", mangle(&e.name), generic_decl(&e.type_params)).unwrap();
+        writeln!(out, "#[derive(Clone{eq})]\nenum {}{} {{", mangle(&e.name), generic_decl(&e.type_params, &e.bounds)).unwrap();
         for v in &e.variants {
             if v.payload.is_empty() {
                 writeln!(out, "    {},", mangle(&v.name)).unwrap(); // la variante puede ser keyword de Rust

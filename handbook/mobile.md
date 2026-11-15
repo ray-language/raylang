@@ -541,7 +541,7 @@ Y lo que se declara en el `ray.toml`:
 | `[ios] privacy_manifest` | un `PrivacyInfo.xcprivacy` propio, en lugar del que genera el shell (una app que recoge datos aporta el suyo) |
 | `[ios] development_team` | el equipo de desarrollo, para instalar en un iPhone real |
 | `[ios] background_audio` | el audio sigue sonando con la app en segundo plano (sesión `playback`: abrir la app corta la música de otras) |
-| `[ios] audio_session` | `"playback"` o `"playback_mix"` (la app suena con el interruptor de silencio y SIN cortar la música de otras apps), sin el modo en segundo plano |
+| `[ios] audio_session` | `"playback"`, `"playback_mix"` (la app suena con el interruptor de silencio y SIN cortar la música de otras apps) o `"play_and_record"` (permite grabar con `audio.open_input` y añade el texto de permiso del micrófono), sin el modo en segundo plano |
 | `[ios] background` / `background_dark` | el color (`#rrggbb`) de la pantalla de arranque y de la vista bajo la página: sin destello blanco; `background_dark` para el modo oscuro |
 | `[ios] sounds` | archivos (caf/aiff/wav, ≤ 30 s) copiados al bundle para `Notification.sound_name` de `std/notify` |
 | `[android] application_id` | un application id distinto del de `[app] id` |

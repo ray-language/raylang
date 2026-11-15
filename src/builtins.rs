@@ -1634,6 +1634,17 @@ const AUDIO_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
 /// M145: abre una salida PCM y registra su extremo de escritura como PipeW; `Ok(handle)`.
 #[cfg(all(feature = "audio", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn audio_open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> Result<i64, String> {
+    // M463 (ray-daw #422): `input:<formato>` abre una ENTRADA. Su handle es el extremo de
+    // lectura del pipe (`Pipe`, como el stdout de un hijo): `__audio_read` aparca la fibra hasta
+    // que el dispositivo entregue datos, y `close(h)` para la captura.
+    if let Some(input_format) = format.strip_prefix("input:") {
+        let f = ray_runtime::audio::open_input(sample_rate, channels, latency_ms, input_format)?;
+        let mut reg = registry().lock().unwrap();
+        let id = reg.next;
+        reg.next += 1;
+        reg.open.insert(id, OpenHandle::Pipe(f));
+        return Ok(id);
+    }
     let f = ray_runtime::audio::open(sample_rate, channels, latency_ms, format)?;
     let mut reg = registry().lock().unwrap();
     let id = reg.next;
@@ -1665,11 +1676,13 @@ fn audio_key(f: &std::fs::File) -> i64 {
 /// M158 (§79b): la posición REAL de reproducción de la salida `h`, en ms.
 #[cfg(all(feature = "audio", any(unix, windows), not(target_arch = "wasm32")))]
 pub fn audio_played(h: i64) -> Result<i64, String> {
-    let fd = match registry().lock().unwrap().open.get(&h) {
-        Some(OpenHandle::PipeW(f)) => audio_key(f),
+    let (fd, input) = match registry().lock().unwrap().open.get(&h) {
+        Some(OpenHandle::PipeW(f)) => (audio_key(f), false),
+        // M463: sobre una entrada es su reloj de captura (`audio.recorded_ms`).
+        Some(OpenHandle::Pipe(f)) => (audio_key(f), true),
         _ => return Err("audio: not an open audio output".to_string()),
     };
-    ray_runtime::audio::played_ms(fd)
+    if input { ray_runtime::audio::recorded_ms(fd) } else { ray_runtime::audio::played_ms(fd) }
 }
 #[cfg(any(not(all(feature = "audio", any(unix, windows))), target_arch = "wasm32"))]
 pub fn audio_played(_h: i64) -> Result<i64, String> {
@@ -6545,6 +6558,15 @@ static BUILTINS: &[Builtin] = &[
         Ok(Type::Array(Box::new(Type::Bytes)))
     } },
     // __proc_try_wait(h) -> [bytes] (M100 v2): ["running"] | ["code"|"signal", n] | ["err", msg].
+    // __audio_read(h) -> [bytes] (M463): una lectura de una ENTRADA de audio — [b"ok", frames]
+    // (vacío = la entrada se cerró) o [b"err", msg]. Mismo opcode que `__proc_read` (la VM ya lee
+    // un handle Pipe aparcando la fibra); nombre propio para que el nativo emita su lector sin
+    // depender del runtime de procesos, que iOS excluye.
+    Builtin { name: "__audio_read", opcode: OpCode::SocketReadBytes, check: |a| {
+        arity(a, 1, "__audio_read", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__audio_read expects an int (the input handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
     Builtin { name: "__proc_try_wait", opcode: OpCode::ProcTryWait, check: |a| {
         arity(a, 1, "__proc_try_wait", "")?;
         if a[0] != Type::Int { return Err((Some(0), format!("__proc_try_wait expects an int (the child handle), not {}", a[0]))); }

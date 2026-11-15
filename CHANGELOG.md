@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/audio` graba** (macOS e iOS): `audio.open_input(rate, channels, format, latency_ms)`
+  abre el micrófono o la interfaz de audio por defecto, `audio.read(h)` devuelve lo capturado
+  aparcando la fibra hasta que haya datos, y `audio.recorded_ms(h)` es el reloj de captura, para
+  alinear una toma con lo que sonaba. En iOS, `[ios] audio_session = "play_and_record"`. En
+  Linux, Android y Windows `open_input` devuelve un error hasta que llegue su backend.
 - **Una tupla o un `Option` son clave de `Map`**: `Map<(int, int), V>` para una rejilla,
   `Map<(string, Pos), int>`, `Map<Option<int>, string>`, y también como campo de un tipo con
   `@derive(Eq, Hash)`. Las tuplas ordenan elemento a elemento y `None` va antes que `Some`.

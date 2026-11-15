@@ -38,6 +38,8 @@ unsafe extern "C" {
     fn socketpair(domain: i32, ty: i32, protocol: i32, fds: *mut i32) -> i32;
     fn setsockopt(fd: i32, level: i32, name: i32, value: *const core::ffi::c_void, len: u32) -> i32;
     fn read(fd: i32, buf: *mut u8, n: usize) -> isize;
+    /// M463: la fuente de entrada escribe lo capturado en el extremo no bloqueante del pipe.
+    fn write(fd: i32, buf: *const u8, n: usize) -> isize;
     fn close(fd: i32) -> i32;
     /// M398: el alimentador espera con `poll` (20 ms) en vez de un `read` bloqueante, para
     /// atender la bandera de `flush` aunque el programa no escriba nada más.
@@ -55,6 +57,9 @@ struct PollFd {
 }
 #[cfg(unix)]
 const POLLIN: i16 = 1;
+/// M463: el otro extremo se cerró (el programa hizo `close` de la entrada) o el fd ya no vale.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+const POLL_GONE: i16 = 0x08 | 0x10 | 0x20; // POLLERR | POLLHUP | POLLNVAL
 #[cfg(unix)]
 const F_GETFL: i32 = 3;
 #[cfg(unix)]
@@ -530,6 +535,257 @@ fn peek_pipe(handle: i64) -> Result<usize, ()> {
 /// Un sumidero PCM: recibe muestras entrelazadas (en el formato con que se abrió) y las hace
 /// sonar (o las consume). `play` puede BLOQUEAR (es la contrapresión: el pipe se llena aguas
 /// arriba y la fibra aparca). `flush` (M398) descarta lo que tenga encolado, si tiene.
+// =====================================================================================
+// M463 (ray-daw #422) — ENTRADA de audio: grabar del micrófono o de una interfaz
+// =====================================================================================
+//
+// El espejo de la salida. `open_input` crea el mismo par de sockets, pero el sentido es el
+// contrario: la FUENTE (el callback del dispositivo, o un hilo en la fuente de pruebas) escribe
+// lo capturado en un extremo y el programa lee del otro, que se registra como un pipe de lectura
+// ordinario — `audio.read` aparca la fibra hasta que haya datos, igual que la lectura del stdout
+// de un proceso hijo. El `close(h)` del programa cierra ese extremo; la fuente lo ve y se para.
+//
+// La entrada NO tiene contrapresión: el dispositivo captura a su ritmo, lo lea alguien o no. La
+// cola guarda hasta `INPUT_QUEUE_MS` de audio; si el programa no lee a tiempo, lo que no cabe se
+// DESCARTA por frames enteros (un desbordamiento, contado) — nunca se bloquea el hilo del
+// dispositivo ni se desalinea el flujo.
+//
+// Fuentes: AudioQueue de entrada en macOS e iOS; `RAY_AUDIO_SOURCE=null` (silencio) o `=tone`
+// (un La de 440 Hz) a ritmo de tiempo real y sin hardware, para tests y CI, en cualquier unix.
+// Linux, Android y Windows no tienen fuente de dispositivo todavía: `open_input` da `Err`.
+
+/// Cuánto audio capturado se guarda sin leer antes de descartar.
+#[cfg(unix)]
+const INPUT_QUEUE_MS: i64 = 1000;
+
+/// El estado de una entrada abierta, compartido entre la fuente y `recorded_ms`.
+#[cfg_attr(windows, allow(dead_code))] // en Windows aún no hay entrada: nadie lo construye
+pub struct InCtl {
+    /// Frames que el dispositivo entregó desde que se abrió, se hayan leído o no: el reloj de
+    /// captura (`recorded_ms`).
+    captured_frames: AtomicI64,
+    /// Frames descartados porque el programa no leyó a tiempo.
+    dropped_frames: AtomicI64,
+    sample_rate: i64,
+    frame_bytes: usize,
+    /// El final de un frame que una escritura parcial dejó a medias: va primero en la siguiente.
+    #[cfg(unix)]
+    pending: Mutex<Vec<u8>>,
+}
+
+fn in_ctls() -> &'static Mutex<HashMap<i64, Arc<InCtl>>> {
+    static CTLS: OnceLock<Mutex<HashMap<i64, Arc<InCtl>>>> = OnceLock::new();
+    CTLS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Como `forget_ctl`: la fuente retira su entrada del mapa solo si sigue siendo la suya (el SO
+/// reutiliza el fd en cuanto se cierra).
+#[cfg(unix)]
+fn forget_in_ctl(key: i64, own: &Arc<InCtl>) {
+    let mut map = in_ctls().lock().unwrap();
+    if map.get(&key).is_some_and(|c| Arc::ptr_eq(c, own)) {
+        map.remove(&key);
+    }
+    if std::env::var_os("RAY_AUDIO_TRACE").is_some() {
+        eprintln!(
+            "audio input: captured {} frames, dropped {}",
+            own.captured_frames.load(Ordering::SeqCst),
+            own.dropped_frames.load(Ordering::SeqCst)
+        );
+    }
+}
+
+/// El reloj de captura de la entrada `key`, en ms: cuánto audio ha entregado el dispositivo
+/// desde que se abrió. Avanza aunque el programa no lea.
+pub fn recorded_ms(key: i64) -> Result<i64, String> {
+    let ctl = in_ctls().lock().unwrap().get(&key).cloned().ok_or_else(|| "audio: not an open audio input".to_string())?;
+    Ok(ctl.captured_frames.load(Ordering::SeqCst) * 1000 / ctl.sample_rate)
+}
+
+/// Entrega `data` (frames enteros recién capturados) al programa. `false` = el programa cerró la
+/// entrada (o el pipe murió): la fuente debe parar. Nunca bloquea: lo que no cabe se descarta
+/// por frames enteros.
+#[cfg(unix)]
+fn push_captured(fd_w: i32, ctl: &InCtl, data: &[u8]) -> bool {
+    let fb = ctl.frame_bytes;
+    ctl.captured_frames.fetch_add((data.len() / fb) as i64, Ordering::SeqCst);
+    let mut pending = ctl.pending.lock().unwrap_or_else(|e| e.into_inner());
+    // Lo que quedó a medias va primero; si ni eso cabe, este bloque entero se descarta.
+    while !pending.is_empty() {
+        // SAFETY: `pending` vive durante la llamada; fd_w es de la fuente.
+        let n = unsafe { write(fd_w, pending.as_ptr(), pending.len()) };
+        if n > 0 {
+            pending.drain(..n as usize);
+        } else if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock {
+            ctl.dropped_frames.fetch_add((data.len() / fb) as i64, Ordering::SeqCst);
+            return true;
+        } else if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        } else {
+            return false;
+        }
+    }
+    let mut off = 0usize;
+    while off < data.len() {
+        // SAFETY: el tramo vive durante la llamada.
+        let n = unsafe { write(fd_w, data[off..].as_ptr(), data.len() - off) };
+        if n > 0 {
+            off += n as usize;
+            continue;
+        }
+        let err = std::io::Error::last_os_error();
+        if n < 0 && err.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        if n < 0 && err.kind() == std::io::ErrorKind::WouldBlock {
+            // Lleno. Se completa (más tarde) el frame partido y se descarta el resto.
+            let partial = off % fb;
+            let keep = if partial == 0 { 0 } else { fb - partial };
+            pending.extend_from_slice(&data[off..off + keep]);
+            ctl.dropped_frames.fetch_add(((data.len() - off - keep) / fb) as i64, Ordering::SeqCst);
+            return true;
+        }
+        return false; // EPIPE: el programa cerró
+    }
+    true
+}
+
+/// Abre una ENTRADA PCM (`sample_rate` Hz, `channels` canales, muestras en `format`) y devuelve
+/// el extremo de lectura del pipe, no bloqueante y listo para el registro de handles: el
+/// llamador lee de ahí los frames entrelazados que captura el dispositivo. `latency_ms` (20–1000,
+/// o 0 = 100) es el tamaño de los bloques en que llegan.
+#[cfg(unix)]
+pub fn open_input(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> Result<std::fs::File, String> {
+    let fmt = Format::parse(format)?;
+    if !(8000..=192000).contains(&sample_rate) {
+        return Err(format!("audio: unsupported sample rate {sample_rate} (8000–192000)"));
+    }
+    if !(1..=8).contains(&channels) {
+        return Err(format!("audio: unsupported channel count {channels} (1–8)"));
+    }
+    if latency_ms != 0 && !(20..=1000).contains(&latency_ms) {
+        return Err(format!("audio: unsupported latency {latency_ms} ms (20–1000, or 0 = default)"));
+    }
+    let latency_ms = if latency_ms == 0 { 100 } else { latency_ms };
+    let frame_bytes = channels as usize * fmt.sample_bytes();
+    let bytes_per_sec = sample_rate as usize * frame_bytes;
+    let source = std::env::var("RAY_AUDIO_SOURCE").ok();
+    let test_source = matches!(source.as_deref(), Some("null") | Some("tone"));
+    if !test_source && !cfg!(any(target_os = "macos", target_os = "ios")) {
+        return Err("audio: input is not supported on this platform yet (macOS and iOS only; RAY_AUDIO_SOURCE=null gives a silent real-time source)".to_string());
+    }
+
+    let mut fds = [0i32; 2];
+    // SAFETY: socketpair escribe dos fds válidos.
+    if unsafe { socketpair(AF_UNIX, SOCK_STREAM, 0, fds.as_mut_ptr()) } != 0 {
+        return Err(format!("audio: could not create the pipe: {}", std::io::Error::last_os_error()));
+    }
+    let (fd_r, fd_w) = (fds[0], fds[1]);
+    let budget = ((bytes_per_sec as i64 * INPUT_QUEUE_MS / 1000).max(4096)).min(i32::MAX as i64) as i32;
+    // SAFETY: fds recién creados y nuestros; los valores viven durante cada llamada.
+    unsafe {
+        let v = &budget as *const i32 as *const core::ffi::c_void;
+        for fd in [fd_r, fd_w] {
+            setsockopt(fd, SOL_SOCKET, SO_SNDBUF, v, 4);
+            setsockopt(fd, SOL_SOCKET, SO_RCVBUF, v, 4);
+        }
+        // Una escritura con el programa ya cerrado debe dar EPIPE, no matar el proceso.
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            let one: i32 = 1;
+            setsockopt(fd_w, SOL_SOCKET, SO_NOSIGPIPE, &one as *const i32 as *const core::ffi::c_void, 4);
+        }
+        // Los dos extremos no bloqueantes: la fuente nunca espera, y la lectura del programa
+        // aparca la fibra (WouldBlock) en vez de bloquear el hilo.
+        for fd in [fd_r, fd_w] {
+            let fl = fcntl_raw(fd, F_GETFL);
+            fcntl_raw(fd, F_SETFL, fl | O_NONBLOCK);
+        }
+    }
+    let key = fd_r as i64;
+    let ctl = Arc::new(InCtl {
+        captured_frames: AtomicI64::new(0),
+        dropped_frames: AtomicI64::new(0),
+        sample_rate,
+        frame_bytes,
+        pending: Mutex::new(Vec::new()),
+    });
+    let started = if test_source {
+        test_source_start(fd_w, key, ctl.clone(), sample_rate, channels, latency_ms, fmt, source.as_deref() == Some("tone"));
+        Ok(())
+    } else {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            coreaudio::open_input(sample_rate, channels, latency_ms, fmt, fd_w, key, ctl.clone())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        {
+            Err("audio: input is not supported on this platform yet".to_string())
+        }
+    };
+    if let Err(e) = started {
+        // SAFETY: los dos fds siguen siendo nuestros (nadie más los recibió).
+        unsafe {
+            close(fd_r);
+            close(fd_w);
+        }
+        return Err(e);
+    }
+    in_ctls().lock().unwrap().insert(key, ctl);
+    // SAFETY: fd_r es nuestro; File toma la propiedad (su Drop = close = fin de la captura).
+    Ok(unsafe { std::os::unix::io::FromRawFd::from_raw_fd(fd_r) })
+}
+
+/// En Windows aún no hay entrada (ni la fuente de pruebas: el pipe anónimo no es sondeable).
+#[cfg(windows)]
+pub fn open_input(_sample_rate: i64, _channels: i64, _latency_ms: i64, _format: &str) -> Result<std::fs::File, String> {
+    Err("audio: input is not supported on this platform yet (macOS and iOS only)".to_string())
+}
+
+/// La fuente de pruebas (`RAY_AUDIO_SOURCE=null|tone`): un hilo que entrega bloques de
+/// `latency_ms / 4` a ritmo de tiempo real — silencio, o un La de 440 Hz a media escala.
+#[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
+fn test_source_start(fd_w: i32, key: i64, ctl: Arc<InCtl>, rate: i64, channels: i64, latency_ms: i64, fmt: Format, tone: bool) {
+    std::thread::spawn(move || {
+        let block_frames = ((rate * latency_ms / 4000).max(64)) as usize;
+        let sb = fmt.sample_bytes();
+        let mut buf = vec![0u8; block_frames * channels as usize * sb];
+        let started = std::time::Instant::now();
+        let mut frame = 0u64;
+        loop {
+            if tone {
+                for i in 0..block_frames {
+                    let t = (frame + i as u64) as f64 / rate as f64;
+                    let v = (t * 440.0 * std::f64::consts::TAU).sin() * 0.5;
+                    for c in 0..channels as usize {
+                        let at = (i * channels as usize + c) * sb;
+                        match fmt {
+                            Format::S16 => buf[at..at + 2].copy_from_slice(&((v * 32767.0) as i16).to_le_bytes()),
+                            Format::S24 => buf[at..at + 3].copy_from_slice(&((v * 8_388_607.0) as i32).to_le_bytes()[..3]),
+                            Format::S32 => buf[at..at + 4].copy_from_slice(&((v * 2_147_483_647.0) as i32).to_le_bytes()),
+                            Format::F32 => buf[at..at + 4].copy_from_slice(&(v as f32).to_le_bytes()),
+                        }
+                    }
+                }
+            }
+            frame += block_frames as u64;
+            // El bloque se entrega cuando «ha sonado»: al final de su duración.
+            let due = started + std::time::Duration::from_micros(frame * 1_000_000 / rate as u64);
+            let now = std::time::Instant::now();
+            if due > now {
+                std::thread::sleep(due - now);
+            }
+            if !push_captured(fd_w, &ctl, &buf) {
+                break;
+            }
+        }
+        // SAFETY: fd_w es de este hilo desde que arrancó.
+        unsafe { close(fd_w) };
+        forget_in_ctl(key, &ctl);
+    });
+}
+
 trait Sink: Send {
     fn play(&mut self, data: &[u8]);
     fn finish(&mut self);
@@ -671,6 +927,17 @@ mod coreaudio {
         fn AudioQueueNewOutput(
             format: *const AudioStreamBasicDescription,
             callback: extern "C" fn(*mut std::ffi::c_void, AudioQueueRef, AudioQueueBufferRef),
+            user_data: *mut std::ffi::c_void,
+            run_loop: *const std::ffi::c_void,
+            run_loop_mode: *const std::ffi::c_void,
+            flags: u32,
+            out: *mut AudioQueueRef,
+        ) -> i32;
+        /// M463: la cola de ENTRADA. Con `run_loop` nulo el callback corre en un hilo interno
+        /// de AudioQueue, como el de salida.
+        fn AudioQueueNewInput(
+            format: *const AudioStreamBasicDescription,
+            callback: extern "C" fn(*mut std::ffi::c_void, AudioQueueRef, AudioQueueBufferRef, *const AudioTimeStamp, u32, *const std::ffi::c_void),
             user_data: *mut std::ffi::c_void,
             run_loop: *const std::ffi::c_void,
             run_loop_mode: *const std::ffi::c_void,
@@ -1083,6 +1350,132 @@ mod coreaudio {
         }
         live_queues().lock().unwrap_or_else(|e| e.into_inner()).push(q as usize);
         Ok(Box::new(CoreAudioSink { q, shared, played }))
+    }
+
+    /// M463: lo que el callback de entrada necesita — a dónde escribir y si ya debe parar.
+    struct InputState {
+        fd_w: i32,
+        ctl: Arc<super::InCtl>,
+        closed: std::sync::atomic::AtomicBool,
+    }
+
+    /// El callback de la cola de entrada: entrega el búfer capturado y lo devuelve a la cola.
+    /// Si el programa cerró la entrada no lo reencola: la cola se queda sin búferes y el
+    /// vigilante la desmonta.
+    extern "C" fn on_input(
+        user: *mut std::ffi::c_void,
+        q: AudioQueueRef,
+        buf: AudioQueueBufferRef,
+        _start: *const AudioTimeStamp,
+        _packets: u32,
+        _descs: *const std::ffi::c_void,
+    ) {
+        // SAFETY: `user` es el `Arc<InputState>` filtrado en `open_input`, vivo hasta que el
+        // vigilante desmonta la cola (Dispose síncrono: ya no hay callbacks después).
+        let st = unsafe { &*(user as *const InputState) };
+        if st.closed.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        // SAFETY: AudioQueue entrega un búfer válido con `audio_data_byte_size` octetos.
+        let data = unsafe { std::slice::from_raw_parts((*buf).audio_data, (*buf).audio_data_byte_size as usize) };
+        let whole = data.len() / st.ctl.frame_bytes * st.ctl.frame_bytes;
+        if whole > 0 && !super::push_captured(st.fd_w, &st.ctl, &data[..whole]) {
+            st.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+            return;
+        }
+        // SAFETY: el búfer es de esta cola; se devuelve para la siguiente captura.
+        unsafe { AudioQueueEnqueueBuffer(q, buf, 0, std::ptr::null()) };
+    }
+
+    /// Abre la cola de entrada del dispositivo por defecto y la arranca. La primera vez, macOS
+    /// pide permiso de micrófono para la app que aloja el proceso (la terminal, o el `.app`);
+    /// sin permiso la cola entrega silencio. En iOS hace falta además
+    /// `NSMicrophoneUsageDescription` y una sesión de audio que permita grabar.
+    pub fn open_input(
+        rate: i64,
+        channels: i64,
+        latency_ms: i64,
+        fmt: super::Format,
+        fd_w: i32,
+        key: i64,
+        ctl: Arc<super::InCtl>,
+    ) -> Result<(), String> {
+        let sb = fmt.sample_bytes();
+        let bytes_per_frame = (channels as usize * sb) as u32;
+        let desc = AudioStreamBasicDescription {
+            sample_rate: rate as f64,
+            format_id: FORMAT_LINEAR_PCM,
+            format_flags: if fmt == super::Format::F32 { FLAG_IS_FLOAT | FLAG_IS_PACKED } else { FLAG_IS_SIGNED_INTEGER | FLAG_IS_PACKED },
+            bytes_per_packet: bytes_per_frame,
+            frames_per_packet: 1,
+            bytes_per_frame,
+            channels_per_frame: channels as u32,
+            bits_per_channel: (sb * 8) as u32,
+            reserved: 0,
+        };
+        // Tres búferes de un cuarto de la latencia pedida (5 ms como poco): el bloque en que
+        // llega la captura.
+        let frame_bytes = bytes_per_frame as usize;
+        let bytes_per_sec = rate as usize * frame_bytes;
+        let buf_size = ((bytes_per_sec * latency_ms as usize / 4000).max(bytes_per_sec / 200).max(256) / frame_bytes * frame_bytes) as u32;
+        let state = Arc::new(InputState { fd_w, ctl: ctl.clone(), closed: std::sync::atomic::AtomicBool::new(false) });
+        let user = Arc::into_raw(state.clone()) as *mut std::ffi::c_void;
+        let mut q: AudioQueueRef = std::ptr::null_mut();
+        // SAFETY: desc/out válidos; el callback y `user` viven hasta Dispose.
+        let st = unsafe { AudioQueueNewInput(&desc, on_input, user, std::ptr::null(), std::ptr::null(), 0, &mut q) };
+        if st != 0 {
+            // SAFETY: recupera el Arc filtrado (la cola no llegó a existir).
+            unsafe { drop(Arc::from_raw(user as *const InputState)) };
+            return Err(format!("audio: could not open the input device (AudioQueueNewInput, OSStatus {st}); is there a microphone or audio interface?"));
+        }
+        // SAFETY: `q` es la cola recién creada; los búferes son suyos.
+        unsafe {
+            for _ in 0..3 {
+                let mut b: AudioQueueBufferRef = std::ptr::null_mut();
+                if AudioQueueAllocateBuffer(q, buf_size, &mut b) == 0 {
+                    AudioQueueEnqueueBuffer(q, b, 0, std::ptr::null());
+                }
+            }
+            let st = AudioQueueStart(q, std::ptr::null());
+            if st != 0 {
+                AudioQueueDispose(q, 1);
+                drop(Arc::from_raw(user as *const InputState));
+                return Err(format!("audio: could not start recording (AudioQueueStart, OSStatus {st}); check the microphone permission and, on iOS, the audio session"));
+            }
+        }
+        // El vigilante: cuando el programa cierra la entrada (el otro extremo del par desaparece,
+        // o el callback vio EPIPE), para y desmonta la cola. No se puede hacer desde el callback.
+        let q_addr = q as usize;
+        let user_addr = user as usize;
+        std::thread::spawn(move || {
+            loop {
+                if state.closed.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
+                let mut pfd = super::PollFd { fd: fd_w, events: 0, revents: 0 };
+                // SAFETY: pfd es nuestro y vive durante la llamada.
+                let n = unsafe { super::poll(&mut pfd, 1, 100) };
+                if n > 0 && pfd.revents & super::POLL_GONE != 0 {
+                    state.closed.store(true, std::sync::atomic::Ordering::SeqCst);
+                    break;
+                }
+                if n <= 0 {
+                    continue; // tiempo agotado o EINTR
+                }
+                std::thread::sleep(std::time::Duration::from_millis(20)); // escribible: nada que hacer
+            }
+            // SAFETY: la cola y `user` son de esta entrada; Stop/Dispose inmediatos esperan a que
+            // el callback en curso termine, así que después nadie más usa `user` ni `fd_w`.
+            unsafe {
+                let q = q_addr as AudioQueueRef;
+                AudioQueueStop(q, 1);
+                AudioQueueDispose(q, 1);
+                drop(Arc::from_raw(user_addr as *const InputState));
+                super::close(fd_w);
+            }
+            super::forget_in_ctl(key, &ctl);
+        });
+        Ok(())
     }
 
     impl Sink for CoreAudioSink {

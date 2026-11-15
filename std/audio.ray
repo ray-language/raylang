@@ -129,3 +129,50 @@ pub fn drain(h: int) -> Result<int, string> {
         Result.Err(r[1])
     }
 }
+
+/// Opens an audio INPUT (the default microphone or audio interface) and starts recording:
+/// `sample_rate` Hz, `channels` interleaved channels, samples in `format` (`"s16le"`, `"s24le"`,
+/// `"s32le"` or `"f32le"`). `latency_ms` (20–1000, or 0 for the default of 100) sizes the blocks
+/// the capture arrives in. Returns a handle for `read`; `close(h)` stops recording.
+///
+/// Available on macOS and iOS; other platforms return `Err`. The first time, the system asks
+/// for microphone permission (on iOS the app also needs `NSMicrophoneUsageDescription`); without
+/// it the input delivers silence. `RAY_AUDIO_SOURCE=null` (silence) or `=tone` (440 Hz) replace
+/// the device with a real-time source, for tests.
+// M463 (ray-daw #422).
+pub fn open_input(
+    sample_rate: int,
+    channels: int,
+    format: string,
+    latency_ms: int
+) -> Result<int, string> {
+    let r = __audio_open(sample_rate, channels, latency_ms, "input:" + format);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("invalid handle"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// Reads the audio captured since the last `read`: whole interleaved frames in the format of
+/// `open_input`. Parks the fiber until there is data, so a recording loop needs no clock. An
+/// empty result means the input was closed. Audio that is not read in time (about one second)
+/// is dropped, never delayed.
+pub fn read(h: int) -> Result<bytes, string> {
+    let r = __audio_read(h);
+    if (r[0] == b"ok") {
+        Result.Ok(r[1])
+    } else {
+        Result.Err(from_utf8(r[1]).unwrap_or("audio: read failed"))
+    }
+}
+
+/// The capture clock of the input `h`, in ms: how much audio the device has delivered since it
+/// was opened, whether it was read or not. Pair it with `played_ms` of an output to line up a
+/// recording with what was playing.
+pub fn recorded_ms(h: int) -> Result<int, string> {
+    played_ms(h)
+}

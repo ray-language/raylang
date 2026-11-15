@@ -3305,6 +3305,40 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // M464 (std/midi): la primitiva de puertos, y los alias de lectura y escritura de sus
+            // handles (un pipe de lectura y uno de escritura, como los de audio). Con
+            // `--without audio`, el Err-valor.
+            "midi_op" if name.starts_with("__") => {
+                if self.exclude.contains("audio") {
+                    out.push_str("Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(&b\"this binary was built without audio support, which includes MIDI\"[..])]))");
+                } else {
+                    self.needs_rt_audio = true;
+                    self.needs_rt_process = true;
+                    out.push_str("__ray_midi_op(&");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(", &");
+                    self.emit_expr(out, eff[1])?;
+                    out.push_str(", ");
+                    self.emit_expr(out, eff[2])?;
+                    out.push(')');
+                }
+            }
+            "midi_read" if name.starts_with("__") && !self.exclude.contains("audio") => {
+                self.needs_rt_audio = true;
+                self.needs_rt_process = true;
+                out.push_str("__ray_proc_read(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
+            "midi_write" if name.starts_with("__") && !self.exclude.contains("audio") => {
+                self.needs_rt_audio = true;
+                self.needs_rt_process = true;
+                out.push_str("__ray_proc_write(");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", &*");
+                self.emit_expr(out, eff[1])?;
+                out.push(')');
+            }
             // M463: la lectura de una ENTRADA es la de un pipe (`Pipe`): el lector de procesos.
             "audio_read" if name.starts_with("__") && !self.exclude.contains("audio") => {
                 self.needs_rt_audio = true;

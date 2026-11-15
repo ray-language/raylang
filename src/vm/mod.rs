@@ -2192,6 +2192,21 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                OpCode::MidiOp => {
+                    // M464: pop en orden inverso (id, name, op).
+                    let id = self.pop();
+                    let name = self.pop();
+                    let op = self.pop();
+                    let elems = match (&op, &name, &id) {
+                        (HeapValue::Str(op), HeapValue::Str(name), HeapValue::Int(id)) => match crate::builtins::midi_op(op, name, *id) {
+                            Ok(r) => vec![HeapValue::bytes(b"ok".to_vec()), HeapValue::bytes(r)],
+                            Err(e) => vec![HeapValue::bytes(b"err".to_vec()), HeapValue::bytes(e.into_bytes())],
+                        },
+                        _ => unreachable!("the checker guarantees (string, string, int)"),
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 OpCode::CharsetOp => {
                     // M446: pop en orden inverso (data, label, op).
                     let data = self.pop();

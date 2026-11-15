@@ -1349,6 +1349,16 @@ impl<'a> Interpreter<'a> {
                 }
                 _ => unreachable!("the checker guarantees (string, bytes, bytes, bytes)"),
             },
+            "__midi_op" => match (&values[0], &values[1], &values[2]) {
+                (Value::Str(op), Value::Str(name), Value::Int(id)) => {
+                    let elems = match crate::builtins::midi_op(op, name, *id) {
+                        Ok(r) => vec![Value::Bytes(Rc::new(b"ok".to_vec())), Value::Bytes(Rc::new(r))],
+                        Err(e) => vec![Value::Bytes(Rc::new(b"err".to_vec())), Value::Bytes(Rc::new(e.into_bytes()))],
+                    };
+                    Value::Array(Rc::new(std::cell::RefCell::new(elems)))
+                }
+                _ => unreachable!("the checker guarantees (string, string, int)"),
+            },
             "__charset_op" => match (&values[0], &values[1], &values[2]) {
                 (Value::Str(op), Value::Str(label), Value::Bytes(data)) => {
                     let elems = match crate::builtins::charset_op(op, label, data) {
@@ -1625,7 +1635,7 @@ impl<'a> Interpreter<'a> {
             // M16.1c: lee del socket como bytes (bloqueante en el intérprete) → [b"ok", datos]/[b"err", msg].
             // M100 v2: `__proc_read` es un alias con opcode compartido — el mismo camino lee un
             // socket o el pipe de un proceso hijo (la variante bloqueante ya distingue el Pipe).
-            "__socket_read_bytes" | "__proc_read" | "__audio_read" => {
+            "__socket_read_bytes" | "__proc_read" | "__audio_read" | "__midi_read" => {
                 let arr = match &values[0] {
                     Value::Int(h) => match crate::builtins::socket_read_bytes_blocking(*h) {
                         Ok(data) => vec![bytes_tag("ok"), Value::Bytes(Rc::new(data))],
@@ -1638,7 +1648,7 @@ impl<'a> Interpreter<'a> {
             // M100 v3: `__proc_write` es un alias con opcode compartido — el mismo camino escribe
             // en el stdin de un hijo vivo (el despacho por tipo de handle vive en el host).
             // M16.1c: escribe bytes en el socket → ["ok", ""] o ["err", msg].
-            "__socket_write_bytes" | "__proc_write" | "__audio_write" => {
+            "__socket_write_bytes" | "__proc_write" | "__audio_write" | "__midi_write" => {
                 let arr = match (&values[0], &values[1]) {
                     (Value::Int(h), Value::Bytes(data)) => match crate::builtins::socket_write_raw(*h, data) {
                         Ok(_) => vec![Value::Str("ok".to_string()), Value::Str(String::new())],

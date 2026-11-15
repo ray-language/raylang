@@ -20505,3 +20505,39 @@ unix.
 que un DAW alinea la toma con el `played_ms` de lo que sonaba.
 
 Pendiente del hallazgo: elegir dispositivo (#424) y la latencia baja de un AudioUnit HAL.
+
+## 442. M464 — `std/midi`: los puertos MIDI del sistema (nov 2026)
+
+ray-daw (#423) no tenía MIDI: CoreMIDI entrega los mensajes en un callback y la FFI no admite
+callbacks; la página tampoco (WKWebView no implementa Web MIDI). Decisión del usuario: en el
+núcleo, a mano como el audio (cero crates), macOS e iOS primero.
+
+**Forma.** La de `std/audio`: lo que llega por callback se convierte en un descriptor.
+
+- Una **entrada** es un par de sockets de DATAGRAMAS: el callback escribe un datagrama por
+  mensaje (`[ns: 8 LE][octetos]`) y el programa lee del otro extremo, un pipe de lectura
+  ordinario. Con datagramas cada `read` devuelve un mensaje entero y no hay nada que
+  reensamblar en raylang (no hay estado por handle en la stdlib).
+- Una **salida** es un par de flujo: el programa escribe tramas `[longitud u16][octetos]` en un
+  pipe de escritura y un hilo las entrega con `MIDISend` (o `MIDIReceived` si el puerto es
+  virtual). El `close(h)` es el EOF que termina el hilo y desmonta el puerto.
+- **`watch`** es otro extremo de lectura, que recibe un datagrama por cada
+  `kMIDIMsgSetupChanged`.
+
+Un solo opcode nuevo, `MidiOp` (`__midi_op(op, name, id)`), para listar y abrir;
+`__midi_read`/`__midi_write` comparten los de los pipes. Las aperturas registran el handle en el
+registro de siempre, así que `close(h)` sirve para todo.
+
+**Decisiones.**
+
+- El cliente de CoreMIDI se crea en un hilo propio que se queda en su run loop: es donde llegan
+  los avisos y lo que mantiene al día la lista con dispositivos conectados en caliente.
+- El `id` de un puerto es su *unique ID* de CoreMIDI (estable entre reconexiones), no un índice.
+- Cerrar una entrada sin tráfico no lo ve el callback: cada operación barre las entradas vivas
+  sondeando con un datagrama vacío, que `midi.read` descarta (un mensaje lleva al menos los 8
+  octetos de su marca).
+- Los puertos **virtuales** entran en la primera versión porque son la única forma de probar
+  sin hardware, y porque un secuenciador o un sinte los necesita para hablar con otros programas.
+- Va tras la feature `audio`: no merece una feature ni un `--without` propios.
+
+Pendiente: Linux (ALSA seq), Windows (WinMM), Android (AMidi), y probar con un dispositivo real.

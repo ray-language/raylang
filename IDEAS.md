@@ -4729,7 +4729,7 @@ cerraron #356. Lo que NO entró, por acotar el arco a lo que raysolve necesitaba
 Ninguno bloquea código existente: todos son rechazos del checker con mensaje, salvo el 5 (error
 de `rustc` en el build nativo).
 
-## 125. Entrada de audio y MIDI (ray-daw #422, #423) — fase 1 ✅ EJECUTADA como M463 (DESIGN §441); MIDI y el resto de plataformas, pendientes
+## 125. Entrada de audio y MIDI (ray-daw #422, #423) — fases 1 y 2 ✅ EJECUTADAS como M463 y M464 (DESIGN §441–§442); el resto de plataformas, pendiente
 
 Decisiones del usuario (15 nov 2026): **macOS + iOS primero** para la entrada de audio, y
 **`std/midi` en el núcleo** (CoreMIDI a mano en `ray-runtime`, como el audio: cero crates), también
@@ -4739,9 +4739,9 @@ macOS + iOS primero. La API se define para todas las plataformas; donde no hay b
 Fases:
 
 1. **Entrada de audio en macOS/iOS** — M463, hecha. `audio.open_input` / `read` / `recorded_ms`.
-2. **`std/midi` en macOS/iOS** — CoreMIDI: listar puertos, abrir una entrada y leer mensajes con
-   marca de tiempo aparcando la fibra, abrir una salida y enviar, y el aviso de conexión o
-   desconexión. Se prueba sin hardware con puertos virtuales.
+2. **`std/midi` en macOS/iOS** — M464, hecha (DESIGN §442). CoreMIDI: listar puertos, entradas y
+   salidas reales y virtuales, y el aviso de conexión o desconexión. Probado con puertos
+   virtuales; falta un dispositivo físico.
 3. **Entrada de audio en Linux (ALSA), Android (AAudio) y Windows (WASAPI)**. Cada una en su PR;
    Linux y Windows necesitan un dispositivo de entrada en la VM para probarse de verdad.
 4. **MIDI en Linux (ALSA seq), Windows (WinMM) y Android (AMidi)**.

@@ -100,10 +100,15 @@ impl Transpiler {
     /// orden de evaluación. Sirve a las DOS rutas de llamada de usuario (`shadows_builtin` — mismo
     /// módulo — y el brazo genérico del final, nombres calificados `mod::fn`).
     pub(super) fn emit_user_call_hoisted(&mut self, out: &mut String, name: &str, eff: &[&Expr]) -> Result<(), String> {
-        let marked = self.fn_marks.get(name).cloned().unwrap_or_default();
-        let dicts = self.dict_marks.get(name).cloned().unwrap_or_default();
+        // Una variable LOCAL con el nombre de una función global la tapa (como en el checker):
+        // la llamada es a la closure local, sin los genéricos, marcas ni diccionarios de la
+        // función homónima. Antes `fn f<T>(…)` en el programa hacía que un `f()` sobre un
+        // parámetro `f: fn() -> …` saliera como `f::<…>()` (E0109 en el build del usuario).
+        let local = self.lookup(name).is_some();
+        let marked = if local { Default::default() } else { self.fn_marks.get(name).cloned().unwrap_or_default() };
+        let dicts = if local { Default::default() } else { self.dict_marks.get(name).cloned().unwrap_or_default() };
         let expected = self.expected_ty.take(); // pertenece a ESTA llamada, no a sus argumentos
-        let turbofish = self.generic_turbofish(name, eff, expected.as_ref(), marked.len() + dicts.len())?;
+        let turbofish = if local { String::new() } else { self.generic_turbofish(name, eff, expected.as_ref(), marked.len() + dicts.len())? };
         if eff.is_empty() {
             out.push_str(&mangle(name));
             out.push_str(&turbofish);

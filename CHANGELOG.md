@@ -6,6 +6,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **El binario nativo compila cuando una closure local se llama igual que una función
+  genérica**: con un `fn f<T>(…)` en el programa, llamar a un parámetro `f: fn() -> …` fallaba
+  en el build con un error de `rustc`.
+
 ## 1.27.100 — 2026-11-15
 
 - **Un `Map` con clave genérica funciona en los tres motores, y lo que no es clave es un error

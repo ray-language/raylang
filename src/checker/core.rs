@@ -1834,7 +1834,7 @@ impl Checker {
             .and_then(|k| self.structs.get(&k))
             .map(|fs| {
                 fs.iter()
-                    .filter(|(_, ty)| mentions_type(&e.msg, &ty.to_string()))
+                    .filter(|(_, ty)| !matches!(ty, Type::Int | Type::Float | Type::String | Type::Bool | Type::Char) && mentions_type(&e.msg, &ty.to_string()))
                     .map(|(n, _)| format!("'{n}'"))
                     .collect()
             })

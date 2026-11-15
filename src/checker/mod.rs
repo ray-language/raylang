@@ -809,6 +809,8 @@ struct Checker {
     /// M461: los tipos no genéricos con `@derive(Eq, Hash)` (candidatos a clave de `Map`), para
     /// que el mensaje de error distinga «falta el derive» de «un campo no es clave».
     derived_eq_hash: HashSet<String>,
+    /// #356: por tipo genérico, las posiciones de sus parámetros con el bound `MapKey`.
+    key_bounded_params: HashMap<String, Vec<usize>>,
     /// M270: nombres de funciones del prelude que el usuario REDEFINIÓ en la raíz; el prelude quedó
     /// inyectado bajo el alias `nombre#prelude` para los módulos.
     overridden_prelude: HashSet<String>,

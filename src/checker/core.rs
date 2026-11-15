@@ -56,6 +56,7 @@ impl Checker {
             current_fn_is_root: true,
             key_params_allowed: false,
             derived_eq_hash: HashSet::new(),
+            key_bounded_params: HashMap::new(),
             overridden_prelude: HashSet::new(),
             dict_calls: HashMap::new(),
             dyn_coercions: HashMap::new(),
@@ -1225,8 +1226,24 @@ impl Checker {
                 .filter_map(|i| type_key_of(&i.target))
                 .collect()
         };
+        // Qué parámetros de cada tipo genérico llevan `MapKey` (ver `ensure_key_args`).
+        let bounded = |tps: &[String], bounds: &[(String, String)]| -> Vec<usize> {
+            tps.iter().enumerate()
+                .filter(|(_, tp)| bounds.iter().any(|(p, tr)| p == *tp && tr == MAP_KEY_TRAIT))
+                .map(|(i, _)| i)
+                .collect()
+        };
+        self.key_bounded_params = program.structs.iter().map(|s| (s.name.clone(), bounded(&s.type_params, &s.bounds)))
+            .chain(program.enums.iter().map(|e| (e.name.clone(), bounded(&e.type_params, &e.bounds))))
+            .filter(|(_, positions)| !positions.is_empty())
+            .collect();
         let (eq, hash) = (derives("Eq"), derives("Hash"));
-        let mut keys: HashSet<String> = eq.intersection(&hash).cloned().collect();
+        // Solo structs y enums del programa: los impls de `u8`/`u32`/`u64` del prelude también
+        // van marcados como sintéticos y no son claves (el runtime no tiene esa variante).
+        let mut keys: HashSet<String> = eq.intersection(&hash)
+            .filter(|n| self.structs.contains_key(*n) || self.enums.contains_key(*n))
+            .cloned()
+            .collect();
         self.derived_eq_hash = keys.clone();
         loop {
             let dropped: Vec<String> = keys.iter()
@@ -1267,7 +1284,16 @@ impl Checker {
             return String::new();
         };
         if !self.derived_eq_hash.contains(&name) {
-            return format!(" (add @derive(Eq, Hash) to '{name}'; an impl written by hand does not count)");
+            // Solo se aconseja el derive donde sirve: un tipo del prelude no es del usuario, y
+            // `@derive` no admite tipos genéricos.
+            let generic = self.struct_tparams.get(&name).or_else(|| self.enum_tparams.get(&name)).is_some_and(|tp| !tp.is_empty());
+            return if name == "Option" || name == "Result" {
+                String::new()
+            } else if generic {
+                format!(" (a generic type such as '{name}' cannot be a Map key)")
+            } else {
+                format!(" (add @derive(Eq, Hash) to '{name}'; an impl written by hand does not count)")
+            };
         }
         let keys: HashSet<String> = self.impl_traits.iter()
             .filter(|(_, tr)| tr == MAP_KEY_TRAIT)
@@ -1402,12 +1428,18 @@ impl Checker {
                 let arity = self.struct_tparams.get(name)
                     .or_else(|| self.enum_tparams.get(name));
                 match arity {
-                    Some(tparams) => self.ensure_type_args(name, tparams.len(), args, line, col),
+                    Some(tparams) => {
+                        self.ensure_type_args(name, tparams.len(), args, line, col)?;
+                        self.ensure_key_args(name, args, line, col)
+                    }
                     None => Err(self.err(line, col, format!("unknown type: '{}' not declared", name))),
                 }
             }
             Type::Enum(name, args) => match self.enum_tparams.get(name) {
-                Some(tparams) => self.ensure_type_args(name, tparams.len(), args, line, col),
+                Some(tparams) => {
+                    self.ensure_type_args(name, tparams.len(), args, line, col)?;
+                    self.ensure_key_args(name, args, line, col)
+                }
                 None => Err(self.err(line, col, format!("unknown type: enum '{}' not declared", name))),
             },
             // Un parámetro de tipo (M6) es válido si está en ámbito.
@@ -1448,6 +1480,30 @@ impl Checker {
     }
 
     /// Comprueba la aridad de los argumentos de tipo y valida cada uno.
+    /// #356: al MENCIONAR un tipo genérico con un parámetro `MapKey` (`Idx<T>`), el argumento
+    /// debe ser clave. Los demás bounds de un struct solo se verifican al construirlo, pero
+    /// este decide el tipo de la clave del `Map` que lleva dentro: sin comprobarlo aquí,
+    /// `fn size<T>(x: Idx<T>)` pasaba el checker y el nativo no compilaba.
+    fn ensure_key_args(&self, name: &str, args: &[Type], line: usize, col: usize) -> Result<(), TypeError> {
+        let Some(positions) = self.key_bounded_params.get(name) else { return Ok(()) };
+        if line >= crate::prelude::LINE_BASE || self.key_params_allowed {
+            return Ok(());
+        }
+        for &i in positions {
+            let Some(arg) = args.get(i).map(|a| self.resolve_type(a)) else { continue };
+            if is_primitive_key(&arg) || self.satisfies_bound(&arg, MAP_KEY_TRAIT) {
+                continue;
+            }
+            return Err(self.err(line, col, match &arg {
+                Type::Var(tp) => format!(
+                    "the type parameter '{tp}' is used as a Map key (by '{name}') but is not bounded by '{MAP_KEY_TRAIT}' (declare it as '{tp}: {MAP_KEY_TRAIT}')"
+                ),
+                other => format!("{other} does not implement '{MAP_KEY_TRAIT}' (required by '{name}')"),
+            }));
+        }
+        Ok(())
+    }
+
     pub(super) fn ensure_type_args(&self, name: &str, arity: usize, args: &[Type], line: usize, col: usize) -> Result<(), TypeError> {
         if args.len() != arity {
             return Err(self.err(line, col, format!(
@@ -4209,6 +4265,14 @@ impl Checker {
         for (tp, bound_trait) in &gi.bounds {
             let inner_concrete = sigma_impl.get(tp).cloned().unwrap_or_else(|| Type::Var(tp.clone()));
             let bmethods = self.traits.get(bound_trait).cloned().unwrap_or_default();
+            // Un bound marcador (`MapKey`) no tiene diccionario que pedir a `dict_for`, que es
+            // quien verifica: se comprueba aquí, o un impl `impl<T: MapKey> Tr for Wrap<T>`
+            // se elegiría para un `Wrap<float>` a través de un genérico acotado o de un `dyn`.
+            if bmethods.is_empty() && !self.satisfies_bound(&inner_concrete, bound_trait) {
+                return Err(self.err(line, col, format!(
+                    "the impl for {concrete} requires that '{tp}' be '{bound_trait}', but {inner_concrete} does not implement it"
+                )));
+            }
             for bm in &bmethods {
                 inner.push(self.dict_for(&inner_concrete, bound_trait, &bm.name, line, col)?);
             }
@@ -4428,3 +4492,4 @@ fn mentions_type(msg: &str, ty: &str) -> bool {
         !msg[..i].chars().next_back().is_some_and(ident) && !msg[i + ty.len()..].chars().next().is_some_and(ident)
     })
 }
+

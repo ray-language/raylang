@@ -6,6 +6,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.100 — 2026-11-15
+
 - **Un `Map` con clave genérica funciona en los tres motores, y lo que no es clave es un error
   de tipos**: `fn count<P: MapKey>(xs: [P])` declara que `P` sirve de clave con el bound nuevo
   `MapKey` (lo cumplen `int`, `string`, `char`, `bool` y `bytes`). Antes `Map<P, V>` se aceptaba

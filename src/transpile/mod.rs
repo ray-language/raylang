@@ -113,6 +113,9 @@ struct Transpiler {
     expected_ty: Option<Type>,
     /// M313: tipo de retorno de la función en curso (esperado de un `return`).
     current_ret: Option<Type>,
+    /// El cuerpo de la función en emisión (solo para COMPARAR punteros: ¿es este bloque el
+    /// cuerpo, y por tanto su cola el valor de retorno?). Nunca se desreferencia.
+    fn_body: *const crate::ast::Block,
     /// Conversores Send generados bajo demanda (H21-N5a): (tipo concreto, su rust_ty como clave única).
     /// El índice en el Vec es el id de las fns `__to_send_N`/`__from_send_N`; se emiten al final
     /// (worklist: generar el cuerpo de uno puede registrar otros — tipos anidados).
@@ -401,7 +404,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         .filter(|s| {
             s.type_params.iter().any(|tp| {
                 let one: std::collections::HashSet<String> = std::iter::once(tp.clone()).collect();
-                !s.fields.iter().any(|(_, ft)| ty_mentions_tparam(&normalize_type(ft), &one))
+                !s.fields.iter().any(|(_, ft)| rust_ty_mentions_tparam(&normalize_type(ft), &one))
             })
         })
         .map(|s| s.name.clone())
@@ -460,6 +463,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         phantom_structs,
         expected_ty: None,
         current_ret: None,
+        fn_body: std::ptr::null(),
         send_convs: Vec::new(),
         consts,
         readonly_params: crate::readonly::readonly_array_params(prog),

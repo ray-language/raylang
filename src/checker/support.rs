@@ -84,6 +84,9 @@ pub(super) fn type_has_var(t: &Type) -> bool {
         Type::Task(t) => type_has_var(t),
         Type::Fn(ps, r) => ps.iter().any(type_has_var) || type_has_var(r),
         Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(type_has_var),
+        // Una tupla con una incógnita dentro también la tiene: sin esto, el campo
+        // `Map<(A, int), V>` de un struct genérico se comprobaba contra `(A, int)` sin resolver.
+        Type::Tuple(ts) => ts.iter().any(type_has_var),
         _ => false,
     }
 }

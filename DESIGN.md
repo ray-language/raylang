@@ -20541,3 +20541,30 @@ registro de siempre, así que `close(h)` sirve para todo.
 - Va tras la feature `audio`: no merece una feature ni un `--without` propios.
 
 Pendiente: Linux (ALSA seq), Windows (WinMM), Android (AMidi), y probar con un dispositivo real.
+
+## 443. Revisión previa a 1.27.101 (nov 2026)
+
+La revisión del rango `v1.27.100..main` (M462–M464) encontró diez puntos; los que cambian algo:
+
+- **`audio.read` partía frames.** El par de la entrada era de flujo y el runtime lee en trozos
+  de 64 KiB: con atraso, un frame de 6 octetos (s24le estéreo) quedaba a caballo entre dos
+  lecturas. La entrada pasa a DATAGRAMAS, uno por bloque (de 32 KiB como mucho): cada `read` es
+  un bloque de frames enteros, y desaparece el código que recomponía escrituras parciales. El
+  cierre del programa se detecta con `getpeername` (un par de datagramas no avisa con POLLHUP).
+- **MIDI perdía mensajes en una entrada inactiva.** Para saber si el programa había cerrado una
+  entrada, cada operación la sondeaba con un datagrama vacío; en una que nadie leía llenaban la
+  cola. Ahora se pregunta al socket (`getpeername`), sin escribir. Y un hilo barrendero
+  desmonta cada 200 ms las entradas cerradas: antes un `close(h)` no surtía efecto hasta la
+  siguiente llamada a `std/midi`, y los demás programas seguían viendo el puerto virtual.
+- **El arreglo de la closure homónima era parcial**: la local seguía usando los parámetros de
+  solo lectura, la firma y el tipo de retorno de la global. El caso grave: recibía la constante
+  compartida y podía mutarla.
+- **Literales de `Map` en nativo**: el tipo esperado se retira al entrar al literal (se colaba
+  en el anidado) y llega también a retornos, argumentos y payloads; un tipo con huecos
+  (`Option<()>`) no se usa para nombrar la clave.
+- **`type_has_var` no miraba dentro de las tuplas**, así que el checker comprobaba el campo
+  `Map<(A, int), V>` de un struct genérico contra `(A, int)` sin resolver.
+- Un struct genérico cuyo parámetro solo vive en una clave tupla/`Option` lleva `PhantomData`
+  en nativo; una tupla de más de 8 elementos como clave da un error de raylang, no de rustc.
+
+Sin cambio: el espejo selfhost acepta `Option` de claves pero no tuplas (no tiene tipo tupla).

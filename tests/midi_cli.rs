@@ -147,3 +147,30 @@ fn main() -> int {
     }
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// Revisión de 1.27.101: listar puertos sondeaba cada entrada abierta con un datagrama; en una
+/// entrada que nadie leía llenaban la cola y los mensajes de verdad se perdían.
+#[cfg(target_os = "macos")]
+#[test]
+fn listing_ports_does_not_fill_an_idle_input() {
+    let src = r#"import std/midi;
+fn main() -> int {
+    let inp = midi.create_input("ray idle in").unwrap();
+    var id = 0;
+    for p in midi.outputs() { if (p.name == "ray idle in") { id = p.id; } }
+    let out = midi.open_output(id).unwrap();
+    var n = 0;
+    while (n < 6000) { let _ = midi.outputs(); n = n + 1; }
+    print(midi.send(out, b"\x90\x40\x7f"));
+    print(midi.read(inp).unwrap().data);
+    let _ = close(out);
+    let _ = close(inp);
+    0
+}
+"#;
+    let d = workdir("idle", src);
+    let o = Command::new(env!("CARGO_BIN_EXE_ray")).args(["run", "prog.ray"]).current_dir(&d).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&o.stderr), "");
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "Result.Ok(3)\n90407f\n");
+    let _ = std::fs::remove_dir_all(&d);
+}

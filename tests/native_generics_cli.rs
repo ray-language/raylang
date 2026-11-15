@@ -167,3 +167,27 @@ fn main() -> int {
     );
     same_everywhere(&d, "<1>\n[[a]]\n18\nhi!\nz\n");
 }
+
+#[test]
+fn a_local_closure_does_not_inherit_the_signature_of_a_global_function() {
+    // Revisión de 1.27.101: la closure local que tapa a una función global seguía usando sus
+    // parámetros de solo lectura (recibía la constante COMPARTIDA y la mutaba), su firma (los
+    // argumentos se tipaban contra la global) y su tipo de retorno.
+    let d = project("shadow_sig", &[("src/main.ray", r#"const TABLE: [int] = [1, 2, 3];
+fn run(xs: [int]) -> int { xs.len() }
+fn apply(run: fn([int]) -> int) -> int { run(TABLE) }
+fn g(x: Option<int>) -> string { "global" }
+fn make<T>() -> Option<T> { Option.None }
+fn opt(g: fn(Option<string>) -> int) -> int { g(make()) }
+fn lens(g: fn(int) -> [int]) -> int { g(2).len() }
+fn main() -> int {
+    print(apply(fn(xs: [int]) -> int { xs.push(9); xs.len() }));
+    print(run(TABLE));
+    print(opt(fn(o: Option<string>) -> int { if (o.is_none()) { 1 } else { 0 } }));
+    print(lens(fn(n: int) -> [int] { [n, n, n] }));
+    print(g(Option.Some(1)));
+    0
+}
+"#)]);
+    same_everywhere(&d, "4\n3\n1\n3\nglobal\n");
+}

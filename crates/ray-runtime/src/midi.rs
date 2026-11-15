@@ -182,6 +182,9 @@ mod coremidi {
         fn read(fd: i32, buf: *mut u8, n: usize) -> isize;
         fn write(fd: i32, buf: *const u8, n: usize) -> isize;
         fn close(fd: i32) -> i32;
+        /// Falla con ENOTCONN cuando el otro extremo del par ya se cerró: la forma de saber,
+        /// sin escribir nada, que el programa soltó una entrada.
+        fn getpeername(fd: i32, addr: *mut u8, len: *mut u32) -> i32;
         #[link_name = "fcntl"]
         fn fcntl_raw(fd: i32, cmd: i32, ...) -> i32;
     }
@@ -248,7 +251,9 @@ mod coremidi {
             let one = [1u8];
             // SAFETY: `one` vive durante la llamada; `fd` es un extremo nuestro.
             let n = unsafe { write(fd, one.as_ptr(), 1) };
-            let alive = n == 1 || std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock;
+            // Una cola llena (el programa no ha leído los avisos anteriores) no es un lector
+            // muerto: en macOS un socket de datagramas lleno da ENOBUFS, no WouldBlock.
+            let alive = n == 1 || is_full(&std::io::Error::last_os_error());
             if !alive {
                 // SAFETY: el extremo es nuestro y nadie más lo usa tras retirarlo.
                 unsafe { close(fd) };
@@ -408,13 +413,9 @@ mod coremidi {
                 record.extend_from_slice(&ticks_to_ns(ticks).to_le_bytes());
                 record.extend_from_slice(data);
                 let n = write(input.fd_w, record.as_ptr(), record.len());
-                if n < 0 {
-                    let kind = std::io::Error::last_os_error().kind();
-                    let full = kind == std::io::ErrorKind::WouldBlock || std::io::Error::last_os_error().raw_os_error() == Some(55); // ENOBUFS
-                    if !full {
-                        input.closed.store(true, Ordering::SeqCst); // el programa cerró la entrada
-                        return;
-                    }
+                if n < 0 && !is_full(&std::io::Error::last_os_error()) {
+                    input.closed.store(true, Ordering::SeqCst); // el programa cerró la entrada
+                    return;
                 }
                 // `MIDIPacketNext`: en arm64 los paquetes van alineados a 4 octetos.
                 let next = p.add(10 + len);
@@ -423,26 +424,44 @@ mod coremidi {
         }
     }
 
-    /// Desmonta las entradas cuyo lector ya cerró. Se llama al empezar cada operación: una
-    /// entrada cerrada sin tráfico queda montada hasta la siguiente, lo que no cuesta nada.
+    /// ¿El error de una escritura es «cola llena» (y no «el lector se fue»)?
+    fn is_full(err: &std::io::Error) -> bool {
+        err.kind() == std::io::ErrorKind::WouldBlock || err.raw_os_error() == Some(55) // ENOBUFS
+    }
+
+    /// ¿Sigue abierto el otro extremo del par?
+    fn peer_alive(fd: i32) -> bool {
+        let mut addr = [0u8; 128];
+        let mut len = addr.len() as u32;
+        // SAFETY: `addr` y `len` son nuestros y describen el búfer.
+        unsafe { getpeername(fd, addr.as_mut_ptr(), &mut len) == 0 }
+    }
+
+    /// Arranca (una vez) el hilo que desmonta las entradas que el programa cerró: sin él, un
+    /// `close(h)` solo surtía efecto en la siguiente llamada a `std/midi`, y hasta entonces los
+    /// demás programas seguían viendo —y enviando a— un puerto virtual muerto.
+    fn start_sweeper() {
+        static STARTED: OnceLock<()> = OnceLock::new();
+        STARTED.get_or_init(|| {
+            std::thread::spawn(|| loop {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                sweep();
+            });
+        });
+    }
+
+    /// Desmonta las entradas cuyo lector ya cerró. Lo llama el barrendero cada 200 ms y cada
+    /// operación al empezar.
     fn sweep() {
         let mut alive = inputs_alive().lock().unwrap_or_else(|e| e.into_inner());
         alive.retain(|&addr| {
             // SAFETY: cada dirección es un `Arc<Input>` filtrado y aún no soltado.
             let input = unsafe { &*(addr as *const Input) };
             if !input.closed.load(Ordering::SeqCst) {
-                // Sin tráfico el callback no se entera del cierre: se sondea con un datagrama
-                // VACÍO. Un lector vivo lo recibe y `std/midi` lo descarta (un mensaje lleva al
-                // menos los 8 octetos de su marca de tiempo); aquí solo interesa si el otro
-                // extremo sigue ahí.
-                let probe: [u8; 0] = [];
-                // SAFETY: longitud cero; el fd es nuestro.
-                let n = unsafe { write(input.fd_w, probe.as_ptr(), 0) };
-                let gone = n < 0 && {
-                    let err = std::io::Error::last_os_error();
-                    err.kind() != std::io::ErrorKind::WouldBlock && err.raw_os_error() != Some(55)
-                };
-                if !gone {
+                // Sin tráfico el callback no se entera del cierre: se pregunta al socket, sin
+                // escribir nada (un sondeo con datagramas llenaba la cola de una entrada que
+                // nadie leía y los mensajes de verdad se perdían).
+                if peer_alive(input.fd_w) {
                     return true;
                 }
                 input.closed.store(true, Ordering::SeqCst);
@@ -512,6 +531,7 @@ mod coremidi {
         }
         input.object.lock().unwrap().0 = object;
         inputs_alive().lock().unwrap().push(ref_con as usize);
+        start_sweeper();
         Ok(file(fd_r))
     }
 

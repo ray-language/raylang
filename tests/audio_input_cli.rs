@@ -137,3 +137,38 @@ fn main() -> int {
     assert_eq!(String::from_utf8_lossy(&o.stdout), "true true\n");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn every_read_is_whole_frames_whatever_the_frame_size() {
+    // Revisión de 1.27.101: con un flujo, la lectura de 64 KiB del runtime partía los frames
+    // que no dividen 65536 (s24le estéreo: 6 octetos) en cuanto había atraso. Cada bloque viaja
+    // ahora como un datagrama.
+    let d = workdir("frames");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import std/audio;
+import std/time;
+fn main() -> int {
+    let h = audio.open_input(48000, 2, "s24le", 40).unwrap();
+    time.sleep(700);
+    var reads = 0;
+    var misaligned = 0;
+    var total = 0;
+    while (total < 48000 * 6 * 9 / 10) {
+        let b = audio.read(h).unwrap();
+        if (b.len() == 0 || b.len() % 6 != 0) { misaligned = misaligned + 1; }
+        total = total + b.len();
+        reads = reads + 1;
+    }
+    print("${reads > 10} ${misaligned}");
+    let _ = close(h);
+    0
+}
+"#,
+    )
+    .unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_ray")).args(["run", "prog.ray"]).env("RAY_AUDIO_SOURCE", "tone").current_dir(&d).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&o.stderr), "");
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "true 0\n");
+    let _ = std::fs::remove_dir_all(&d);
+}

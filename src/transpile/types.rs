@@ -305,6 +305,36 @@ pub(super) fn key_is_converted(k: &Type) -> bool {
     }
 }
 
+/// ¿Queda en `t` algún hueco sin resolver (el `Unit` con que `type_of` marca lo que solo el
+/// contexto fija, como el contenido de un `Option.None` suelto)?
+pub(super) fn type_has_hole(t: &Type) -> bool {
+    match t {
+        Type::Unit => true,
+        Type::Array(e) | Type::Channel(e) | Type::Task(e) => type_has_hole(e),
+        Type::Map(k, v) => type_has_hole(k) || type_has_hole(v),
+        Type::Tuple(ts) => ts.iter().any(type_has_hole),
+        Type::Struct(_, args) | Type::Enum(_, args) => args.iter().any(type_has_hole),
+        _ => false,
+    }
+}
+
+/// ¿Aparece alguno de `tps` en el tipo RUST de `t`? Como `ty_mentions_tparam`, salvo en la
+/// clave de un `Map`: una tupla, un `Option` o un tipo de usuario se guardan como `__RayKey`
+/// (sin parámetros), así que un parámetro que solo vive ahí no llega al struct de Rust (E0392).
+pub(super) fn rust_ty_mentions_tparam(t: &Type, tps: &std::collections::HashSet<String>) -> bool {
+    match t {
+        Type::Map(k, v) => {
+            let direct = matches!(&**k, Type::Var(n) if tps.contains(n))
+                || matches!(&**k, Type::Struct(n, args) if args.is_empty() && tps.contains(n));
+            direct || rust_ty_mentions_tparam(v, tps)
+        }
+        Type::Array(e) => rust_ty_mentions_tparam(e, tps),
+        Type::Tuple(ts) => ts.iter().any(|x| rust_ty_mentions_tparam(x, tps)),
+        Type::Struct(n, args) | Type::Enum(n, args) if !args.is_empty() && !tps.contains(n) => args.iter().any(|a| rust_ty_mentions_tparam(a, tps)),
+        other => ty_mentions_tparam(other, tps),
+    }
+}
+
 /// El tipo Rust de la clave de un `Map<k, _>`: el del propio `k` si es un primitivo, `__RayKey`
 /// si es un tipo de usuario, y el tipo asociado `<P as __RayKeyed>::Key` si es un parámetro.
 pub(super) fn key_rust_ty(k: &Type, enums: &std::collections::HashSet<String>, tparams: &std::collections::HashSet<String>) -> Result<String, String> {
@@ -312,6 +342,8 @@ pub(super) fn key_rust_ty(k: &Type, enums: &std::collections::HashSet<String>, t
         Type::Var(n) => Ok(format!("<{n} as __RayKeyed>::Key")),
         Type::Struct(n, args) if args.is_empty() && tparams.contains(&n) => Ok(format!("<{n} as __RayKeyed>::Key")),
         Type::Struct(n, _) | Type::Enum(n, _) if n != "Result" => Ok("__RayKey".to_string()),
+        // Los impls de `__RayKeyed` del runtime cubren tuplas de 2 a 8 elementos.
+        Type::Tuple(ts) if ts.len() > 8 => Err(format!("a tuple of {} elements as a Map key is not supported in the native backend (8 at most)", ts.len())),
         Type::Tuple(_) => Ok("__RayKey".to_string()),
         other => rust_ty(&other, enums, tparams),
     }

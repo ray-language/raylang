@@ -6,6 +6,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.101 — 2026-11-15
+
 - **`std/midi`** (macOS e iOS): `midi.inputs()` y `midi.outputs()` listan los puertos,
   `midi.open_input(id)` + `midi.read(h)` leen mensajes con su marca de tiempo aparcando la fibra,
   y `midi.open_output(id)` + `midi.send(h, bytes)` envían. Un programa puede ofrecer puertos

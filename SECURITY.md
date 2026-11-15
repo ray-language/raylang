@@ -464,6 +464,23 @@ documentada:
   a sus firmas variádicas (lista de atributos terminada en NULL) y liberación con
   `secret_password_free`/`g_error_free`; en Windows, `CredWriteW`/`CredReadW`/`CredDeleteW` sobre un
   `CREDENTIALW` propio y `CredFree` del buffer devuelto. Todos los buffers viven durante la llamada.
+- **`crates/ray-runtime/src/audio.rs`, entrada** (M463) — `audio.open_input`: un `socketpair` de
+  datagramas con `setsockopt`/`fcntl` sobre fds propios; en macOS e iOS, `AudioQueueNewInput` con un
+  callback que solo lee el búfer que AudioQueue le entrega (longitud `mAudioDataByteSize`) y escribe
+  en su extremo no bloqueante; el estado del callback es un `Arc` filtrado como `user_data` que un
+  hilo vigilante recupera tras `AudioQueueStop`/`Dispose` inmediatos (ya sin callbacks), y que
+  detecta el cierre del programa con `getpeername` sobre el fd propio.
+- **`crates/ray-runtime/src/midi.rs`** (M464) — `std/midi` sobre **CoreMIDI** (macOS e iOS; el
+  framework se enlaza, **sin crates**): `MIDIClientCreate` en un hilo propio que se queda en
+  `CFRunLoopRun`; los puertos y extremos virtuales son `UInt32` opacos que creamos y desmontamos
+  (`MIDIPortDispose`/`MIDIEndpointDispose`); el callback de lectura recorre la `MIDIPacketList`
+  que CoreMIDI entrega con lecturas **no alineadas** (`read_unaligned`: la struct va empaquetada a
+  4) y avanza como `MIDIPacketNext` (alineado a 4 en arm64); su `refCon` es un `Arc` filtrado que
+  el barrendero suelta solo después de desmontar el puerto; las listas de envío se construyen en
+  un `Vec` propio con la misma disposición. `CFString` creados y liberados por nosotros
+  (`CFStringCreateWithBytes`/`CFRelease`), `mach_absolute_time`/`mach_timebase_info` para la marca
+  de tiempo, y `socketpair`/`setsockopt`/`fcntl`/`getpeername`/`read`/`write`/`close` sobre fds
+  propios. Fuera de Apple el módulo no tiene `unsafe`: toda operación da `Err`.
 - **`crates/ray-runtime/src/locale.rs`** — los idiomas del sistema (`std/locale`, M458), **sin
   crates**: en macOS e iOS, `CFLocaleCopyPreferredLanguages` y la copia de cada `CFString` a un
   búfer del tamaño que CoreFoundation pide (el arreglo se libera con `CFRelease`); en Android,

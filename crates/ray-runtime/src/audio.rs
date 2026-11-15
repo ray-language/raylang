@@ -41,6 +41,9 @@ unsafe extern "C" {
     /// M463: la fuente de entrada escribe lo capturado en el extremo no bloqueante del pipe.
     fn write(fd: i32, buf: *const u8, n: usize) -> isize;
     fn close(fd: i32) -> i32;
+    /// M463: falla (ENOTCONN) cuando el otro extremo del par de datagramas ya se cerró.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    fn getpeername(fd: i32, addr: *mut u8, len: *mut u32) -> i32;
     /// M398: el alimentador espera con `poll` (20 ms) en vez de un `read` bloqueante, para
     /// atender la bandera de `flush` aunque el programa no escriba nada más.
     fn poll(fds: *mut PollFd, n: u32, timeout_ms: i32) -> i32;
@@ -57,9 +60,7 @@ struct PollFd {
 }
 #[cfg(unix)]
 const POLLIN: i16 = 1;
-/// M463: el otro extremo se cerró (el programa hizo `close` de la entrada) o el fd ya no vale.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-const POLL_GONE: i16 = 0x08 | 0x10 | 0x20; // POLLERR | POLLHUP | POLLNVAL
+
 #[cfg(unix)]
 const F_GETFL: i32 = 3;
 #[cfg(unix)]
@@ -76,6 +77,9 @@ const O_NONBLOCK: i32 = 0x0004;
 const AF_UNIX: i32 = 1;
 #[cfg(unix)]
 const SOCK_STREAM: i32 = 1;
+/// M463: la entrada usa DATAGRAMAS — cada lectura del programa es un bloque de frames enteros.
+#[cfg(unix)]
+const SOCK_DGRAM: i32 = 2;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const SOL_SOCKET: i32 = 1;
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -545,9 +549,13 @@ fn peek_pipe(handle: i64) -> Result<usize, ()> {
 // ordinario — `audio.read` aparca la fibra hasta que haya datos, igual que la lectura del stdout
 // de un proceso hijo. El `close(h)` del programa cierra ese extremo; la fuente lo ve y se para.
 //
+// El par es de DATAGRAMAS: cada bloque capturado viaja entero y cada `audio.read` devuelve uno,
+// así que el programa siempre recibe frames enteros sea cual sea su tamaño (con un flujo, la
+// lectura de 64 KiB del runtime partía los frames de 3 o 6 octetos).
+//
 // La entrada NO tiene contrapresión: el dispositivo captura a su ritmo, lo lea alguien o no. La
-// cola guarda hasta `INPUT_QUEUE_MS` de audio; si el programa no lee a tiempo, lo que no cabe se
-// DESCARTA por frames enteros (un desbordamiento, contado) — nunca se bloquea el hilo del
+// cola guarda hasta `INPUT_QUEUE_MS` de audio; si el programa no lee a tiempo, el bloque que no
+// cabe se DESCARTA entero (un desbordamiento, contado) — nunca se bloquea el hilo del
 // dispositivo ni se desalinea el flujo.
 //
 // Fuentes: AudioQueue de entrada en macOS e iOS; `RAY_AUDIO_SOURCE=null` (silencio) o `=tone`
@@ -568,9 +576,6 @@ pub struct InCtl {
     dropped_frames: AtomicI64,
     sample_rate: i64,
     frame_bytes: usize,
-    /// El final de un frame que una escritura parcial dejó a medias: va primero en la siguiente.
-    #[cfg(unix)]
-    pending: Mutex<Vec<u8>>,
 }
 
 fn in_ctls() -> &'static Mutex<HashMap<i64, Arc<InCtl>>> {
@@ -602,50 +607,36 @@ pub fn recorded_ms(key: i64) -> Result<i64, String> {
     Ok(ctl.captured_frames.load(Ordering::SeqCst) * 1000 / ctl.sample_rate)
 }
 
-/// Entrega `data` (frames enteros recién capturados) al programa. `false` = el programa cerró la
-/// entrada (o el pipe murió): la fuente debe parar. Nunca bloquea: lo que no cabe se descarta
-/// por frames enteros.
+/// El datagrama más largo que se entrega: cabe en el búfer de lectura del runtime (64 KiB).
+#[cfg(unix)]
+const INPUT_DATAGRAM_MAX: usize = 32 * 1024;
+
+/// Entrega `data` (frames enteros recién capturados) al programa, en datagramas de frames
+/// enteros. `false` = el programa cerró la entrada: la fuente debe parar. Nunca bloquea: el
+/// bloque que no cabe se descarta entero.
 #[cfg(unix)]
 fn push_captured(fd_w: i32, ctl: &InCtl, data: &[u8]) -> bool {
     let fb = ctl.frame_bytes;
     ctl.captured_frames.fetch_add((data.len() / fb) as i64, Ordering::SeqCst);
-    let mut pending = ctl.pending.lock().unwrap_or_else(|e| e.into_inner());
-    // Lo que quedó a medias va primero; si ni eso cabe, este bloque entero se descarta.
-    while !pending.is_empty() {
-        // SAFETY: `pending` vive durante la llamada; fd_w es de la fuente.
-        let n = unsafe { write(fd_w, pending.as_ptr(), pending.len()) };
-        if n > 0 {
-            pending.drain(..n as usize);
-        } else if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::WouldBlock {
-            ctl.dropped_frames.fetch_add((data.len() / fb) as i64, Ordering::SeqCst);
-            return true;
-        } else if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
-            continue;
-        } else {
-            return false;
+    let piece = (INPUT_DATAGRAM_MAX / fb).max(1) * fb;
+    for block in data.chunks(piece) {
+        loop {
+            // SAFETY: el tramo vive durante la llamada; fd_w es de la fuente.
+            let n = unsafe { write(fd_w, block.as_ptr(), block.len()) };
+            if n >= 0 {
+                break;
+            }
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            // Cola llena: WouldBlock, o ENOBUFS en un socket de datagramas (55 en macOS, 105 en Linux).
+            if err.kind() == std::io::ErrorKind::WouldBlock || matches!(err.raw_os_error(), Some(55) | Some(105)) {
+                ctl.dropped_frames.fetch_add((block.len() / fb) as i64, Ordering::SeqCst);
+                break;
+            }
+            return false; // el programa cerró la entrada
         }
-    }
-    let mut off = 0usize;
-    while off < data.len() {
-        // SAFETY: el tramo vive durante la llamada.
-        let n = unsafe { write(fd_w, data[off..].as_ptr(), data.len() - off) };
-        if n > 0 {
-            off += n as usize;
-            continue;
-        }
-        let err = std::io::Error::last_os_error();
-        if n < 0 && err.kind() == std::io::ErrorKind::Interrupted {
-            continue;
-        }
-        if n < 0 && err.kind() == std::io::ErrorKind::WouldBlock {
-            // Lleno. Se completa (más tarde) el frame partido y se descarta el resto.
-            let partial = off % fb;
-            let keep = if partial == 0 { 0 } else { fb - partial };
-            pending.extend_from_slice(&data[off..off + keep]);
-            ctl.dropped_frames.fetch_add(((data.len() - off - keep) / fb) as i64, Ordering::SeqCst);
-            return true;
-        }
-        return false; // EPIPE: el programa cerró
     }
     true
 }
@@ -677,11 +668,13 @@ pub fn open_input(sample_rate: i64, channels: i64, latency_ms: i64, format: &str
 
     let mut fds = [0i32; 2];
     // SAFETY: socketpair escribe dos fds válidos.
-    if unsafe { socketpair(AF_UNIX, SOCK_STREAM, 0, fds.as_mut_ptr()) } != 0 {
+    if unsafe { socketpair(AF_UNIX, SOCK_DGRAM, 0, fds.as_mut_ptr()) } != 0 {
         return Err(format!("audio: could not create the pipe: {}", std::io::Error::last_os_error()));
     }
     let (fd_r, fd_w) = (fds[0], fds[1]);
-    let budget = ((bytes_per_sec as i64 * INPUT_QUEUE_MS / 1000).max(4096)).min(i32::MAX as i64) as i32;
+    // La cola (y con ella el datagrama más largo que admite el socket): 1 s de audio, y nunca
+    // menos de dos datagramas máximos.
+    let budget = ((bytes_per_sec as i64 * INPUT_QUEUE_MS / 1000).max(2 * INPUT_DATAGRAM_MAX as i64)).min(i32::MAX as i64) as i32;
     // SAFETY: fds recién creados y nuestros; los valores viven durante cada llamada.
     unsafe {
         let v = &budget as *const i32 as *const core::ffi::c_void;
@@ -708,7 +701,6 @@ pub fn open_input(sample_rate: i64, channels: i64, latency_ms: i64, format: &str
         dropped_frames: AtomicI64::new(0),
         sample_rate,
         frame_bytes,
-        pending: Mutex::new(Vec::new()),
     });
     let started = if test_source {
         test_source_start(fd_w, key, ctl.clone(), sample_rate, channels, latency_ms, fmt, source.as_deref() == Some("tone"));
@@ -1452,17 +1444,15 @@ mod coreaudio {
                 if state.closed.load(std::sync::atomic::Ordering::SeqCst) {
                     break;
                 }
-                let mut pfd = super::PollFd { fd: fd_w, events: 0, revents: 0 };
-                // SAFETY: pfd es nuestro y vive durante la llamada.
-                let n = unsafe { super::poll(&mut pfd, 1, 100) };
-                if n > 0 && pfd.revents & super::POLL_GONE != 0 {
+                // ¿Sigue ahí el extremo del programa? (Un par de datagramas no avisa con POLLHUP.)
+                let mut addr = [0u8; 128];
+                let mut len = addr.len() as u32;
+                // SAFETY: `addr` y `len` son nuestros y describen el búfer.
+                if unsafe { super::getpeername(fd_w, addr.as_mut_ptr(), &mut len) } != 0 {
                     state.closed.store(true, std::sync::atomic::Ordering::SeqCst);
                     break;
                 }
-                if n <= 0 {
-                    continue; // tiempo agotado o EINTR
-                }
-                std::thread::sleep(std::time::Duration::from_millis(20)); // escribible: nada que hacer
+                std::thread::sleep(std::time::Duration::from_millis(50));
             }
             // SAFETY: la cola y `user` son de esta entrada; Stop/Dispose inmediatos esperan a que
             // el callback en curso termine, así que después nadie más usa `user` ni `fd_w`.

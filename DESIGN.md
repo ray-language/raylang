@@ -20425,3 +20425,29 @@ Un mapa con claves compuestas cruza fibras por `__RaySend::K`.
 **Fuera de alcance, a propósito.** Tuplas, `Option`/`Result`, arreglos y tipos genéricos como
 clave o como campo de una clave; los literales de enums genéricos con parámetro `MapKey` en
 nativo. Anotado en IDEAS §124.
+
+## 439. Revisión previa a 1.27.100: `MapKey` se verifica en todos los caminos (nov 2026)
+
+La revisión del rango `v1.27.99..main` (M460/M461) encontró tres caminos por los que un tipo
+que no es clave pasaba el checker y moría después (pánico interno en la VM, error de `rustc`
+en nativo), todos con la misma raíz: `MapKey` es el primer trait **sin métodos**, y la
+verificación de bounds del checker vivía en `dict_for`, que se llama método a método.
+
+- **`u8`/`u32`/`u64` recibían `MapKey`**: sus `impl Eq`/`Hash` del prelude van marcados como
+  sintéticos. `grant_map_keys` se limita ahora a los structs y enums del programa.
+- **Un impl genérico con bound marcador** (`impl<T: MapKey> Tr for Wrap<T>`) elegido a través
+  de un genérico acotado o de un `dyn`: `synth_dict_closure` comprueba el bound.
+- **La mención de un tipo genérico con parámetro `MapKey`** (`fn size<T>(x: Idx<T>)`): los
+  bounds de un struct solo se verificaban al construirlo. Este se verifica también al
+  mencionarlo (`ensure_key_args`), porque decide el tipo de la clave del `Map` que lleva.
+
+Además: `impl Hash for bytes` en el prelude (un tipo con un campo `bytes` no podía derivar
+`Hash`, y `bytes` es clave); el GC cuenta los bytes de una clave compuesta; el consejo de
+añadir `@derive` ya no sale para `Option` ni para tipos genéricos; y el espejo selfhost lleva
+la misma regla y el mismo mensaje.
+
+Se dejó como está, a sabiendas: el punto fijo de «qué tipos son clave» vive en el checker y,
+repetido, en el transpilador (`emit_key_impls`). Unificarlo pide que el checker entregue su
+resultado al backend, que hoy solo recibe el AST. Con el arreglo de `u*` las dos copias dan lo
+mismo; un cambio de la regla tiene que tocar las dos. Y el intérprete construye la forma de
+cada clave compuesta sin caché: es el oráculo de desarrollo, no el motor de producto.

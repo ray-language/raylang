@@ -498,9 +498,28 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
                         terr(
                             line,
                             col,
-                            "a Map key must be int/string/char/bool, not " + type_str(args[0])
+                            "a Map key must be int/string/char/bool/bytes or a type with @derive(Eq, Hash) whose fields are Map keys, not "
+                                + type_str(args[0])
                         )
                     );
+                }
+                // #356 (espejo de `ensure_type` en Rust): un parámetro de tipo solo es clave
+                // con el bound `MapKey`.
+                match (unbounded_key_param(c, args[0])) {
+                    Option.Some(tp) => {
+                        return Result.Err(
+                            terr(
+                                line,
+                                col,
+                                "the type parameter '"
+                                    + tp
+                                    + "' is used as a Map key but is not bounded by 'MapKey' (declare it as '"
+                                    + tp
+                                    + ": MapKey')"
+                            )
+                        );
+                    },
+                    Option.None => { },
                 }
                 ensure_type(c, args[0], line, col)?;
                 return ensure_type(c, args[1], line, col);
@@ -615,6 +634,27 @@ fn is_hashable_key(c: Checker, t: Type) -> bool {
         Type.TBool => true,
         Type.TNamed(n, args) => args.len() == 0 && contains_str(c.tparams, n),
         _ => false,
+    }
+}
+
+// #356: si `t` es un parámetro de tipo en ámbito SIN el bound `MapKey`, su nombre.
+fn unbounded_key_param(c: Checker, t: Type) -> Option<string> {
+    match (t) {
+        Type.TNamed(n, args) => {
+            if (args.len() != 0 || !contains_str(c.tparams, n)) {
+                return Option.None;
+            }
+            var i = 0;
+            while (i < c.bounds.len()) {
+                let b = c.bounds[i];
+                if (b.param == n && b.trait_name == "MapKey") {
+                    return Option.None;
+                }
+                i = i + 1;
+            }
+            Option.Some(n)
+        },
+        _ => Option.None,
     }
 }
 
@@ -1003,6 +1043,11 @@ fn inject_prelude_traits(c: Checker, prog: Program) {
         inject_prim_show(c, Type.TString, "string");
         inject_prim_show(c, Type.TBool, "bool");
         inject_prim_show(c, Type.TChar, "char");
+    }
+    // #356: `MapKey` es un trait marcador (sin métodos) — basta con que exista para que el
+    // bound `P: MapKey` sea válido.
+    if (!user_declares_trait(prog, "MapKey")) {
+        c.traits.insert("MapKey", []);
     }
     if (!user_declares_trait(prog, "Ord")) {
         c.traits.insert("Ord", [ord_sig()]);

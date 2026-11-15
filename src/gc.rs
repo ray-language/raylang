@@ -278,11 +278,7 @@ fn obj_bytes(obj: &Obj) -> usize {
             m.capacity() * (std::mem::size_of::<MapKey>() + std::mem::size_of::<HeapValue>())
                 + m.iter()
                     .map(|(k, v)| {
-                        let kb = match k {
-                            MapKey::Str(s) => s.len(),
-                            MapKey::Bytes(b) => b.capacity(),
-                            _ => 0,
-                        };
+                        let kb = key_bytes(k);
                         kb + value_bytes(v)
                     })
                     .sum::<usize>()
@@ -546,5 +542,21 @@ mod size_guard {
             "Slot creció a {} B (>48): boxea la variante grande de Obj (como Map)",
             std::mem::size_of::<Option<Slot>>());
         assert!(std::mem::size_of::<HeapValue>() <= 32, "HeapValue creció: {}", std::mem::size_of::<HeapValue>());
+    }
+}
+
+/// Los bytes que una clave de `Map` ocupa FUERA de su ranura: el texto de un string, los
+/// octetos de un `bytes` y, en una clave compuesta (M461), su caja, sus campos y lo que estos
+/// arrastren. Sin contarla, un mapa de millones de claves de struct no pesaba para el GC.
+fn key_bytes(k: &MapKey) -> usize {
+    match k {
+        MapKey::Str(s) => s.len(),
+        MapKey::Bytes(b) => b.capacity(),
+        MapKey::Composite(c) => {
+            std::mem::size_of::<crate::runtime::CompositeKey>()
+                + c.fields.capacity() * std::mem::size_of::<MapKey>()
+                + c.fields.iter().map(key_bytes).sum::<usize>()
+        }
+        _ => 0,
     }
 }

@@ -342,6 +342,20 @@ trait Hash {
 /// It has no methods and cannot be implemented by hand.
 trait MapKey { }
 
+// `bytes` es clave de `Map`, así que un tipo con un campo `bytes` debe poder derivar `Hash`.
+// Mismo polinomio acotado a 32 bits que el de `string`.
+impl Hash for bytes {
+    fn hash(self) -> int {
+        var h = 17;
+        var i = 0;
+        while (i < self.len()) {
+            h = h * 31 + self[i] & 4294967295;
+            i = i + 1;
+        }
+        h
+    }
+}
+
 impl MapKey for int { }
 
 impl MapKey for string { }

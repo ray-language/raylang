@@ -278,3 +278,89 @@ fn a_user_type_that_is_not_a_key_says_why() {
         &format!("type error at 2:5: {head}, not (int, int)"),
     );
 }
+
+#[test]
+fn the_marker_bound_is_checked_on_every_path() {
+    // Revisión de 1.27.100: tres caminos por los que un tipo que no es clave llegaba al `Map`
+    // (pánico interno en la VM, error de rustc en nativo).
+    let head = "a Map key must be int/string/char/bool/bytes or a type with @derive(Eq, Hash) whose fields are Map keys";
+    // Los `impl Eq`/`Hash` de `u8`/`u32`/`u64` del prelude van marcados como derivados.
+    rejected(
+        "unsigned",
+        "fn main() -> int {\n    let m: Map<u8, string> = Map.new();\n    m.len()\n}\n",
+        &format!("type error at 2:5: {head}, not u8"),
+    );
+    // Un impl genérico con bound marcador, elegido a través de otro genérico o de un `dyn`.
+    let tally = "trait Tally { fn tally(self) -> int; }\nstruct Wrap<T> { v: T, }\nimpl<T: MapKey> Tally for Wrap<T> { fn tally(self) -> int { 1 } }\n";
+    rejected(
+        "impl_via_generic",
+        &format!("{tally}fn use_it<X: Tally>(x: X) -> int {{ x.tally() }}\nfn main() -> int {{ use_it(Wrap {{ v: 1.5 }}) }}\n"),
+        "type error at 5:20: the impl for Wrap<float> requires that 'T' be 'MapKey', but float does not implement it",
+    );
+    rejected(
+        "impl_via_dyn",
+        &format!("{tally}fn main() -> int {{\n    let d: dyn Tally = Wrap {{ v: [1, 2] }};\n    d.tally()\n}}\n"),
+        "type error at 5:24: the impl for Wrap<[int]> requires that 'T' be 'MapKey', but [int] does not implement it",
+    );
+    // La mención de un tipo genérico con parámetro `MapKey`.
+    let idx = "struct Idx<K: MapKey> { m: Map<K, int>, }\n";
+    rejected(
+        "mention_param",
+        &format!("{idx}fn size<T>(x: Idx<T>) -> int {{ x.m.len() }}\nfn main() -> int {{ 0 }}\n"),
+        "type error at 2:12: the type parameter 'T' is used as a Map key (by 'Idx') but is not bounded by 'MapKey' (declare it as 'T: MapKey')",
+    );
+    rejected(
+        "mention_field",
+        &format!("{idx}struct Outer<T> {{ i: Idx<T>, }}\nfn main() -> int {{ 0 }}\n"),
+        "type error at 2:22: the type parameter 'T' is used as a Map key (by 'Idx') but is not bounded by 'MapKey' (declare it as 'T: MapKey')",
+    );
+    rejected(
+        "mention_concrete",
+        &format!("{idx}fn size(x: Idx<float>) -> int {{ x.m.len() }}\nfn main() -> int {{ 0 }}\n"),
+        "type error at 2:9: float does not implement 'MapKey' (required by 'Idx')",
+    );
+    // El consejo del derive solo donde sirve.
+    rejected(
+        "option",
+        "fn main() -> int {\n    let m: Map<Option<int>, int> = Map.new();\n    m.len()\n}\n",
+        &format!("type error at 2:5: {head}, not Option<int>"),
+    );
+    rejected(
+        "generic_type",
+        "struct Pair<T> { v: T, }\nfn main() -> int {\n    let m: Map<Pair<int>, int> = Map.new();\n    m.len()\n}\n",
+        &format!("type error at 3:5: {head}, not Pair<int> (a generic type such as 'Pair' cannot be a Map key)"),
+    );
+}
+
+#[test]
+fn bytes_fields_and_marker_bounded_impls_work_in_the_three_engines() {
+    same_everywhere(
+        "bytes_field",
+        r#"@derive(Eq, Hash)
+struct P { id: int, tag: bytes, }
+trait Tally { fn tally(self) -> int; }
+struct Wrap<T> { v: T, }
+impl<T: MapKey> Tally for Wrap<T> {
+    fn tally(self) -> int {
+        let m: Map<T, int> = Map.new();
+        m.insert(self.v, 1);
+        m.len()
+    }
+}
+fn use_it<X: Tally>(x: X) -> int { x.tally() }
+struct Idx<K: MapKey> { m: Map<K, int>, }
+fn size<T: MapKey>(x: Idx<T>) -> int { x.m.len() }
+fn main() -> int {
+    var m: Map<P, int> = [P { id: 1, tag: b"a" }: 1, P { id: 1, tag: b"b" }: 2];
+    print(m.keys().len());
+    print(m.get(P { id: 1, tag: b"b" }));
+    print(use_it(Wrap { v: "s" }));
+    let d: dyn Tally = Wrap { v: P { id: 2, tag: b"" } };
+    print(d.tally());
+    print(size(Idx { m: ["a": 1] }));
+    0
+}
+"#,
+        "2\nOption.Some(2)\n1\n1\n1\n",
+    );
+}

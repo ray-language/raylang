@@ -485,11 +485,6 @@ impl Transpiler {
         Ok(())
     }
 
-    /// M313: el `impl __RaySendConv` GENÉRICO de cada struct/enum del programa (sobre sus propios
-    /// parámetros de tipo), más un impl-stub para cada tipo función que aparece en campos/payloads
-    /// (como los `impl RayShow` de `<fn>`). Un tipo que no puede cruzar (campos función, `dyn`)
-    /// recibe un impl que panica — misma filosofía que los conversores numerados. Va ANTES de
-    /// `emit_send_convs`: los cuerpos pueden registrar conversores de tipos concretos anidados.
     /// M461 (#356): la conversión a clave de `Map` (`__RayKeyed`) de cada tipo de usuario que
     /// puede serlo: los structs y enums NO genéricos con `@derive(Eq, Hash)` cuyos campos son
     /// claves — la misma regla (y el mismo punto fijo) con la que el checker concede `MapKey`.
@@ -576,6 +571,11 @@ impl Transpiler {
         Ok(())
     }
 
+    /// M313: el `impl __RaySendConv` GENÉRICO de cada struct/enum del programa (sobre sus propios
+    /// parámetros de tipo), más un impl-stub para cada tipo función que aparece en campos/payloads
+    /// (como los `impl RayShow` de `<fn>`). Un tipo que no puede cruzar (campos función, `dyn`)
+    /// recibe un impl que panica — misma filosofía que los conversores numerados. Va ANTES de
+    /// `emit_send_convs`: los cuerpos pueden registrar conversores de tipos concretos anidados.
     pub(super) fn emit_send_conv_impls(&mut self, out: &mut String, prog: &Program) -> Result<(), String> {
         let stub = |name: &str| format!("value of a type holding functions cannot cross a thread boundary in the native backend (type '{name}'); rebuild it inside the fiber (e.g. web/framework's listen_app)");
         let saved = std::mem::take(&mut self.tparams);

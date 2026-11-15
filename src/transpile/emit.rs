@@ -1073,9 +1073,9 @@ impl Transpiler {
                     };
                     let binder = |n: &Option<String>| n.clone().map(|x| mangle(&x)).unwrap_or_else(|| "_".into());
                     let (kn, vn) = (binder(&names[0]), binder(&names[1]));
-                    write!(out, "{}for ({}, {}) in __ray_pairs(&", lbl, kn, vn).unwrap();
-                    self.emit_expr(out, expr)?;
-                    out.push_str(") ");
+                    write!(out, "{}for ({}, {}) in ", lbl, kn, vn).unwrap();
+                    self.emit_map_listing(out, expr, "__ray_pairs", "__ray_pairs_of")?;
+                    out.push(' ');
                     self.scopes.push(HashMap::new());
                     if let Some(n) = &names[0] {
                         self.declare(n, kt);
@@ -2023,7 +2023,24 @@ impl Transpiler {
                         out.push_str("; ");
                     }
                 }
-                write!(out, "Rc::new(std::cell::RefCell::new({} {{ ", mangle(name)).unwrap();
+                // M461: con un parámetro `MapKey`, los argumentos de tipo van explícitos (rustc no
+                // deduce `K` de `Map<K, V>`: la clave es un tipo asociado).
+                let targs = if self.keyed_structs.contains(name) {
+                    let lit_ty = match self.expected_ty.clone().map(|t| self.classify(&t)) {
+                        Some(Type::Struct(en, eargs)) if &en == name => Type::Struct(en, eargs),
+                        _ => self.type_of(e)?,
+                    };
+                    match lit_ty {
+                        Type::Struct(_, args) if !args.is_empty() => {
+                            let rs: Vec<String> = args.iter().map(|a| rust_ty(a, &self.enums, &self.tparams)).collect::<Result<_, _>>()?;
+                            format!("::<{}>", rs.join(", "))
+                        }
+                        _ => String::new(),
+                    }
+                } else {
+                    String::new()
+                };
+                write!(out, "Rc::new(std::cell::RefCell::new({}{} {{ ", mangle(name), targs).unwrap();
                 for (i, (fname, val)) in fields.iter().enumerate() {
                     if i > 0 {
                         out.push_str(", ");
@@ -2142,7 +2159,7 @@ impl Transpiler {
                     out.push_str("{ ");
                     for (i, (k, v)) in pairs.iter().enumerate() {
                         write!(out, "let __rt_k{} = ", i).unwrap();
-                        self.emit_expr(out, k)?;
+                        self.emit_map_key(out, k)?;
                         out.push_str("; ");
                         write!(out, "let __rt_v{} = ", i).unwrap();
                         self.emit_expr(out, v)?;

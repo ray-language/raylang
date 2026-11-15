@@ -20388,3 +20388,40 @@ El espejo selfhost no se tocó: es un validador de un subconjunto que no conoce 
 `bytes`, y su regla de claves ya difería.
 
 Segundo paso (M461): que los tipos de usuario con `@derive(Eq, Hash)` cumplan `MapKey`.
+
+## 438. M461 — tipos de usuario como clave de `Map` (nov 2026)
+
+Segundo paso de #356. raysolve indexa por `PkgVer { name, version: SemVer }` y solo le quedaba
+`std/collections/dict` (raylang puro: `dict.get` + `string#hash` eran el 23 % de su perfil).
+
+**Regla.** `MapKey` (§437) lo cumplen también los structs y enums **no genéricos** con
+`@derive(Eq, Hash)` cuyos campos son claves. Solo cuentan los impls DERIVADOS: son
+estructurales por construcción, que es como compara el runtime. El checker lo calcula por punto
+fijo de descarte (`grant_map_keys`) antes de validar los tipos, y el error de un tipo que no
+llega dice si falta el derive o qué campo lo impide.
+
+**Semántica.** Igualdad, hash y orden estructurales: campos en orden de declaración; variantes
+de enum por su posición. La clave es una **copia** tomada al usarla (insertar, buscar): mutar el
+struct original, o el que devuelve `keys()` o el `for` sobre el mapa, no toca el mapa. Es la
+única semántica segura con structs mutables y compartidos, y la que ya tenían los primitivos.
+
+**Una sola forma en los tres motores.** `MapKey::Composite { rank, fields, shape }` (runtime
+compartido por la VM y el intérprete): `rank` es la posición de la variante, `fields` las claves
+de los campos, y `shape` lo necesario para reconstruir el valor (nombres e índices); la
+comparación solo mira `rank` y `fields`. El nativo emite la MISMA forma (`__RayKey` /
+`__RayKeyPart`), así que el orden de `keys()` coincide por construcción y no por confiar en un
+`derive(Ord)` de Rust sobre cada tipo.
+
+**Nativo.** Un struct es `Rc<RefCell<…>>`: no puede ser clave de un `HashMap` (ni debe, es
+mutable). Se descartó cambiar la representación de los structs (ancho, toca todo el backend) a
+favor de una conversión en la frontera del mapa: el trait `__RayKeyed` con tipo asociado `Key`.
+Los primitivos son su propia clave (`Key = Self`: el tipo y el código de un `Map<string, V>` no
+cambian en nada), los tipos de usuario se convierten a `__RayKey`, y el código genérico usa
+`<P as __RayKeyed>::Key`. Consecuencia: rustc no puede deducir `P` desde la clave (el tipo
+asociado no es inyectivo), así que las llamadas a funciones y los literales de structs con un
+parámetro `MapKey` llevan sus argumentos de tipo explícitos (`FnSig::keyed`, `keyed_structs`).
+Un mapa con claves compuestas cruza fibras por `__RaySend::K`.
+
+**Fuera de alcance, a propósito.** Tuplas, `Option`/`Result`, arreglos y tipos genéricos como
+clave o como campo de una clave; los literales de enums genéricos con parámetro `MapKey` en
+nativo. Anotado en IDEAS §124.

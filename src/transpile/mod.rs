@@ -40,6 +40,10 @@ struct FnSig {
     params: Vec<Type>,
     ret: Type,
     tparams: Vec<String>,
+    /// M461: algún parámetro de tipo lleva `MapKey`. Su clave de `Map` es un tipo ASOCIADO
+    /// (`<P as __RayKeyed>::Key`), del que rustc no puede deducir `P`: la llamada lleva siempre
+    /// sus argumentos de tipo explícitos.
+    keyed: bool,
 }
 
 struct Transpiler {
@@ -74,6 +78,9 @@ struct Transpiler {
     struct_fields: HashMap<String, Vec<(String, Type)>>,
     /// Parámetros de tipo de cada struct/enum (para sustituir en `Caja<int>`).
     struct_tparams: HashMap<String, Vec<String>>,
+    /// M461: structs genéricos con un parámetro `MapKey` — su literal lleva los argumentos de
+    /// tipo explícitos (ver `FnSig::keyed`).
+    keyed_structs: std::collections::HashSet<String>,
     enum_tparams: HashMap<String, Vec<String>>,
     /// Payload de cada variante de enum (`Enum` → `Variante` → tipos), para los bindings de `match`.
     enum_variants: HashMap<String, HashMap<String, Vec<Type>>>,
@@ -368,6 +375,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
             params: f.params.iter().map(|p| normalize_type(&p.ty)).collect(),
             ret: normalize_type(&f.return_type),
             tparams: f.type_params.clone(),
+            keyed: f.bounds.iter().any(|(_, tr)| tr == "MapKey"),
         });
     }
     // Funciones externas (FFI, M41): se registran como funciones ordinarias → una llamada `sqrt(2.0)`
@@ -377,6 +385,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
             params: e.params.iter().map(|p| normalize_type(&p.ty)).collect(),
             ret: normalize_type(&e.return_type),
             tparams: Vec::new(),
+            keyed: false,
         });
     }
     // Enums de USUARIO (incl. genéricos). Option/Result se excluyen: son los nativos de Rust, no se emiten.
@@ -439,6 +448,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
         enums,
         struct_fields,
         struct_tparams,
+        keyed_structs: prog.structs.iter().filter(|s| s.bounds.iter().any(|(_, tr)| tr == "MapKey")).map(|s| s.name.clone()).collect(),
         enum_variants,
         enum_tparams,
         match_temp: 0,
@@ -919,6 +929,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     // generar uno puede registrar tipos anidados. Va antes de los bloques de runtime (orden top-level
     // libre en Rust; solo importa que TODA la emisión de cuerpos ya pasó).
     t.emit_send_conv_impls(&mut out, prog)?; // M313: antes, porque registra conversores concretos
+    t.emit_key_impls(&mut out, prog)?; // M461: claves de `Map` de los tipos de usuario
     t.emit_send_convs(&mut out)?;
     // rayobs #292: el runtime de canales también cuando un TIPO lo menciona (campo de struct, `let`,
     // closure, alias…) sin que haya ninguna OPERACIÓN de canal: se mira lo ya emitido, que es donde

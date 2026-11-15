@@ -507,6 +507,24 @@ Los enums pueden ser **recursivos** (a través de payloads con arreglos u otros 
 Tabla clave→valor. Claves *hashables*: int/string/char/bool/bytes (**no** float ni `u*`). Los recorridos van
 **en orden de clave** — deterministas.
 
+Un tipo propio también es clave si lleva `@derive(Eq, Hash)` y sus campos son claves:
+
+```rust
+@derive(Eq, Hash)
+struct Pos { x: int, y: int }
+
+fn main() {
+    var seen: Map<Pos, string> = Map.new();
+    seen.insert(Pos { x: 1, y: 2 }, "start");
+    print(seen.get(Pos { x: 1, y: 2 }).unwrap_or("?"));   // start
+}
+```
+
+El mapa compara por estructura (campo a campo) y guarda una **copia** de la clave: cambiar
+después el struct que insertaste no mueve la entrada. Vale para structs y enums no genéricos,
+anidados también. Un `Eq` o un `Hash` escritos a mano no cuentan (el mapa no los llamaría);
+para una igualdad a medida está `std/collections/dict`.
+
 En código genérico, el parámetro que hace de clave lo declara con el bound `MapKey`:
 
 ```rust
@@ -517,8 +535,9 @@ fn count<P: MapKey>(xs: [P]) -> int {
 }
 ```
 
-`MapKey` es un trait marcador: no tiene métodos y no se implementa a mano. Llamar a `count` con
-un tipo que no es clave es un error de tipos en la llamada.
+`MapKey` es un trait marcador: no tiene métodos y no se implementa a mano. Lo cumplen los
+primitivos de arriba y los tipos con `@derive(Eq, Hash)`. Llamar a `count` con un tipo que no es
+clave es un error de tipos en la llamada.
 
 ```rust
 var edades: Map<string, int> = Map.new();

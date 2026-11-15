@@ -12,6 +12,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   con cualquier `P`: el binario nativo no compilaba ni con un `int`, y la VM terminaba con un
   error interno al usar un struct. **Cambio que puede romper**: un `Map<P, V>` genérico sin el
   bound deja de compilar; el error dice qué añadir.
+- **Un tipo propio puede ser clave de `Map`**: basta `@derive(Eq, Hash)` y que sus campos sean
+  claves (`Map<Pos, string>`, `Map<PkgVer, int>` con structs anidados, enums con payload). El
+  mapa compara por estructura y guarda una copia de la clave. Antes solo valían
+  `int`/`string`/`char`/`bool`/`bytes`, y en código genérico quedaba `std/collections/dict`,
+  mucho más lento. Funciona igual con `ray run` y en el binario nativo.
 
 ## 1.27.99 — 2026-11-14
 

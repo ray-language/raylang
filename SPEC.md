@@ -167,9 +167,13 @@ nombre_trait = IDENT [ '.' IDENT ] ;                (* trait local o calificado 
   si cabe (fuera de rango = error de tipos); con sufijo ya tiene ancho (§3) y un contexto de otro
   ancho es error.
 - **Arreglos `[T]`**, **`Map<K,V>`** (claves *hashables*: `int`, `string`, `char`, `bool`,
-  `bytes` — `float` no; son los tipos que cumplen el trait marcador **`MapKey`**, que no tiene
-  métodos ni admite un `impl` a mano. Un parámetro de tipo solo puede ser clave con el bound
-  `P: MapKey`, y cada instanciación lo verifica), **structs** y **enums**: **semántica de referencia** (§8). Tuplas
+  `bytes` — `float` no — y los structs y enums **no genéricos** con `@derive(Eq, Hash)` cuyos
+  campos son a su vez claves. Son los tipos que cumplen el trait marcador **`MapKey`**, que no
+  tiene métodos ni admite un `impl` a mano. Un parámetro de tipo solo puede ser clave con el
+  bound `P: MapKey`, y cada instanciación lo verifica. La igualdad y el orden de las claves son
+  **estructurales** (campo a campo en orden de declaración; las variantes de un enum, en su
+  orden de declaración) y la clave se **copia** al usarla: mutar después el valor, o el que
+  devuelve `keys()`, no cambia el mapa), **structs** y **enums**: **semántica de referencia** (§8). Tuplas
   `(A, B, …)`: acceso posicional `t.0` y desestructuración; las posiciones son de **solo
   lectura** (`t.0 = v` es error de tipos: la tupla es un agregado inmutable — para mutar,
   desestructura o usa un arreglo), así que la tupla se comporta como **valor**.
@@ -671,10 +675,11 @@ sobre el que se escriben las capas 1 y 2.
   suma enteros. `enumerate`/`zip` se consumen con **patrón de tupla** en el `for`:
   `for (i, x) in it.enumerate() { … }`. No colisionan con el `map`/`filter`/`fold` **eager** de
   arreglos (`xs.map(f) -> [U]`): se desambigua por el tipo del receptor.
-- **Map** (`Map<K, V>`, claves primitivas: `int string char bool bytes`; en código genérico,
-  `K: MapKey`): `Map.new() insert get
+- **Map** (`Map<K, V>`, claves: `int string char bool bytes` y los tipos con
+  `@derive(Eq, Hash)` de campos clave; en código genérico, `K: MapKey`): `Map.new() insert get
   get_or remove contains_key keys values clear len` — `keys()`/`values()` recorren en **orden de
-  clave** (el almacén interno no expone su orden). Para claves de usuario, `std/collections/dict`.
+  clave** (el almacén interno no expone su orden). Para una igualdad a medida (un `Eq`/`Hash`
+  escritos a mano), `std/collections/dict`.
 - **Handles**: `close(h)` cierra un archivo, socket o canal (el mismo nombre para los tres).
 - **Concurrencia**: §9 (`spawn join try_join scope channel send recv close select signals`).
 - **Traits del prelude** (los métodos son los que se implementan y se llaman por UFCS):

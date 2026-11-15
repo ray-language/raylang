@@ -19,6 +19,11 @@ pub(super) fn is_hashable_key(t: &Type) -> bool {
     matches!(t, Type::Int | Type::String | Type::Char | Type::Bool | Type::Bytes | Type::Var(_))
 }
 
+/// ¿Es `t` un primitivo clave de `Map`? (Sin los parámetros de tipo ni los tipos de usuario.)
+pub(super) fn is_primitive_key(t: &Type) -> bool {
+    matches!(t, Type::Int | Type::String | Type::Char | Type::Bool | Type::Bytes)
+}
+
 /// El nombre del trait marcador de las claves de `Map` (#356), declarado en el prelude.
 pub(super) const MAP_KEY_TRAIT: &str = "MapKey";
 

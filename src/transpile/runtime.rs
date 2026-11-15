@@ -316,7 +316,9 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
         // Un canal/tarea dentro del árbol NO se copia: se COMPARTE (clone del Arc interno), como la VM
         // comparte el id de canal al cruzar (M12: el canal ES el conducto, no un dato). Va type-erased
         // (`__RayChan<T>`/`__RayTask<T>` son genéricos y el árbol es monomórfico); `from` downcastea.
-        "Ch(std::sync::Arc<dyn std::any::Any + Send + Sync>) }\n",
+        "Ch(std::sync::Arc<dyn std::any::Any + Send + Sync>), ",
+        // M461: una clave compuesta de `Map` (posición de variante, su función de mostrar, campos).
+        "K(u32, fn(&__RayKey) -> String, Vec<__RaySend>) }\n",
     ));
     // M313 (findings #71): la conversión Send como TRAIT, para el código GENÉRICO. Los conversores
     // numerados (`__to_send_N`) son por tipo concreto y no pueden nombrar el `T` de una función
@@ -523,6 +525,47 @@ fn __ray_substring(s: &Rc<str>, i: i64, j: i64) -> Rc<str> {\n");
     } else {
         out.push_str("use std::collections::HashMap as __RayMap;\n");
     }
+    // M461 (#356): claves COMPUESTAS de `Map`. Un struct de usuario es `Rc<RefCell<…>>`, que no
+    // puede ser clave de un `HashMap` (ni debe: es mutable y compartido). Se guarda una COPIA
+    // en `__RayKey` — posición de la variante + campos, la misma forma que `MapKey::Composite`
+    // de la VM, de modo que igualdad, hash y ORDEN salen iguales por construcción. `show` es
+    // la función que la muestra (reconstruye el valor); no participa en la comparación.
+    // `__RayKeyed` es lo que el código genérico exige a un `P: MapKey`: los primitivos son su
+    // propia clave (sin coste), los tipos de usuario reciben su impl en `emit_key_impls`.
+    out.push_str(concat!(
+        "#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]\n",
+        "enum __RayKeyPart { I(i64), S(Rc<str>), C(char), B(bool), By(Rc<[u8]>), K(Box<__RayKey>) }\n",
+        "#[derive(Clone)]\n",
+        "struct __RayKey { rank: u32, fields: Vec<__RayKeyPart>, show: fn(&__RayKey) -> String }\n",
+        "impl PartialEq for __RayKey { fn eq(&self, o: &Self) -> bool { self.rank == o.rank && self.fields == o.fields } }\n",
+        "impl Eq for __RayKey {}\n",
+        "impl std::hash::Hash for __RayKey { fn hash<H: std::hash::Hasher>(&self, h: &mut H) { self.rank.hash(h); self.fields.hash(h); } }\n",
+        "impl PartialOrd for __RayKey { fn partial_cmp(&self, o: &Self) -> Option<std::cmp::Ordering> { Some(self.cmp(o)) } }\n",
+        "impl Ord for __RayKey { fn cmp(&self, o: &Self) -> std::cmp::Ordering { self.rank.cmp(&o.rank).then_with(|| self.fields.cmp(&o.fields)) } }\n",
+        "impl RayShow for __RayKey { fn ray_show(&self) -> String { (self.show)(self) } }\n",
+        "impl __RayKeyPart { fn __to_send(&self) -> __RaySend { match self { __RayKeyPart::I(x) => __RaySend::I(*x), __RayKeyPart::S(x) => __RaySend::S(std::sync::Arc::<str>::from(&**x)), __RayKeyPart::C(x) => __RaySend::C(*x), __RayKeyPart::B(x) => __RaySend::B(*x), __RayKeyPart::By(x) => __RaySend::By(std::sync::Arc::<[u8]>::from(&**x)), __RayKeyPart::K(x) => (**x).clone().__to_send() } }\n",
+        "  fn __from_send(s: __RaySend) -> Self { match s { __RaySend::I(x) => __RayKeyPart::I(x), __RaySend::S(x) => __RayKeyPart::S(Rc::<str>::from(&*x)), __RaySend::C(x) => __RayKeyPart::C(x), __RaySend::B(x) => __RayKeyPart::B(x), __RaySend::By(x) => __RayKeyPart::By(Rc::<[u8]>::from(&*x)), other => __RayKeyPart::K(Box::new(__RayKey::__from_send(other))) } } }\n",
+        "impl __RaySendConv for __RayKey { fn __to_send(self) -> __RaySend { __RaySend::K(self.rank, self.show, self.fields.iter().map(|p| p.__to_send()).collect()) }\n",
+        "  fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::K(rank, show, fields) => __RayKey { rank, show, fields: fields.into_iter().map(__RayKeyPart::__from_send).collect() }, _ => unreachable!() } } }\n",
+        "trait __RayKeyed: Sized { type Key: Clone + std::hash::Hash + Eq + Ord + RayShow + __RaySendConv + 'static; fn __key(&self) -> Self::Key; fn __unkey(k: &Self::Key) -> Self; }\n",
+        "trait __RayKeyField: Sized { fn __part(&self) -> __RayKeyPart; fn __unpart(p: &__RayKeyPart) -> Self; }\n",
+        "impl __RayKeyed for i64 { type Key = i64; fn __key(&self) -> i64 { *self } fn __unkey(k: &i64) -> i64 { *k } }\n",
+        "impl __RayKeyed for char { type Key = char; fn __key(&self) -> char { *self } fn __unkey(k: &char) -> char { *k } }\n",
+        "impl __RayKeyed for bool { type Key = bool; fn __key(&self) -> bool { *self } fn __unkey(k: &bool) -> bool { *k } }\n",
+        "impl __RayKeyed for Rc<str> { type Key = Rc<str>; fn __key(&self) -> Rc<str> { self.clone() } fn __unkey(k: &Rc<str>) -> Rc<str> { k.clone() } }\n",
+        "impl __RayKeyed for Rc<[u8]> { type Key = Rc<[u8]>; fn __key(&self) -> Rc<[u8]> { self.clone() } fn __unkey(k: &Rc<[u8]>) -> Rc<[u8]> { k.clone() } }\n",
+        "impl __RayKeyField for i64 { fn __part(&self) -> __RayKeyPart { __RayKeyPart::I(*self) } fn __unpart(p: &__RayKeyPart) -> Self { match p { __RayKeyPart::I(x) => *x, _ => unreachable!() } } }\n",
+        "impl __RayKeyField for char { fn __part(&self) -> __RayKeyPart { __RayKeyPart::C(*self) } fn __unpart(p: &__RayKeyPart) -> Self { match p { __RayKeyPart::C(x) => *x, _ => unreachable!() } } }\n",
+        "impl __RayKeyField for bool { fn __part(&self) -> __RayKeyPart { __RayKeyPart::B(*self) } fn __unpart(p: &__RayKeyPart) -> Self { match p { __RayKeyPart::B(x) => *x, _ => unreachable!() } } }\n",
+        "impl __RayKeyField for Rc<str> { fn __part(&self) -> __RayKeyPart { __RayKeyPart::S(self.clone()) } fn __unpart(p: &__RayKeyPart) -> Self { match p { __RayKeyPart::S(x) => x.clone(), _ => unreachable!() } } }\n",
+        "impl __RayKeyField for Rc<[u8]> { fn __part(&self) -> __RayKeyPart { __RayKeyPart::By(self.clone()) } fn __unpart(p: &__RayKeyPart) -> Self { match p { __RayKeyPart::By(x) => x.clone(), _ => unreachable!() } } }\n",
+        "fn __ray_keys_of<T: __RayKeyed, V>(m: &Rc<std::cell::RefCell<__RayMap<T::Key, V>>>) -> Rc<std::cell::RefCell<Vec<T>>> {\n",
+        "    let b = m.borrow(); let mut ks: Vec<&T::Key> = b.keys().collect(); ks.sort();\n",
+        "    Rc::new(std::cell::RefCell::new(ks.into_iter().map(T::__unkey).collect()))\n}\n",
+        "fn __ray_pairs_of<T: __RayKeyed, V: Clone>(m: &Rc<std::cell::RefCell<__RayMap<T::Key, V>>>) -> Vec<(T, V)> {\n",
+        "    let b = m.borrow(); let mut ks: Vec<&T::Key> = b.keys().collect(); ks.sort();\n",
+        "    ks.into_iter().map(|k| (T::__unkey(k), b[k].clone())).collect()\n}\n",
+    ));
     // M313: Map en la conversión Send por trait (ver `__RaySendConv`).
     out.push_str("impl<K: __RaySendConv + Clone + std::hash::Hash + Eq, V: __RaySendConv + Clone> __RaySendConv for Rc<std::cell::RefCell<__RayMap<K, V>>> { fn __to_send(self) -> __RaySend { __RaySend::M(self.borrow().iter().map(|(__k, __v)| (__k.clone().__to_send(), __v.clone().__to_send())).collect()) } fn __from_send(__ss: __RaySend) -> Self { match __ss { __RaySend::M(__sm) => Rc::new(std::cell::RefCell::new(__sm.into_iter().map(|(__k, __v)| (K::__from_send(__k), V::__from_send(__v))).collect::<__RayMap<_, _>>())), _ => unreachable!() } } }\n");
     out.push_str("fn __ray_sort<T: Ord + Clone>(a: &Rc<std::cell::RefCell<Vec<T>>>) -> Rc<std::cell::RefCell<Vec<T>>> {\n");

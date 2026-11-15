@@ -169,15 +169,18 @@ impl Transpiler {
             }
         }
         if sig.tparams.iter().all(|t| subst.contains_key(t)) {
-            return Ok(String::new()); // rustc los infiere de los argumentos
-        }
-        let Some(exp) = expected else { return Ok(String::new()) };
-        // El retorno se clasifica (Channel/Enum) como el esperado; el `T` del callee no está en
-        // `self.tparams`, así que queda como `Struct("T")` y `unify` lo trata como variable.
-        let ret = self.classify(&sig.ret);
-        unify(&ret, &self.classify(exp), &sig.tparams, &mut subst);
-        if !sig.tparams.iter().all(|t| subst.contains_key(t)) {
-            return Ok(String::new());
+            if !sig.keyed {
+                return Ok(String::new()); // rustc los infiere de los argumentos
+            }
+        } else {
+            let Some(exp) = expected else { return Ok(String::new()) };
+            // El retorno se clasifica (Channel/Enum) como el esperado; el `T` del callee no está en
+            // `self.tparams`, así que queda como `Struct("T")` y `unify` lo trata como variable.
+            let ret = self.classify(&sig.ret);
+            unify(&ret, &self.classify(exp), &sig.tparams, &mut subst);
+            if !sig.tparams.iter().all(|t| subst.contains_key(t)) {
+                return Ok(String::new());
+            }
         }
         let mut args = Vec::new();
         for t in &sig.tparams {
@@ -324,7 +327,9 @@ impl Transpiler {
                 )
             }
             Type::Map(k, v) => {
-                let ik = self.to_send_expr(&k, "__sk")?;
+                // M461: una clave convertida ya es un `__RayKey` (o la clave asociada de un
+                // parámetro): cruza por el trait, no por el conversor del tipo de usuario.
+                let ik = if key_is_converted(&k) { "__RaySendConv::__to_send(__sk)".to_string() } else { self.to_send_expr(&k, "__sk")? };
                 let iv = self.to_send_expr(&v, "__sv")?;
                 format!(
                     "__RaySend::M(({expr}).borrow().iter().map(|(__kr, __vr)| {{ let __sk = __kr.clone(); let __sv = __vr.clone(); ({ik}, {iv}) }}).collect())"
@@ -401,7 +406,7 @@ impl Transpiler {
                 )
             }
             Type::Map(k, v) => {
-                let ik = self.from_send_expr(&k, "__sk")?;
+                let ik = if key_is_converted(&k) { "__RaySendConv::__from_send(__sk)".to_string() } else { self.from_send_expr(&k, "__sk")? };
                 let iv = self.from_send_expr(&v, "__sv2")?;
                 format!(
                     "match {expr} {{ __RaySend::M(__sm) => Rc::new(std::cell::RefCell::new(__sm.into_iter().map(|(__sk, __sv2)| ({ik}, {iv})).collect::<__RayMap<_, _>>())), {un} }}"
@@ -485,6 +490,92 @@ impl Transpiler {
     /// (como los `impl RayShow` de `<fn>`). Un tipo que no puede cruzar (campos función, `dyn`)
     /// recibe un impl que panica — misma filosofía que los conversores numerados. Va ANTES de
     /// `emit_send_convs`: los cuerpos pueden registrar conversores de tipos concretos anidados.
+    /// M461 (#356): la conversión a clave de `Map` (`__RayKeyed`) de cada tipo de usuario que
+    /// puede serlo: los structs y enums NO genéricos con `@derive(Eq, Hash)` cuyos campos son
+    /// claves — la misma regla (y el mismo punto fijo) con la que el checker concede `MapKey`.
+    /// `__key` copia el valor a un `__RayKey`; `__unkey` reconstruye uno NUEVO (lo que devuelven
+    /// `keys()` y el `for` sobre el mapa). El orden de las variantes es el de declaración: es
+    /// el `rank`, igual que el tag de la VM.
+    pub(super) fn emit_key_impls(&mut self, out: &mut String, prog: &Program) -> Result<(), String> {
+        let derived = |tr: &str| -> std::collections::HashSet<String> {
+            prog.impls.iter()
+                .filter(|i| i.synthetic && i.trait_name == tr && i.type_params.is_empty())
+                .filter_map(|i| match normalize_type(&i.target) {
+                    Type::Struct(n, _) | Type::Enum(n, _) => Some(n),
+                    _ => None,
+                })
+                .collect()
+        };
+        let hash = derived("Hash");
+        let mut keys: std::collections::HashSet<String> = derived("Eq").into_iter().filter(|n| hash.contains(n)).collect();
+        let field_ok = |t: &Type, keys: &std::collections::HashSet<String>| match normalize_type(t) {
+            Type::Int | Type::String | Type::Char | Type::Bool | Type::Bytes => true,
+            Type::Struct(n, args) | Type::Enum(n, args) => args.is_empty() && keys.contains(&n),
+            _ => false,
+        };
+        loop {
+            let dropped: Vec<String> = prog.structs.iter()
+                .filter(|s| keys.contains(&s.name) && !(s.type_params.is_empty() && s.fields.iter().all(|(_, t)| field_ok(t, &keys))))
+                .map(|s| s.name.clone())
+                .chain(prog.enums.iter()
+                    .filter(|e| keys.contains(&e.name) && !(e.type_params.is_empty() && e.variants.iter().all(|v| v.payload.iter().all(|t| field_ok(t, &keys)))))
+                    .map(|e| e.name.clone()))
+                .collect();
+            if dropped.is_empty() {
+                break;
+            }
+            for name in dropped {
+                keys.remove(&name);
+            }
+        }
+        let field_impl = |rty: &str| format!(
+            "impl __RayKeyField for {rty} {{ fn __part(&self) -> __RayKeyPart {{ __RayKeyPart::K(Box::new(__RayKeyed::__key(self))) }} fn __unpart(p: &__RayKeyPart) -> Self {{ match p {{ __RayKeyPart::K(k) => <Self as __RayKeyed>::__unkey(k), _ => unreachable!() }} }} }}"
+        );
+        for s in prog.structs.iter().filter(|s| keys.contains(&s.name)) {
+            let sm = mangle(&s.name);
+            let rty = format!("Rc<std::cell::RefCell<{sm}>>");
+            let parts: Vec<String> = s.fields.iter().map(|(f, _)| format!("__RayKeyField::__part(&__kb.{})", mangle(f))).collect();
+            let fields: Vec<String> = s.fields.iter().enumerate()
+                .map(|(i, (f, _))| format!("{}: __RayKeyField::__unpart(&k.fields[{i}])", mangle(f)))
+                .collect();
+            writeln!(out, "fn __ray_key_show_{sm}(k: &__RayKey) -> String {{ <{rty} as __RayKeyed>::__unkey(k).ray_show() }}").unwrap();
+            writeln!(
+                out,
+                "#[allow(unused_variables)] impl __RayKeyed for {rty} {{ type Key = __RayKey; fn __key(&self) -> __RayKey {{ let __kb = self.borrow(); __RayKey {{ rank: 0, fields: vec![{}], show: __ray_key_show_{sm} }} }} fn __unkey(k: &__RayKey) -> Self {{ Rc::new(std::cell::RefCell::new({sm} {{ {} }})) }} }}",
+                parts.join(", "), fields.join(", ")
+            ).unwrap();
+            writeln!(out, "{}", field_impl(&rty)).unwrap();
+        }
+        for e in prog.enums.iter().filter(|e| keys.contains(&e.name)) {
+            let em = mangle(&e.name);
+            let boxed = enum_box(&em);
+            let rty = format!("{boxed}<{em}>");
+            let mut to_arms = Vec::new();
+            let mut from_arms = Vec::new();
+            for (rank, v) in e.variants.iter().enumerate() {
+                let vm = mangle(&v.name);
+                if v.payload.is_empty() {
+                    to_arms.push(format!("{em}::{vm} => __RayKey {{ rank: {rank}, fields: vec![], show: __ray_key_show_{em} }}"));
+                    from_arms.push(format!("{rank} => {boxed}::new({em}::{vm})"));
+                } else {
+                    let binds: Vec<String> = (0..v.payload.len()).map(|i| format!("__k{i}")).collect();
+                    let parts: Vec<String> = binds.iter().map(|b| format!("__RayKeyField::__part({b})")).collect();
+                    let args: Vec<String> = (0..v.payload.len()).map(|i| format!("__RayKeyField::__unpart(&k.fields[{i}])")).collect();
+                    to_arms.push(format!("{em}::{vm}({}) => __RayKey {{ rank: {rank}, fields: vec![{}], show: __ray_key_show_{em} }}", binds.join(", "), parts.join(", ")));
+                    from_arms.push(format!("{rank} => {boxed}::new({em}::{vm}({}))", args.join(", ")));
+                }
+            }
+            writeln!(out, "fn __ray_key_show_{em}(k: &__RayKey) -> String {{ <{rty} as __RayKeyed>::__unkey(k).ray_show() }}").unwrap();
+            writeln!(
+                out,
+                "impl __RayKeyed for {rty} {{ type Key = __RayKey; fn __key(&self) -> __RayKey {{ match &**self {{ {} }} }} fn __unkey(k: &__RayKey) -> Self {{ match k.rank {{ {}, _ => unreachable!() }} }} }}",
+                to_arms.join(", "), from_arms.join(", ")
+            ).unwrap();
+            writeln!(out, "{}", field_impl(&rty)).unwrap();
+        }
+        Ok(())
+    }
+
     pub(super) fn emit_send_conv_impls(&mut self, out: &mut String, prog: &Program) -> Result<(), String> {
         let stub = |name: &str| format!("value of a type holding functions cannot cross a thread boundary in the native backend (type '{name}'); rebuild it inside the fiber (e.g. web/framework's listen_app)");
         let saved = std::mem::take(&mut self.tparams);
@@ -1205,7 +1296,35 @@ impl Transpiler {
             return Ok(());
         }
         out.push('&');
-        self.emit_expr(out, key)
+        self.emit_map_key(out, key)
+    }
+
+    /// La clave de un `Map`, como VALOR. Un tipo de usuario o un parámetro de tipo se
+    /// convierten a su clave (M461, `__RayKeyed`): una copia, igual que en la VM. Un primitivo
+    /// se emite tal cual.
+    pub(super) fn emit_map_key(&mut self, out: &mut String, key: &Expr) -> Result<(), String> {
+        if key_is_converted(&self.type_of(key)?) {
+            out.push_str("__RayKeyed::__key(&(");
+            self.emit_expr(out, key)?;
+            out.push_str("))");
+            Ok(())
+        } else {
+            self.emit_expr(out, key)
+        }
+    }
+
+    /// Las claves (o los pares) de un mapa, ordenados: `plain(&m)` con claves primitivas;
+    /// `converted::<T, _>(&m)` cuando se guardan convertidas, que reconstruye cada valor.
+    pub(super) fn emit_map_listing(&mut self, out: &mut String, map: &Expr, plain: &str, converted: &str) -> Result<(), String> {
+        match self.type_of(map)? {
+            Type::Map(k, _) if key_is_converted(&k) => {
+                write!(out, "{converted}::<{}, _>(&", rust_ty(&k, &self.enums, &self.tparams)?).unwrap();
+            }
+            _ => write!(out, "{plain}(&").unwrap(),
+        }
+        self.emit_expr(out, map)?;
+        out.push(')');
+        Ok(())
     }
 
     pub(super) fn as_builtin_call<'a>(&self, e: &'a Expr, want: &str) -> Option<Vec<&'a Expr>> {
@@ -2092,7 +2211,7 @@ impl Transpiler {
                 out.push_str("{ let __rt_m = ");
                 self.emit_expr(out, eff[0])?;
                 out.push_str("; let __rt_k = ");
-                self.emit_expr(out, eff[1])?;
+                self.emit_map_key(out, eff[1])?;
                 out.push_str("; let __rt_v = ");
                 self.emit_expr(out, eff[2])?;
                 out.push_str("; __rt_m.borrow_mut().insert(__rt_k, __rt_v); }");
@@ -2112,7 +2231,7 @@ impl Transpiler {
                 out.push_str("{ let __rt_m = ");
                 self.emit_expr(out, eff[0])?;
                 out.push_str("; let __rt_k = ");
-                self.emit_expr(out, eff[1])?;
+                self.emit_map_key(out, eff[1])?;
                 out.push_str("; let __rt_d = ");
                 self.emit_expr(out, eff[2])?;
                 write!(out, "; *__rt_m.borrow_mut().entry(__rt_k).or_insert({}) += __rt_d; }}", zero)
@@ -2131,7 +2250,7 @@ impl Transpiler {
                 let literal_key = matches!(eff[1].kind, ExprKind::Str(_));
                 if !literal_key {
                     out.push_str("; let __rt_k = ");
-                    self.emit_expr(out, eff[1])?;
+                    self.emit_map_key(out, eff[1])?;
                 }
                 out.push_str("; let __rt_d = ");
                 self.emit_expr(out, eff[2])?;
@@ -2160,7 +2279,7 @@ impl Transpiler {
                 out.push_str("{ let __rt_m = ");
                 self.emit_expr(out, eff[0])?;
                 out.push_str("; let __rt_k = ");
-                self.emit_expr(out, eff[1])?;
+                self.emit_map_key(out, eff[1])?;
                 // el resultado se liga a un temporal: el RefMut de una expr de cola sobreviviría
                 // a los locales del bloque (E0597).
                 out.push_str("; let __rt_r = __rt_m.borrow_mut().remove(&__rt_k); __rt_r }");
@@ -2171,11 +2290,7 @@ impl Transpiler {
                 self.emit_map_key_ref(out, eff[1])?;
                 out.push(')');
             }
-            "keys" => {
-                out.push_str("__ray_keys(&");
-                self.emit_expr(out, eff[0])?;
-                out.push(')');
-            }
+            "keys" => self.emit_map_listing(out, eff[0], "__ray_keys", "__ray_keys_of")?,
             "values" => {
                 out.push_str("__ray_values(&");
                 self.emit_expr(out, eff[0])?;

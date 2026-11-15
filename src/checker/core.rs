@@ -2563,7 +2563,13 @@ impl Checker {
             // a `check_expr` (que infiere de los pares o exige anotar el vacío).
             ExprKind::MapLit(pares) => match expected {
                 Type::Map(kexp, vexp) => {
-                    self.ensure_type(expected, expr.line, expr.col)?; // clave hashable
+                    // Clave hashable. Con incógnitas dentro (el literal es el campo de un struct
+                    // genérico que se está construyendo: `Grid { m: [("a", 1): 2] }` contra
+                    // `Map<(A, int), int>`) no hay nada que comprobar todavía: el bound del
+                    // struct lo valida al resolver `A`.
+                    if !type_has_var(expected) {
+                        self.ensure_type(expected, expr.line, expr.col)?;
+                    }
                     for (k, v) in pares {
                         let kt = self.check_expr_expected(k, kexp)?;
                         if kt != **kexp {

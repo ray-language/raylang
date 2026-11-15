@@ -454,3 +454,36 @@ fn main() -> int {
         ),
     );
 }
+
+#[test]
+fn nested_map_literals_and_generic_key_structs_build_natively() {
+    // Revisión de 1.27.101: el tipo esperado de un literal de `Map` se colaba en el literal
+    // anidado; un `[Option.None: 1]` como retorno, argumento o payload no nombraba su clave; y un
+    // struct genérico cuyo parámetro solo vive en una clave tupla/Option no lo usaba en Rust.
+    // De paso, el checker comprobaba el campo `Map<(A, int), V>` contra `(A, int)` sin resolver.
+    same_everywhere(
+        "nested",
+        r#"struct Grid<A: MapKey> { m: Map<(A, int), int>, o: Map<Option<A>, int> }
+enum E { A(Map<Option<int>, int>) }
+fn make() -> Map<Option<int>, int> { [Option.None: 1] }
+fn size(m: Map<Option<int>, int>) -> int { m.len() }
+fn main() -> int {
+    let a: Map<string, Map<(int, int), int>> = ["x": [(1, 2): 3]];
+    print(a.get("x").unwrap().get((1, 2)));
+    let b: Map<(int, int), Map<string, int>> = [(1, 2): ["k": 3]];
+    print(b.get((1, 2)).unwrap().get("k"));
+    print(make().len());
+    print(size([Option.None: 1]));
+    let e = E.A([Option.None: 1]);
+    match (e) { E.A(m) => print(m.len()) }
+    let o: Option<Map<Option<int>, int>> = Option.Some([Option.None: 5]);
+    print(o.unwrap().get(Option.None));
+    let g = Grid { m: [("a", 1): 2], o: [Option.Some("z"): 1] };
+    print(g.m.get(("a", 1)));
+    print(g.o.keys());
+    0
+}
+"#,
+        "Option.Some(3)\nOption.Some(3)\n1\n1\n1\nOption.Some(5)\nOption.Some(2)\n[Option.Some(z)]\n",
+    );
+}

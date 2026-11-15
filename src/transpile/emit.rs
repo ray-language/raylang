@@ -44,7 +44,9 @@ impl Transpiler {
         let prev_hoisted = std::mem::take(&mut self.hoisted_borrows);
         let prev_ret = self.current_ret.replace(f.return_type.clone());
         let prev_expected = self.expected_ty.take();
+        let prev_body = std::mem::replace(&mut self.fn_body, &f.body as *const crate::ast::Block);
         let r = self.emit_function_inner(out, rust_name, f);
+        self.fn_body = prev_body;
         self.scopes.truncate(base_scopes);
         self.tparams = prev_tparams;
         self.cells = prev_cells;
@@ -748,7 +750,14 @@ impl Transpiler {
         }
         if let Some(tail) = &b.tail {
             out.push_str("    ");
-            self.emit_expr(out, tail).map_err(|e| with_position(e, tail.line, tail.col))?;
+            // Un literal de `Map` como valor de retorno de la FUNCIÓN toma su tipo del retorno
+            // declarado (su clave puede necesitarlo: `[Option.None: 1]`).
+            let fn_tail = std::ptr::eq(b, self.fn_body) && matches!(tail.kind, ExprKind::MapLit(_));
+            match self.current_ret.clone().filter(|_| fn_tail) {
+                Some(ret) => self.emit_typed(out, tail, &ret),
+                None => self.emit_expr(out, tail),
+            }
+            .map_err(|e| with_position(e, tail.line, tail.col))?;
             out.push('\n');
         }
         for name in fused_here {
@@ -2097,11 +2106,30 @@ impl Transpiler {
                 // temporales como en `emit_user_call_hoisted`: cada `let` cierra sus guards antes
                 // del siguiente arg, mismo orden de evaluación.
                 let hoist = args.len() > 1;
+                // Un literal de `Map` en el payload de un enum NO genérico toma su tipo de la
+                // variante (su clave puede necesitarlo: `E.A([Option.None: 1])`).
+                let payload: Vec<Type> = if !native && self.enum_tparams.get(enum_name).is_some_and(|t| t.is_empty()) {
+                    self.enum_variants.get(enum_name).and_then(|vs| vs.get(variant)).cloned().unwrap_or_default()
+                } else if native {
+                    // `Some(…)`/`Ok(…)`/`Err(…)` contra un `Option<T>`/`Result<T, E>` esperado.
+                    match (self.expected_ty.clone().map(|t| self.classify(&t)), variant.as_str()) {
+                        (Some(Type::Enum(n, targs)), "Some") if n == "Option" && targs.len() == 1 => vec![targs[0].clone()],
+                        (Some(Type::Enum(n, targs)), "Ok") if n == "Result" && targs.len() == 2 => vec![targs[0].clone()],
+                        (Some(Type::Enum(n, targs)), "Err") if n == "Result" && targs.len() == 2 => vec![targs[1].clone()],
+                        _ => Vec::new(),
+                    }
+                } else {
+                    Vec::new()
+                };
+                let typed = |i: usize, a: &Expr| payload.get(i).filter(|_| matches!(a.kind, ExprKind::MapLit(_))).cloned();
                 if hoist {
                     out.push_str("{ ");
                     for (i, a) in args.iter().enumerate() {
                         write!(out, "let __rt_a{} = ", i).unwrap();
-                        self.emit_expr(out, a)?;
+                        match typed(i, a) {
+                            Some(pt) => self.emit_typed(out, a, &pt)?,
+                            None => self.emit_expr(out, a)?,
+                        }
                         out.push_str("; ");
                     }
                 }
@@ -2120,7 +2148,10 @@ impl Transpiler {
                             write!(out, "__rt_a{}", i).unwrap();
                         }
                     } else {
-                        self.emit_expr(out, &args[0])?;
+                        match typed(0, &args[0]) {
+                            Some(pt) => self.emit_typed(out, &args[0], &pt)?,
+                            None => self.emit_expr(out, &args[0])?,
+                        }
                     }
                     out.push(')');
                 }
@@ -2157,11 +2188,15 @@ impl Transpiler {
                 let hoist = !pairs.is_empty(); // un par ya son 2 exprs (clave y valor)
                 // El tipo de la clave: el esperado (la anotación del `let`, el campo…) o, sin
                 // él, el del propio literal.
-                let lit_key_ty = match self.expected_ty.clone().map(|t| self.classify(&t)) {
-                    Some(Type::Map(k, _)) => Some(*k),
+                // El esperado es de ESTE literal: se retira (`take`) para que no se cuele en un
+                // literal anidado, y sus dos mitades se reparten — la clave a `emit_map_key`, el
+                // valor como esperado del valor. Un tipo con un hueco (`Option<()>` de un `None`
+                // suelto) no nombra nada: se deja a rustc.
+                let (lit_key_ty, lit_val_ty) = match self.expected_ty.take().map(|t| self.classify(&t)) {
+                    Some(Type::Map(k, v)) => (Some(*k), Some(*v)),
                     _ => match self.type_of(e) {
-                        Ok(Type::Map(k, _)) if !matches!(*k, Type::Unit) => Some(*k),
-                        _ => None,
+                        Ok(Type::Map(k, v)) => (Some(*k).filter(|t| !type_has_hole(t)), Some(*v).filter(|t| !type_has_hole(t))),
+                        _ => (None, None),
                     },
                 };
                 if hoist {
@@ -2171,7 +2206,10 @@ impl Transpiler {
                         self.emit_map_key(out, k, lit_key_ty.as_ref())?;
                         out.push_str("; ");
                         write!(out, "let __rt_v{} = ", i).unwrap();
-                        self.emit_expr(out, v)?;
+                        match &lit_val_ty {
+                            Some(vt) => self.emit_typed(out, v, vt)?,
+                            None => self.emit_expr(out, v)?,
+                        }
                         out.push_str("; ");
                     }
                 }

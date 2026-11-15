@@ -136,10 +136,11 @@ impl<'a> Interpreter<'a> {
     /// La clave de `Map` de un valor: los primitivos tal cual; un struct o enum, copiado.
     fn key_of(&self, v: &Value) -> MapKey {
         MapKey::from_value(v, &|enum_name, variant| {
-            self.enum_variants
+            let tag = self.enum_variants
                 .get(enum_name)
                 .and_then(|vs| vs.iter().position(|n| n == variant))
-                .unwrap_or(0) as u32
+                .unwrap_or(0) as u32;
+            crate::runtime::key_rank(enum_name, tag)
         })
     }
 

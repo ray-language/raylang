@@ -20451,3 +20451,27 @@ repetido, en el transpilador (`emit_key_impls`). Unificarlo pide que el checker 
 resultado al backend, que hoy solo recibe el AST. Con el arreglo de `u*` las dos copias dan lo
 mismo; un cambio de la regla tiene que tocar las dos. Y el intérprete construye la forma de
 cada clave compuesta sin caché: es el oráculo de desarrollo, no el motor de producto.
+
+## 440. M462 — tuplas y `Option` como clave de `Map` (nov 2026)
+
+Lo primero de IDEAS §124. `MapKey` deja de depender de un impl para estos dos tipos: es
+**estructural** (`satisfies_bound` lo decide por la forma del tipo), así que una tupla o un
+`Option` de claves son clave sueltos, anidados, como campo de un tipo derivado y como
+instancia de un `P: MapKey`.
+
+- **Orden.** Tuplas elemento a elemento. En `Option`, `None < Some`: el convencional (y el de
+  Rust), aunque el prelude declare `Some` antes. La posición de orden (`rank`) se separa del
+  tag de la VM (`KeyShape::vm_tag`) para poder reconstruir el valor.
+- **Runtime.** Una tupla es un arreglo: la clave compuesta lee `Obj::Array` e `Obj::IntArray`
+  (la forma especializada de una tupla de ints) y la reconstruye como arreglo genérico. El
+  checker garantiza que un arreglo de verdad nunca llega como clave.
+- **`@derive(Hash)`** acepta campos tupla (los hashea elemento a elemento, porque una tupla no
+  tiene métodos) y `Option` (`impl<T: Hash> Hash for Option<T>` en el prelude; el diccionario
+  `Hash` de una tupla se sintetiza como ya se hacía con `Eq` y `Show`).
+- **Nativo.** Impls genéricos de `__RayKeyed` para `Option<T>` y para tuplas de 2 a 8
+  elementos; `__RayKeyField` pasa a ser supertrait de `__RayKeyed`, para que un `(P, int)` en
+  código genérico sirva con solo `P: MapKey`. La conversión nombra ahora el tipo de la clave
+  (`<Option<i64> as __RayKeyed>::__key(…)`): de un `None` suelto rustc no podía deducirlo.
+
+De paso: la llamada a una closure local que se llama como una función genérica del programa
+ya no hereda sus argumentos de tipo en nativo (E0109).

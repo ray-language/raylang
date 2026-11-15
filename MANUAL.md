@@ -522,7 +522,11 @@ fn main() {
 
 El mapa compara por estructura (campo a campo) y guarda una **copia** de la clave: cambiar
 después el struct que insertaste no mueve la entrada. Vale para structs y enums no genéricos,
-anidados también. Un `Eq` o un `Hash` escritos a mano no cuentan (el mapa no los llamaría);
+anidados también.
+
+Una tupla o un `Option` de claves también es clave, sin declarar nada: `Map<(int, int), Cell>`
+para una rejilla, `Map<(string, Pos), int>`, `Map<Option<int>, string>`. Las tuplas ordenan
+elemento a elemento y `None` va antes que `Some`. Un `Eq` o un `Hash` escritos a mano no cuentan (el mapa no los llamaría);
 para una igualdad a medida está `std/collections/dict`.
 
 En código genérico, el parámetro que hace de clave lo declara con el bound `MapKey`:

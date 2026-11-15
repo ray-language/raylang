@@ -508,11 +508,16 @@ impl Transpiler {
         };
         let hash = derived("Hash");
         let mut keys: std::collections::HashSet<String> = derived("Eq").into_iter().filter(|n| hash.contains(n)).collect();
-        let field_ok = |t: &Type, keys: &std::collections::HashSet<String>| match normalize_type(t) {
-            Type::Int | Type::String | Type::Char | Type::Bool | Type::Bytes => true,
-            Type::Struct(n, args) | Type::Enum(n, args) => args.is_empty() && keys.contains(&n),
-            _ => false,
-        };
+        // La MISMA regla que `Checker::is_key_field` (un cambio va en los dos sitios).
+        fn field_ok(t: &Type, keys: &std::collections::HashSet<String>) -> bool {
+            match normalize_type(t) {
+                Type::Int | Type::String | Type::Char | Type::Bool | Type::Bytes => true,
+                Type::Tuple(ts) => ts.iter().all(|t| field_ok(t, keys)),
+                Type::Struct(n, args) | Type::Enum(n, args) if n == "Option" && args.len() == 1 => field_ok(&args[0], keys),
+                Type::Struct(n, args) | Type::Enum(n, args) => args.is_empty() && keys.contains(&n),
+                _ => false,
+            }
+        }
         loop {
             let dropped: Vec<String> = prog.structs.iter()
                 .filter(|s| keys.contains(&s.name) && !(s.type_params.is_empty() && s.fields.iter().all(|(_, t)| field_ok(t, &keys))))
@@ -1295,27 +1300,44 @@ impl Transpiler {
     /// La clave de una CONSULTA a un Map (`get`/`get_or`/`contains_key`), por referencia. Un literal
     /// de string va como `&str` (el Map de claves `Rc<str>` se consulta por `str`): `m.get("k")` no
     /// crea el string de la clave.
-    pub(super) fn emit_map_key_ref(&mut self, out: &mut String, key: &Expr) -> Result<(), String> {
+    pub(super) fn emit_map_key_ref(&mut self, out: &mut String, map: &Expr, key: &Expr) -> Result<(), String> {
         if let ExprKind::Str(s) = &key.kind {
             write!(out, "{:?}", s).unwrap();
             return Ok(());
         }
         out.push('&');
-        self.emit_map_key(out, key)
+        let kty = self.map_key_ty(map);
+        self.emit_map_key(out, key, kty.as_ref())
     }
 
-    /// La clave de un `Map`, como VALOR. Un tipo de usuario o un parámetro de tipo se
-    /// convierten a su clave (M461, `__RayKeyed`): una copia, igual que en la VM. Un primitivo
-    /// se emite tal cual.
-    pub(super) fn emit_map_key(&mut self, out: &mut String, key: &Expr) -> Result<(), String> {
-        if key_is_converted(&self.type_of(key)?) {
-            out.push_str("__RayKeyed::__key(&(");
-            self.emit_expr(out, key)?;
-            out.push_str("))");
-            Ok(())
-        } else {
-            self.emit_expr(out, key)
+    /// El tipo de la clave del mapa `map`, si se conoce.
+    pub(super) fn map_key_ty(&self, map: &Expr) -> Option<Type> {
+        match self.type_of(map) {
+            Ok(Type::Map(k, _)) => Some(*k),
+            _ => None,
         }
+    }
+
+    /// La clave de un `Map`, como VALOR. Un tipo de usuario, una tupla, un `Option` o un
+    /// parámetro de tipo se convierten a su clave (M461, `__RayKeyed`): una copia, igual que en
+    /// la VM. Un primitivo se emite tal cual. `kty` es el tipo de la clave del mapa cuando se
+    /// conoce: nombra el tipo de la conversión, porque de la clave convertida rustc no puede
+    /// deducirlo (`None` como clave de un `Map<Option<int>, V>`).
+    pub(super) fn emit_map_key(&mut self, out: &mut String, key: &Expr, kty: Option<&Type>) -> Result<(), String> {
+        let ty = match kty {
+            Some(t) => t.clone(),
+            None => self.type_of(key)?,
+        };
+        if !key_is_converted(&ty) {
+            return self.emit_expr(out, key);
+        }
+        match kty {
+            Some(t) => write!(out, "<{} as __RayKeyed>::__key(&(", rust_ty(t, &self.enums, &self.tparams)?).unwrap(),
+            None => out.push_str("__RayKeyed::__key(&("),
+        }
+        self.emit_expr(out, key)?;
+        out.push_str("))");
+        Ok(())
     }
 
     /// Las claves (o los pares) de un mapa, ordenados: `plain(&m)` con claves primitivas;
@@ -2216,7 +2238,7 @@ impl Transpiler {
                 out.push_str("{ let __rt_m = ");
                 self.emit_expr(out, eff[0])?;
                 out.push_str("; let __rt_k = ");
-                self.emit_map_key(out, eff[1])?;
+                { let kty = self.map_key_ty(eff[0]); self.emit_map_key(out, eff[1], kty.as_ref())?; }
                 out.push_str("; let __rt_v = ");
                 self.emit_expr(out, eff[2])?;
                 out.push_str("; __rt_m.borrow_mut().insert(__rt_k, __rt_v); }");
@@ -2236,7 +2258,7 @@ impl Transpiler {
                 out.push_str("{ let __rt_m = ");
                 self.emit_expr(out, eff[0])?;
                 out.push_str("; let __rt_k = ");
-                self.emit_map_key(out, eff[1])?;
+                { let kty = self.map_key_ty(eff[0]); self.emit_map_key(out, eff[1], kty.as_ref())?; }
                 out.push_str("; let __rt_d = ");
                 self.emit_expr(out, eff[2])?;
                 write!(out, "; *__rt_m.borrow_mut().entry(__rt_k).or_insert({}) += __rt_d; }}", zero)
@@ -2255,13 +2277,13 @@ impl Transpiler {
                 let literal_key = matches!(eff[1].kind, ExprKind::Str(_));
                 if !literal_key {
                     out.push_str("; let __rt_k = ");
-                    self.emit_map_key(out, eff[1])?;
+                    { let kty = self.map_key_ty(eff[0]); self.emit_map_key(out, eff[1], kty.as_ref())?; }
                 }
                 out.push_str("; let __rt_d = ");
                 self.emit_expr(out, eff[2])?;
                 out.push_str("; __rt_m.borrow().get(");
                 if literal_key {
-                    self.emit_map_key_ref(out, eff[1])?;
+                    self.emit_map_key_ref(out, eff[0], eff[1])?;
                 } else {
                     out.push_str("&__rt_k");
                 }
@@ -2275,7 +2297,7 @@ impl Transpiler {
                 out.push_str("{ let __rt_g = ");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow().get(");
-                self.emit_map_key_ref(out, eff[1])?;
+                self.emit_map_key_ref(out, eff[0], eff[1])?;
                 out.push_str(").cloned(); __rt_g }");
             }
             // remove(m, k) → Option<V> (quita y devuelve). Fusionado con unwrap_or. La clave se iza
@@ -2284,7 +2306,7 @@ impl Transpiler {
                 out.push_str("{ let __rt_m = ");
                 self.emit_expr(out, eff[0])?;
                 out.push_str("; let __rt_k = ");
-                self.emit_map_key(out, eff[1])?;
+                { let kty = self.map_key_ty(eff[0]); self.emit_map_key(out, eff[1], kty.as_ref())?; }
                 // el resultado se liga a un temporal: el RefMut de una expr de cola sobreviviría
                 // a los locales del bloque (E0597).
                 out.push_str("; let __rt_r = __rt_m.borrow_mut().remove(&__rt_k); __rt_r }");
@@ -2292,7 +2314,7 @@ impl Transpiler {
             "contains_key" => {
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow().contains_key(");
-                self.emit_map_key_ref(out, eff[1])?;
+                self.emit_map_key_ref(out, eff[0], eff[1])?;
                 out.push(')');
             }
             "keys" => self.emit_map_listing(out, eff[0], "__ray_keys", "__ray_keys_of")?,

@@ -167,12 +167,12 @@ nombre_trait = IDENT [ '.' IDENT ] ;                (* trait local o calificado 
   si cabe (fuera de rango = error de tipos); con sufijo ya tiene ancho (§3) y un contexto de otro
   ancho es error.
 - **Arreglos `[T]`**, **`Map<K,V>`** (claves *hashables*: `int`, `string`, `char`, `bool`,
-  `bytes` — `float` no — y los structs y enums **no genéricos** con `@derive(Eq, Hash)` cuyos
-  campos son a su vez claves. Son los tipos que cumplen el trait marcador **`MapKey`**, que no
+  `bytes` — `float` no —, las **tuplas** y los **`Option`** de claves, y los structs y enums
+  **no genéricos** con `@derive(Eq, Hash)` cuyos campos son a su vez claves. Son los tipos que cumplen el trait marcador **`MapKey`**, que no
   tiene métodos ni admite un `impl` a mano. Un parámetro de tipo solo puede ser clave con el
   bound `P: MapKey`, y cada instanciación lo verifica. La igualdad y el orden de las claves son
-  **estructurales** (campo a campo en orden de declaración; las variantes de un enum, en su
-  orden de declaración) y la clave se **copia** al usarla: mutar después el valor, o el que
+  **estructurales** (campo a campo en orden de declaración; una tupla, elemento a elemento;
+  las variantes de un enum, en su orden de declaración; en `Option`, `None` antes que `Some`) y la clave se **copia** al usarla: mutar después el valor, o el que
   devuelve `keys()`, no cambia el mapa), **structs** y **enums**: **semántica de referencia** (§8). Tuplas
   `(A, B, …)`: acceso posicional `t.0` y desestructuración; las posiciones son de **solo
   lectura** (`t.0 = v` es error de tipos: la tupla es un agregado inmutable — para mutar,
@@ -675,8 +675,8 @@ sobre el que se escriben las capas 1 y 2.
   suma enteros. `enumerate`/`zip` se consumen con **patrón de tupla** en el `for`:
   `for (i, x) in it.enumerate() { … }`. No colisionan con el `map`/`filter`/`fold` **eager** de
   arreglos (`xs.map(f) -> [U]`): se desambigua por el tipo del receptor.
-- **Map** (`Map<K, V>`, claves: `int string char bool bytes` y los tipos con
-  `@derive(Eq, Hash)` de campos clave; en código genérico, `K: MapKey`): `Map.new() insert get
+- **Map** (`Map<K, V>`, claves: `int string char bool bytes`, tuplas y `Option` de claves, y
+  los tipos con `@derive(Eq, Hash)` de campos clave; en código genérico, `K: MapKey`): `Map.new() insert get
   get_or remove contains_key keys values clear len` — `keys()`/`values()` recorren en **orden de
   clave** (el almacén interno no expone su orden). Para una igualdad a medida (un `Eq`/`Hash`
   escritos a mano), `std/collections/dict`.

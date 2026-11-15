@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Una tupla o un `Option` son clave de `Map`**: `Map<(int, int), V>` para una rejilla,
+  `Map<(string, Pos), int>`, `Map<Option<int>, string>`, y también como campo de un tipo con
+  `@derive(Eq, Hash)`. Las tuplas ordenan elemento a elemento y `None` va antes que `Some`.
+  `@derive(Hash)` acepta ya campos tupla y `Option`.
+
 - **El binario nativo compila cuando una closure local se llama igual que una función
   genérica**: con un `fn f<T>(…)` en el programa, llamar a un parámetro `f: fn() -> …` fallaba
   en el build con un error de `rustc`.

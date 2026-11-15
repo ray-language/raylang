@@ -417,10 +417,25 @@ pub(super) fn parse_derived_impl(trait_name: &str, name: &str, signature: &str, 
 /// (que puede ser cualquier i64, p. ej. un int grande que hashea a sí mismo) se acotan a 32 bits.
 pub(super) fn struct_hash_body(fields: &[(String, Type)]) -> String {
     let mut acc = "17".to_string();
-    for (n, _) in fields {
-        acc = format!("(({acc} * 31 + (self.{n}.hash() & 4294967295)) & 4294967295)");
+    for (n, ty) in fields {
+        acc = format!("(({acc} * 31 + ({} & 4294967295)) & 4294967295)", hash_expr(&format!("self.{n}"), ty));
     }
     format!("        {acc}")
+}
+
+/// El hash de la expresión `e` de tipo `ty` en un cuerpo derivado: su `.hash()`, o elemento a
+/// elemento si es una TUPLA (que no tiene métodos). Mismo polinomio acotado a 32 bits.
+fn hash_expr(e: &str, ty: &Type) -> String {
+    match ty {
+        Type::Tuple(ts) => {
+            let mut acc = "17".to_string();
+            for (i, t) in ts.iter().enumerate() {
+                acc = format!("(({acc} * 31 + ({} & 4294967295)) & 4294967295)", hash_expr(&format!("({e}).{i}"), t));
+            }
+            acc
+        }
+        _ => format!("{e}.hash()"),
+    }
 }
 
 /// Cuerpo de `hash` para un enum (M40.3a): `match` sobre `self`; el hash arranca en el índice de la
@@ -436,7 +451,7 @@ pub(super) fn enum_hash_body(name: &str, variants: &[VariantDef]) -> String {
             let mut acc = format!("{idx}");
             for i in 0..k {
                 // M61.1: acotado a 32 bits, como struct_hash_body (el int es checked).
-                acc = format!("(({acc} * 31 + (a{i}.hash() & 4294967295)) & 4294967295)");
+                acc = format!("(({acc} * 31 + ({} & 4294967295)) & 4294967295)", hash_expr(&format!("a{i}"), &v.payload[i]));
             }
             arms.push_str(&format!(
                 "            {name}.{v}({b}) => {acc},\n",

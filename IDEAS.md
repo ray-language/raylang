@@ -4716,13 +4716,9 @@ regresiones. Se anotan para decidir con calma, no se han tocado.
 M460 (bound `MapKey`) y M461 (tipos con `@derive(Eq, Hash)` como clave, DESIGN §437–§438)
 cerraron #356. Lo que NO entró, por acotar el arco a lo que raysolve necesitaba:
 
-1. **Tuplas como clave** (`Map<(int, int), V>`), sueltas o como campo de un tipo clave. Es lo
-   más pedible: en el runtime una tupla es un arreglo (con las variantes `IntArray`/
-   `FloatArray` de la VM), así que la conversión a clave tiene que leer las tres formas.
-   **Impacto**: aditivo. **Coste**: medio (VM + intérprete + `__RayKeyed` para tuplas de Rust).
-2. **`Option<K>` / `Result` como campo de una clave.** El orden de variantes de `Option` difiere
-   entre el prelude (`Some`, `None`) y Rust (`None < Some`): hay que fijar cuál manda antes de
-   exponerlo, porque `keys()` va ordenado.
+1. **Tuplas como clave** — ✅ M462 (DESIGN §440).
+2. **`Option<K>` como clave o campo** — ✅ M462: manda el orden convencional, `None < Some`.
+   `Result` sigue fuera (no hay `Hash` para él ni un orden obvio entre `Ok` y `Err`).
 3. **Tipos genéricos como clave** (`Pair<int, string>`): hoy `@derive` no admite genéricos.
 4. **Enteros sin signo** (`u8`/`u32`/`u64`) como clave: `MapKey` del runtime no tiene variante.
 5. **Nativo: literal de un ENUM genérico con parámetro `MapKey`**. Los structs y las llamadas

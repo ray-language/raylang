@@ -498,7 +498,7 @@ fn ensure_type(c: Checker, t: Type, line: int, col: int) -> Result<int, TypeErro
                         terr(
                             line,
                             col,
-                            "a Map key must be int/string/char/bool/bytes or a type with @derive(Eq, Hash) whose fields are Map keys, not "
+                            "a Map key must be int/string/char/bool/bytes, a tuple or Option of keys, or a type with @derive(Eq, Hash) whose fields are Map keys, not "
                                 + type_str(args[0])
                         )
                     );

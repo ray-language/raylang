@@ -274,7 +274,7 @@ pub struct AssocFn {
 pub const ASSOC_FNS: &[AssocFn] = &[
     AssocFn {
         type_name: "Map", fn_name: "new", arity: 0, opcode: OpCode::MapNew,
-        doc: "Creates an empty `Map<K, V>`. The element types are inferred from the expected type (annotate the binding if indeterminate). Keys: int, string, char, bool, bytes, or a type with `@derive(Eq, Hash)` whose fields are keys.",
+        doc: "Creates an empty `Map<K, V>`. The element types are inferred from the expected type (annotate the binding if indeterminate). Keys: int, string, char, bool, bytes, a tuple or `Option` of keys, or a type with `@derive(Eq, Hash)` whose fields are keys.",
         sig: "Map.new() -> Map<K, V>",
     },
     AssocFn {

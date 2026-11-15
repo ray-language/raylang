@@ -527,6 +527,17 @@ impl Checker {
         if let Type::Var(u) = concrete {
             return self.current_fn_bounds.iter().any(|(bp, tr)| bp == u && tr == trait_name);
         }
+        // `MapKey` es estructural: una tupla o un `Option` de claves también lo cumplen.
+        if trait_name == MAP_KEY_TRAIT {
+            return match concrete {
+                Type::Tuple(ts) => ts.iter().all(|t| self.satisfies_bound(t, trait_name)),
+                Type::Enum(n, args) if n == "Option" && args.len() == 1 => self.satisfies_bound(&args[0], trait_name),
+                Type::Struct(n, args) | Type::Enum(n, args) => {
+                    args.is_empty() && self.impl_traits.contains(&(n.clone(), trait_name.to_string()))
+                }
+                other => is_primitive_key(other),
+            };
+        }
         match type_key_of(concrete) {
             Some(key) => self.impl_traits.contains(&(key, trait_name.to_string())),
             None => false,
@@ -661,7 +672,7 @@ impl Checker {
             // estructura); un impl a mano prometería una igualdad que el `Map` no usa.
             if imp.trait_name == MAP_KEY_TRAIT && imp.line < crate::prelude::LINE_BASE {
                 return Err(self.err(imp.line, imp.col, format!(
-                    "'{MAP_KEY_TRAIT}' cannot be implemented by hand: it is granted to int/string/char/bool/bytes and to types with @derive(Eq, Hash) whose fields are Map keys"
+                    "'{MAP_KEY_TRAIT}' cannot be implemented by hand: it is granted to int/string/char/bool/bytes, to tuples and Options of keys, and to types with @derive(Eq, Hash) whose fields are Map keys"
                 )));
             }
             // Registrar que este tipo implementa este trait (M9.2: verificación de bounds).
@@ -1273,6 +1284,8 @@ impl Checker {
 
     fn is_key_field(t: &Type, keys: &HashSet<String>) -> bool {
         match t {
+            Type::Tuple(ts) => ts.iter().all(|t| Self::is_key_field(t, keys)),
+            Type::Enum(n, args) if n == "Option" && args.len() == 1 => Self::is_key_field(&args[0], keys),
             Type::Struct(n, args) | Type::Enum(n, args) => args.is_empty() && keys.contains(n),
             other => is_primitive_key(other),
         }
@@ -1287,7 +1300,9 @@ impl Checker {
             // Solo se aconseja el derive donde sirve: un tipo del prelude no es del usuario, y
             // `@derive` no admite tipos genéricos.
             let generic = self.struct_tparams.get(&name).or_else(|| self.enum_tparams.get(&name)).is_some_and(|tp| !tp.is_empty());
-            return if name == "Option" || name == "Result" {
+            return if name == "Option" {
+                " (an Option is a Map key when its content is)".to_string()
+            } else if name == "Result" {
                 String::new()
             } else if generic {
                 format!(" (a generic type such as '{name}' cannot be a Map key)")
@@ -1325,7 +1340,7 @@ impl Checker {
             Type::Map(k, v) => {
                 if !is_hashable_key(k) && !self.satisfies_bound(k, MAP_KEY_TRAIT) {
                     return Err(self.err(line, col, format!(
-                        "a Map key must be int/string/char/bool/bytes or a type with @derive(Eq, Hash) whose fields are Map keys, not {}{}",
+                        "a Map key must be int/string/char/bool/bytes, a tuple or Option of keys, or a type with @derive(Eq, Hash) whose fields are Map keys, not {}{}",
                         k, self.map_key_hint(k)
                     )));
                 }
@@ -4145,7 +4160,7 @@ impl Checker {
         // M302 (IDEAS §97 #5): una TUPLA implementa `Eq`/`Show` por composición de sus elementos
         // (como el impl genérico de `[T]` del prelude, pero sin impl: se sintetiza el closure).
         if let Type::Tuple(ts) = concrete
-            && (trait_name == "Eq" || trait_name == "Show")
+            && (trait_name == "Eq" || trait_name == "Show" || trait_name == "Hash")
         {
             return self.synth_tuple_dict(ts, trait_name, method, line, col);
         }
@@ -4210,7 +4225,17 @@ impl Checker {
         for t in elems {
             dicts.push(self.dict_for(t, trait_name, method, line, col)?);
         }
-        let (params, ret, body) = if trait_name == "Eq" {
+        let (params, ret, body) = if trait_name == "Hash" {
+            // El mismo polinomio acotado a 32 bits que `@derive(Hash)`: `((acc * 31 + h) & M)`.
+            let int = |n: i64| Expr { kind: ExprKind::Int(n, crate::token::Radix::DEC), line, col };
+            let mask = |e: Expr| bin(BinaryOp::BitAnd, e, int(4294967295));
+            let mut acc = int(17);
+            for (i, d) in dicts.into_iter().enumerate() {
+                let h = mask(call(d, vec![field("__d0", i)]));
+                acc = mask(bin(BinaryOp::Add, bin(BinaryOp::Mul, acc, int(31)), h));
+            }
+            (vec![Param { name: "__d0".into(), ty: tuple_ty.clone(), line, col }], Type::Int, acc)
+        } else if trait_name == "Eq" {
             let mut acc: Option<Expr> = None;
             for (i, d) in dicts.into_iter().enumerate() {
                 let c = call(d, vec![field("__d0", i), field("__d1", i)]);

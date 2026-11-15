@@ -533,7 +533,12 @@ Y lo que se declara en el `ray.toml`:
 | `[app] name` | el nombre bajo el icono |
 | `[app] id` | el bundle id de iOS y, si no se indica otro, el application id de Android |
 | `[app] icon` | un PNG: el icono de la app en los dos sistemas |
+| `[app] build` | el número de compilación (`CFBundleVersion` y `versionCode`): las tiendas piden uno nuevo en cada subida; `ray bundle --build N` manda |
 | `[app.plist]` | claves que van tal cual al `Info.plist` de iOS, por ejemplo el texto de un permiso |
+| `[app.plist.<idioma>]` | las mismas claves con su texto en ese idioma (`[app.plist.en]`): los permisos y el nombre salen en el idioma del teléfono |
+| `[ios] devices` | `["iphone"]`, `["ipad"]` o los dos (por defecto, los dos) |
+| `[ios] orientations` | `"portrait"`, `"upside_down"`, `"landscape_left"`, `"landscape_right"` |
+| `[ios] privacy_manifest` | un `PrivacyInfo.xcprivacy` propio, en lugar del que genera el shell (una app que recoge datos aporta el suyo) |
 | `[ios] development_team` | el equipo de desarrollo, para instalar en un iPhone real |
 | `[ios] background_audio` | el audio sigue sonando con la app en segundo plano (sesión `playback`: abrir la app corta la música de otras) |
 | `[ios] audio_session` | `"playback"` o `"playback_mix"` (la app suena con el interruptor de silencio y SIN cortar la música de otras apps), sin el modo en segundo plano |

@@ -815,14 +815,14 @@ struct Checker {
     /// object, usando las expresiones-vtable como sus métodos. Cada método se resuelve con `dict_for`
     /// (M9.4): el método manglado plano para un impl concreto/genérico sin bounds, o un **closure
     /// anidado** para un impl genérico acotado (`Caja<int>`) → habilita `dyn` sobre impls genéricos.
-    dyn_coercions: HashMap<(usize, usize), (Vec<String>, Vec<Expr>)>,
+    dyn_coercions: HashMap<(usize, usize), Vec<(usize, (Vec<String>, Vec<Expr>))>>,
     /// Sitios de **despacho dinámico** (M9.3b): `(línea, col, método)` de un `obj.m(args)`
     /// con `obj: dyn Trait`. `lower_dyn` los baja al bloque `{ let r = obj; (r.m)(r.data, ...) }`.
     dyn_dispatch: HashSet<(usize, usize, String)>,
     /// Sitios de **upcasting** (M9.5b): `(línea, col)` de un valor `dyn S1` coercionado a `dyn S2`
     /// con S2 ⊆ S1 → el conjunto destino S2. `lower_dyn` lo baja a reconstruir el struct menor
     /// proyectando los campos del mayor.
-    dyn_upcasts: HashMap<(usize, usize), Vec<String>>,
+    dyn_upcasts: HashMap<(usize, usize), Vec<(usize, Vec<String>)>>,
     /// M10.2b: si está activo, el checker **recolecta** el índice semántico (tipos y posiciones
     /// de declaración por identificador) en `index`. Solo lo enciende `semantic_index`; en una
     /// verificación normal queda en `false` (coste cero).

@@ -102,6 +102,7 @@ fn main() -> int {
     print(url.normalize("http://[::1]:80/"));
     print(url.normalize("http://h/a%"));
     print(url.normalize("a b"));
+    print(url.normalize("http://H%3a/%3a"));
     print(url.escape_unsafe("/a b/é?q=x y&z=\"1\"#f%20"));
     print(url.resolve("http://h/x/", url.escape_unsafe("a b.html")));
     0
@@ -116,6 +117,7 @@ fn main() -> int {
             "Result.Ok(http://[::1]/)\n",
             "Result.Ok(http://h/a%)\n",
             "Result.Err(invalid URL (control character or space; percent-encode it))\n",
+            "Result.Ok(http://h%3A/%3A)\n",
             "/a%20b/%C3%A9?q=x%20y&z=%221%22#f%20\n",
             "Result.Ok(http://h/x/a%20b.html)\n",
         ),

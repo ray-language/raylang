@@ -728,9 +728,9 @@ pub(super) fn lower_dict_calls_expr(expr: &mut Expr, sites: &mut DictSites) {
 // **despacho** `obj.m(args)` baja a `{ let r = obj; (r.m)(r.data, args) }`. Reusa structs +
 // funciones de primera clase: el intérprete y la VM no saben de trait objects.
 
-type CoercionMap = HashMap<(usize, usize), (Vec<String>, Vec<Expr>)>;
+type CoercionMap = HashMap<(usize, usize), Vec<(usize, (Vec<String>, Vec<Expr>))>>;
 type DispatchSet = HashSet<(usize, usize, String)>;
-type UpcastMap = HashMap<(usize, usize), Vec<String>>;
+type UpcastMap = HashMap<(usize, usize), Vec<(usize, Vec<String>)>>;
 
 /// Nombre del struct sintetizado que realiza `dyn A + B` en runtime. El conjunto viene canónico
 /// (ordenado), así que el nombre es único por conjunto. El `+` es ilegal en identificadores de
@@ -756,6 +756,37 @@ pub(super) fn ident_expr(name: &str, line: usize, col: usize) -> Expr {
     Expr { kind: ExprKind::Ident(name.to_string()), line, col }
 }
 
+/// Cuántos nodos compuestos hay en la cadena izquierda de `expr` que comparten su posición
+/// (él incluido). Distingue los sitios de coerción a `dyn` que caen en la misma `(línea, col)`:
+/// en `q.grow(1)` el receptor `q` cuenta 0 y la llamada 1. Da lo MISMO antes y después de
+/// bajar UFCS y operadores: `Call(Field(q, grow), [1])` y `Call(grow, [q, 1])` cuentan 1 (un
+/// `Field` no suma), y `q + q` cuenta 1 como `Binary` y como `Call(add, [q, q])`.
+pub(crate) fn dyn_chain_count(expr: &Expr) -> usize {
+    let same = |c: &Expr| (c.line, c.col) == (expr.line, expr.col);
+    let below = |c: &Expr| if same(c) { dyn_chain_count(c) } else { 0 };
+    match &expr.kind {
+        ExprKind::Call { callee, args } => match args.first().filter(|a| same(a)) {
+            Some(receiver) => 1 + dyn_chain_count(receiver),
+            None => 1 + below(callee),
+        },
+        ExprKind::Field { object, .. } => below(object),
+        ExprKind::Binary { left, .. } => 1 + below(left),
+        ExprKind::Index { array, .. } => 1 + below(array),
+        ExprKind::Unary { expr: inner, .. } | ExprKind::Cast { expr: inner, .. } => 1 + below(inner),
+        ExprKind::Try(inner) => 1 + below(inner),
+        _ => 0,
+    }
+}
+
+/// El sitio de coerción de un nodo. `strict` (receptor de una llamada bajada, o esa llamada)
+/// exige la cuenta exacta; el resto conserva la regla por posición, que ahí no es ambigua.
+fn dyn_site<V>(map: &HashMap<(usize, usize), Vec<(usize, V)>>, line: usize, col: usize, chain: usize, strict: bool) -> Option<&V> {
+    let sites = map.get(&(line, col))?;
+    sites.iter().find(|(n, _)| *n == chain)
+        .or_else(|| sites.first().filter(|_| !strict))
+        .map(|(_, v)| v)
+}
+
 pub(super) fn lower_dyn(program: &mut Program, coercions: &CoercionMap, dispatch: &DispatchSet, upcasts: &UpcastMap) {
     if coercions.is_empty() && dispatch.is_empty() && upcasts.is_empty() {
         return;
@@ -767,8 +798,8 @@ pub(super) fn lower_dyn(program: &mut Program, coercions: &CoercionMap, dispatch
     // Structs sintetizados: uno por **conjunto** distinto que aparezca en una coerción **o como
     // destino de un upcast**, con `data` + un campo función por método de la unión (la vtable). Los
     // tipos de campo son irrelevantes en runtime (erasure); el motor solo usa los nombres y el orden.
-    let mut sets: Vec<Vec<String>> = coercions.values().map(|(set, _)| set.clone())
-        .chain(upcasts.values().cloned())
+    let mut sets: Vec<Vec<String>> = coercions.values().flatten().map(|(_, (set, _))| set.clone())
+        .chain(upcasts.values().flatten().map(|(_, set)| set.clone()))
         .collect();
     sets.sort();
     sets.dedup();
@@ -828,7 +859,7 @@ pub(super) fn lower_dyn_block(block: &mut Block, coercions: &CoercionMap, dispat
 }
 
 pub(super) fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchSet, upcasts: &UpcastMap, tm: &HashMap<String, Vec<String>>, counter: &mut usize) {
-    lower_dyn_node(expr, coercions, dispatch, upcasts, tm, counter, true);
+    lower_dyn_node(expr, coercions, dispatch, upcasts, tm, counter, true, false);
 }
 
 /// `own` = este nodo es el DUEÑO de su posición. Una coerción o un upcast se registran por
@@ -836,12 +867,19 @@ pub(super) fn lower_dyn_expr(expr: &mut Expr, coercions: &CoercionMap, dispatch:
 /// `a.b` con `a`, `xs[i]` con `xs`, `e?` con `e`…). El hijo izquierdo nunca es un sitio de
 /// coerción —no hay tipo esperado ahí—, así que gana el nodo MÁS EXTERNO de la cadena (#353):
 /// antes se envolvía también el callee o el objeto (ICE, o un valor equivocado en silencio).
-fn lower_dyn_node(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchSet, upcasts: &UpcastMap, tm: &HashMap<String, Vec<String>>, counter: &mut usize, own: bool) {
+fn lower_dyn_node(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchSet, upcasts: &UpcastMap, tm: &HashMap<String, Vec<String>>, counter: &mut usize, own: bool, receiver: bool) {
     let here = (expr.line, expr.col);
+    // Una llamada UFCS o un operador sobrecargado ya bajados llevan el receptor en `args[0]`
+    // con la MISMA posición que la llamada, y los dos son sitios de coerción legítimos (el
+    // receptor contra el parámetro, la llamada contra su contexto). Ahí la posición no basta:
+    // se exige además la cuenta de la cadena que anotó el checker (`dyn_chain_count`).
+    let chain = dyn_chain_count(expr);
+    let strict = receiver
+        || matches!(&expr.kind, ExprKind::Call { args, .. } if args.first().is_some_and(|a| (a.line, a.col) == here));
     // El hijo izquierdo solo es dueño si su posición difiere de la de este nodo.
     let left = |child: &mut Expr, counter: &mut usize| {
         let owns = (child.line, child.col) != here;
-        lower_dyn_node(child, coercions, dispatch, upcasts, tm, counter, owns);
+        lower_dyn_node(child, coercions, dispatch, upcasts, tm, counter, owns, false);
     };
     // Recorrer los sub-nodos primero (post-orden): así los despachos/coerciones anidados
     // (en el receptor y los argumentos) ya están bajados cuando reescribimos este nodo.
@@ -853,8 +891,9 @@ fn lower_dyn_node(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchS
         }
         ExprKind::Call { callee, args } => {
             left(callee, counter);
-            for a in args.iter_mut() {
-                lower_dyn_expr(a, coercions, dispatch, upcasts, tm, counter);
+            for (i, a) in args.iter_mut().enumerate() {
+                let is_receiver = i == 0 && (a.line, a.col) == here;
+                lower_dyn_node(a, coercions, dispatch, upcasts, tm, counter, true, is_receiver);
             }
         }
         ExprKind::MapLit(pares) => {
@@ -945,7 +984,7 @@ fn lower_dyn_node(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchS
     // función de la vtable los calculó el checker con `dict_for` (M9.4) — método manglado plano o
     // closure anidado para un impl genérico acotado—, así que `dyn` funciona también sobre impls
     // genéricos. Van en el orden de los métodos del trait, igual que `tm`.
-    if let Some((set, vtable)) = coercions.get(&(line, col)).filter(|_| own) {
+    if let Some((set, vtable)) = dyn_site(coercions, line, col, chain, strict).filter(|_| own) {
         let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::DEC));
         let inner = Expr { kind: taken, line, col };
         let mut fields = vec![("data".to_string(), inner)];
@@ -959,7 +998,7 @@ fn lower_dyn_node(expr: &mut Expr, coercions: &CoercionMap, dispatch: &DispatchS
     // Upcasting `dyn S1` → `dyn S2` (S2 ⊆ S1, M9.5b): reconstruir el struct menor proyectando los
     // campos del mayor. Necesita un temp porque el origen se referencia varias veces:
     // `{ let __dynup = <obj>; __dyn_S2 { data: __dynup.data, m: __dynup.m, … } }`.
-    if let Some(target) = upcasts.get(&(line, col)).filter(|_| own) {
+    if let Some(target) = dyn_site(upcasts, line, col, chain, strict).filter(|_| own) {
         let taken = std::mem::replace(&mut expr.kind, ExprKind::Int(0, crate::token::Radix::DEC));
         let source = Expr { kind: taken, line, col };
         let tmp = format!("__dynup#{}", *counter);

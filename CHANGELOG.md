@@ -6,6 +6,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.99 — 2026-11-14
+
 - **`ray fmt` ya no borra código tras una cadena interpolada**: `"id-${n}".to_upper() + "!"`
   quedaba en `"id-${n}"` y `"${x}".len()` en `"${x}"` — a veces el programa seguía compilando y
   hacía otra cosa. Se conservan la llamada, el índice y el `+` que siguen a la cadena.
@@ -93,6 +95,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   con una tarea de `spawn_isolated`), sus hijas heredan el dominio, `scope` espera también las de
   `spawn_local`, y qué devuelve `try_join`. `llms.txt` nombra las firmas P-256/RSA y explica
   `pem`, `keychain`, `qr` y `bigint`; `to_bytes` figura como método (`"RIFF".to_bytes()`).
+
+- **Convertir a `dyn` el resultado de una llamada con punto o de un operador también funciona**:
+  `let d: dyn Shape = foo.make()`, `total(q.grow(1))` y `let e: dyn Shape = q + q` terminaban en
+  un error interno.
+- **`"${x}"` con `x: T` solo sigue el bound `Show`**: otro trait con un método `show` daba un
+  error de tipos confuso en vez de decir que `T` no se convierte a texto.
+- **El error de `@derive` nombra solo los campos culpables** (antes, también uno cuyo tipo
+  fuera parte del nombre de otro: `In` dentro de `Inner`).
+- **El aviso de rango incumplido de una dependencia ya no culpa a una versión sustituida**: solo
+  cuentan los rangos del `ray.toml` de la versión de cada paquete que queda en uso.
+- **`url.normalize` deja en mayúsculas los escapes del host**, como los de la ruta y la query.
 
 ## 1.27.98 — 2026-11-14
 

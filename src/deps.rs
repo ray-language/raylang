@@ -472,13 +472,10 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
             continue; // M40.8a: las path-deps son locales; no se descargan (las registra el CLI)
         }
         enqueue(n, s, "ray.toml", &mut queue, &mut index_hash, &mut index)?;
+        all_requests.entry(n.clone()).or_default().push(("ray.toml".to_string(), s.clone()));
     }
 
     while let Some((name, spec, by, req)) = queue.pop_front() {
-        let seen = all_requests.entry(name.clone()).or_default();
-        if !seen.iter().any(|(b, r)| *b == by && *r == req) {
-            seen.push((by.clone(), req.clone()));
-        }
         // Elegir el spec: nuevo, o MVS con el ya elegido si difieren (conflicto).
         let chosen_spec = match chosen.get(&name) {
             None => spec,
@@ -548,6 +545,11 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
                  if the names differ between indexes)"
             );
         }
+        // Lo que pedía OTRA versión de este paquete (la que el MVS acaba de sustituir) ya no
+        // cuenta: solo avisan los rangos del `ray.toml` de la versión en uso.
+        for requests in all_requests.values_mut() {
+            requests.retain(|(by, _)| *by != name);
+        }
         for (dn, ds) in pkg_deps {
             // M51d: el `ray.toml` de una transitiva NO es confiable — validar su nombre ANTES de
             // usarlo en cualquier ruta (es la valla contra `../../x` → escape de la caché).
@@ -558,6 +560,7 @@ fn ensure_impl(manifest: &Manifest, update: bool) -> Result<usize, String> {
                 continue;
             }
             enqueue(&dn, &ds, &name, &mut queue, &mut index_hash, &mut index)?;
+            all_requests.entry(dn.clone()).or_default().push((name.clone(), ds.clone()));
         }
     }
 

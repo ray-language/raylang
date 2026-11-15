@@ -489,7 +489,7 @@ pub fn normalize(s: string) -> Result<string, string> {
     let u = parse(s)?;
     let scheme = u.scheme.to_lower();
     let host = match (u.host) {
-        Option.Some(h) => Option.Some(normalize_escapes(h).to_lower()),
+        Option.Some(h) => Option.Some(normalize_escapes(h.to_lower())),
         Option.None => Option.None,
     };
     let port = match (u.port) {

@@ -20475,3 +20475,33 @@ instancia de un `P: MapKey`.
 
 De paso: la llamada a una closure local que se llama como una función genérica del programa
 ya no hereda sus argumentos de tipo en nativo (E0109).
+## 441. M463 — `std/audio` graba: la entrada de audio (nov 2026)
+
+ray-daw (#422) no podía grabar: `std/audio` era solo salida y la FFI no llega a CoreAudio, que
+entrega los datos en un callback.
+
+**Forma.** El espejo exacto de la salida (M145): un par de sockets, pero al revés. La fuente
+escribe lo capturado en un extremo y el programa lee del otro, registrado como un pipe de
+lectura ordinario — el mismo tipo de handle que el stdout de un proceso hijo —, así que
+`audio.read` aparca la fibra con la maquinaria que ya existía. Cero opcodes nuevos:
+`__audio_open` con el formato `input:<fmt>` abre la entrada, `__audio_read` comparte el opcode
+de `__proc_read`, y `__audio_played` sobre una entrada es su reloj de captura.
+
+**Sin contrapresión, a propósito.** En la salida el programa espera al dispositivo; en la
+entrada el dispositivo no espera a nadie. La cola guarda 1 s y lo que no cabe se descarta por
+frames enteros (contado, visible con `RAY_AUDIO_TRACE`): un programa lento pierde audio, pero
+nunca lo recibe con retraso creciente ni desalineado. Una escritura parcial deja el resto de su
+frame pendiente para la siguiente, que es lo que mantiene la alineación.
+
+**Backends.** AudioQueue de entrada en macOS e iOS (el callback escribe directo en el socket no
+bloqueante; un hilo vigilante desmonta la cola cuando el programa cierra, porque no se puede
+desde el callback). En iOS la sesión debe permitir grabar: `[ios] audio_session =
+"play_and_record"`, que además añade `NSMicrophoneUsageDescription`. Linux (ALSA), Android
+(AAudio) y Windows (WASAPI) devuelven `Err` hasta su PR — decisión del usuario: primero lo que se
+puede grabar de verdad aquí. `RAY_AUDIO_SOURCE=null|tone` es la fuente de pruebas, en cualquier
+unix.
+
+**`recorded_ms`** cuenta lo que el dispositivo entregó, se haya leído o no: es el reloj con el
+que un DAW alinea la toma con el `played_ms` de lo que sonaba.
+
+Pendiente del hallazgo: elegir dispositivo (#424) y la latencia baja de un AudioUnit HAL.

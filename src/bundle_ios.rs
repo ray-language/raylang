@@ -987,7 +987,8 @@ pub struct ShellOptions {
     pub background_audio: bool,
     /// M447 (pepa #334): el catálogo trae el color `LaunchBackground` (`[ios] background`).
     pub launch_color: bool,
-    /// M447 (pepa #336): `[ios] audio_session` — `"playback"` o `"playback_mix"` (MixWithOthers).
+    /// M447 (pepa #336): `[ios] audio_session` — `"playback"` o `"playback_mix"` (MixWithOthers);
+    /// M463: `"play_and_record"`, la que permite grabar.
     pub audio_session: Option<String>,
     /// M447 (pepa #331): archivos de `[ios] sounds`, copiados a `Shell/` y a la fase Resources.
     pub sounds: Vec<std::path::PathBuf>,
@@ -1240,11 +1241,18 @@ pub fn write_project(
     // M447 (pepa #336): `[ios] audio_session = "playback_mix"` añade MixWithOthers — abrir la app no
     // corta la música de otra; `"playback"` (o `background_audio` a secas) la interrumpe, como un
     // reproductor. Sin ninguna, la sesión queda en la categoría por defecto (ambient, silencio).
+    // M463 (ray-daw #422): `"play_and_record"` es la categoría que deja grabar; suena por el
+    // altavoz (no por el auricular) y acepta un micrófono Bluetooth.
     let mix = audio_session.as_deref() == Some("playback_mix");
+    let record = audio_session.as_deref() == Some("play_and_record");
     let (audio_import, audio_session) = if background_audio || audio_session.is_some() {
         (
             "#import <AVFoundation/AVFoundation.h>",
-            if mix {
+            if record {
+                "AVAudioSession *session = [AVAudioSession sharedInstance]; // [ios] audio_session = play_and_record\n    \
+                 [session setCategory:AVAudioSessionCategoryPlayAndRecord withOptions:(AVAudioSessionCategoryOptionDefaultToSpeaker | AVAudioSessionCategoryOptionAllowBluetooth) error:nil];\n    \
+                 [session setActive:YES error:nil];"
+            } else if mix {
                 "AVAudioSession *session = [AVAudioSession sharedInstance]; // [ios] audio_session = playback_mix\n    \
                  [session setCategory:AVAudioSessionCategoryPlayback withOptions:AVAudioSessionCategoryOptionMixWithOthers error:nil];\n    \
                  [session setActive:YES error:nil];"
@@ -1444,6 +1452,19 @@ mod tests {
         let opts = ShellOptions { icon: true, ..Default::default() };
         assert!(xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), &opts).contains("ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon\n"));
         assert!(!xcconfig("Demo", "org.raylang.demo", "1.0.0", &Signing::default(), &ShellOptions::default()).contains("ASSETCATALOG"));
+    }
+
+    /// M463: `audio_session = "play_and_record"` pone la categoría que permite grabar.
+    #[test]
+    fn the_record_session_sets_play_and_record() {
+        let d = std::env::temp_dir().join(format!("ray_ios_record_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let opts = ShellOptions { audio_session: Some("play_and_record".to_string()), ..Default::default() };
+        write_project(&d, "Rec", "org.example.rec", "1.0.0", &Signing::default(), opts, &[]).unwrap();
+        let app = std::fs::read_to_string(d.join("Shell/AppDelegate.m")).unwrap();
+        assert!(app.contains("setCategory:AVAudioSessionCategoryPlayAndRecord"), "{app}");
+        assert!(app.contains("#import <AVFoundation/AVFoundation.h>"));
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     /// M447 (pepa #334/#336/#331): color de arranque en el plist y la escena, webview transparente

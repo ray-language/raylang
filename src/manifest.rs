@@ -456,8 +456,9 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 // M447 (pepa #336): la categoría de la sesión de audio.
                 "audio_session" => {
                     let v = as_string()?;
-                    if v != "playback" && v != "playback_mix" {
-                        return Err(err(num, "audio_session must be \"playback\" or \"playback_mix\""));
+                    // M463: `play_and_record` — la que permite GRABAR (`audio.open_input`).
+                    if v != "playback" && v != "playback_mix" && v != "play_and_record" {
+                        return Err(err(num, "audio_session must be \"playback\", \"playback_mix\" or \"play_and_record\""));
                     }
                     ios_audio_session = Some(v);
                 }

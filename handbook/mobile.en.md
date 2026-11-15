@@ -541,7 +541,7 @@ And what is declared in `ray.toml`:
 | `[ios] privacy_manifest` | your own `PrivacyInfo.xcprivacy`, instead of the one the shell generates (an app that collects data provides its own) |
 | `[ios] development_team` | the development team, to install on a real iPhone |
 | `[ios] background_audio` | audio keeps playing with the app in the background (`playback` session: opening the app stops other apps' music) |
-| `[ios] audio_session` | `"playback"` or `"playback_mix"` (the app sounds with the silent switch on WITHOUT stopping other apps' music), without the background mode |
+| `[ios] audio_session` | `"playback"`, `"playback_mix"` (the app sounds with the silent switch on WITHOUT stopping other apps' music) or `"play_and_record"` (allows recording with `audio.open_input` and adds the microphone permission text), without the background mode |
 | `[ios] background` / `background_dark` | the color (`#rrggbb`) of the launch screen and of the view under the page: no white flash; `background_dark` for dark mode |
 | `[ios] sounds` | files (caf/aiff/wav, ≤ 30 s) copied into the bundle for `std/notify`'s `Notification.sound_name` |
 | `[android] application_id` | an application id different from `[app] id` |
@@ -568,5 +568,5 @@ And what is declared in `ray.toml`:
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:53931c469231 -->
-<!-- sync: sha256:53931c469231 -->
+<!-- sync: sha256:a7075c6c1a46 -->
+<!-- sync: sha256:a7075c6c1a46 -->

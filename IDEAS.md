@@ -4728,3 +4728,26 @@ cerraron #356. Lo que NO entró, por acotar el arco a lo que raysolve necesitaba
 
 Ninguno bloquea código existente: todos son rechazos del checker con mensaje, salvo el 5 (error
 de `rustc` en el build nativo).
+
+## 125. Entrada de audio y MIDI (ray-daw #422, #423) — fase 1 ✅ EJECUTADA como M463 (DESIGN §441); MIDI y el resto de plataformas, pendientes
+
+Decisiones del usuario (15 nov 2026): **macOS + iOS primero** para la entrada de audio, y
+**`std/midi` en el núcleo** (CoreMIDI a mano en `ray-runtime`, como el audio: cero crates), también
+macOS + iOS primero. La API se define para todas las plataformas; donde no hay backend,
+`open_input` da `Err`.
+
+Fases:
+
+1. **Entrada de audio en macOS/iOS** — M463, hecha. `audio.open_input` / `read` / `recorded_ms`.
+2. **`std/midi` en macOS/iOS** — CoreMIDI: listar puertos, abrir una entrada y leer mensajes con
+   marca de tiempo aparcando la fibra, abrir una salida y enviar, y el aviso de conexión o
+   desconexión. Se prueba sin hardware con puertos virtuales.
+3. **Entrada de audio en Linux (ALSA), Android (AAudio) y Windows (WASAPI)**. Cada una en su PR;
+   Linux y Windows necesitan un dispositivo de entrada en la VM para probarse de verdad.
+4. **MIDI en Linux (ALSA seq), Windows (WinMM) y Android (AMidi)**.
+5. **Elegir dispositivo y latencia baja** (#424): `audio.devices()`, `open_device`, y un camino
+   AudioUnit HAL para bajar de los ~50 ms de AudioQueue. Es lo que un DAW necesita para tocar en
+   directo; no bloquea grabar.
+
+**Impacto**: todo aditivo. **Riesgo**: los backends de las fases 3 y 4 no se pueden grabar ni
+tocar de verdad en este equipo; se escribirían contra la fuente de pruebas.

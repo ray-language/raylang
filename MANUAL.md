@@ -1636,6 +1636,31 @@ en silencio — para tests y CI sin tarjeta de sonido. En el binario nativo, `--
 excluye. La música reactiva de un juego es el caso de diseño: cada iteración del bucle sintetiza
 lo que toca según el estado, y el dispositivo marca el compás.
 
+**Grabar** es el espejo: `open_input` abre el micrófono (o la interfaz de audio por defecto) y
+`read` devuelve lo capturado, aparcando la fibra hasta que haya datos — el bucle de grabación
+tampoco necesita reloj:
+
+```rust
+import std/audio;
+import std/collections/bytesbuilder;
+
+let mic = audio.open_input(48000, 1, "s16le", 0)?;   // mono, s16le, bloques por defecto
+let take = bytesbuilder.new();
+while (recording) {
+    let block = audio.read(mic)?;     // frames enteros; aparca hasta que llegan
+    take.push(block);
+}
+let _ = close(mic);                   // para la captura
+```
+
+El dispositivo captura a su ritmo, lo leas o no: lo que no se lee en cosa de un segundo se
+descarta (por frames enteros, sin desalinear el flujo). `audio.recorded_ms(mic)` es el reloj de
+captura; junto con el `played_ms` de una salida sirve para alinear una toma con lo que sonaba.
+Hoy funciona en macOS y en iOS (con `[ios] audio_session = "play_and_record"`); en el resto,
+`open_input` da `Err`. La primera vez el sistema pide permiso de micrófono, y sin él la entrada
+entrega silencio. Para tests, `RAY_AUDIO_SOURCE=tone` (un La de 440 Hz) o `=null` (silencio)
+sustituyen al dispositivo.
+
 ### Assets del proyecto (`std/embed`)
 
 Los archivos que tu programa necesita llevar consigo (css, imágenes, fuentes, el `dist` de un

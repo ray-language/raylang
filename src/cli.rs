@@ -2814,6 +2814,10 @@ fn cmd_bundle(args: &[String]) {
             .and_then(|m| m.ios_background.as_deref().map(|l| (l.to_string(), m.ios_background_dark.clone())))
             .is_some_and(|(l, d)| write_ios_launch_color(&proj, &l, d.as_deref()));
         let audio_session = manifest.as_ref().and_then(|m| m.ios_audio_session.clone());
+        // M463: grabar exige la clave de uso del micrófono (una del usuario en `[app.plist]` manda).
+        if audio_session.as_deref() == Some("play_and_record") && !ios_plist.iter().any(|(k, _)| k == "NSMicrophoneUsageDescription") {
+            ios_plist.push(("NSMicrophoneUsageDescription".to_string(), crate::manifest::PlistValue::Str(format!("{name} records audio from the microphone."))));
+        }
         let sounds = resolve_sound_files(manifest.as_ref().map(|m| (&m.root, m.ios_sounds.as_slice())), "[ios] sounds");
         // M448b (IDEAS §122): std/alarm → RayAlarm.swift (AlarmKit) en el target, y la clave de uso que
         // AlarmKit exige para pedir el permiso (una del usuario en `[app.plist]` manda).

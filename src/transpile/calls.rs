@@ -3305,6 +3305,14 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // M463: la lectura de una ENTRADA es la de un pipe (`Pipe`): el lector de procesos.
+            "audio_read" if name.starts_with("__") && !self.exclude.contains("audio") => {
+                self.needs_rt_audio = true;
+                self.needs_rt_process = true;
+                out.push_str("__ray_proc_read(");
+                self.emit_expr(out, eff[0])?;
+                out.push(')');
+            }
             "audio_drain" if name.starts_with("__") && !self.exclude.contains("audio") => {
                 self.needs_rt_audio = true;
                 self.needs_rt_process = true;

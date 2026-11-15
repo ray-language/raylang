@@ -324,6 +324,9 @@ pub enum OpCode {
     BigIntOp,
     /// M446: `__charset_op(op, label, data)` → `[bytes]` (`["ok", r]` / `["err", msg]`). Solo VM.
     CharsetOp,
+    /// M464: `__midi_op(op, name, id)` → `[bytes]` (`["ok", r]` / `["err", msg]`): los puertos
+    /// MIDI del sistema (`std/midi`). Las aperturas registran un handle y devuelven su número.
+    MidiOp,
     /// M253: `__deflate_op(op, data, n)` → `[bytes]` (`[r]` / `[]` = no disponible). Solo VM.
     DeflateOp,
     /// M347 (rayauth R23): `__qr_matrix(text, ecl)` → `[string]` (filas de '1'/'0'; vacío si no cabe).

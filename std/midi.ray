@@ -1,0 +1,144 @@
+//! MIDI ports of the system: list them, read messages from an input and send to an output.
+//!
+//! ```rust
+//! import std/midi;
+//!
+//! for p in midi.inputs() { print("${p.id}  ${p.name}"); }
+//! let keys = midi.open_input(midi.inputs()[0].id)?;
+//! let msg = midi.read(keys)?;            // parks the fiber until a message arrives
+//! print("${msg.timestamp_ns}: ${msg.data}");
+//! ```
+//!
+//! Available on macOS and iOS (CoreMIDI); other platforms return `Err`.
+
+// std/midi (M464, ray-daw #423) — sobre el primitivo `__midi_op` del runtime (CoreMIDI a mano en
+// `ray_runtime::midi`). Una entrada es un pipe de lectura donde cada lectura es UN mensaje
+// (`[marca de tiempo ns: 8 LE][octetos MIDI]`); una salida es un pipe de escritura que recibe
+// tramas `[longitud u16 LE][octetos]`. Por eso `read` aparca la fibra y `close(h)` cierra
+// cualquiera de los dos, sin opcodes propios.
+
+/// A MIDI port of the system. `id` is stable while the device stays connected (and usually
+/// across reconnections); pass it to `open_input` / `open_output`.
+pub struct Port {
+    id: int,
+    name: string,
+}
+
+/// A MIDI message as it arrived: the raw bytes (status byte first, e.g. `0x90 60 100` for a
+/// note-on) and when the system received it, in nanoseconds of a monotonic clock — compare it
+/// between messages, not with the wall clock. A long SysEx may arrive split in several messages.
+pub struct Message {
+    timestamp_ns: int,
+    data: bytes,
+}
+
+fn op(name: string, port_name: string, id: int) -> Result<bytes, string> {
+    let r = __midi_op(name, port_name, id);
+    if (r[0] == b"ok") {
+        Result.Ok(r[1])
+    } else {
+        Result.Err(from_utf8(r[1]).unwrap_or("midi: failed"))
+    }
+}
+
+fn ports(listing: Result<bytes, string>) -> [Port] {
+    var out: [Port] = [];
+    let text = match (listing) {
+        Result.Ok(b) => from_utf8(b).unwrap_or(""),
+        Result.Err(_) => "",
+    };
+    for line in text.split(
+        "\n"
+    ) {
+        match (line.index_of("\t")) {
+            Option.Some(tab) => match (parse_int(line.substring(0, tab))) {
+                Option.Some(id) => out.push(Port { id: id, name: line.substring(tab + 1, line.len()) }),
+                Option.None => { },
+            },
+            Option.None => { },
+        }
+    }
+    out
+}
+
+fn handle(r: Result<bytes, string>) -> Result<int, string> {
+    match (parse_int(from_utf8(r?).unwrap_or(""))) {
+        Option.Some(h) => Result.Ok(h),
+        Option.None => Result.Err("midi: invalid handle"),
+    }
+}
+
+/// The input ports present right now: keyboards, controllers and the virtual outputs of other
+/// programs. Empty where MIDI is not supported.
+pub fn inputs() -> [Port] { ports(op("inputs", "", 0)) }
+
+/// The output ports present right now: synthesizers, interfaces and the virtual inputs of other
+/// programs. Empty where MIDI is not supported.
+pub fn outputs() -> [Port] { ports(op("outputs", "", 0)) }
+
+/// Opens the input port `id` (from `inputs()`). Returns a handle for `read`; `close(h)` releases it.
+pub fn open_input(id: int) -> Result<int, string> { handle(op("open_input", "", id)) }
+
+/// Creates a virtual input named `name`: other programs see it as a MIDI destination, and what
+/// they send to it is read with `read`. `close(h)` removes it.
+pub fn create_input(name: string) -> Result<int, string> { handle(op("create_input", name, 0)) }
+
+/// Opens the output port `id` (from `outputs()`). Returns a handle for `send`; `close(h)` releases it.
+pub fn open_output(id: int) -> Result<int, string> { handle(op("open_output", "", id)) }
+
+/// Creates a virtual output named `name`: other programs see it as a MIDI source and receive
+/// what is sent with `send`. `close(h)` removes it.
+pub fn create_output(name: string) -> Result<int, string> { handle(op("create_output", name, 0)) }
+
+/// Reads the next message of the input `h`. Parks the fiber until one arrives, so a loop over
+/// `read` needs no polling. Messages that are not read pile up to a limit and then are dropped.
+pub fn read(h: int) -> Result<Message, string> {
+    // Un datagrama de menos de 8 octetos no es un mensaje (es el sondeo con el que el runtime
+    // comprueba que la entrada sigue abierta): se descarta y se espera al siguiente.
+    while (true) {
+        let r = __midi_read(h);
+        if (r[0] != b"ok") {
+            return Result.Err(from_utf8(r[1]).unwrap_or("midi: read failed"));
+        }
+        let raw = r[1];
+        if (raw.len() >= 8) {
+            var ns = 0;
+            var i = 7;
+            while (i >= 0) {
+                ns = ns << 8 | raw[i];
+                i = i - 1;
+            }
+            return Result.Ok(Message { timestamp_ns: ns, data: raw.sub_bytes(8, raw.len()) });
+        }
+    }
+    Result.Err("midi: read failed")
+}
+
+/// Sends the raw MIDI bytes `data` (one or more complete messages, up to 65535 bytes) to the
+/// output `h`, now.
+pub fn send(h: int, data: bytes) -> Result<int, string> {
+    if (data.len() > 65535) {
+        return Result.Err("midi: a message of ${data.len()} bytes is too long (65535 at most)");
+    }
+    let frame = bytes_of([data.len() & 255, data.len() >> 8]) + data;
+    let r = __midi_write(h, frame);
+    if (r[0] == "ok") {
+        Result.Ok(data.len())
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// Starts watching the set of ports. Returns a handle for `next_change`; `close(h)` stops it.
+pub fn watch() -> Result<int, string> { handle(op("watch", "", 0)) }
+
+/// Parks the fiber until a device is connected or disconnected; then call `inputs()` /
+/// `outputs()` again.
+pub fn next_change(h: int) -> Result<int, string> {
+    let r = __midi_read(h);
+    if (r[0] == b"ok") {
+        Result.Ok(0)
+    } else {
+        Result.Err(from_utf8(r[1]).unwrap_or("midi: watch failed"))
+    }
+}

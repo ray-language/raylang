@@ -1194,7 +1194,7 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    `kv` `keychain` `crypto` (+ `crypto/{md5,aes,des}`) `resilience` `net` `json` `hex` `base64`
    `url` `regex` `csv` `toml` `template` `markdown` `inflate` `deflate` `zip` `huffman` `protobuf`
    `uuid` `collections/{set,deque,stringbuilder,bytesbuilder,dict}` `image` `audio` `media` `ui` `embed`
-   `update` `ffi` `pem` `xml` `qr` `charset` `binary` `locale`
+   `update` `ffi` `pem` `xml` `qr` `charset` `binary` `locale` `midi`
    (firmas en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca-estándar-std)).
 
    Una app de escritorio (`std/ui`) habla con el sistema sin rodeos: `platform()` en la
@@ -1660,6 +1660,39 @@ Hoy funciona en macOS y en iOS (con `[ios] audio_session = "play_and_record"`); 
 `open_input` da `Err`. La primera vez el sistema pide permiso de micrófono, y sin él la entrada
 entrega silencio. Para tests, `RAY_AUDIO_SOURCE=tone` (un La de 440 Hz) o `=null` (silencio)
 sustituyen al dispositivo.
+
+### MIDI (`std/midi`)
+
+Un teclado, un controlador o un sintetizador conectados al equipo son puertos MIDI: `inputs()` y
+`outputs()` los listan, y cada uno se abre por su `id`. Leer aparca la fibra hasta que llega un
+mensaje, así que un bucle sobre `read` no sondea nada:
+
+```rust
+import std/midi;
+
+for p in midi.inputs() { print("${p.id}  ${p.name}"); }
+
+let keys = midi.open_input(midi.inputs()[0].id)?;
+while (true) {
+    let msg = midi.read(keys)?;               // aparca hasta el siguiente mensaje
+    if (msg.data[0] & 0xf0 == 0x90 && msg.data[2] > 0) {
+        print("nota ${msg.data[1]} a los ${msg.timestamp_ns / 1000000} ms");
+    }
+}
+```
+
+`msg.data` son los octetos MIDI tal cual (el de estado primero) y `msg.timestamp_ns` es cuándo
+los recibió el sistema, en un reloj monótono: sirve para medir el tiempo entre notas, no para
+compararlo con la hora. Enviar es `midi.send(out, b"\x90\x3c\x64")` sobre un `open_output`.
+
+Un programa también puede **ofrecer** puertos: `midi.create_output("Mi secuenciador")` aparece
+en los demás programas como una fuente MIDI, y `midi.create_input("Mi sinte")` como un destino.
+Para enterarse de que se enchufó o se quitó un dispositivo, `midi.watch()` y
+`midi.next_change(h)`, que aparca hasta que cambia la lista. `close(h)` cierra cualquiera de
+estos handles.
+
+Funciona en macOS y en iOS; en el resto de sistemas las listas salen vacías y abrir un puerto
+da `Err`.
 
 ### Assets del proyecto (`std/embed`)
 

@@ -2827,6 +2827,44 @@ pub fn bigint_op(_name: &str, _a: &[u8], _b: &[u8], _c: &[u8]) -> Result<Vec<u8>
     Err("bigint is not available in this build (feature 'bigint')".to_string())
 }
 
+/// M464 (ray-daw #423): la primitiva de `std/midi` (ver `ray_runtime::midi`).
+///   - `inputs` / `outputs` → una línea `id\tnombre` por puerto.
+///   - `open_input` / `create_input` / `watch` → abren un extremo de LECTURA y lo registran como
+///     `Pipe`; devuelven el número de handle (`__midi_read` aparca la fibra; `close(h)` lo suelta).
+///   - `open_output` / `create_output` → un extremo de ESCRITURA, registrado como `PipeW`.
+#[cfg(all(feature = "audio", any(unix, windows), not(target_arch = "wasm32")))]
+pub fn midi_op(op: &str, name: &str, id: i64) -> Result<Vec<u8>, String> {
+    use ray_runtime::midi;
+    let listing = |ports: Vec<midi::Port>| -> Vec<u8> {
+        ports.into_iter().map(|(id, name)| format!("{id}\t{}\n", name.replace(['\t', '\n'], " "))).collect::<String>().into_bytes()
+    };
+    let register = |handle: OpenHandle| -> Vec<u8> {
+        let mut reg = registry().lock().unwrap();
+        let id = reg.next;
+        reg.next += 1;
+        reg.open.insert(id, handle);
+        id.to_string().into_bytes()
+    };
+    match op {
+        "inputs" => midi::list(true).map(listing),
+        "outputs" => midi::list(false).map(listing),
+        "open_input" => midi::open_input(id).map(|f| register(OpenHandle::Pipe(f))),
+        "create_input" => midi::create_input(name).map(|f| register(OpenHandle::Pipe(f))),
+        "watch" => midi::watch().map(|f| register(OpenHandle::Pipe(f))),
+        "open_output" => midi::open_output(id).map(|f| register(OpenHandle::PipeW(f))),
+        "create_output" => midi::create_output(name).map(|f| register(OpenHandle::PipeW(f))),
+        other => Err(format!("midi: unknown operation '{other}'")),
+    }
+}
+#[cfg(any(not(all(feature = "audio", any(unix, windows))), target_arch = "wasm32"))]
+pub fn midi_op(_op: &str, _name: &str, _id: i64) -> Result<Vec<u8>, String> {
+    Err(if cfg!(target_arch = "wasm32") {
+        "midi is not available in the web playground (wasm)".to_string()
+    } else {
+        "this binary was built without audio support, which includes MIDI (rebuild with the 'audio' feature)".to_string()
+    })
+}
+
 /// M446: la primitiva de `std/charset` (ver ray_runtime::charset): decode/encode/labels con las
 /// tablas WHATWG. Sin la feature (slim/wasm), `Err` claro.
 #[cfg(all(feature = "charset", not(target_arch = "wasm32")))]
@@ -4740,6 +4778,29 @@ static BUILTINS: &[Builtin] = &[
         if a[1] != Type::String { return Err((Some(1), format!("__charset_op expects a string (the charset label), not {}", a[1]))); }
         if a[2] != Type::Bytes { return Err((Some(2), format!("__charset_op expects bytes, not {}", a[2]))); }
         Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // M464 (ray-daw #423): __midi_op(op, name, id) -> [bytes]: ["ok", resultado] | ["err", mensaje].
+    // Primitivo interno de std/midi: listar puertos y abrir entradas, salidas y el aviso de cambios.
+    Builtin { name: "__midi_op", opcode: OpCode::MidiOp, check: |a| {
+        arity(a, 3, "__midi_op", " (op, name, id)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__midi_op expects a string (the operation), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__midi_op expects a string (the port name), not {}", a[1]))); }
+        if a[2] != Type::Int { return Err((Some(2), format!("__midi_op expects an int (the port id), not {}", a[2]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    // __midi_read(h) -> [bytes] / __midi_write(h, frame) -> [string] (M464): los alias de
+    // `__proc_read` / `__audio_write` para los handles de std/midi (mismos opcodes; nombre propio
+    // para que el nativo los emita con el runtime de audio).
+    Builtin { name: "__midi_read", opcode: OpCode::SocketReadBytes, check: |a| {
+        arity(a, 1, "__midi_read", "")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__midi_read expects an int (the input handle), not {}", a[0]))); }
+        Ok(Type::Array(Box::new(Type::Bytes)))
+    } },
+    Builtin { name: "__midi_write", opcode: OpCode::SocketWriteBytes, check: |a| {
+        arity(a, 2, "__midi_write", " (handle, frame)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__midi_write expects an int (the output handle), not {}", a[0]))); }
+        if a[1] != Type::Bytes { return Err((Some(1), format!("__midi_write expects bytes (the frame), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
     } },
     // M347 (rayauth R1): __pk_op(op, a, b, c) -> [bytes]: ["ok", resultado] | ["err", mensaje]. Clave
     // pública (ECDSA P-256, RSA PKCS#1 v1.5/PSS) sobre ring; std/crypto lo envuelve en `p256_*`/`rsa_*`.

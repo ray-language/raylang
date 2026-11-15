@@ -1061,7 +1061,7 @@ fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing, opts:
          // (dispositivo y simulador son ambos arm64 — jamás un lipo).\n\
          LIBRARY_SEARCH_PATHS[sdk=iphoneos*] = $(PROJECT_DIR)/libs\n\
          LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*] = $(PROJECT_DIR)/libs-sim\n\
-         OTHER_LDFLAGS = -lray_app -framework WebKit -framework AudioToolbox -framework MediaPlayer -framework UserNotifications{avf} -lobjc\n\
+         OTHER_LDFLAGS = -lray_app -framework WebKit -framework AudioToolbox -framework CoreMIDI -framework MediaPlayer -framework UserNotifications{avf} -lobjc\n\
          {sign}"
     )
 }

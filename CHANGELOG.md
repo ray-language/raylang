@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/midi`** (macOS e iOS): `midi.inputs()` y `midi.outputs()` listan los puertos,
+  `midi.open_input(id)` + `midi.read(h)` leen mensajes con su marca de tiempo aparcando la fibra,
+  y `midi.open_output(id)` + `midi.send(h, bytes)` envían. Un programa puede ofrecer puertos
+  virtuales (`create_input`, `create_output`) y enterarse de que se conectó o desconectó un
+  dispositivo (`watch`, `next_change`). En Linux, Windows y Android aún no hay backend.
+
 - **`std/audio` graba** (macOS e iOS): `audio.open_input(rate, channels, format, latency_ms)`
   abre el micrófono o la interfaz de audio por defecto, `audio.read(h)` devuelve lo capturado
   aparcando la fibra hasta que haya datos, y `audio.recorded_ms(h)` es el reloj de captura, para

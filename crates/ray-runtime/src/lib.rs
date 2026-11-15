@@ -14,6 +14,7 @@ pub mod bigint;
 pub mod charset;
 pub mod keychain;
 pub mod md5;
+pub mod midi;
 pub mod float_fmt;
 pub mod locale;
 pub mod media;

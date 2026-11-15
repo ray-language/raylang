@@ -135,7 +135,7 @@ Reserved (cannot be used as identifiers):
 | `unit` | "no useful value" (return of `print`, etc.). The VALUE is written `{ }` (the empty block): `Result.Ok({ })` in a `-> Result<unit, string>` function; `()` is not an expression ("expected an expression, found RParen") |
 | `[T]` | dynamic array, **reference** semantics |
 | `(A, B, …)` | tuple (immutable aggregate, copied as a value; `t.0 = x` is an error) |
-| `Map<K, V>` | key→value table; *hashable* keys: int/u\*/string/char/bool/bytes (**not** float); traversed in key order (deterministic) |
+| `Map<K, V>` | key→value table; *hashable* keys: int/string/char/bool/bytes (**not** float or `u*`); in generic code the parameter carries the `MapKey` bound (`fn count<P: MapKey>(xs: [P])`), a marker trait with no methods that cannot be implemented by hand; traversed in key order (deterministic) |
 | `fn(A, B) -> R` | function type (functions and closures are first-class values) |
 | `Option<T>` / `Result<T, E>` | from the prelude; absence and error as values (there is no `null` and no exceptions) |
 | `Channel<T>` / `Task<T>` | concurrency (SPEC §9) |
@@ -795,4 +795,4 @@ orientations) **replaces** it; the rest are added.
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:630c765c7e91 -->
+<!-- sync: sha256:8e5275d1aed0 -->

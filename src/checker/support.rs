@@ -19,6 +19,9 @@ pub(super) fn is_hashable_key(t: &Type) -> bool {
     matches!(t, Type::Int | Type::String | Type::Char | Type::Bool | Type::Bytes | Type::Var(_))
 }
 
+/// El nombre del trait marcador de las claves de `Map` (#356), declarado en el prelude.
+pub(super) const MAP_KEY_TRAIT: &str = "MapKey";
+
 /// ¿Es `e` un valor válido para una constante (M27.5)? Un literal, o un literal numérico negado (`-5`).
 pub(super) fn is_const_literal(e: &Expr, known: &HashMap<String, Type>) -> bool {
     match &e.kind {

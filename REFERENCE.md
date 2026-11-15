@@ -136,7 +136,7 @@ Reservadas (no pueden usarse como identificadores):
 | `unit` | "sin valor útil" (retorno de `print`, etc.). El VALOR se escribe `{ }` (el bloque vacío): `Result.Ok({ })` en una función `-> Result<unit, string>`; `()` no es una expresión («expected an expression, found RParen») |
 | `[T]` | arreglo dinámico, semántica de **referencia** |
 | `(A, B, …)` | tupla (agregado inmutable, se copia como valor; `t.0 = x` es error) |
-| `Map<K, V>` | tabla clave→valor; claves *hashables*: int/u\*/string/char/bool/bytes (**no** float); recorridos en orden de clave (determinista) |
+| `Map<K, V>` | tabla clave→valor; claves *hashables*: int/string/char/bool/bytes (**no** float ni `u*`); en código genérico el parámetro lleva el bound `MapKey` (`fn count<P: MapKey>(xs: [P])`), un trait marcador sin métodos que no se implementa a mano; recorridos en orden de clave (determinista) |
 | `fn(A, B) -> R` | tipo función (funciones y closures son valores de primera clase) |
 | `Option<T>` / `Result<T, E>` | del prelude; la ausencia y el error como valores (no hay `null` ni excepciones) |
 | `Channel<T>` / `Task<T>` | concurrencia (§9 de la SPEC) |

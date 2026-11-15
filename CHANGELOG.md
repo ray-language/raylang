@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Un `Map` con clave genérica funciona en los tres motores, y lo que no es clave es un error
+  de tipos**: `fn count<P: MapKey>(xs: [P])` declara que `P` sirve de clave con el bound nuevo
+  `MapKey` (lo cumplen `int`, `string`, `char`, `bool` y `bytes`). Antes `Map<P, V>` se aceptaba
+  con cualquier `P`: el binario nativo no compilaba ni con un `int`, y la VM terminaba con un
+  error interno al usar un struct. **Cambio que puede romper**: un `Map<P, V>` genérico sin el
+  bound deja de compilar; el error dice qué añadir.
+
 ## 1.27.99 — 2026-11-14
 
 - **`ray fmt` ya no borra código tras una cadena interpolada**: `"id-${n}".to_upper() + "!"`

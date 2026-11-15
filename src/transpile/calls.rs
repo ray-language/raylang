@@ -490,7 +490,7 @@ impl Transpiler {
         let saved = std::mem::take(&mut self.tparams);
         for s in &prog.structs {
             self.tparams = s.type_params.iter().cloned().collect();
-            let gens = generic_bound(&s.type_params, GENERIC_BOUND);
+            let gens = generic_decl(&s.type_params, &s.bounds);
             let rty = format!("Rc<std::cell::RefCell<{}{}>>", mangle(&s.name), type_args(&s.type_params));
             let body = (|| -> Result<String, String> {
                 // Un `dyn Trait` (struct sintético `__dyn_T`: closures que capturan el valor; sin
@@ -523,7 +523,7 @@ impl Transpiler {
                 continue;
             }
             self.tparams = e.type_params.iter().cloned().collect();
-            let gens = generic_bound(&e.type_params, GENERIC_BOUND);
+            let gens = generic_decl(&e.type_params, &e.bounds);
             let ename = mangle(&e.name);
             let rty = format!("{}<{}{}>", enum_box(&ename), ename, type_args(&e.type_params));
             // Mismo orden de variantes (por nombre) que los conversores numerados: to y from cuadran.

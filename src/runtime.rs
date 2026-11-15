@@ -99,18 +99,99 @@ pub enum MapKey {
     Char(char),
     Bool(bool),
     Bytes(Vec<u8>), // M16 (diferido): secuencia de octetos como clave (Hash/Eq/Ord fiables)
+    /// M461 (#356): un struct o una variante de enum con `@derive(Eq, Hash)` cuyos campos son a
+    /// su vez claves. Es una COPIA del valor tomada al usarlo como clave: mutar después el
+    /// struct original no cambia la clave. Boxeado para no agrandar `MapKey`.
+    Composite(Box<CompositeKey>),
+}
+
+/// Una clave compuesta: la posición de la variante en su enum (0 en un struct), los campos en
+/// orden de declaración y la forma del tipo. Igualdad, hash y orden son ESTRUCTURALES y solo
+/// miran `rank` y `fields` — lo mismo que un `derive(PartialEq, Eq, Hash, PartialOrd, Ord)` de
+/// Rust sobre el tipo, que es lo que emite el backend nativo. En un mapa todas las claves son
+/// del mismo tipo, así que la forma no distingue nada.
+#[derive(Debug, Clone)]
+pub struct CompositeKey {
+    pub rank: u32,
+    pub fields: Vec<MapKey>,
+    pub shape: std::sync::Arc<KeyShape>,
+}
+
+/// Lo necesario para RECONSTRUIR el valor desde la clave (`keys()`, el `for` sobre el mapa,
+/// `print`): los nombres para el intérprete y para mostrarla, y los índices de la VM.
+#[derive(Debug)]
+pub struct KeyShape {
+    pub type_name: String,
+    /// `Some(variante)` si es un enum.
+    pub variant: Option<String>,
+    /// Nombres de campo de un struct (vacío en un enum: su payload es posicional).
+    pub field_names: Vec<String>,
+    /// VM: índice del struct en `CompiledProgram.structs`, o el `enum_id`. El intérprete no lo usa.
+    pub vm_type: u32,
+}
+
+impl PartialEq for CompositeKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.rank == other.rank && self.fields == other.fields
+    }
+}
+
+impl Eq for CompositeKey {}
+
+impl std::hash::Hash for CompositeKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.rank.hash(state);
+        self.fields.hash(state);
+    }
+}
+
+impl PartialOrd for CompositeKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for CompositeKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.rank.cmp(&other.rank).then_with(|| self.fields.cmp(&other.fields))
+    }
 }
 
 impl MapKey {
-    /// Convierte un valor del intérprete en una clave (el checker garantiza el tipo).
-    pub fn from_value(v: &Value) -> MapKey {
+    /// Convierte un valor del intérprete en una clave (el checker garantiza el tipo). `rank`
+    /// da la posición de una variante en su enum (`(enum, variante) -> índice`): fija el orden
+    /// de las claves, igual que el tag de la VM.
+    pub fn from_value(v: &Value, rank: &dyn Fn(&str, &str) -> u32) -> MapKey {
         match v {
+            Value::Struct(s) => {
+                let s = s.borrow();
+                MapKey::Composite(Box::new(CompositeKey {
+                    rank: 0,
+                    fields: s.fields.iter().map(|(_, f)| MapKey::from_value(f, rank)).collect(),
+                    shape: std::sync::Arc::new(KeyShape {
+                        type_name: s.name.clone(),
+                        variant: None,
+                        field_names: s.fields.iter().map(|(n, _)| n.clone()).collect(),
+                        vm_type: 0,
+                    }),
+                }))
+            }
+            Value::Enum(e) => MapKey::Composite(Box::new(CompositeKey {
+                rank: rank(&e.enum_name, &e.variant),
+                fields: e.payload.iter().map(|f| MapKey::from_value(f, rank)).collect(),
+                shape: std::sync::Arc::new(KeyShape {
+                    type_name: e.enum_name.clone(),
+                    variant: Some(e.variant.clone()),
+                    field_names: Vec::new(),
+                    vm_type: 0,
+                }),
+            })),
             Value::Int(n) => MapKey::Int(*n),
             Value::Str(s) => MapKey::Str(s.as_str().into()),
             Value::Char(c) => MapKey::Char(*c),
             Value::Bool(b) => MapKey::Bool(*b),
             Value::Bytes(b) => MapKey::Bytes((**b).clone()),
-            _ => unreachable!("the checker guarantees a hashable key (int/string/char/bool/bytes)"),
+            _ => unreachable!("the checker guarantees a Map key"),
         }
     }
 
@@ -122,6 +203,21 @@ impl MapKey {
             MapKey::Char(c) => Value::Char(*c),
             MapKey::Bool(b) => Value::Bool(*b),
             MapKey::Bytes(b) => Value::Bytes(Rc::new(b.clone())),
+            // Un valor NUEVO en cada llamada: quien recibe la clave no comparte nada con el mapa.
+            MapKey::Composite(c) => {
+                let fields = c.fields.iter().map(|f| f.to_value());
+                match &c.shape.variant {
+                    Some(variant) => Value::Enum(Rc::new(EnumInstance {
+                        enum_name: c.shape.type_name.clone(),
+                        variant: variant.clone(),
+                        payload: fields.collect(),
+                    })),
+                    None => Value::Struct(Rc::new(RefCell::new(StructInstance {
+                        name: c.shape.type_name.clone(),
+                        fields: c.shape.field_names.iter().cloned().zip(fields).collect(),
+                    }))),
+                }
+            }
         }
     }
 }

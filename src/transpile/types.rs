@@ -69,7 +69,7 @@ pub(super) fn rust_ty(raw: &Type, enums: &std::collections::HashSet<String>, tpa
         Type::Map(k, v) => {
             return Ok(format!(
                 "Rc<std::cell::RefCell<__RayMap<{}, {}>>>",
-                rust_ty(k, enums, tparams)?,
+                key_rust_ty(k, enums, tparams)?,
                 rust_ty(v, enums, tparams)?
             ))
         }
@@ -292,12 +292,35 @@ pub(super) fn generic_decl(tparams: &[String], bounds: &[(String, String)]) -> S
     format!("<{}>", ps.join(", "))
 }
 
-/// El bound de Rust de UN parámetro de tipo: el común, más lo que el `HashMap` del runtime y
-/// `keys()` (ordenadas) exigen a una clave cuando el parámetro lleva `MapKey` (#356: sin esto
-/// `Map<P, V>` genérico no compilaba, E0599).
+/// ¿La clave de `Map` de tipo `k` se guarda CONVERTIDA (M461)? Sí un tipo de usuario (su
+/// `Rc<RefCell<…>>` mutable no puede ser clave de un `HashMap`: se copia a un `__RayKey`) y un
+/// parámetro de tipo (el código genérico no sabe cuál de los dos casos le tocará). Un
+/// primitivo se guarda tal cual, como siempre.
+pub(super) fn key_is_converted(k: &Type) -> bool {
+    match normalize_type(k) {
+        Type::Var(_) => true,
+        Type::Struct(n, _) | Type::Enum(n, _) => n != "Option" && n != "Result",
+        _ => false,
+    }
+}
+
+/// El tipo Rust de la clave de un `Map<k, _>`: el del propio `k` si es un primitivo, `__RayKey`
+/// si es un tipo de usuario, y el tipo asociado `<P as __RayKeyed>::Key` si es un parámetro.
+pub(super) fn key_rust_ty(k: &Type, enums: &std::collections::HashSet<String>, tparams: &std::collections::HashSet<String>) -> Result<String, String> {
+    match normalize_type(k) {
+        Type::Var(n) => Ok(format!("<{n} as __RayKeyed>::Key")),
+        Type::Struct(n, args) if args.is_empty() && tparams.contains(&n) => Ok(format!("<{n} as __RayKeyed>::Key")),
+        Type::Struct(n, _) | Type::Enum(n, _) if n != "Option" && n != "Result" => Ok("__RayKey".to_string()),
+        other => rust_ty(&other, enums, tparams),
+    }
+}
+
+/// El bound de Rust de UN parámetro de tipo: el común, más `__RayKeyed` (la conversión a clave
+/// de `Map`) cuando el parámetro lleva `MapKey` (#356: sin un bound de clave, `Map<P, V>`
+/// genérico no compilaba, E0599).
 pub(super) fn param_bound(tparam: &str, bounds: &[(String, String)]) -> String {
     if bounds.iter().any(|(p, tr)| p == tparam && tr == "MapKey") {
-        format!("{GENERIC_BOUND} + std::hash::Hash + Eq + Ord")
+        format!("{GENERIC_BOUND} + __RayKeyed")
     } else {
         GENERIC_BOUND.to_string()
     }
@@ -306,16 +329,6 @@ pub(super) fn param_bound(tparam: &str, bounds: &[(String, String)]) -> String {
 /// M313: todo parámetro de tipo lleva también `__RaySendConv` (conversión Send por trait, para que
 /// el código genérico pueda enviar/recibir valores que mencionan `T`).
 pub(super) const GENERIC_BOUND: &str = "Clone + RayShow + 'static + __RaySendConv";
-
-/// `<A: bound, B: bound>` para una lista de params de tipo (o "" si vacía).
-pub(super) fn generic_bound(tparams: &[String], bound: &str) -> String {
-    if tparams.is_empty() {
-        String::new()
-    } else {
-        let ps: Vec<String> = tparams.iter().map(|t| format!("{}: {}", t, bound)).collect();
-        format!("<{}>", ps.join(", "))
-    }
-}
 
 /// Los args de tipo `<A, B>` (sin bounds) para instanciar un tipo genérico (o "" si vacía).
 pub(super) fn type_args(tparams: &[String]) -> String {

@@ -127,10 +127,28 @@ struct Interpreter<'a> {
     /// Funciones externas (M41, FFI): nombre → descriptor de llamada. Una llamada a uno de estos
     /// nombres se despacha a `ffi::call` (a la librería C) en vez de ejecutar un cuerpo raylang.
     externs: HashMap<String, crate::ffi::ExternDesc>,
+    /// M461 (#356): las variantes de cada enum en orden de declaración. La posición de una
+    /// variante ordena las claves compuestas de un `Map`, como el tag de la VM.
+    enum_variants: HashMap<String, Vec<String>>,
 }
 
 impl<'a> Interpreter<'a> {
+    /// La clave de `Map` de un valor: los primitivos tal cual; un struct o enum, copiado.
+    fn key_of(&self, v: &Value) -> MapKey {
+        MapKey::from_value(v, &|enum_name, variant| {
+            self.enum_variants
+                .get(enum_name)
+                .and_then(|vs| vs.iter().position(|n| n == variant))
+                .unwrap_or(0) as u32
+        })
+    }
+
     fn new(program: &'a Program) -> Self {
+        let enum_variants = program
+            .enums
+            .iter()
+            .map(|e| (e.name.clone(), e.variants.iter().map(|v| v.name.clone()).collect()))
+            .collect();
         let mut functions = HashMap::new();
         let mut named_index = HashMap::new();
         for (i, f) in program.functions.iter().enumerate() {
@@ -162,6 +180,7 @@ impl<'a> Interpreter<'a> {
             depth: 0,
             call_stack: Vec::new(),
             externs,
+            enum_variants,
         }
     }
 
@@ -709,7 +728,7 @@ impl<'a> Interpreter<'a> {
                 for (k, v) in pairs {
                     let kv = self.eval_expr(k)?;
                     let vv = self.eval_expr(v)?;
-                    m.insert(MapKey::from_value(&kv), vv);
+                    m.insert(self.key_of(&kv), vv);
                 }
                 Ok(Value::Map(Rc::new(RefCell::new(m))))
             }
@@ -996,7 +1015,7 @@ impl<'a> Interpreter<'a> {
                     // (como `+`), y aquí tenemos la posición del callee. Espejo del opcode `MapAdd`.
                     if name == "add_to" {
                         use std::collections::hash_map::Entry;
-                        let k = MapKey::from_value(&values[1]);
+                        let k = self.key_of(&values[1]);
                         let delta = values[2].clone();
                         match &values[0] {
                             Value::Map(rc) => match rc.borrow_mut().entry(k) {
@@ -1168,20 +1187,20 @@ impl<'a> Interpreter<'a> {
             "__insert" => {
                 match &values[0] {
                     Value::Map(rc) => {
-                        rc.borrow_mut().insert(MapKey::from_value(&values[1]), values[2].clone());
+                        rc.borrow_mut().insert(self.key_of(&values[1]), values[2].clone());
                     }
                     _ => unreachable!("the checker guarantees a Map"),
                 }
                 Value::Unit
             }
             "__contains_key" => match &values[0] {
-                Value::Map(rc) => Value::Bool(rc.borrow().contains_key(&MapKey::from_value(&values[1]))),
+                Value::Map(rc) => Value::Bool(rc.borrow().contains_key(&self.key_of(&values[1]))),
                 _ => unreachable!("the checker guarantees a Map"),
             },
             // Primitivo: [] o [v]; el prelude lo envuelve en Option<V>.
             "__map_get" => match &values[0] {
                 Value::Map(rc) => {
-                    let elems = match rc.borrow().get(&MapKey::from_value(&values[1])) {
+                    let elems = match rc.borrow().get(&self.key_of(&values[1])) {
                         Some(v) => vec![v.clone()],
                         None => vec![],
                     };
@@ -1191,7 +1210,7 @@ impl<'a> Interpreter<'a> {
             },
             // P0.2: get-or-default SIN alocar (a diferencia de __map_get, que aloca [V]).
             "__get_or" => match &values[0] {
-                Value::Map(rc) => match rc.borrow().get(&MapKey::from_value(&values[1])) {
+                Value::Map(rc) => match rc.borrow().get(&self.key_of(&values[1])) {
                     Some(v) => v.clone(),
                     None => values[2].clone(),
                 },
@@ -1200,7 +1219,7 @@ impl<'a> Interpreter<'a> {
             // M13.1b: quita y devuelve [] o [v]; el prelude → Option<V>.
             "__map_remove" => match &values[0] {
                 Value::Map(rc) => {
-                    let elems = match rc.borrow_mut().remove(&MapKey::from_value(&values[1])) {
+                    let elems = match rc.borrow_mut().remove(&self.key_of(&values[1])) {
                         Some(v) => vec![v],
                         None => vec![],
                     };

@@ -334,8 +334,10 @@ trait Hash {
 
 // #356: lo que puede ser clave de un `Map`. Es un trait MARCADOR (sin métodos): el `Map` compara
 // y ordena sus claves por estructura dentro del runtime, sin llamar a código del programa. Un
-// `impl MapKey` a mano se rechaza fuera del prelude.
-/// A type that can be the key of a built-in `Map`: `int`, `string`, `char`, `bool` and `bytes`.
+// `impl MapKey` a mano se rechaza fuera del prelude; el checker lo concede a los tipos de usuario
+// con `@derive(Eq, Hash)` cuyos campos son claves (`grant_map_keys`).
+/// A type that can be the key of a built-in `Map`: `int`, `string`, `char`, `bool`, `bytes`, and
+/// any non-generic struct or enum with `@derive(Eq, Hash)` whose fields are themselves keys.
 /// Generic code that uses a type parameter as a key declares it: `fn count<P: MapKey>(xs: [P])`.
 /// It has no methods and cannot be implemented by hand.
 trait MapKey { }

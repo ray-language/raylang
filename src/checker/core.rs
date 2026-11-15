@@ -55,6 +55,7 @@ impl Checker {
             current_fn_bounds: Vec::new(),
             current_fn_is_root: true,
             key_params_allowed: false,
+            derived_eq_hash: HashSet::new(),
             overridden_prelude: HashSet::new(),
             dict_calls: HashMap::new(),
             dyn_coercions: HashMap::new(),
@@ -219,6 +220,9 @@ impl Checker {
         for t in &program.traits {
             self.traits.entry(t.name.clone()).or_insert_with(|| t.methods.clone());
         }
+        // M461 (#356): qué tipos de usuario son clave de `Map`, antes de validar los tipos (un
+        // campo `Map<Pos, int>` ya lo necesita).
+        self.grant_map_keys(program);
         // --- Validar los tipos referenciados (ahora que todos están registrados con
         // su aridad), con los parámetros de cada definición en ámbito ---
         // M396 (rayplay #165): el error de un tipo desconocido señala la VARIANTE o el CAMPO que lo
@@ -656,7 +660,7 @@ impl Checker {
             // estructura); un impl a mano prometería una igualdad que el `Map` no usa.
             if imp.trait_name == MAP_KEY_TRAIT && imp.line < crate::prelude::LINE_BASE {
                 return Err(self.err(imp.line, imp.col, format!(
-                    "'{MAP_KEY_TRAIT}' cannot be implemented by hand: it is granted to int/string/char/bool/bytes"
+                    "'{MAP_KEY_TRAIT}' cannot be implemented by hand: it is granted to int/string/char/bool/bytes and to types with @derive(Eq, Hash) whose fields are Map keys"
                 )));
             }
             // Registrar que este tipo implementa este trait (M9.2: verificación de bounds).
@@ -1208,6 +1212,81 @@ impl Checker {
         Ok(())
     }
 
+    /// M461 (#356): concede `MapKey` a los structs y enums NO genéricos con `@derive(Eq, Hash)`
+    /// cuyos campos son a su vez claves. Solo cuentan los impls DERIVADOS: son estructurales
+    /// por construcción, que es como el `Map` compara, hashea y ordena en el runtime. Un `Eq`
+    /// o un `Hash` escritos a mano prometerían una igualdad que el `Map` no usa.
+    /// Punto fijo por descarte: se parte de todos los candidatos y se quita el que tenga un
+    /// campo que no es clave, hasta que nada cambie (así un enum recursivo se admite).
+    fn grant_map_keys(&mut self, program: &Program) {
+        let derives = |tr: &str| -> HashSet<String> {
+            program.impls.iter()
+                .filter(|i| i.synthetic && i.trait_name == tr && i.type_params.is_empty())
+                .filter_map(|i| type_key_of(&i.target))
+                .collect()
+        };
+        let (eq, hash) = (derives("Eq"), derives("Hash"));
+        let mut keys: HashSet<String> = eq.intersection(&hash).cloned().collect();
+        self.derived_eq_hash = keys.clone();
+        loop {
+            let dropped: Vec<String> = keys.iter()
+                .filter(|name| !self.key_field_types(name).iter().all(|t| Self::is_key_field(t, &keys)))
+                .cloned()
+                .collect();
+            if dropped.is_empty() {
+                break;
+            }
+            for name in dropped {
+                keys.remove(&name);
+            }
+        }
+        for name in keys {
+            self.impl_traits.insert((name, MAP_KEY_TRAIT.to_string()));
+        }
+    }
+
+    /// Los tipos de los campos de un struct, o de los payloads de las variantes de un enum.
+    fn key_field_types(&self, name: &str) -> Vec<Type> {
+        match (self.structs.get(name), self.enums.get(name)) {
+            (Some(fields), _) => fields.iter().map(|(_, t)| self.resolve_type(t)).collect(),
+            (None, Some(variants)) => variants.iter().flat_map(|(_, p)| p.iter().map(|t| self.resolve_type(t))).collect(),
+            (None, None) => Vec::new(),
+        }
+    }
+
+    fn is_key_field(t: &Type, keys: &HashSet<String>) -> bool {
+        match t {
+            Type::Struct(n, args) | Type::Enum(n, args) => args.is_empty() && keys.contains(n),
+            other => is_primitive_key(other),
+        }
+    }
+
+    /// Por qué un tipo de usuario no es clave de `Map`, para el final del mensaje de error.
+    fn map_key_hint(&self, t: &Type) -> String {
+        let Some(name) = type_key_of(t).filter(|n| self.structs.contains_key(n) || self.enums.contains_key(n)) else {
+            return String::new();
+        };
+        if !self.derived_eq_hash.contains(&name) {
+            return format!(" (add @derive(Eq, Hash) to '{name}'; an impl written by hand does not count)");
+        }
+        let keys: HashSet<String> = self.impl_traits.iter()
+            .filter(|(_, tr)| tr == MAP_KEY_TRAIT)
+            .map(|(n, _)| n.clone())
+            .collect();
+        let field = match self.structs.get(&name) {
+            Some(fields) => fields.iter()
+                .map(|(f, ty)| (format!("field '{f}'"), self.resolve_type(ty)))
+                .find(|(_, ty)| !Self::is_key_field(ty, &keys)),
+            None => self.enums.get(&name).and_then(|variants| variants.iter()
+                .flat_map(|(v, p)| p.iter().map(move |ty| (format!("variant '{v}'"), self.resolve_type(ty))))
+                .find(|(_, ty)| !Self::is_key_field(ty, &keys))),
+        };
+        match field {
+            Some((place, ty)) => format!(" ({place} of '{name}' has type {ty}, which is not a Map key)"),
+            None => String::new(),
+        }
+    }
+
     /// Verifica que un tipo es válido: los nombres referenciados deben existir y, si
     /// son genéricos, llevar la **aridad** correcta de argumentos de tipo.
     pub(super) fn ensure_type(&self, ty: &Type, line: usize, col: usize) -> Result<(), TypeError> {
@@ -1218,9 +1297,10 @@ impl Checker {
             // `Struct("Map", args)` (sin resolver, p. ej. en un contexto que no pasó por
             // `resolve_type`); se cubren ambas formas.
             Type::Map(k, v) => {
-                if !is_hashable_key(k) {
+                if !is_hashable_key(k) && !self.satisfies_bound(k, MAP_KEY_TRAIT) {
                     return Err(self.err(line, col, format!(
-                        "a Map key must be int/string/char/bool/bytes, not {}", k
+                        "a Map key must be int/string/char/bool/bytes or a type with @derive(Eq, Hash) whose fields are Map keys, not {}{}",
+                        k, self.map_key_hint(k)
                     )));
                 }
                 // #356: un parámetro de tipo solo es clave si lleva el bound `MapKey`, que se
@@ -1871,7 +1951,7 @@ impl Checker {
             .and_then(|k| self.structs.get(&k))
             .map(|fs| {
                 fs.iter()
-                    .filter(|(_, ty)| !matches!(ty, Type::Int | Type::Float | Type::String | Type::Bool | Type::Char) && mentions_type(&e.msg, &ty.to_string()))
+                    .filter(|(_, ty)| !matches!(ty, Type::Int | Type::String | Type::Bool) && mentions_type(&e.msg, &ty.to_string()))
                     .map(|(n, _)| format!("'{n}'"))
                     .collect()
             })

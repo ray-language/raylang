@@ -806,6 +806,9 @@ struct Checker {
     /// #356: mientras se validan los destinos de los alias de tipo, un parámetro de tipo puede
     /// ser clave de `Map` sin bound (un alias no los declara; lo valida cada uso).
     key_params_allowed: bool,
+    /// M461: los tipos no genéricos con `@derive(Eq, Hash)` (candidatos a clave de `Map`), para
+    /// que el mensaje de error distinga «falta el derive» de «un campo no es clave».
+    derived_eq_hash: HashSet<String>,
     /// M270: nombres de funciones del prelude que el usuario REDEFINIÓ en la raíz; el prelude quedó
     /// inyectado bajo el alias `nombre#prelude` para los módulos.
     overridden_prelude: HashSet<String>,

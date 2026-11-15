@@ -281,6 +281,8 @@ struct CallFrame {
 
 struct Vm<'a> {
     program: &'a CompiledProgram,
+    /// M461 (#356): formas de los tipos usados como clave compuesta de `Map` (caché por VM).
+    key_shapes: KeyShapes,
     /// M38.3b: la **fibra en curso** (su ejecución: marcos, pila, heap, scopes, task, is_main). Es
     /// thread-local (en M:N cada worker tiene la suya); al conmutar se salva en `Shared` y se carga la
     /// siguiente. Antes eran campos sueltos del `Vm`; unificarlos en un `Fiber` hace la conmutación un
@@ -326,6 +328,7 @@ impl<'a> Vm<'a> {
         }
         Vm {
             program,
+            key_shapes: Default::default(),
             cur: Fiber {
                 frames: Vec::new(),
                 stack: Vec::new(),
@@ -360,6 +363,7 @@ impl<'a> Vm<'a> {
     fn worker(program: &'a CompiledProgram, shared: Arc<Mutex<Shared>>) -> Self {
         Vm {
             program,
+            key_shapes: Default::default(),
             cur: Fiber::default(), // sin fibra aún; `poll_next` cargará la primera de `ready`
             shared,
             fuel: u64::MAX,
@@ -1253,7 +1257,7 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::MapInsert => {
                     let v = self.pop();
-                    let k = heap_to_key(self.pop());
+                    let k = self.pop_key();
                     let h = self.pop_obj();
                     match self.cur.heap.get_mut(h) {
                         Obj::Map(m) => { m.insert(k, v); }
@@ -1262,7 +1266,7 @@ impl<'a> Vm<'a> {
                     self.push(HeapValue::Unit);
                 }
                 OpCode::MapContainsKey => {
-                    let k = heap_to_key(self.pop());
+                    let k = self.pop_key();
                     let h = self.pop_obj();
                     let present = match self.cur.heap.get(h) {
                         Obj::Map(m) => m.contains_key(&k),
@@ -1272,7 +1276,7 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::MapGet => {
                     // Primitivo: [] o [v]; el prelude lo envuelve en Option<V>.
-                    let k = heap_to_key(self.pop());
+                    let k = self.pop_key();
                     let h = self.pop_obj();
                     let elems = match self.cur.heap.get(h) {
                         Obj::Map(m) => match m.get(&k) {
@@ -1287,7 +1291,7 @@ impl<'a> Vm<'a> {
                 OpCode::MapGetOr => {
                     // P0.2: get-or-default SIN alocar. Args apilados (map, key, default) → cima = default.
                     let d = self.pop();
-                    let k = heap_to_key(self.pop());
+                    let k = self.pop_key();
                     let h = self.pop_obj();
                     let v = match self.cur.heap.get(h) {
                         Obj::Map(m) => m.get(&k).cloned().unwrap_or(d),
@@ -1299,7 +1303,7 @@ impl<'a> Vm<'a> {
                     // P0.3: upsert acumulativo en UN lookup (entry-API). Args (map, key, delta) → cima = delta.
                     use std::collections::hash_map::Entry;
                     let delta = self.pop();
-                    let k = heap_to_key(self.pop());
+                    let k = self.pop_key();
                     let h = self.pop_obj();
                     let (l, c) = pos!();
                     let ovf = || runtime_error(l, c, "arithmetic overflow on int");
@@ -1322,7 +1326,7 @@ impl<'a> Vm<'a> {
                 }
                 OpCode::MapRemove => {
                     // M13.1b: quita la clave; [] o [v]. El prelude → Option<V>.
-                    let k = heap_to_key(self.pop());
+                    let k = self.pop_key();
                     let h = self.pop_obj();
                     let elems = match self.cur.heap.get_mut(h) {
                         Obj::Map(m) => match m.remove(&k) {
@@ -1342,7 +1346,7 @@ impl<'a> Vm<'a> {
                         _ => unreachable!("the checker guarantees a Map"),
                     };
                     ks.sort();
-                    let elems: Vec<HeapValue> = ks.iter().map(key_to_heap).collect();
+                    let elems: Vec<HeapValue> = ks.iter().map(|k| key_to_heap(&mut self.cur.heap, k)).collect();
                     let arr = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(arr));
                 }
@@ -5943,6 +5947,16 @@ impl<'a> Vm<'a> {
         match self.pop() {
             HeapValue::Int(n) => n,
             _ => unreachable!("the checker guarantees an int"),
+        }
+    }
+
+    /// Saca la clave de un `Map`. Un primitivo se MUEVE a la clave (el camino de siempre); un
+    /// struct o enum (M461) se copia en una clave compuesta.
+    #[inline(always)]
+    fn pop_key(&mut self) -> MapKey {
+        match self.pop() {
+            HeapValue::Obj(h) => composite_key(&self.cur.heap, &self.program.structs, &self.program.enums, &mut self.key_shapes, h),
+            v => heap_to_key(v),
         }
     }
 

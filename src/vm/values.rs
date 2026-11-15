@@ -263,13 +263,64 @@ pub(super) fn heap_to_key(v: HeapValue) -> MapKey {
         HeapValue::Char(c) => MapKey::Char(c),
         HeapValue::Bool(b) => MapKey::Bool(b),
         HeapValue::Bytes(b) => MapKey::Bytes(b.to_vec()),
-        _ => unreachable!("the checker guarantees a hashable key (int/string/char/bool/bytes)"),
+        _ => unreachable!("the checker guarantees a Map key"),
     }
 }
 
+/// M461 (#356): la forma (nombres + índices) de cada tipo que ya se usó como clave compuesta,
+/// por `(0 = struct | 1 = enum, índice del tipo, tag)`. Se construye una vez por tipo y VM: una
+/// clave nueva solo clona el `Arc`.
+pub(super) type KeyShapes = std::collections::HashMap<(u8, u32, u32), std::sync::Arc<crate::runtime::KeyShape>>;
+
+/// La clave compuesta del struct o enum en `h`: una COPIA profunda de sus campos (el checker
+/// garantiza que todos son claves). Mutar después el objeto no toca la clave.
+pub(super) fn composite_key(
+    heap: &Heap,
+    structs: &[crate::bytecode::CompiledStruct],
+    enums: &[CompiledEnum],
+    shapes: &mut KeyShapes,
+    h: crate::gc::Handle,
+) -> MapKey {
+    use crate::runtime::{CompositeKey, KeyShape};
+    let (kind, type_idx, tag, values): (u8, u32, u32, &[HeapValue]) = match heap.get(h) {
+        Obj::Struct(s) => (0, s.struct_idx as u32, 0, &s.fields),
+        Obj::Enum(e) => (1, e.enum_id, e.tag, &e.payload),
+        _ => unreachable!("the checker guarantees a Map key"),
+    };
+    let shape = shapes
+        .entry((kind, type_idx, tag))
+        .or_insert_with(|| {
+            std::sync::Arc::new(if kind == 0 {
+                let def = &structs[type_idx as usize];
+                KeyShape { type_name: def.name.clone(), variant: None, field_names: def.fields.clone(), vm_type: type_idx }
+            } else {
+                let (ename, vname) = enum_names(enums, type_idx as usize, tag as usize);
+                KeyShape { type_name: ename.to_string(), variant: Some(vname.to_string()), field_names: Vec::new(), vm_type: type_idx }
+            })
+        })
+        .clone();
+    let mut fields = Vec::with_capacity(values.len());
+    for v in values {
+        fields.push(match v {
+            HeapValue::Obj(inner) => composite_key(heap, structs, enums, shapes, *inner),
+            prim => heap_to_key(prim.clone()),
+        });
+    }
+    MapKey::Composite(Box::new(CompositeKey { rank: tag, fields, shape }))
+}
+
 /// Reconstruye el valor de la VM a partir de una clave de Map (para `keys`, M13.1b).
-pub(super) fn key_to_heap(k: &MapKey) -> HeapValue {
+pub(super) fn key_to_heap(heap: &mut Heap, k: &MapKey) -> HeapValue {
     match k {
+        // Un objeto NUEVO por llamada: quien recibe la clave no comparte nada con el mapa.
+        MapKey::Composite(c) => {
+            let fields: Vec<HeapValue> = c.fields.iter().map(|f| key_to_heap(heap, f)).collect();
+            let obj = match c.shape.variant {
+                Some(_) => Obj::Enum(crate::gc::VmEnum { enum_id: c.shape.vm_type, tag: c.rank, payload: fields }),
+                None => Obj::Struct(crate::gc::VmStruct { struct_idx: c.shape.vm_type as usize, fields }),
+            };
+            HeapValue::Obj(heap.allocate(obj))
+        }
         MapKey::Int(n) => HeapValue::Int(*n),
         MapKey::Str(s) => HeapValue::Str(s.clone()),
         MapKey::Char(c) => HeapValue::Char(*c),

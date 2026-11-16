@@ -476,6 +476,13 @@ documentada:
   **con nombre** en modo mensaje (`\\.\pipe\ray-audio-in-<pid>-<n>`, una sola instancia con
   `FILE_FLAG_FIRST_PIPE_INSTANCE` y `PIPE_REJECT_REMOTE_CLIENTS`): el propio proceso abre el
   único extremo cliente en el acto, así que ningún otro proceso puede conectarse a él.
+- **`crates/ray-runtime/src/audio.rs`, baja latencia** (M469, solo macOS) — el AudioUnit de la HAL
+  (`AudioComponentInstanceNew`, `AudioUnitSetProperty` con valores propios del tamaño declarado):
+  el callback de render copia del anillo al búfer que CoreAudio presta (`mDataByteSize` acota la
+  copia) y el de entrada pide los frames con `AudioUnitRender` sobre un búfer propio; el estado
+  de ambos es un `Arc` filtrado que se recupera tras `AudioOutputUnitStop` + `Uninitialize` (ya
+  sin callbacks). `AudioObjectSetPropertyData` cambia el tamaño del búfer de E/S del dispositivo
+  para este proceso.
 - **`crates/ray-runtime/src/audio.rs`, dispositivos** (M468) — `audio.devices()`: en macOS, la HAL
   de CoreAudio (`AudioObjectGetPropertyData` sobre búferes propios del tamaño que la propia API
   dice, alineados a 8; los `CFString` devueltos se sueltan); en Linux, `snd_device_name_hint` (las

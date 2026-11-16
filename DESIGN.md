@@ -20719,3 +20719,55 @@ Verificado: en este Mac (cuatro dispositivos, salida por los audífonos y grabac
 micrófono por id); en la VM de Linux (`default` y `plughw:`, salida y captura por id); en la VM
 de Windows (altavoces y línea de entrada por id); en el emulador de Android (altavoz y
 micrófono por id). Sin probar: una interfaz USB o un dispositivo Bluetooth de verdad.
+
+## 448. M469 — `std/audio` con baja latencia en macOS (nov 2026)
+
+La segunda mitad de ray-daw #424: con el hint mínimo (20 ms) la cola entre `write` y el altavoz
+no bajaba de ~55 ms. Para mezclar sobra; para tocar un instrumento en directo o escucharse al
+grabar, no.
+
+**Por qué AudioQueue no baja.** Reparte la latencia en tres búferes propios y no deja tocar el
+del dispositivo; y la cola de entrada entrega en ráfagas de ~20 ms se le pida el bloque que se
+le pida (medido: con bloques de 60 frames, la espera más larga entre dos lecturas eran 22 ms).
+
+**El camino nuevo.** El AudioUnit de salida de la HAL: el dispositivo pide audio en un
+callback cada búfer de E/S, y ese búfer se puede bajar. Un hint por debajo de 20 ms abre ese
+camino; de 20 en adelante todo sigue como estaba (AudioQueue, con sus rampas anti-clic y su
+silencio de mantenimiento). El búfer del dispositivo es un cuarto del hint redondeado hacia
+abajo a una potencia de dos (5 ms → 32 frames, 10 → 64, 15 → 128), el anillo son dos de esos
+búferes, y el socket del programa pierde su suelo de 20 ms: la mitad del hint.
+
+El callback copia del anillo y completa con silencio; un hueco se cuenta. No hay rampas ni
+keepalive: aquí manda la latencia, y quien la pide escribe bloques pequeños a tiempo.
+
+**La entrada** va por el mismo AudioUnit con la E/S de entrada activada: el callback pide los
+frames con `AudioUnitRender` y los entrega. No convierte la frecuencia de muestreo ni reparte
+canales, así que solo se usa cuando el programa pide lo que el dispositivo da; si no,
+`open_input` cae a la cola de siempre y la traza lo dice.
+
+**Medido** (este Mac, bocinas y micrófono integrados, 48 kHz, bloques de 256 frames durante 4 s;
+`cola` = escrito − `played_ms`):
+
+| hint | antes (cola mín/media/máx) | ahora | búfer del dispositivo |
+|---:|---|---|---:|
+| 5 ms | rechazado | 3 / 4 / 5 ms | 32 frames |
+| 10 ms | rechazado | 6 / 8 / 10 ms | 64 frames |
+| 15 ms | rechazado | 10 / 13 / 16 ms | 128 frames |
+| 20 ms | 49 / 55 / 61 ms | igual (AudioQueue) | — |
+
+Sin huecos en 4 s con 10 y 15 ms, en la VM y en nativo; con 5 ms la VM dejó un hueco en una de
+tres pasadas: es el borde. Entrada con hint 5: bloques de 32 frames, espera más larga 1 ms
+(antes 22 ms).
+
+**Lo que no se midió.** La latencia de extremo a extremo (un clic que sale por el altavoz y
+vuelve por el micrófono): exige sonar en la sala. `played_ms` cuenta lo entregado al
+dispositivo; el conversor y el hardware añaden lo suyo, unos pocos ms.
+
+**Bluetooth (#431).** Una salida Bluetooth crepita con menos de ~80 ms encolados, y el fallo
+ocurre dentro de CoreAudio: ninguna cuenta de aquí lo ve. Ahora que se sabe qué dispositivo hay
+detrás (M468), el hint se sube a 80 ms cuando el transporte es Bluetooth, y `RAY_AUDIO_TRACE`
+lo avisa. Sin probar: no había un dispositivo Bluetooth conectado.
+
+**El resto de sistemas** aceptan el hint y lo suben a su suelo (ALSA 10 ms de búfer, WASAPI
+compartido ~10 ms, AAudio en modo LOW_LATENCY, iOS ~240 ms). Bajar ahí es otro trabajo: periodos
+pequeños en ALSA, `IAudioClient3` en Windows, RemoteIO en iOS.

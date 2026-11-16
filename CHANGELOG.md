@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/audio` con baja latencia** (macOS): un hint de 3 a 19 ms lleva la salida directa al
+  dispositivo, con búferes de 32 a 128 frames, y la cola entre `write` y el altavoz baja de
+  ~55 ms a unos 4 ms (hint 5) u 8 ms (hint 10). La entrada entrega bloques de 32 frames cada
+  milisegundo en vez de ráfagas cada 20 ms. Es lo que hace falta para tocar un instrumento en
+  directo o escucharse al grabar. En el resto de sistemas el hint se acepta y sube a su suelo.
+- Una salida Bluetooth en macOS recibe siempre 80 ms de latencia como poco: con menos
+  crepitaba, y la traza no lo veía.
 - **`std/audio` deja elegir el dispositivo**: `audio.devices()` lista los dispositivos con sus
   canales, su frecuencia y cómo están conectados (`transport`: integrado, USB, Bluetooth…), y
   `audio.open_device(id, …)` y `audio.open_input_device(id, …)` abren uno concreto en vez del

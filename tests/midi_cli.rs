@@ -11,6 +11,13 @@ fn virtual_ports_available() -> bool {
     if cfg!(target_os = "macos") {
         return true;
     }
+    // Una sola sonda por proceso: los tests corren en paralelo y comparten su directorio.
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(probe_virtual_ports)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn probe_virtual_ports() -> bool {
     let d = workdir("probe", "import std/midi;\nfn main() -> int {\n    print(midi.watch().is_ok());\n    0\n}\n");
     let o = Command::new(env!("CARGO_BIN_EXE_ray")).args(["run", "prog.ray"]).current_dir(&d).output().unwrap();
     let _ = std::fs::remove_dir_all(&d);

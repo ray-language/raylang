@@ -499,6 +499,11 @@ documentada:
   de `midiInOpen` recibe un `Arc` filtrado que el hilo vigilante recupera tras `midiInClose` (ya
   sin callbacks); el búfer de SysEx es memoria propia prestada con `midiInAddBuffer` y recuperada
   con `midiInReset` antes de soltarla.
+- **`crates/ray-runtime/src/midi.rs`, Android** (M467) — sin API nativa de MIDI: cada puerto es un
+  `socketpair` (`SOCK_SEQPACKET`) que un hilo propio alimenta con lo que contesta el shell
+  (`RayMidi.java`); el `unsafe` es solo libc (`socketpair`, `setsockopt`, `fcntl`, `poll`, `send`,
+  `read`, `close`) sobre descriptores y búferes propios, y un `from_raw_fd` del extremo que se
+  entrega al programa (que pasa a ser su dueño).
 - **`crates/ray-runtime/src/midi.rs`** (M464) — `std/midi` sobre **CoreMIDI** (macOS e iOS; el
   framework se enlaza, **sin crates**): `MIDIClientCreate` en un hilo propio que se queda en
   `CFRunLoopRun`; los puertos y extremos virtuales son `UInt32` opacos que creamos y desmontamos

@@ -20771,3 +20771,33 @@ lo avisa. Sin probar: no había un dispositivo Bluetooth conectado.
 **El resto de sistemas** aceptan el hint y lo suben a su suelo (ALSA 10 ms de búfer, WASAPI
 compartido ~10 ms, AAudio en modo LOW_LATENCY, iOS ~240 ms). Bajar ahí es otro trabajo: periodos
 pequeños en ALSA, `IAudioClient3` en Windows, RemoteIO en iOS.
+
+## 449. Revisión previa a 1.27.102 (nov 2026)
+
+La revisión del arco M465–M469 encontró lo que sigue; se corrigió antes del tag.
+
+- **Un dispositivo que desaparece colgaba el programa.** La salida de baja latencia fija el
+  dispositivo al abrir y su `play` esperaba sin límite a que el callback hiciera sitio: si lo
+  desenchufaban, `write`, `drain` y `close` no volvían. Ahora la espera caduca a los 2 s sin
+  callback, la salida se da por perdida y lo que se escriba se descarta (con un aviso en
+  stderr). Lo mismo para la cola de AudioQueue cuando va a un dispositivo elegido; la de por
+  defecto no caduca, porque sigue al sistema y una interrupción de iOS la pausa a ratos.
+- **El mono de baja latencia salía por un altavoz.** El AudioUnit de la HAL asigna canales uno
+  a uno. El sink duplica cada muestra a estéreo cuando el programa es mono y el dispositivo no;
+  un flujo con más canales que el dispositivo se rechaza con un error que lo dice.
+- **El búfer de E/S bajado no se devolvía.** `kAudioDevicePropertyBufferFrameSize` es por
+  dispositivo y la HAL usa el menor de sus clientes: dejarlo en 32–128 frames encarecía al resto
+  de flujos y programas. Se cuenta por dispositivo (`acquire_buffer_frames` /
+  `release_buffer_frames`) y al soltarse el último flujo vuelve el tamaño anterior, también si
+  abrir falla.
+- **MIDI en Android: un `onSend` no es un mensaje.** Android puede traer varios mensajes en una
+  entrega, estado en curso o un SysEx partido. `RayMidi.java` trocea la entrada y entrega un
+  mensaje completo por lectura, que es el contrato de `midi.read`.
+- **`midi.next_change` giraba en vacío** si el hilo vigilante terminaba (el fin de flujo de un
+  `SOCK_SEQPACKET` es una lectura vacía): ahora es `Err`, como ya hacía `read`.
+- `audio.devices()` no lista un dispositivo sin canales en ninguna dirección; abrir por id en
+  macOS ya no enumera todos los dispositivos; los pasos de montaje del AudioUnit paran en el
+  primero que falla; SECURITY.md recoge el `unsafe` del MIDI de Android.
+
+Queda sin hacer, anotado: unificar los helpers de socket repetidos entre los tres backends de
+`midi.rs`, y validar un id en WASAPI sin enumerar todos los extremos.

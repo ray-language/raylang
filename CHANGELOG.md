@@ -6,6 +6,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.102 — 2026-11-16
+
+- `std/midi` en Android entrega un mensaje completo por lectura, como el resto de sistemas,
+  aunque el sistema los traiga juntos o partidos.
+- Una salida de audio de baja latencia en mono suena por los dos altavoces, y al cerrarse
+  devuelve al dispositivo el tamaño de búfer que tenía.
+- Si se desenchufa el dispositivo de una salida de baja latencia (o de una abierta con
+  `open_device`), `write`, `drain` y `close` ya no se quedan colgados.
+- `midi.next_change` devuelve `Err` cuando la vigilancia termina, en vez de avisar sin parar.
 - **`std/audio` con baja latencia** (macOS): un hint de 3 a 19 ms lleva la salida directa al
   dispositivo, con búferes de 32 a 128 frames, y la cola entre `write` y el altavoz baja de
   ~55 ms a unos 4 ms (hint 5) u 8 ms (hint 10). La entrada entrega bloques de 32 frames cada

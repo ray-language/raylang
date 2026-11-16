@@ -1405,13 +1405,17 @@ mod coreaudio {
                 if uid.is_empty() {
                     continue;
                 }
+                let (input_channels, output_channels) = (channels(id, SCOPE_INPUT), channels(id, SCOPE_OUTPUT));
+                if input_channels == 0 && output_channels == 0 {
+                    continue; // ni graba ni suena (un dispositivo sin flujos): no se puede abrir
+                }
                 let mut rate = 0f64;
                 get(id, NOMINAL_SAMPLE_RATE, SCOPE_GLOBAL, &mut rate);
                 out.push(super::super::DeviceInfo {
                     id: uid,
                     name: get_text(id, NAME),
-                    input_channels: channels(id, SCOPE_INPUT),
-                    output_channels: channels(id, SCOPE_OUTPUT),
+                    input_channels,
+                    output_channels,
                     default_input: id == default_in,
                     default_output: id == default_out,
                     sample_rate: rate as i64,
@@ -1451,6 +1455,14 @@ mod coreaudio {
             channels(device, SCOPE_INPUT)
         }
 
+        pub fn output_channels(device: u32) -> i64 {
+            channels(device, SCOPE_OUTPUT)
+        }
+
+        pub fn device_name(device: u32) -> String {
+            get_text(device, NAME)
+        }
+
         pub fn device_transport(device: u32) -> &'static str {
             transport(device)
         }
@@ -1461,9 +1473,54 @@ mod coreaudio {
             rate
         }
 
+        /// Los dispositivos con el búfer de E/S bajado por un flujo de baja latencia: el tamaño
+        /// que tenían antes y cuántos flujos nuestros lo mantienen bajado.
+        fn lowered() -> &'static std::sync::Mutex<std::collections::HashMap<u32, (u32, usize)>> {
+            static L: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u32, (u32, usize)>>> = std::sync::OnceLock::new();
+            L.get_or_init(Default::default)
+        }
+
+        /// Baja el búfer de E/S de `device` a `frames` para un flujo de baja latencia y devuelve
+        /// el que quedó. Cada llamada se empareja con un `release_buffer_frames`: al soltarse
+        /// el último flujo, el dispositivo recupera el tamaño que tenía (la HAL usa el menor
+        /// de todos sus clientes, así que dejarlo bajado encarece a los demás flujos y programas).
+        pub fn acquire_buffer_frames(device: u32, frames: u32) -> u32 {
+            let mut lowered = lowered().lock().unwrap_or_else(|e| e.into_inner());
+            let mut current = 0u32;
+            get(device, BUFFER_FRAME_SIZE, SCOPE_GLOBAL, &mut current);
+            let entry = lowered.entry(device).or_insert((current, 0));
+            entry.1 += 1;
+            // Otro flujo nuestro ya lo bajó más: no se sube.
+            if entry.1 > 1 && current > 0 && current <= frames {
+                return current;
+            }
+            set_buffer_frames(device, frames)
+        }
+
+        /// Devuelve el búfer de E/S al soltarse (el par de un `acquire_buffer_frames`).
+        pub struct LoweredBuffer(pub u32);
+        impl Drop for LoweredBuffer {
+            fn drop(&mut self) {
+                release_buffer_frames(self.0);
+            }
+        }
+
+        pub fn release_buffer_frames(device: u32) {
+            let mut lowered = lowered().lock().unwrap_or_else(|e| e.into_inner());
+            let Some(entry) = lowered.get_mut(&device) else { return };
+            entry.1 = entry.1.saturating_sub(1);
+            if entry.1 == 0 {
+                let original = entry.0;
+                lowered.remove(&device);
+                if original > 0 {
+                    set_buffer_frames(device, original);
+                }
+            }
+        }
+
         /// Pide al dispositivo un búfer de E/S de `frames` (acotado al rango que admite) y
         /// devuelve el que quedó. El tamaño es por proceso: la HAL usa el menor de sus clientes.
-        pub fn set_buffer_frames(device: u32, frames: u32) -> u32 {
+        fn set_buffer_frames(device: u32, frames: u32) -> u32 {
             let mut range = [0f64; 2];
             let wanted = if get(device, BUFFER_FRAME_SIZE_RANGE, SCOPE_GLOBAL, &mut range) && range[1] >= range[0] && range[0] > 0.0 {
                 (frames as f64).clamp(range[0], range[1]) as u32
@@ -1604,6 +1661,21 @@ mod coreaudio {
             closing: AtomicBool,
         }
 
+        /// Si el dispositivo deja de pedir audio este tiempo con el anillo lleno, se da por
+        /// perdido (desenchufado): lo escrito se descarta en vez de dejar colgado al programa.
+        const DEVICE_LOST_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
+        /// Ejecuta los pasos en orden y para en el primero que falla (nombre y OSStatus).
+        fn run_steps(steps: &[(&'static str, &dyn Fn() -> i32)]) -> Result<(), (&'static str, i32)> {
+            for (name, step) in steps {
+                match step() {
+                    0 => {}
+                    st => return Err((name, st)),
+                }
+            }
+            Ok(())
+        }
+
         /// El callback de render, en el hilo de tiempo real de la HAL: copia del anillo y
         /// completa con silencio.
         extern "C" fn on_render(user: *mut c_void, _flags: *mut u32, _time: *const AudioTimeStamp, _bus: u32, frames: u32, io: *mut AudioBufferList) -> i32 {
@@ -1645,6 +1717,12 @@ mod coreaudio {
             shared: Arc<Shared>,
             played: Arc<AtomicI64>,
             device_frames: u32,
+            device_id: u32,
+            /// Octetos por muestra cuando el programa es mono y la unidad recibe estéreo (cada
+            /// muestra se duplica); 0 si el formato pasa tal cual.
+            upmix_sample_bytes: usize,
+            /// El dispositivo dejó de pedir audio: lo que se escriba se descarta.
+            lost: bool,
         }
         // SAFETY: el AudioUnit se crea en el hilo que abre y después solo lo toca el alimentador.
         unsafe impl Send for LowLatencySink {}
@@ -1664,7 +1742,19 @@ mod coreaudio {
                     format!("audio: no output device with id '{device}' (was it disconnected?); list them with audio.devices()")
                 });
             };
+            // El AudioUnit no reparte canales (los asigna uno a uno): un flujo mono saldría solo
+            // por la izquierda, y uno con más canales que el dispositivo perdería los que
+            // sobran. El mono se duplica aquí a estéreo; lo segundo se rechaza.
+            let device_channels = hal::output_channels(device_id);
+            if device_channels > 0 && channels > device_channels {
+                return Err(format!(
+                    "audio: the output device has {device_channels} channel(s) and the stream has {channels}; a low-latency output (a hint under {} ms) does not mix channels down",
+                    super::super::LOW_LATENCY_BELOW_MS
+                ));
+            }
             let sb = fmt.sample_bytes();
+            let upmix = channels == 1 && device_channels >= 2;
+            let channels = if upmix { 2 } else { channels };
             let frame_bytes = channels as usize * sb;
             let desc = AudioStreamBasicDescription {
                 sample_rate: rate as f64,
@@ -1684,7 +1774,7 @@ mod coreaudio {
                 _ => rate as f64,
             };
             let target = (device_rate * latency_ms as f64 / 4000.0) as u32;
-            let device_frames = hal::set_buffer_frames(device_id, (1u32 << (31 - target.max(32).leading_zeros())).max(32));
+            let device_frames = hal::acquire_buffer_frames(device_id, (1u32 << (31 - target.max(32).leading_zeros())).max(32));
             // El anillo: dos búferes del dispositivo (en frames del programa) y nunca menos de
             // un cuarto del hint — lo que el alimentador entrega de una vez.
             let bytes_per_sec = rate as usize * frame_bytes;
@@ -1714,24 +1804,20 @@ mod coreaudio {
                     let set = |id: u32, scope: u32, data: *const c_void, size: usize| AudioUnitSetProperty(unit, id, scope, 0, data, size as u32);
                     let callback = RenderCallback { callback: on_render, user: user as *mut c_void };
                     let max_frames: u32 = 4096;
-                    let steps: [(&str, i32); 6] = [
-                        ("CurrentDevice", set(PROP_CURRENT_DEVICE, SCOPE_GLOBAL, &device_id as *const u32 as *const c_void, 4)),
-                        ("StreamFormat", set(PROP_STREAM_FORMAT, SCOPE_INPUT, &desc as *const _ as *const c_void, std::mem::size_of::<AudioStreamBasicDescription>())),
-                        ("MaximumFramesPerSlice", set(PROP_MAX_FRAMES_PER_SLICE, SCOPE_GLOBAL, &max_frames as *const u32 as *const c_void, 4)),
-                        ("SetRenderCallback", set(PROP_SET_RENDER_CALLBACK, SCOPE_INPUT, &callback as *const _ as *const c_void, std::mem::size_of::<RenderCallback>())),
-                        ("AudioUnitInitialize", AudioUnitInitialize(unit)),
-                        ("AudioOutputUnitStart", 0),
-                    ];
-                    match steps.iter().find(|(_, st)| *st != 0) {
-                        Some(&(name, st)) => Err((name, st)),
-                        None => match AudioOutputUnitStart(unit) {
-                            0 => Ok(()),
+                    run_steps(&[
+                        ("CurrentDevice", &|| set(PROP_CURRENT_DEVICE, SCOPE_GLOBAL, &device_id as *const u32 as *const c_void, 4)),
+                        ("StreamFormat", &|| set(PROP_STREAM_FORMAT, SCOPE_INPUT, &desc as *const _ as *const c_void, std::mem::size_of::<AudioStreamBasicDescription>())),
+                        ("MaximumFramesPerSlice", &|| set(PROP_MAX_FRAMES_PER_SLICE, SCOPE_GLOBAL, &max_frames as *const u32 as *const c_void, 4)),
+                        ("SetRenderCallback", &|| set(PROP_SET_RENDER_CALLBACK, SCOPE_INPUT, &callback as *const _ as *const c_void, std::mem::size_of::<RenderCallback>())),
+                        ("AudioUnitInitialize", &|| AudioUnitInitialize(unit)),
+                        ("AudioOutputUnitStart", &|| match AudioOutputUnitStart(unit) {
+                            0 => 0,
                             st => {
                                 AudioUnitUninitialize(unit);
-                                Err(("AudioOutputUnitStart", st))
+                                st
                             }
-                        },
-                    }
+                        }),
+                    ])
                 }
             };
             if let Err((name, st)) = step {
@@ -1742,9 +1828,10 @@ mod coreaudio {
                     }
                     drop(Arc::from_raw(user));
                 }
+                hal::release_buffer_frames(device_id);
                 return Err(format!("audio: could not open the low-latency output ({name}, OSStatus {st})"));
             }
-            Ok(Box::new(LowLatencySink { unit, user, shared, played, device_frames }))
+            Ok(Box::new(LowLatencySink { unit, user, shared, played, device_frames, device_id, upmix_sample_bytes: if upmix { sb } else { 0 }, lost: false }))
         }
 
         // ── La entrada de baja latencia ───────────────────────────────────────────────────
@@ -1839,7 +1926,7 @@ mod coreaudio {
                 reserved: 0,
             };
             let target = (rate as f64 * latency_ms as f64 / 4000.0) as u32;
-            hal::set_buffer_frames(device_id, (1u32 << (31 - target.max(32).leading_zeros())).max(32));
+            hal::acquire_buffer_frames(device_id, (1u32 << (31 - target.max(32).leading_zeros())).max(32));
             let capture = Arc::new(Capture {
                 unit: std::sync::atomic::AtomicUsize::new(0),
                 fd_w,
@@ -1861,25 +1948,22 @@ mod coreaudio {
                     let (on, off): (u32, u32) = (1, 0);
                     let callback = InputCallback { callback: on_input, user: user as *mut c_void };
                     let max_frames: u32 = 4096;
-                    let steps: [(&str, i32); 7] = [
-                        ("EnableIO input", AudioUnitSetProperty(unit, PROP_ENABLE_IO, SCOPE_INPUT, INPUT_BUS, &on as *const u32 as *const c_void, 4)),
-                        ("EnableIO output", AudioUnitSetProperty(unit, PROP_ENABLE_IO, SCOPE_OUTPUT, 0, &off as *const u32 as *const c_void, 4)),
-                        ("CurrentDevice", AudioUnitSetProperty(unit, PROP_CURRENT_DEVICE, SCOPE_GLOBAL, 0, &device_id as *const u32 as *const c_void, 4)),
-                        ("StreamFormat", AudioUnitSetProperty(unit, PROP_STREAM_FORMAT, SCOPE_OUTPUT, INPUT_BUS, &desc as *const _ as *const c_void, std::mem::size_of::<AudioStreamBasicDescription>() as u32)),
-                        ("MaximumFramesPerSlice", AudioUnitSetProperty(unit, PROP_MAX_FRAMES_PER_SLICE, SCOPE_GLOBAL, 0, &max_frames as *const u32 as *const c_void, 4)),
-                        ("SetInputCallback", AudioUnitSetProperty(unit, PROP_SET_INPUT_CALLBACK, SCOPE_GLOBAL, 0, &callback as *const _ as *const c_void, std::mem::size_of::<InputCallback>() as u32)),
-                        ("AudioUnitInitialize", AudioUnitInitialize(unit)),
-                    ];
-                    match steps.iter().find(|(_, st)| *st != 0) {
-                        Some(&(name, st)) => Err((name, st)),
-                        None => match AudioOutputUnitStart(unit) {
-                            0 => Ok(()),
+                    run_steps(&[
+                        ("EnableIO input", &|| AudioUnitSetProperty(unit, PROP_ENABLE_IO, SCOPE_INPUT, INPUT_BUS, &on as *const u32 as *const c_void, 4)),
+                        ("EnableIO output", &|| AudioUnitSetProperty(unit, PROP_ENABLE_IO, SCOPE_OUTPUT, 0, &off as *const u32 as *const c_void, 4)),
+                        ("CurrentDevice", &|| AudioUnitSetProperty(unit, PROP_CURRENT_DEVICE, SCOPE_GLOBAL, 0, &device_id as *const u32 as *const c_void, 4)),
+                        ("StreamFormat", &|| AudioUnitSetProperty(unit, PROP_STREAM_FORMAT, SCOPE_OUTPUT, INPUT_BUS, &desc as *const _ as *const c_void, std::mem::size_of::<AudioStreamBasicDescription>() as u32)),
+                        ("MaximumFramesPerSlice", &|| AudioUnitSetProperty(unit, PROP_MAX_FRAMES_PER_SLICE, SCOPE_GLOBAL, 0, &max_frames as *const u32 as *const c_void, 4)),
+                        ("SetInputCallback", &|| AudioUnitSetProperty(unit, PROP_SET_INPUT_CALLBACK, SCOPE_GLOBAL, 0, &callback as *const _ as *const c_void, std::mem::size_of::<InputCallback>() as u32)),
+                        ("AudioUnitInitialize", &|| AudioUnitInitialize(unit)),
+                        ("AudioOutputUnitStart", &|| match AudioOutputUnitStart(unit) {
+                            0 => 0,
                             st => {
                                 AudioUnitUninitialize(unit);
-                                Err(("AudioOutputUnitStart", st))
+                                st
                             }
-                        },
-                    }
+                        }),
+                    ])
                 }
             };
             if let Err((name, st)) = step {
@@ -1890,6 +1974,7 @@ mod coreaudio {
                     }
                     drop(Arc::from_raw(user));
                 }
+                hal::release_buffer_frames(device_id);
                 return Err(format!("{name}, OSStatus {st}"));
             }
             // El vigilante: cuando el programa cierra la entrada, para y desmonta la unidad
@@ -1917,6 +2002,7 @@ mod coreaudio {
                     drop(Arc::from_raw(user_addr as *const Capture));
                     super::super::close(fd_w);
                 }
+                hal::release_buffer_frames(device_id);
                 super::super::forget_in_ctl(key, &ctl);
             });
             Ok(())
@@ -1924,12 +2010,33 @@ mod coreaudio {
 
         impl Sink for LowLatencySink {
             fn play(&mut self, data: &[u8]) {
+                if self.lost {
+                    return;
+                }
+                // Mono sobre un dispositivo estéreo: cada muestra va a los dos canales.
+                let doubled: Vec<u8>;
+                let data = match self.upmix_sample_bytes {
+                    0 => data,
+                    sb => {
+                        doubled = data.chunks_exact(sb).flat_map(|sample| [sample, sample]).flatten().copied().collect();
+                        &doubled
+                    }
+                };
                 let mut at = 0;
                 let mut ring = self.shared.ring.lock().unwrap_or_else(|e| e.into_inner());
                 while at < data.len() {
-                    // Contrapresión: anillo lleno → espera a que el callback haga sitio.
+                    // Contrapresión: anillo lleno → espera a que el callback haga sitio. Si el
+                    // callback no vuelve (el dispositivo se desenchufó), la salida se da por
+                    // perdida: colgar aquí dejaría colgados `write`, `drain` y `close`.
                     while ring.len() >= self.shared.cap {
-                        ring = self.shared.space.wait(ring).unwrap_or_else(|e| e.into_inner());
+                        let (guard, wait) = self.shared.space.wait_timeout(ring, DEVICE_LOST_AFTER).unwrap_or_else(|e| e.into_inner());
+                        ring = guard;
+                        if wait.timed_out() && ring.len() >= self.shared.cap {
+                            ring.clear();
+                            self.lost = true;
+                            eprintln!("[audio] the low-latency output device stopped asking for audio (was it disconnected?): the rest of the stream is discarded");
+                            return;
+                        }
                     }
                     let n = (self.shared.cap - ring.len()).min(data.len() - at);
                     ring.extend(&data[at..at + n]);
@@ -1968,6 +2075,7 @@ mod coreaudio {
                     AudioComponentInstanceDispose(self.unit);
                     drop(Arc::from_raw(self.user));
                 }
+                hal::release_buffer_frames(self.device_id);
             }
         }
     }
@@ -1984,10 +2092,10 @@ mod coreaudio {
             // La cola acepta cualquier UID y falla al arrancar con un código opaco: se comprueba
             // antes que el dispositivo existe y sirve para esta dirección.
             let direction = if input { "input" } else { "output" };
-            match hal::devices()?.iter().find(|d| d.id == device) {
+            match hal::device_id(device, input) {
                 None => return Err(format!("audio: no {direction} device with id '{device}' (was it disconnected?); list them with audio.devices()")),
-                Some(d) if (if input { d.input_channels } else { d.output_channels }) == 0 => {
-                    return Err(format!("audio: the device '{}' has no {direction} channels", d.name));
+                Some(id) if (if input { hal::input_channels(id) } else { hal::output_channels(id) }) == 0 => {
+                    return Err(format!("audio: the device '{}' has no {direction} channels", hal::device_name(id)));
                 }
                 Some(_) => {}
             }
@@ -2178,6 +2286,11 @@ mod coreaudio {
         q: AudioQueueRef,
         shared: Arc<Shared>,
         played: Arc<super::AtomicI64>,
+        /// M468: la cola va a un dispositivo elegido (no sigue al de por defecto): si lo
+        /// desenchufan, el callback deja de llegar y nadie haría sitio en el anillo.
+        pinned: bool,
+        /// El dispositivo elegido dejó de pedir audio: lo que se escriba se descarta.
+        lost: bool,
     }
     // SAFETY: AudioQueueRef se usa solo desde el hilo alimentador tras la creación; el callback
     // corre en el hilo interno de AudioToolbox y solo toca `shared` (sincronizado).
@@ -2409,7 +2522,7 @@ mod coreaudio {
             }
         }
         live_queues().lock().unwrap_or_else(|e| e.into_inner()).push(q as usize);
-        Ok(Box::new(CoreAudioSink { q, shared, played }))
+        Ok(Box::new(CoreAudioSink { q, shared, played, pinned: !device.is_empty(), lost: false }))
     }
 
     /// M463: lo que el callback de entrada necesita — a dónde escribir y si ya debe parar.
@@ -2496,11 +2609,16 @@ mod coreaudio {
         let low_latency = latency_ms < super::LOW_LATENCY_BELOW_MS;
         let floor = if low_latency { bytes_per_sec / 1000 } else { bytes_per_sec / 200 };
         let buf_size = ((bytes_per_sec * latency_ms as usize / 4000).max(floor).max(frame_bytes * 16) / frame_bytes * frame_bytes) as u32;
+        // El búfer bajado se devuelve al soltar `lowered`: al cerrar la entrada (lo hace el
+        // vigilante) o si abrirla falla.
         #[cfg(target_os = "macos")]
-        if low_latency && let Some(id) = hal::device_id(device, true) {
+        let lowered = if low_latency { hal::device_id(device, true) } else { None }.map(|id| {
             let target = (hal::device_rate(id).max(rate as f64) * latency_ms as f64 / 4000.0) as u32;
-            hal::set_buffer_frames(id, (1u32 << (31 - target.max(32).leading_zeros())).max(32));
-        }
+            hal::acquire_buffer_frames(id, (1u32 << (31 - target.max(32).leading_zeros())).max(32));
+            hal::LoweredBuffer(id)
+        });
+        #[cfg(not(target_os = "macos"))]
+        let lowered = ();
         let state = Arc::new(InputState { fd_w, ctl: ctl.clone(), closed: std::sync::atomic::AtomicBool::new(false) });
         let user = Arc::into_raw(state.clone()) as *mut std::ffi::c_void;
         let mut q: AudioQueueRef = std::ptr::null_mut();
@@ -2562,6 +2680,7 @@ mod coreaudio {
                 drop(Arc::from_raw(user_addr as *const InputState));
                 super::close(fd_w);
             }
+            drop(lowered);
             super::forget_in_ctl(key, &ctl);
         });
         Ok(())
@@ -2569,11 +2688,27 @@ mod coreaudio {
 
     impl Sink for CoreAudioSink {
         fn play(&mut self, data: &[u8]) {
+            if self.lost {
+                return;
+            }
             let mut ring = self.shared.ring.lock().unwrap();
             for &b in data {
-                // Contrapresión: anillo lleno → espera a que el callback haga sitio.
+                // Contrapresión: anillo lleno → espera a que el callback haga sitio. Con un
+                // dispositivo elegido que deja de pedir audio (desenchufado) la salida se da por
+                // perdida; la de por defecto no caduca (una interrupción de iOS la pausa a ratos).
                 while ring.len() >= self.shared.cap {
-                    ring = self.shared.space.wait(ring).unwrap();
+                    if !self.pinned {
+                        ring = self.shared.space.wait(ring).unwrap();
+                        continue;
+                    }
+                    let (guard, wait) = self.shared.space.wait_timeout(ring, std::time::Duration::from_secs(2)).unwrap();
+                    ring = guard;
+                    if wait.timed_out() && ring.len() >= self.shared.cap {
+                        ring.clear();
+                        self.lost = true;
+                        eprintln!("[audio] the output device stopped asking for audio (was it disconnected?): the rest of the stream is discarded");
+                        return;
+                    }
                 }
                 ring.push_back(b);
             }
@@ -3003,10 +3138,15 @@ mod alsa {
                 let desc = hint_text(get_hint, hint, b"DESC\0").unwrap_or_default();
                 let label = desc.lines().next().unwrap_or("").trim();
                 let is_default = name == "default";
+                let input_channels = if !input { 0 } else if card { probe(&name, SND_PCM_STREAM_CAPTURE) } else { 2 };
+                let output_channels = if !output { 0 } else if card { probe(&name, SND_PCM_STREAM_PLAYBACK) } else { 2 };
+                if input_channels == 0 && output_channels == 0 {
+                    continue; // no se pudo abrir en ninguna dirección: tampoco lo abriría el programa
+                }
                 out.push(super::DeviceInfo {
                     name: if label.is_empty() { name.clone() } else { label.to_string() },
-                    input_channels: if !input { 0 } else if card { probe(&name, SND_PCM_STREAM_CAPTURE) } else { 2 },
-                    output_channels: if !output { 0 } else if card { probe(&name, SND_PCM_STREAM_PLAYBACK) } else { 2 },
+                    input_channels,
+                    output_channels,
                     default_input: is_default && input,
                     default_output: is_default && output,
                     sample_rate: 0,

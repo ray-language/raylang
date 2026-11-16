@@ -9,8 +9,8 @@
 //! print("${msg.timestamp_ns}: ${msg.data}");
 //! ```
 //!
-//! Available on macOS and iOS (CoreMIDI) and on Linux (the ALSA sequencer); other platforms
-//! return `Err`.
+//! Available on macOS and iOS (CoreMIDI), Linux (the ALSA sequencer), Windows (WinMM) and
+//! Android (inside the app shell). Windows and Android have no virtual ports.
 
 // std/midi (M464, ray-daw #423) — sobre el primitivo `__midi_op` del runtime (CoreMIDI a mano en
 // `ray_runtime::midi`). Una entrada es un pipe de lectura donde cada lectura es UN mensaje

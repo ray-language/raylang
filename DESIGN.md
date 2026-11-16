@@ -20641,3 +20641,34 @@ Verificado en las VMs: en Linux, la batería de puertos virtuales contra el secu
 el puerto «Midi Through»; en Windows, el envío al sintetizador GS y `watch`. Sin probar: la
 recepción en Windows (la VM no tiene entradas MIDI) y un dispositivo físico en cualquiera de las
 dos.
+
+## 446. M467 — `std/midi` en Android (nov 2026)
+
+Lo que quedaba de la fase 4 de IDEAS §125.
+
+**Por qué no AMidi.** La API nativa de MIDI de Android solo mueve octetos por un puerto ya
+abierto: listar dispositivos, abrirlos y enterarse de que se conectan es de `MidiManager`, en
+Java, y un `AMidiDevice` se obtiene de un objeto Java. Cruzar ese objeto exige un método nativo
+nuevo en el puente y la mitad del trabajo seguiría en Java. Así que todo el MIDI vive en
+`RayMidi` (el shell) y el runtime le habla por las peticiones genéricas que ya usan
+`std/notify` y `std/alarm` (`shell_request`): cero JNI nuevo.
+
+**La forma.** `midi_list`, `midi_open_in`/`midi_open_out` (devuelven un testigo del puerto),
+`midi_send` y `midi_close`. La entrada es un sondeo largo: el runtime pide `midi_read` y la
+respuesta llega con el siguiente mensaje — o vacía a los 300 ms, que es cuando el hilo mira si
+el programa cerró. Lo que llega entre dos sondeos se encola y sale junto en la respuesta
+siguiente, con la marca de tiempo que dio el sistema. Hacia el programa nada cambia: el mismo
+par `SOCK_SEQPACKET` de Linux para las entradas y el de flujo para las salidas.
+
+**Lo que cuesta.** Cada petición pasa por el hilo principal del shell: el envío y el rearmado
+de la lectura llevan ese salto. Para tocar un sintetizador con un teclado sobra; si algún día
+estorba, el arreglo es AMidi para el tráfico, con el descubrimiento donde está.
+
+**Lo que no hay.** Puertos virtuales (en Android exigen declarar un `MidiDeviceService` en la
+app), y emparejar un dispositivo Bluetooth desde el programa: se ven los que el sistema ya
+tiene. Los nombres de Android van al revés (un «output port» del dispositivo es una entrada
+para el programa); `RayMidi` los traduce.
+
+Verificado en el emulador: el shell compila, las listas (vacías), los errores de puerto
+inexistente y de puerto virtual, y abrir, cerrar y reabrir `watch`. **Sin probar: el tráfico
+MIDI real** — el emulador no tiene dispositivos MIDI.

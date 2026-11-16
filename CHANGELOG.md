@@ -6,6 +6,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/midi` en Android**: dentro de la app (`ray bundle --android`), con los dispositivos
+  USB y los Bluetooth que el sistema ya tenga emparejados. Sin puertos virtuales. Hay que
+  regenerar el shell.
 - **`std/midi` en Linux y Windows**: el secuenciador de ALSA y WinMM, con la misma API. En
   Linux hay puertos virtuales y aviso de cambios como en macOS. Windows no tiene puertos
   virtuales (`create_input` y `create_output` devuelven un error que lo dice) y `watch` detecta

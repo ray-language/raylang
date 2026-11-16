@@ -6,6 +6,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/midi` en Linux y Windows**: el secuenciador de ALSA y WinMM, con la misma API. En
+  Linux hay puertos virtuales y aviso de cambios como en macOS. Windows no tiene puertos
+  virtuales (`create_input` y `create_output` devuelven un error que lo dice) y `watch` detecta
+  los cambios comparando la lista de dispositivos una vez por segundo.
 - **`std/audio` graba también en Linux, Android y Windows**: `audio.open_input` usa ALSA,
   AAudio y WASAPI, con la misma forma que en macOS e iOS. En Android la app declara el permiso
   con `[android] record_audio = true` y el diálogo sale la primera vez que se abre una entrada;

@@ -4744,7 +4744,8 @@ Fases:
    virtuales; falta un dispositivo físico.
 3. **Entrada de audio en Linux (ALSA), Android (AAudio) y Windows (WASAPI)** — M465, hecha
    (DESIGN §444). Android declara el permiso con `[android] record_audio = true`.
-4. **MIDI en Linux (ALSA seq), Windows (WinMM) y Android (AMidi)**.
+4. **MIDI en Linux (ALSA seq) y Windows (WinMM)** — M466, hecha (DESIGN §445). **Android
+   (AMidi)**, pendiente.
 5. **Elegir dispositivo y latencia baja** (#424): `audio.devices()`, `open_device`, y un camino
    AudioUnit HAL para bajar de los ~50 ms de AudioQueue. Es lo que un DAW necesita para tocar en
    directo; no bloquea grabar.

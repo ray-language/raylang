@@ -476,6 +476,15 @@ documentada:
   **con nombre** en modo mensaje (`\\.\pipe\ray-audio-in-<pid>-<n>`, una sola instancia con
   `FILE_FLAG_FIRST_PIPE_INSTANCE` y `PIPE_REJECT_REMOTE_CLIENTS`): el propio proceso abre el
   único extremo cliente en el acto, así que ningún otro proceso puede conectarse a él.
+- **`crates/ray-runtime/src/midi.rs`, Linux y Windows** (M466) — en Linux, `dlopen("libasound.so.2")`
+  y `transmute` de una treintena de `snd_seq_*`/`snd_midi_event_*` a sus firmas (API estable de
+  alsa-lib); cada puerto es un cliente del secuenciador usado por un solo hilo; `snd_seq_event_t`
+  se transcribe como un struct de 28 octetos y solo se leen eventos que alsa-lib entrega, o se
+  envían los que su codificador rellena. Se instala un manejador de errores mudo
+  (`snd_lib_error_set_handler`), global al proceso. En Windows, `winmm.dll` enlazada: el callback
+  de `midiInOpen` recibe un `Arc` filtrado que el hilo vigilante recupera tras `midiInClose` (ya
+  sin callbacks); el búfer de SysEx es memoria propia prestada con `midiInAddBuffer` y recuperada
+  con `midiInReset` antes de soltarla.
 - **`crates/ray-runtime/src/midi.rs`** (M464) — `std/midi` sobre **CoreMIDI** (macOS e iOS; el
   framework se enlaza, **sin crates**): `MIDIClientCreate` en un hilo propio que se queda en
   `CFRunLoopRun`; los puertos y extremos virtuales son `UInt32` opacos que creamos y desmontamos

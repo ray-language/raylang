@@ -20603,3 +20603,41 @@ frames enteros, y el hilo termina al cerrar); en la VM de Windows, WASAPI y el p
 con el dispositivo y con la fuente de pruebas; en el emulador de Android, el diálogo de permiso
 (concedido y denegado) y la grabación del micrófono virtual en tres formatos. Las tarjetas de
 las VMs entregan silencio: falta grabar de un micrófono físico en Linux y en Windows.
+
+## 445. M466 — `std/midi` en Linux y Windows (nov 2026)
+
+La fase 4 de IDEAS §125, menos Android. La API de M464 no cambia; cambia quién la sirve.
+
+**Linux: el secuenciador de ALSA.** `libasound.so.2` por dlopen, como el audio. Cada puerto que
+el programa abre es un cliente propio del secuenciador con un único puerto, atendido por un solo
+hilo: alsa-lib no promete que un `snd_seq_t` aguante dos hilos, y así no hay cerrojos. Un puerto
+real se abre como un extremo privado (`NO_EXPORT`) conectado al del dispositivo; uno virtual se
+anuncia con capacidad de suscripción, y los demás programas lo ven. `snd_midi_event_*` convierte
+entre eventos del secuenciador y octetos MIDI. `watch` es un cliente suscrito al puerto de avisos
+del sistema. El id de un puerto es `cliente << 8 | puerto`.
+
+Las entradas usan un par `SOCK_SEQPACKET` en vez de datagramas: conserva los límites de cada
+mensaje y además avisa con `POLLHUP` cuando el programa cierra su extremo. En Linux un par de
+datagramas no se entera hasta que se le escribe, y una entrada MIDI puede pasar minutos sin
+tráfico: el puerto virtual seguiría a la vista de los demás. El hilo lector espera a la vez los
+eventos y ese aviso, así que no hay barrendero. `list` espera (acotado) a los hilos cuya entrada
+ya se cerró, para que `close(h)` seguido de `outputs()` no vea el puerto recién cerrado.
+
+alsa-lib imprime sus errores en stderr por su cuenta; se le instala un manejador mudo, porque
+cada fallo ya vuelve como `Err`. Sin `/dev/snd/seq` (un contenedor, un runner de CI) las listas
+salen vacías y abrir da `Err`.
+
+**Windows: WinMM.** La API clásica (`midiIn*`/`midiOut*`), presente en todo Windows. La nueva
+(Windows MIDI Services) exige Windows 11 reciente y un SDK aparte. El precio: no hay puertos
+virtuales — `create_input` y `create_output` dan un `Err` que nombra la salida (un driver de
+bucle) —, el id de un puerto es su posición en la lista, y no hay aviso de cambios sin una
+ventana, así que `watch` compara la lista una vez por segundo. La entrada reutiliza el pipe con
+nombre en modo mensaje de la entrada de audio (M465), ahora dúplex en el lado de la fuente para
+poder preguntar con `PeekNamedPipe` si el programa cerró; un hilo vigilante cierra entonces el
+dispositivo, porque no se puede desde el callback. La salida parte cada trama en mensajes
+cortos y SysEx.
+
+Verificado en las VMs: en Linux, la batería de puertos virtuales contra el secuenciador real y
+el puerto «Midi Through»; en Windows, el envío al sintetizador GS y `watch`. Sin probar: la
+recepción en Windows (la VM no tiene entradas MIDI) y un dispositivo físico en cualquiera de las
+dos.

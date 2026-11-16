@@ -80,15 +80,15 @@ fn null_sink_battery_and_pacing_match_on_all_three_engines() {
     }
 }
 
-/// M158 (§79b): open_latency valida el hint (20–1000, 0 = default) y played_ms avanza de
+/// M158 (§79b): open_latency valida el hint (3–1000 desde M469, 0 = default) y played_ms avanza de
 /// verdad sobre el sumidero de tiempo real. 3 motores, salida exacta (los booleanos absorben
 /// la variación de reloj).
 const V2_PROG: &str = r#"import std/audio;
 
 fn main() {
-    match (audio.open_latency(44100, 2, 5)) {
-        Result.Ok(_) => print("bad: 5ms accepted"),
-        Result.Err(e) => print("latency rejected: " + to_string(e.contains("20"))),
+    match (audio.open_latency(44100, 2, 2)) {
+        Result.Ok(_) => print("bad: 2ms accepted"),
+        Result.Err(e) => print("latency rejected: " + to_string(e.contains("3–1000"))),
     }
     let h = match (audio.open_latency(8000, 1, 50)) {
         Result.Ok(h) => h,

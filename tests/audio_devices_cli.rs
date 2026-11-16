@@ -61,6 +61,51 @@ fn devices_are_listed_and_an_unknown_id_is_an_error_natively() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// M469: un hint de baja latencia (3–19 ms) se acepta en la salida y en la entrada; la entrada
+/// entrega entonces bloques pequeños (la fuente de pruebas, 64 frames) y sigue yendo a su ritmo.
+#[test]
+fn a_low_latency_hint_is_accepted_and_gives_small_blocks() {
+    let d = workdir("low");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import std/audio;
+import std/time;
+fn main() -> int {
+    let o = audio.open_format(48000, 2, "s16le", 5).unwrap();
+    var z: [int] = [];
+    for i in 0..9600 { z.push(0); }
+    let t0 = time.monotonic();
+    print(audio.write(o, bytes_of(z)));
+    let _ = audio.drain(o);
+    let took = time.monotonic() - t0;
+    print("paced: ${took >= 40 && took < 1500}");
+    let _ = close(o);
+    let i = audio.open_input(48000, 1, "s16le", 5).unwrap();
+    var small = true;
+    var total = 0;
+    while (total < 4800) {
+        let b = audio.read(i).unwrap();
+        if (b.len() != 128) { small = false; }
+        total = total + b.len();
+    }
+    print("small blocks: ${small}");
+    let _ = close(i);
+    print(audio.open_input(48000, 1, "s16le", 2).is_err());
+    0
+}
+"#,
+    )
+    .unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_ray")).args(["run", "prog.ray"]).env("RAY_AUDIO_SINK", "null").env("RAY_AUDIO_SOURCE", "tone").current_dir(&d).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&o.stderr), "");
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "Result.Ok(9600)
+paced: true
+small blocks: true
+true
+");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 /// Con el sumidero y la fuente de pruebas no hay dispositivos: el id se acepta y se ignora, de
 /// modo que un programa que elige dispositivo se puede probar en CI.
 #[test]

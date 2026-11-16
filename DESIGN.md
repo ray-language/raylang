@@ -20598,5 +20598,8 @@ Play revisa los permisos sensibles, y una app que no graba no debe llevarlo. El 
 el shell la primera vez que el programa llama a `open_input`, que espera la respuesta; si el
 manifest no lo declara, el error dice qué clave falta (pedirlo así se deniega sin mostrar nada).
 
-Sin probar con hardware: las tres. Compilan para su destino y la fuente de pruebas ejercita el
-pipe en unix y en Windows; falta grabar de un micrófono real en cada una.
+Verificado: en la VM de Linux, la captura real por ALSA en los cuatro formatos (a ritmo, por
+frames enteros, y el hilo termina al cerrar); en la VM de Windows, WASAPI y el pipe con nombre,
+con el dispositivo y con la fuente de pruebas; en el emulador de Android, el diálogo de permiso
+(concedido y denegado) y la grabación del micrófono virtual en tres formatos. Las tarjetas de
+las VMs entregan silencio: falta grabar de un micrófono físico en Linux y en Windows.

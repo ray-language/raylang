@@ -1696,7 +1696,9 @@ estos handles.
 
 Funciona en macOS, iOS, Linux (el secuenciador de ALSA) y Windows. Windows no tiene puertos
 virtuales: `create_input` y `create_output` dan `Err`, y para conectar dos programas hace falta un
-driver de bucle (loopMIDI). En Android las listas salen vacías y abrir un puerto da `Err`.
+driver de bucle (loopMIDI). En Android funciona dentro de la app empaquetada, con los
+dispositivos USB y los Bluetooth que el sistema ya tenga emparejados; tampoco hay puertos
+virtuales.
 
 ### Assets del proyecto (`std/embed`)
 

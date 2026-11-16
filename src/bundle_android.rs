@@ -895,7 +895,9 @@ public final class RayBridge {
                 requestResult(Long.parseLong(id), null, "notify: the shell has no context yet");
                 return;
             }
-            if (op.startsWith("alarm_")) { // M448: std/alarm
+            if (op.startsWith("midi_")) { // M467: std/midi
+                RayMidi.apply(c, Long.parseLong(id), op, arg);
+            } else if (op.startsWith("alarm_")) { // M448: std/alarm
                 RayAlarm.apply(c, Long.parseLong(id), op, arg);
             } else {
                 RayNotify.apply(c, Long.parseLong(id), op, arg);
@@ -927,6 +929,269 @@ public final class RayBridge {
 /// alarmas son inexactas salvo `[android] exact_alarms = true` (SCHEDULE_EXACT_ALARM, si el usuario
 /// lo permite). Una pulsación (la notificación o una de sus acciones) abre MainActivity con el tag
 /// del evento en un extra; Android no tiene API de badge (`notify_badge` es `Ok` sin efecto).
+/// M467 (IDEAS §125): `std/midi` en Android. `android.media.midi` solo existe en Java: `RayMidi`
+/// abre los dispositivos (USB, y los Bluetooth que el sistema ya tenga emparejados) y el runtime
+/// habla con él por las peticiones genéricas del puente. Una entrada se lee por sondeo largo: el
+/// runtime pide `midi_read` y la respuesta llega con el siguiente mensaje (o vacía a los 300 ms,
+/// para que el runtime pueda ver que el programa cerró). Los nombres de Android van al revés: un
+/// «output port» del dispositivo es por donde ÉL envía — una entrada para el programa.
+const RAY_MIDI_JAVA: &str = r#"package org.raylang.shell;
+
+import android.content.Context;
+import android.media.midi.MidiDevice;
+import android.media.midi.MidiDeviceInfo;
+import android.media.midi.MidiInputPort;
+import android.media.midi.MidiManager;
+import android.media.midi.MidiOutputPort;
+import android.media.midi.MidiReceiver;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import java.util.ArrayDeque;
+import java.util.HashMap;
+import java.util.Map;
+
+public final class RayMidi {
+    private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final long POLL_MS = 300;
+    private static final Map<Long, Port> PORTS = new HashMap<>();
+    private static long nextToken = 1;
+
+    // Un puerto abierto por el programa: una entrada (source), una salida (sink) o un watch.
+    private static final class Port {
+        MidiDevice device;
+        MidiOutputPort source;
+        MidiInputPort sink;
+        MidiManager.DeviceCallback watch;
+        final ArrayDeque<String> queue = new ArrayDeque<>();
+        long waiting = 0; // la petición midi_read que espera, o 0
+        Runnable timeout;
+    }
+
+    static void apply(Context c, long id, String op, String arg) {
+        try {
+            MidiManager manager = (MidiManager) c.getSystemService(Context.MIDI_SERVICE);
+            if (manager == null) {
+                RayBridge.requestResult(id, null, "midi: this device has no MIDI support");
+                return;
+            }
+            switch (op) {
+                case "midi_list":
+                    RayBridge.requestResult(id, list(manager, arg.equals("in")), null);
+                    return;
+                case "midi_open_in":
+                    open(manager, id, Long.parseLong(arg), true);
+                    return;
+                case "midi_open_out":
+                    open(manager, id, Long.parseLong(arg), false);
+                    return;
+                case "midi_watch":
+                    watch(manager, id);
+                    return;
+                case "midi_read":
+                    read(id, Long.parseLong(arg));
+                    return;
+                case "midi_send": {
+                    int space = arg.indexOf(' ');
+                    send(id, Long.parseLong(arg.substring(0, space)), arg.substring(space + 1));
+                    return;
+                }
+                case "midi_close":
+                    close(manager, Long.parseLong(arg));
+                    RayBridge.requestResult(id, "", null);
+                    return;
+                default:
+                    RayBridge.requestResult(id, null, "midi: unknown operation '" + op + "'");
+            }
+        } catch (Throwable t) {
+            RayBridge.requestResult(id, null, "midi: " + t);
+        }
+    }
+
+    @SuppressWarnings("deprecation")
+    private static MidiDeviceInfo[] devices(MidiManager manager) {
+        return manager.getDevices();
+    }
+
+    private static String deviceName(MidiDeviceInfo info) {
+        Bundle p = info.getProperties();
+        String name = p.getString(MidiDeviceInfo.PROPERTY_NAME);
+        if (name == null || name.isEmpty()) { name = p.getString(MidiDeviceInfo.PROPERTY_PRODUCT); }
+        return name == null || name.isEmpty() ? "MIDI device " + info.getId() : name;
+    }
+
+    // Una línea `id\tnombre` por puerto; el id es `dispositivo << 8 | puerto`.
+    private static String list(MidiManager manager, boolean inputs) {
+        StringBuilder out = new StringBuilder();
+        int wanted = inputs ? MidiDeviceInfo.PortInfo.TYPE_OUTPUT : MidiDeviceInfo.PortInfo.TYPE_INPUT;
+        for (MidiDeviceInfo info : devices(manager)) {
+            int count = inputs ? info.getOutputPortCount() : info.getInputPortCount();
+            for (MidiDeviceInfo.PortInfo port : info.getPorts()) {
+                if (port.getType() != wanted) { continue; }
+                String name = deviceName(info);
+                String portName = port.getName();
+                if (count > 1) { name = name + " " + (portName == null || portName.isEmpty() ? String.valueOf(port.getPortNumber() + 1) : portName); }
+                out.append(((long) info.getId() << 8) | port.getPortNumber()).append('\t').append(name.replace('\t', ' ').replace('\n', ' ')).append('\n');
+            }
+        }
+        return out.toString();
+    }
+
+    private static void open(MidiManager manager, long id, long portId, boolean input) {
+        int deviceId = (int) (portId >> 8);
+        int portNumber = (int) (portId & 0xff);
+        MidiDeviceInfo found = null;
+        for (MidiDeviceInfo info : devices(manager)) {
+            if (info.getId() == deviceId) { found = info; }
+        }
+        if (found == null) {
+            RayBridge.requestResult(id, null, "midi: no " + (input ? "input" : "output") + " port with id " + portId + " (was it disconnected?)");
+            return;
+        }
+        manager.openDevice(found, device -> {
+            if (device == null) {
+                RayBridge.requestResult(id, null, "midi: could not open the device");
+                return;
+            }
+            Port port = new Port();
+            port.device = device;
+            try {
+                if (input) {
+                    port.source = device.openOutputPort(portNumber);
+                    if (port.source != null) {
+                        port.source.connect(new MidiReceiver() {
+                            @Override
+                            public void onSend(byte[] msg, int offset, int count, long timestamp) {
+                                deliver(port, timestamp + " " + hex(msg, offset, count));
+                            }
+                        });
+                    }
+                } else {
+                    port.sink = device.openInputPort(portNumber);
+                }
+            } catch (Throwable t) {
+                port.source = null;
+                port.sink = null;
+            }
+            if (port.source == null && port.sink == null) {
+                try { device.close(); } catch (Throwable ignored) { }
+                RayBridge.requestResult(id, null, "midi: could not open the port (is another app using it?)");
+                return;
+            }
+            RayBridge.requestResult(id, String.valueOf(register(port)), null);
+        }, MAIN);
+    }
+
+    private static void watch(MidiManager manager, long id) {
+        Port port = new Port();
+        port.watch = new MidiManager.DeviceCallback() {
+            @Override
+            public void onDeviceAdded(MidiDeviceInfo device) { deliver(port, "1"); }
+            @Override
+            public void onDeviceRemoved(MidiDeviceInfo device) { deliver(port, "1"); }
+        };
+        manager.registerDeviceCallback(port.watch, MAIN);
+        RayBridge.requestResult(id, String.valueOf(register(port)), null);
+    }
+
+    private static synchronized long register(Port port) {
+        long token = nextToken++;
+        PORTS.put(token, port);
+        return token;
+    }
+
+    // Un mensaje (o un aviso) para el programa: contesta la lectura que espera, o lo encola.
+    private static void deliver(Port port, String line) {
+        long waiting;
+        synchronized (port) {
+            if (port.queue.size() >= 4096) { return; } // nadie lee: se pierde, como en el resto de sistemas
+            port.queue.add(line);
+            waiting = port.waiting;
+            if (waiting == 0) { return; }
+            port.waiting = 0;
+            if (port.timeout != null) { MAIN.removeCallbacks(port.timeout); }
+        }
+        RayBridge.requestResult(waiting, drain(port), null);
+    }
+
+    private static String drain(Port port) {
+        StringBuilder out = new StringBuilder();
+        synchronized (port) {
+            String line;
+            while ((line = port.queue.poll()) != null) { out.append(line).append('\n'); }
+        }
+        return out.toString();
+    }
+
+    // Sondeo largo: lo encolado ahora, o la respuesta cuando llegue algo; vacía a los POLL_MS.
+    private static void read(long id, long token) {
+        Port port;
+        synchronized (RayMidi.class) { port = PORTS.get(token); }
+        if (port == null) {
+            RayBridge.requestResult(id, null, "midi: the port is closed");
+            return;
+        }
+        synchronized (port) {
+            if (port.queue.isEmpty()) {
+                port.waiting = id;
+                port.timeout = () -> {
+                    synchronized (port) {
+                        if (port.waiting != id) { return; }
+                        port.waiting = 0;
+                    }
+                    RayBridge.requestResult(id, "", null);
+                };
+                MAIN.postDelayed(port.timeout, POLL_MS);
+                return;
+            }
+        }
+        RayBridge.requestResult(id, drain(port), null);
+    }
+
+    private static void send(long id, long token, String hex) throws java.io.IOException {
+        Port port;
+        synchronized (RayMidi.class) { port = PORTS.get(token); }
+        if (port == null || port.sink == null) {
+            RayBridge.requestResult(id, null, "midi: the port is closed");
+            return;
+        }
+        byte[] data = new byte[hex.length() / 2];
+        for (int i = 0; i < data.length; i++) {
+            data[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+        }
+        port.sink.send(data, 0, data.length);
+        RayBridge.requestResult(id, "", null);
+    }
+
+    private static void close(MidiManager manager, long token) {
+        Port port;
+        synchronized (RayMidi.class) { port = PORTS.remove(token); }
+        if (port == null) { return; }
+        long waiting;
+        synchronized (port) {
+            waiting = port.waiting;
+            port.waiting = 0;
+            if (port.timeout != null) { MAIN.removeCallbacks(port.timeout); }
+        }
+        if (waiting != 0) { RayBridge.requestResult(waiting, "", null); }
+        try {
+            if (port.watch != null) { manager.unregisterDeviceCallback(port.watch); }
+            if (port.source != null) { port.source.close(); }
+            if (port.sink != null) { port.sink.close(); }
+            if (port.device != null) { port.device.close(); }
+        } catch (Throwable ignored) { }
+    }
+
+    private static String hex(byte[] data, int offset, int count) {
+        StringBuilder out = new StringBuilder(count * 2);
+        for (int i = offset; i < offset + count; i++) {
+            out.append(Character.forDigit((data[i] >> 4) & 0xf, 16)).append(Character.forDigit(data[i] & 0xf, 16));
+        }
+        return out.toString();
+    }
+}
+"#;
+
 const RAY_NOTIFY_JAVA: &str = r#"package org.raylang.shell;
 
 import android.app.AlarmManager;
@@ -2253,6 +2518,7 @@ pub fn write_project(
     write("app/src/main/java/org/raylang/shell/RayBridge.java", &RAY_BRIDGE_JAVA.replace("/*RAY_DEV_NATIVE*/", &dev_native))?;
     write("app/src/main/java/org/raylang/shell/RayScheme.java", RAY_SCHEME_JAVA)?;
     write("app/src/main/java/org/raylang/shell/RayMedia.java", RAY_MEDIA_JAVA)?;
+    write("app/src/main/java/org/raylang/shell/RayMidi.java", RAY_MIDI_JAVA)?;
     // M442 (IDEAS §121): std/notify — siempre (MainActivity y RayBridge las referencian); la
     // constante decide las alarmas exactas.
     let exact = if exact_alarms { "true" } else { "false" };
@@ -2388,6 +2654,15 @@ mod tests {
         }
         for op in ["media_controls", "media_now_playing", "media_clear"] {
             assert!(RAY_MEDIA_JAVA.contains(&format!("case \"{op}\"")), "{op}");
+        }
+    }
+
+    /// M467: el shell trae `RayMidi.java` y `RayBridge.onRequest` le pasa las peticiones `midi_*`.
+    #[test]
+    fn the_shell_carries_the_midi_bridge() {
+        assert!(RAY_BRIDGE_JAVA.contains("RayMidi.apply(c, Long.parseLong(id), op, arg);"));
+        for op in ["midi_list", "midi_open_in", "midi_open_out", "midi_watch", "midi_read", "midi_send", "midi_close"] {
+            assert!(RAY_MIDI_JAVA.contains(&format!("case \"{op}\"")), "{op}");
         }
     }
 

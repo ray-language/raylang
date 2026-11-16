@@ -17,8 +17,9 @@
 //! Backends A MANO, cero crates, como el audio: CoreMIDI en macOS e iOS (el framework está
 //! siempre presente) y el secuenciador de ALSA en Linux (M466: `libasound.so.2` por dlopen; sin
 //! la biblioteca o sin `/dev/snd/seq`, `Err`) y WinMM en Windows (M466: los dispositivos MIDI
-//! clásicos; Windows no tiene puertos virtuales). Android (AMidi) no tiene backend todavía:
-//! toda operación da `Err`.
+//! clásicos; Windows no tiene puertos virtuales). En Android (M467) el MIDI del sistema solo
+//! existe en Java (`android.media.midi`): el shell abre los dispositivos y este módulo le habla
+//! por las peticiones genéricas del puente.
 //!
 //! Va tras la feature `audio` (un build sin audio tampoco tiene MIDI).
 #![cfg(all(feature = "audio", any(unix, windows)))]
@@ -38,11 +39,15 @@ use alsaseq as backend;
 #[cfg(windows)]
 use winmm as backend;
 
-#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", windows)))]
+// M467: Android — `android.media.midi` a través del shell.
+#[cfg(target_os = "android")]
+use android as backend;
+
+#[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android", windows)))]
 mod backend {
     //! Sin backend: toda operación da `Err`.
     use super::Port;
-    const UNSUPPORTED: &str = "midi: not supported on this platform yet (macOS, iOS, Linux and Windows)";
+    const UNSUPPORTED: &str = "midi: not supported on this platform (macOS, iOS, Linux, Android and Windows)";
     pub fn list(_inputs: bool) -> Result<Vec<Port>, String> {
         Err(UNSUPPORTED.to_string())
     }
@@ -1579,5 +1584,239 @@ mod winmm {
             win_pipe::close_end(end);
         });
         Ok(reader)
+    }
+}
+
+// ── Android: `android.media.midi` a través del shell (M467) ─────────────────────────────────
+//
+// La API nativa (AMidi) no sabe listar ni abrir dispositivos: eso es de `MidiManager`, en Java,
+// y un `AMidiDevice` se obtiene de un objeto Java. En vez de cruzar objetos por JNI, todo el
+// MIDI vive en `RayMidi` (el shell) y aquí se le habla por `ui::shell_request`, que ya existe:
+//
+//   - `midi_list in|out` → una línea `id\tnombre` por puerto.
+//   - `midi_open_in id` / `midi_open_out id` / `midi_watch` → un testigo del puerto abierto.
+//   - `midi_read testigo` → sondeo largo: una línea `ns hex` por mensaje, o vacío a los 300 ms.
+//   - `midi_send testigo hex`, `midi_close testigo`.
+//
+// Hacia el programa, lo de siempre: un par SOCK_SEQPACKET para las entradas (Android es el
+// kernel de Linux: avisa con POLLHUP cuando el programa cierra) y uno de flujo para las salidas.
+// No hay puertos virtuales: en Android exigen declarar un `MidiDeviceService` en la app.
+#[cfg(target_os = "android")]
+mod android {
+    use super::Port;
+    use std::ffi::c_void;
+
+    unsafe extern "C" {
+        fn socketpair(domain: i32, ty: i32, protocol: i32, fds: *mut i32) -> i32;
+        fn setsockopt(fd: i32, level: i32, name: i32, value: *const c_void, len: u32) -> i32;
+        fn read(fd: i32, buf: *mut u8, n: usize) -> isize;
+        fn send(fd: i32, buf: *const u8, n: usize, flags: i32) -> isize;
+        fn close(fd: i32) -> i32;
+        // `n` como en `audio.rs` (una sola declaración de `poll` en el crate).
+        fn poll(fds: *mut PollFd, n: u32, timeout_ms: i32) -> i32;
+        #[link_name = "fcntl"]
+        fn fcntl_raw(fd: i32, cmd: i32, ...) -> i32;
+    }
+    const AF_UNIX: i32 = 1;
+    const SOCK_STREAM: i32 = 1;
+    const SOCK_SEQPACKET: i32 = 5;
+    const SOL_SOCKET: i32 = 1;
+    const SO_SNDBUF: i32 = 7;
+    const SO_RCVBUF: i32 = 8;
+    const F_GETFL: i32 = 3;
+    const F_SETFL: i32 = 4;
+    const O_NONBLOCK: i32 = 0o4000;
+    const MSG_DONTWAIT: i32 = 0x40;
+    const MSG_NOSIGNAL: i32 = 0x4000;
+    const POLLERR: i16 = 0x8;
+    const POLLHUP: i16 = 0x10;
+
+    #[repr(C)]
+    struct PollFd {
+        fd: i32,
+        events: i16,
+        revents: i16,
+    }
+
+    const NO_VIRTUAL: &str = "midi: Android has no virtual MIDI ports for an app without a MidiDeviceService";
+
+    /// Una petición a `RayMidi`. Sin shell (un binario suelto), `Err`.
+    fn shell(op: &str, arg: &str) -> Result<String, String> {
+        #[cfg(feature = "ui")]
+        {
+            crate::ui::shell_request(op, arg).map_err(|e| if e.starts_with("midi:") { e } else { format!("midi: {e}") })
+        }
+        #[cfg(not(feature = "ui"))]
+        {
+            let _ = (op, arg);
+            Err("midi: on Android, MIDI needs the app shell (ray bundle --android)".to_string())
+        }
+    }
+
+    pub fn list(inputs: bool) -> Result<Vec<Port>, String> {
+        let text = shell("midi_list", if inputs { "in" } else { "out" })?;
+        Ok(text
+            .lines()
+            .filter_map(|line| {
+                let (id, name) = line.split_once('\t')?;
+                Some((id.parse().ok()?, name.to_string()))
+            })
+            .collect())
+    }
+
+    fn pair(kind: i32, reader_nonblocking: bool, buffer: i32) -> Result<(i32, i32), String> {
+        let mut fds = [0i32; 2];
+        // SAFETY: socketpair escribe dos fds válidos.
+        if unsafe { socketpair(AF_UNIX, kind, 0, fds.as_mut_ptr()) } != 0 {
+            return Err(format!("midi: could not create the pipe: {}", std::io::Error::last_os_error()));
+        }
+        let (fd_r, fd_w) = (fds[0], fds[1]);
+        // SAFETY: fds recién creados y nuestros; los valores viven durante cada llamada.
+        unsafe {
+            let v = &buffer as *const i32 as *const c_void;
+            for fd in [fd_r, fd_w] {
+                setsockopt(fd, SOL_SOCKET, SO_SNDBUF, v, 4);
+                setsockopt(fd, SOL_SOCKET, SO_RCVBUF, v, 4);
+            }
+            for (fd, nonblocking) in [(fd_r, reader_nonblocking), (fd_w, true)] {
+                if nonblocking {
+                    let fl = fcntl_raw(fd, F_GETFL);
+                    fcntl_raw(fd, F_SETFL, fl | O_NONBLOCK);
+                }
+            }
+        }
+        Ok((fd_r, fd_w))
+    }
+
+    fn file(fd: i32) -> std::fs::File {
+        // SAFETY: `fd` es nuestro; File toma la propiedad (su Drop lo cierra).
+        unsafe { std::os::unix::io::FromRawFd::from_raw_fd(fd) }
+    }
+
+    fn unhex(text: &str) -> Vec<u8> {
+        (0..text.len() / 2).filter_map(|i| u8::from_str_radix(text.get(i * 2..i * 2 + 2)?, 16).ok()).collect()
+    }
+
+    /// El hilo de una entrada o de un `watch`: sondea a `RayMidi` y entrega lo que llega; para
+    /// cuando el programa cierra su extremo, y entonces suelta el puerto en el shell.
+    fn reader_thread(token: String, fd_w: i32, messages: bool) {
+        std::thread::spawn(move || {
+            let mut record = Vec::with_capacity(256);
+            'serve: loop {
+                let mut pfd = PollFd { fd: fd_w, events: 0, revents: 0 };
+                // SAFETY: `pfd` es nuestro y vive durante la llamada.
+                unsafe { poll(&mut pfd, 1, 0) };
+                if pfd.revents & (POLLHUP | POLLERR) != 0 {
+                    break; // el programa cerró la entrada
+                }
+                let Ok(batch) = shell("midi_read", &token) else {
+                    break; // el shell soltó el puerto (o ya no contesta)
+                };
+                for line in batch.lines() {
+                    record.clear();
+                    if messages {
+                        let Some((ns, hex)) = line.split_once(' ') else { continue };
+                        record.extend_from_slice(&ns.parse::<u64>().unwrap_or(0).to_le_bytes());
+                        record.extend_from_slice(&unhex(hex));
+                    } else {
+                        record.push(1);
+                    }
+                    // SAFETY: `record` vive durante la llamada; `fd_w` es de este hilo.
+                    let sent = unsafe { send(fd_w, record.as_ptr(), record.len(), MSG_DONTWAIT | MSG_NOSIGNAL) };
+                    if sent < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::WouldBlock {
+                        break 'serve;
+                    }
+                }
+            }
+            let _ = shell("midi_close", &token);
+            // SAFETY: el fd es de este hilo.
+            unsafe { close(fd_w) };
+        });
+    }
+
+    pub fn open_input(id: Option<i64>, _name: &str) -> Result<std::fs::File, String> {
+        let Some(id) = id else {
+            return Err(NO_VIRTUAL.to_string());
+        };
+        let token = shell("midi_open_in", &id.to_string())?;
+        match pair(SOCK_SEQPACKET, true, 256 * 1024) {
+            Ok((fd_r, fd_w)) => {
+                reader_thread(token, fd_w, true);
+                Ok(file(fd_r))
+            }
+            Err(e) => {
+                let _ = shell("midi_close", &token);
+                Err(e)
+            }
+        }
+    }
+
+    pub fn watch() -> Result<std::fs::File, String> {
+        let token = shell("midi_watch", "")?;
+        match pair(SOCK_SEQPACKET, true, 4096) {
+            Ok((fd_r, fd_w)) => {
+                reader_thread(token, fd_w, false);
+                Ok(file(fd_r))
+            }
+            Err(e) => {
+                let _ = shell("midi_close", &token);
+                Err(e)
+            }
+        }
+    }
+
+    /// Lee exactamente `buf.len()` octetos del extremo bloqueante; `false` en EOF o error.
+    fn read_exact(fd: i32, buf: &mut [u8]) -> bool {
+        let mut got = 0;
+        while got < buf.len() {
+            // SAFETY: el tramo es nuestro y vive durante la llamada.
+            let n = unsafe { read(fd, buf[got..].as_mut_ptr(), buf.len() - got) };
+            if n > 0 {
+                got += n as usize;
+            } else if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            } else {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn open_output(id: Option<i64>, _name: &str) -> Result<std::fs::File, String> {
+        let Some(id) = id else {
+            return Err(NO_VIRTUAL.to_string());
+        };
+        let token = shell("midi_open_out", &id.to_string())?;
+        let (fd_r, fd_w) = match pair(SOCK_STREAM, false, 64 * 1024) {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = shell("midi_close", &token);
+                return Err(e);
+            }
+        };
+        std::thread::spawn(move || {
+            let mut header = [0u8; 2];
+            let mut frame = Vec::new();
+            let mut arg = String::new();
+            while read_exact(fd_r, &mut header) {
+                frame.resize(u16::from_le_bytes(header) as usize, 0);
+                if !read_exact(fd_r, &mut frame) {
+                    break;
+                }
+                arg.clear();
+                arg.push_str(&token);
+                arg.push(' ');
+                for b in &frame {
+                    arg.push_str(&format!("{b:02x}"));
+                }
+                if shell("midi_send", &arg).is_err() {
+                    break; // el dispositivo se desconectó
+                }
+            }
+            let _ = shell("midi_close", &token);
+            // SAFETY: el fd es de este hilo desde que arrancó.
+            unsafe { close(fd_r) };
+        });
+        Ok(file(fd_w))
     }
 }

@@ -130,6 +130,77 @@ pub fn drain(h: int) -> Result<int, string> {
     }
 }
 
+/// An audio device of the system, as listed by `devices`. `id` is what `open_device` and
+/// `open_input_device` take; it stays the same across reconnections on macOS and Windows.
+/// `input_channels` / `output_channels` are 0 when the device does not record / play.
+/// `sample_rate` is its current rate (0 if unknown). `transport` says how it is connected:
+/// `"builtin"`, `"usb"`, `"bluetooth"`, `"hdmi"`, `"network"`, `"virtual"`, `"aggregate"`,
+/// `"wired"`, or `""` when the system does not say — a Bluetooth output needs a larger latency
+/// hint than a wired one.
+// M468 (ray-daw #424).
+pub struct Device {
+    id: string,
+    name: string,
+    input_channels: int,
+    output_channels: int,
+    default_input: bool,
+    default_output: bool,
+    sample_rate: int,
+    transport: string,
+}
+
+/// The audio devices present right now. Empty on iOS (the system routes audio by itself) and
+/// where there is no audio backend.
+pub fn devices() -> [Device] {
+    var out: [Device] = [];
+    let r = __audio_open(0, 0, 0, "devices");
+    if (r[0] != "ok") {
+        return out;
+    }
+    for line in r[1].split("\n") {
+        let f = line.split("\t");
+        if (f.len() >= 8) {
+            out.push(
+                Device {
+                    id: f[0],
+                    name: f[1],
+                    input_channels: parse_int(f[2]).unwrap_or(0),
+                    output_channels: parse_int(f[3]).unwrap_or(0),
+                    default_input: f[4] == "1",
+                    default_output: f[5] == "1",
+                    sample_rate: parse_int(f[6]).unwrap_or(0),
+                    transport: f[7]
+                }
+            );
+        }
+    }
+    out
+}
+
+/// Like `open_format`, on the output device `device` (an `id` from `devices()`) instead of the
+/// default one. An unknown or disconnected device is `Err`.
+pub fn open_device(
+    device: string,
+    sample_rate: int,
+    channels: int,
+    format: string,
+    latency_ms: int
+) -> Result<int, string> {
+    open_format(sample_rate, channels, format + "@" + device, latency_ms)
+}
+
+/// Like `open_input`, recording from the device `device` (an `id` from `devices()`) instead of
+/// the default one.
+pub fn open_input_device(
+    device: string,
+    sample_rate: int,
+    channels: int,
+    format: string,
+    latency_ms: int
+) -> Result<int, string> {
+    open_input(sample_rate, channels, format + "@" + device, latency_ms)
+}
+
 /// Opens an audio INPUT (the default microphone or audio interface) and starts recording:
 /// `sample_rate` Hz, `channels` interleaved channels, samples in `format` (`"s16le"`, `"s24le"`,
 /// `"s32le"` or `"f32le"`). `latency_ms` (20–1000, or 0 for the default of 100) sizes the blocks

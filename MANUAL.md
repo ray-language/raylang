@@ -1664,6 +1664,25 @@ permiso en `[app.plist]` (`NSMicrophoneUsageDescription = "…"`), y si va firma
 endurecido, el entitlement `com.apple.security.device.audio-input`. Para tests, `RAY_AUDIO_SOURCE=tone` (un La de 440 Hz) o `=null` (silencio)
 sustituyen al dispositivo.
 
+**Elegir el dispositivo.** `open` y `open_input` usan el dispositivo por defecto del sistema.
+`audio.devices()` lista los que hay, y `open_device` / `open_input_device` abren uno concreto
+por su `id`:
+
+```rust
+for d in audio.devices() {
+    print("${d.name}: ${d.input_channels} in, ${d.output_channels} out, ${d.transport}");
+}
+let usb = audio.devices().filter(
+    fn(d: audio.Device) -> bool { d.transport == "usb" && d.output_channels > 0 }
+);
+let out = audio.open_device(usb[0].id, 48000, 2, "s24le", 40)?;
+```
+
+`transport` dice cómo está conectado (`"builtin"`, `"usb"`, `"bluetooth"`…): una salida
+Bluetooth necesita una latencia mayor que una por cable — por debajo de unos 80 ms crepita —,
+y con este campo el programa puede elegirla. En iOS la lista sale vacía: el sistema decide por
+dónde suena.
+
 ### MIDI (`std/midi`)
 
 Un teclado, un controlador o un sintetizador conectados al equipo son puertos MIDI: `inputs()` y

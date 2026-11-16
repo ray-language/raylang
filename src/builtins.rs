@@ -1633,7 +1633,12 @@ const AUDIO_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
 
 /// M145: abre una salida PCM y registra su extremo de escritura como PipeW; `Ok(handle)`.
 #[cfg(all(feature = "audio", any(unix, windows), not(target_arch = "wasm32")))]
-pub fn audio_open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> Result<i64, String> {
+pub fn audio_open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> Result<String, String> {
+    // M468 (ray-daw #424): `devices` no abre nada: devuelve el listado de dispositivos (una
+    // línea por dispositivo, campos separados por tabuladores) en vez de un handle.
+    if format == "devices" {
+        return ray_runtime::audio::devices_text();
+    }
     // M463 (ray-daw #422): `input:<formato>` abre una ENTRADA. Su handle es el extremo de
     // lectura del pipe (`Pipe`, como el stdout de un hijo): `__audio_read` aparca la fibra hasta
     // que el dispositivo entregue datos, y `close(h)` para la captura.
@@ -1643,17 +1648,17 @@ pub fn audio_open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str
         let id = reg.next;
         reg.next += 1;
         reg.open.insert(id, OpenHandle::Pipe(f));
-        return Ok(id);
+        return Ok(id.to_string());
     }
     let f = ray_runtime::audio::open(sample_rate, channels, latency_ms, format)?;
     let mut reg = registry().lock().unwrap();
     let id = reg.next;
     reg.next += 1;
     reg.open.insert(id, OpenHandle::PipeW(f));
-    Ok(id)
+    Ok(id.to_string())
 }
 #[cfg(any(not(all(feature = "audio", any(unix, windows))), target_arch = "wasm32"))]
-pub fn audio_open(_sample_rate: i64, _channels: i64, _latency_ms: i64, _format: &str) -> Result<i64, String> {
+pub fn audio_open(_sample_rate: i64, _channels: i64, _latency_ms: i64, _format: &str) -> Result<String, String> {
     Err(AUDIO_UNAVAILABLE.to_string())
 }
 

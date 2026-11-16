@@ -1063,6 +1063,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "}
 ",
             "fn __ray_audio_open(rate: i64, ch: i64, latency_ms: i64, format: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            // M468: `devices` devuelve el listado de dispositivos en vez de un handle.
+            "    if format == \"devices\" {\n",
+            "        return Rc::new(std::cell::RefCell::new(match ray_runtime::audio::devices_text() {\n",
+            "            Ok(text) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(text.as_str())],\n",
+            "            Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
+            "        }));\n",
+            "    }\n",
             // M463: `input:<formato>` abre una entrada; su handle es el extremo de LECTURA (Pipe).
             "    let opened = match format.strip_prefix(\"input:\") {\n",
             "        Some(fmt) => ray_runtime::audio::open_input(rate, ch, latency_ms, fmt).map(|f| __RayHandle::Pipe(std::sync::Arc::new(f))),\n",

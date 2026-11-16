@@ -496,6 +496,10 @@ recording (macOS, iOS, Linux, Android, Windows): audio.open_input(rate, channels
 latency_ms) then audio.read(h) (parks the fiber until captured frames arrive) and
 audio.recorded_ms(h); on iOS set [ios] audio_session = "play_and_record", on Android
 [android] record_audio = true; RAY_AUDIO_SOURCE=tone or =null for tests;
+choosing the device: audio.devices() lists Device { id, name, input_channels, output_channels,
+default_input, default_output, sample_rate, transport } and audio.open_device(id, rate,
+channels, format, latency_ms) / audio.open_input_device(id, …) open one (empty list on iOS;
+transport "bluetooth" wants a latency hint of 80 ms or more);
 `audio.flush(h)` (seek/pause without overlap) cuts with the anti-click ramp ONLY on CoreAudio
 (macOS/iOS; `platform()` returns `"ios"`/`"android"` on the phone) — ALSA/AAudio/WASAPI drop
 without a ramp, so write your own fade before `flush` there; `RAY_AUDIO_TRACE=1` prints `flushes N`;

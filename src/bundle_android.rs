@@ -1234,6 +1234,9 @@ public final class RayNotify {
                 case "audio_permission": // M465: el micrófono, para audio.open_input
                     recordPermission(c, id);
                     return;
+                case "audio_devices": // M468: audio.devices()
+                    RayBridge.requestResult(id, audioDevices(c), null);
+                    return;
                 case "notify_status":
                     RayBridge.requestResult(id, status(c), null);
                     return;
@@ -1360,6 +1363,47 @@ public final class RayNotify {
         pendingRecord = id;
         a.raySuppressLifecycle = true;
         a.requestPermissions(new String[] { RECORD }, RECORD_REQUEST);
+    }
+
+    // M468 (ray-daw #424): los dispositivos de audio, una línea por dispositivo con los campos
+    // de ray_runtime::audio::devices_text (id, nombre, canales de entrada, de salida, por
+    // defecto de entrada, de salida, frecuencia, transporte). Android no dice cuál es el
+    // dispositivo por defecto: lo decide el enrutado en cada momento.
+    static String audioDevices(Context c) {
+        android.media.AudioManager am = (android.media.AudioManager) c.getSystemService(Context.AUDIO_SERVICE);
+        StringBuilder out = new StringBuilder();
+        if (am == null) { return ""; }
+        for (android.media.AudioDeviceInfo d : am.getDevices(android.media.AudioManager.GET_DEVICES_ALL)) {
+            int channels = 0;
+            for (int n : d.getChannelCounts()) { channels = Math.max(channels, n); }
+            if (channels == 0) { channels = 2; } // lista vacía = cualquier número de canales
+            int rate = 0;
+            for (int r : d.getSampleRates()) { rate = Math.max(rate, r); }
+            String kind;
+            String transport;
+            switch (d.getType()) {
+                case android.media.AudioDeviceInfo.TYPE_BUILTIN_EARPIECE: kind = "earpiece"; transport = "builtin"; break;
+                case android.media.AudioDeviceInfo.TYPE_BUILTIN_SPEAKER: kind = "speaker"; transport = "builtin"; break;
+                case android.media.AudioDeviceInfo.TYPE_BUILTIN_MIC: kind = "microphone"; transport = "builtin"; break;
+                case android.media.AudioDeviceInfo.TYPE_TELEPHONY: kind = "telephony"; transport = "builtin"; break;
+                case android.media.AudioDeviceInfo.TYPE_WIRED_HEADSET: kind = "wired headset"; transport = "wired"; break;
+                case android.media.AudioDeviceInfo.TYPE_WIRED_HEADPHONES: kind = "wired headphones"; transport = "wired"; break;
+                case android.media.AudioDeviceInfo.TYPE_LINE_ANALOG: kind = "line"; transport = "wired"; break;
+                case android.media.AudioDeviceInfo.TYPE_BLUETOOTH_SCO: kind = "Bluetooth call"; transport = "bluetooth"; break;
+                case android.media.AudioDeviceInfo.TYPE_BLUETOOTH_A2DP: kind = "Bluetooth"; transport = "bluetooth"; break;
+                case 26: case 27: case 30: kind = "Bluetooth LE"; transport = "bluetooth"; break; // BLE_HEADSET, BLE_SPEAKER, BLE_BROADCAST
+                case android.media.AudioDeviceInfo.TYPE_HDMI: case android.media.AudioDeviceInfo.TYPE_HDMI_ARC: kind = "HDMI"; transport = "hdmi"; break;
+                case android.media.AudioDeviceInfo.TYPE_USB_DEVICE: case android.media.AudioDeviceInfo.TYPE_USB_ACCESSORY: case 22: kind = "USB"; transport = "usb"; break; // 22 = USB_HEADSET
+                case android.media.AudioDeviceInfo.TYPE_IP: kind = "network"; transport = "network"; break;
+                default: kind = ""; transport = ""; break;
+            }
+            String name = String.valueOf(d.getProductName());
+            if (!kind.isEmpty()) { name = name + " (" + kind + ")"; }
+            out.append(d.getId()).append('\t').append(name.replace('\t', ' ').replace('\n', ' ')).append('\t')
+                .append(d.isSource() ? channels : 0).append('\t').append(d.isSink() ? channels : 0)
+                .append("\t0\t0\t").append(rate).append('\t').append(transport).append('\n');
+        }
+        return out.toString();
     }
 
     static void recordPermissionResult(int[] grantResults) {

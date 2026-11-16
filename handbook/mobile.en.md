@@ -546,6 +546,7 @@ And what is declared in `ray.toml`:
 | `[ios] sounds` | files (caf/aiff/wav, ≤ 30 s) copied into the bundle for `std/notify`'s `Notification.sound_name` |
 | `[android] application_id` | an application id different from `[app] id` |
 | `[android] background_audio` | the same on Android, with a foreground service |
+| `[android] record_audio` | declares the microphone permission, to record with `audio.open_input`; the dialog appears the first time the program opens an input |
 | `[android] sounds` | files (ogg/wav/mp3) copied to `res/raw/` for `std/notify`'s `Channel.sound` (the name, lowercase, without extension) |
 | `[android] exact_alarms` | notifications scheduled with `std/notify` use exact alarms (the "Alarms & reminders" permission); without the key, inexact ones with minutes of slack |
 | `[frontend]` | the frontend's commands and folder (section 2) |
@@ -568,5 +569,5 @@ And what is declared in `ray.toml`:
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:a7075c6c1a46 -->
-<!-- sync: sha256:a7075c6c1a46 -->
+<!-- sync: sha256:8a489918793c -->
+<!-- sync: sha256:8a489918793c -->

@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/audio` graba también en Linux, Android y Windows**: `audio.open_input` usa ALSA,
+  AAudio y WASAPI, con la misma forma que en macOS e iOS. En Android la app declara el permiso
+  con `[android] record_audio = true` y el diálogo sale la primera vez que se abre una entrada;
+  sin permiso, `open_input` devuelve un error que lo dice. Si el dispositivo no captura en el
+  formato pedido, se captura en s16le y se convierte.
+
 ## 1.27.101 — 2026-11-15
 
 - **`std/midi`** (macOS e iOS): `midi.inputs()` y `midi.outputs()` listan los puertos,

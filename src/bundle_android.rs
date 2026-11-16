@@ -42,7 +42,7 @@ android.useAndroidX=true
 /// acotado por la network security config. `configChanges`: la rotación no recrea la Activity.
 /// M160: `android:icon` SOLO cuando los PNG multi-densidad se generaron de verdad — el
 /// atributo con los mipmaps ausentes rompe el build en aapt (generar-primero-decidir-después).
-fn android_manifest(icon: bool, background_audio: bool, url_scheme: Option<&str>, exact_alarms: bool, alarm: bool) -> String {
+fn android_manifest(icon: bool, background_audio: bool, url_scheme: Option<&str>, exact_alarms: bool, alarm: bool, record_audio: bool) -> String {
     let icon_attr = if icon { "\n      android:icon=\"@mipmap/ic_launcher\"" } else { "" };
     // M330 D5: el shell de desarrollo abre las URLs de su propio esquema (el QR del enlace);
     // `singleTask` para que un enlace con la app abierta llegue a `onNewIntent` de la actividad
@@ -68,6 +68,10 @@ fn android_manifest(icon: bool, background_audio: bool, url_scheme: Option<&str>
     // desde el programa, nunca al arrancar) y RECEIVE_BOOT_COMPLETED (normal, sin diálogo) para
     // rearmar las programadas tras reiniciar; el receiver nace deshabilitado y RayNotify lo
     // enciende mientras haya alguna pendiente. `[android] exact_alarms` añade SCHEDULE_EXACT_ALARM.
+    // M465: `[android] record_audio = true` — el micrófono para `audio.open_input`. Es un permiso
+    // «peligroso»: además de declararse aquí, el shell lo pide en un diálogo la primera vez que el
+    // programa abre una entrada (RayNotify.recordPermission).
+    let record_perm = if record_audio { "\n  <uses-permission android:name=\"android.permission.RECORD_AUDIO\" />" } else { "" };
     let exact_perm = if exact_alarms && !alarm { "\n  <uses-permission android:name=\"android.permission.SCHEDULE_EXACT_ALARM\" />" } else { "" };
     // M448 (IDEAS §122): std/alarm — SOLO si el programa lo importa (Google Play reserva estos
     // permisos a apps de alarma/calendario). `USE_EXACT_ALARM` (API 33+, sin diálogo) y
@@ -90,7 +94,7 @@ fn android_manifest(icon: bool, background_audio: bool, url_scheme: Option<&str>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <uses-permission android:name="android.permission.INTERNET" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />{exact_perm}{alarm_perms}{audio_perms}
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />{exact_perm}{alarm_perms}{audio_perms}{record_perm}
   <application
       android:label="@string/app_name"{icon_attr}
       android:networkSecurityConfig="@xml/network_security_config"
@@ -456,6 +460,7 @@ public class MainActivity extends Activity {
     public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == RayNotify.PERMISSION_REQUEST) { RayNotify.permissionResult(this, grantResults); }
+        if (requestCode == RayNotify.RECORD_REQUEST) { RayNotify.recordPermissionResult(grantResults); }
     }
 
     // Revisión 1.27.91: si la Activity muere con el diálogo de permiso abierto, la petición del
@@ -961,6 +966,9 @@ public final class RayNotify {
                 case "notify_permission":
                     permission(c, id);
                     return;
+                case "audio_permission": // M465: el micrófono, para audio.open_input
+                    recordPermission(c, id);
+                    return;
                 case "notify_status":
                     RayBridge.requestResult(id, status(c), null);
                     return;
@@ -1045,6 +1053,56 @@ public final class RayNotify {
         long id = pendingPermission;
         pendingPermission = 0;
         if (id != 0) { RayBridge.requestResult(id, null, "notify: the activity was destroyed before the user answered"); }
+        long rec = pendingRecord;
+        pendingRecord = 0;
+        if (rec != 0) { RayBridge.requestResult(rec, null, "the activity was destroyed before the user answered"); }
+    }
+
+    // M465: el permiso de micrófono (RECORD_AUDIO) de audio.open_input. Contesta "granted",
+    // "denied" o "undeclared" (el manifest no lo declara: falta `[android] record_audio = true`,
+    // y pedirlo así se deniega sin mostrar nada).
+    static final String RECORD = "android.permission.RECORD_AUDIO";
+    static final int RECORD_REQUEST = 7004;
+    static long pendingRecord = 0;
+
+    static void recordPermission(Context c, long id) {
+        if (c.checkSelfPermission(RECORD) == PackageManager.PERMISSION_GRANTED) {
+            RayBridge.requestResult(id, "granted", null);
+            return;
+        }
+        boolean declared = false;
+        try {
+            String[] asked = c.getPackageManager().getPackageInfo(c.getPackageName(), PackageManager.GET_PERMISSIONS).requestedPermissions;
+            if (asked != null) {
+                for (String p : asked) { if (RECORD.equals(p)) { declared = true; } }
+            }
+        } catch (Exception e) {
+            declared = false;
+        }
+        if (!declared) {
+            RayBridge.requestResult(id, "undeclared", null);
+            return;
+        }
+        MainActivity a = MainActivity.rayCurrent;
+        if (a == null) {
+            RayBridge.requestResult(id, "denied", null);
+            return;
+        }
+        if (pendingRecord != 0) {
+            RayBridge.requestResult(id, null, "a permission request is already open");
+            return;
+        }
+        pendingRecord = id;
+        a.raySuppressLifecycle = true;
+        a.requestPermissions(new String[] { RECORD }, RECORD_REQUEST);
+    }
+
+    static void recordPermissionResult(int[] grantResults) {
+        long id = pendingRecord;
+        pendingRecord = 0;
+        if (id == 0) { return; }
+        boolean ok = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+        RayBridge.requestResult(id, ok ? "granted" : "denied", null);
     }
 
     static void permissionResult(Context c, int[] grantResults) {
@@ -2123,7 +2181,7 @@ mod devtools_tests {
         let base = std::env::temp_dir().join(format!("ray_android_devtools_{}", std::process::id()));
         for (devtools, want) in [(true, true), (false, false)] {
             let _ = std::fs::remove_dir_all(&base);
-            super::write_project(&base, "App", "org.example.app", "1.0.0", 1, "arm64-v8a", false, devtools, false, None, false, false).unwrap();
+            super::write_project(&base, "App", "org.example.app", "1.0.0", 1, "arm64-v8a", false, devtools, false, None, false, false, false).unwrap();
             let src = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
             assert_eq!(src.contains("setWebContentsDebuggingEnabled(true)"), want, "devtools={devtools}");
             assert!(!src.contains("/*RAY_DEVTOOLS*/"), "el marcador no queda en el proyecto");
@@ -2146,6 +2204,8 @@ pub fn write_project(
     url_scheme: Option<&str>,
     exact_alarms: bool,
     alarm: bool,
+    // M465: `[android] record_audio` → RECORD_AUDIO en el manifest (audio.open_input).
+    record_audio: bool,
 ) -> Result<(), String> {
     let write = |rel: &str, content: &str| -> Result<(), String> {
         let p = dir.join(rel);
@@ -2157,7 +2217,7 @@ pub fn write_project(
     write("settings.gradle", &settings_gradle(name))?;
     write("gradle.properties", GRADLE_PROPERTIES)?;
     write("app/build.gradle", &app_build_gradle(app_id, version, build, abis))?;
-    write("app/src/main/AndroidManifest.xml", &android_manifest(icon, background_audio, url_scheme, exact_alarms, alarm))?;
+    write("app/src/main/AndroidManifest.xml", &android_manifest(icon, background_audio, url_scheme, exact_alarms, alarm, record_audio))?;
     write("app/src/main/res/xml/network_security_config.xml", NETWORK_SECURITY_XML)?;
     write("app/src/main/res/values/strings.xml", &strings_xml(name))?;
     write("app/src/main/res/values/styles.xml", STYLES_XML)?;
@@ -2231,10 +2291,10 @@ mod tests {
         assert!(MAIN_ACTIVITY_JAVA.contains("WebViewCompat.addDocumentStartJavaScript(web, RAY_SHIM, Collections.singleton(\"*\"))"));
         assert!(MAIN_ACTIVITY_JAVA.contains("if (!shimInjected) {\n                    v.evaluateJavascript(RAY_SHIM, null);"));
         assert!(app_build_gradle("org.raylang.demo", "1.0.0", 1, "'arm64-v8a'").contains("implementation 'androidx.webkit:webkit:1.12.1'"));
-        assert!(android_manifest(false, false, None, false, false)
+        assert!(android_manifest(false, false, None, false, false, false)
             .contains("android:networkSecurityConfig=\"@xml/network_security_config\""));
         assert!(NETWORK_SECURITY_XML.contains("127.0.0.1"));
-        assert!(!android_manifest(false, false, None, false, false).contains("usesCleartextTraffic"));
+        assert!(!android_manifest(false, false, None, false, false, false).contains("usesCleartextTraffic"));
         let gradle = app_build_gradle("org.raylang.demo", "1.0.0", 1, "'arm64-v8a'");
         assert!(gradle.contains("namespace 'org.raylang.shell'"), "{gradle}");
         assert!(gradle.contains("applicationId \"org.raylang.demo\""), "{gradle}");
@@ -2264,14 +2324,14 @@ mod tests {
         assert!(RAY_SCHEME_JAVA.contains("(\"ray\".equals(scheme) && \"app\".equals(host))"));
         // If-None-Match nunca viaja: WebResourceResponse no admite 304.
         assert!(RAY_SCHEME_JAVA.contains("RayBridge.schemeOpen(url, method == null ? \"GET\" : method, range, null)"));
-        assert!(!android_manifest(false, false, None, false, false).contains("app.ray.invalid"), "the alias needs no manifest entry");
+        assert!(!android_manifest(false, false, None, false, false, false).contains("app.ray.invalid"), "the alias needs no manifest entry");
     }
 
     #[test]
     fn the_manifest_only_declares_the_icon_when_the_mipmaps_exist() {
         // M160: el atributo sin los PNG rompe aapt — solo con icon=true.
-        assert!(android_manifest(true, false, None, false, false).contains("android:icon=\"@mipmap/ic_launcher\""));
-        assert!(!android_manifest(false, false, None, false, false).contains("android:icon"));
+        assert!(android_manifest(true, false, None, false, false, false).contains("android:icon=\"@mipmap/ic_launcher\""));
+        assert!(!android_manifest(false, false, None, false, false, false).contains("android:icon"));
     }
 
     /// M334: con targetSdk 35 Android dibuja de borde a borde; el shell reserva las barras del
@@ -2291,7 +2351,7 @@ mod tests {
     /// cambiar el modo; en API 29–32 el WebView recibe force dark «solo tema web».
     #[test]
     fn the_shell_theme_follows_the_system_dark_mode() {
-        let manifest = android_manifest(false, false, None, false, false);
+        let manifest = android_manifest(false, false, None, false, false, false);
         assert!(manifest.contains("android:theme=\"@style/RayTheme\""));
         assert!(!manifest.contains("Theme.Material.Light.NoActionBar"), "el tema claro fijo era la causa de #177");
         assert!(manifest.contains("|uiMode\""), "sin uiMode en configChanges el cambio de modo recrea la Activity y recarga la página");
@@ -2331,26 +2391,37 @@ mod tests {
         }
     }
 
+    /// M465: `[android] record_audio` declara el permiso de micrófono, y solo entonces; el shell
+    /// lo pide en tiempo de ejecución y distingue «no declarado» de «denegado».
+    #[test]
+    fn record_audio_declares_the_microphone_permission_only_when_asked() {
+        assert!(android_manifest(false, false, None, false, false, true).contains("android.permission.RECORD_AUDIO"));
+        assert!(!android_manifest(false, false, None, false, false, false).contains("RECORD_AUDIO"));
+        assert!(RAY_NOTIFY_JAVA.contains("case \"audio_permission\""));
+        assert!(RAY_NOTIFY_JAVA.contains("RayBridge.requestResult(id, \"undeclared\", null)"));
+        assert!(MAIN_ACTIVITY_JAVA.contains("RayNotify.recordPermissionResult(grantResults)"));
+    }
+
     /// M324 (ray808 #18): `[android] background_audio` declara el servicio de reproducción con sus
     /// permisos, escribe la clase y enciende el flag de MainActivity; sin él, nada de eso existe.
     #[test]
     fn background_audio_adds_the_foreground_service_only_when_asked() {
-        let with = android_manifest(false, true, None, false, false);
+        let with = android_manifest(false, true, None, false, false, false);
         assert!(with.contains("android:name=\".RayPlaybackService\""), "{with}");
         assert!(with.contains("android:foregroundServiceType=\"mediaPlayback\""), "{with}");
         for perm in ["FOREGROUND_SERVICE", "FOREGROUND_SERVICE_MEDIA_PLAYBACK", "POST_NOTIFICATIONS"] {
             assert!(with.contains(&format!("android.permission.{perm}")), "{perm}");
         }
         // M442: POST_NOTIFICATIONS lo declara siempre std/notify (se pide en tiempo de ejecución).
-        assert!(android_manifest(false, false, None, false, false).contains("android.permission.POST_NOTIFICATIONS"));
-        let without = android_manifest(false, false, None, false, false);
+        assert!(android_manifest(false, false, None, false, false, false).contains("android.permission.POST_NOTIFICATIONS"));
+        let without = android_manifest(false, false, None, false, false, false);
         assert!(!without.contains("RayPlaybackService") && !without.contains("FOREGROUND_SERVICE"), "{without}");
         assert!(MAIN_ACTIVITY_JAVA.contains("if (RAY_BACKGROUND_AUDIO) { RayPlaybackService.start(this); }"));
         assert!(RAY_PLAYBACK_SERVICE_JAVA.contains("ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK"));
         let base = std::env::temp_dir().join(format!("ray_android_audio_{}", std::process::id()));
         for (bg, want) in [(true, true), (false, false)] {
             let _ = std::fs::remove_dir_all(&base);
-            write_project(&base, "App", "org.example.app", "1.0.0", 1, "'arm64-v8a'", false, false, bg, None, false, false).unwrap();
+            write_project(&base, "App", "org.example.app", "1.0.0", 1, "'arm64-v8a'", false, false, bg, None, false, false, false).unwrap();
             let main = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
             assert_eq!(main.contains("RAY_BACKGROUND_AUDIO = true;"), want, "bg={bg}");
             assert!(!main.contains("/*RAY_BACKGROUND_AUDIO*/"), "sin marcador");
@@ -2381,23 +2452,23 @@ mod tests {
     /// entrega a la librería; el shell normal no lleva nada de eso.
     #[test]
     fn the_dev_shell_registers_its_url_scheme_and_hands_links_to_the_library() {
-        let with = android_manifest(false, false, Some("org.example.app.dev"), false, false);
+        let with = android_manifest(false, false, Some("org.example.app.dev"), false, false, false);
         assert!(with.contains("<data android:scheme=\"org.example.app.dev\" />"));
         assert!(with.contains("android.intent.category.BROWSABLE"));
         assert!(with.contains("android:launchMode=\"singleTask\""));
-        assert!(!android_manifest(false, false, None, false, false).contains("launchMode"));
-        assert!(!android_manifest(false, false, None, false, false).contains("android.intent.action.VIEW"));
+        assert!(!android_manifest(false, false, None, false, false, false).contains("launchMode"));
+        assert!(!android_manifest(false, false, None, false, false, false).contains("android.intent.action.VIEW"));
         let base = std::env::temp_dir().join(format!("ray-android-devlink-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
-        write_project(&base, "App", "org.example.app.dev", "1.0.0", 1, "'arm64-v8a'", false, true, false, Some("org.example.app.dev"), false, false).unwrap();
+        write_project(&base, "App", "org.example.app.dev", "1.0.0", 1, "'arm64-v8a'", false, true, false, Some("org.example.app.dev"), false, false, false).unwrap();
         let main = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
         assert!(main.contains("rayDevLink(getIntent());"));
         assert!(main.contains("protected void onNewIntent(Intent intent)"));
         assert!(main.contains("\"org.example.app.dev\".equals(data.getScheme())"));
         let bridge = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/RayBridge.java")).unwrap();
         assert!(bridge.contains("public static native void devLink(String url);"));
-        write_project(&base, "App", "org.example.app", "1.0.0", 1, "'arm64-v8a'", false, false, false, None, false, false).unwrap();
+        write_project(&base, "App", "org.example.app", "1.0.0", 1, "'arm64-v8a'", false, false, false, None, false, false, false).unwrap();
         let main = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/MainActivity.java")).unwrap();
         assert!(!main.contains("rayDevLink"));
         assert!(main.contains("protected void onNewIntent(Intent intent)"), "M442: onNewIntent existe siempre");
@@ -2409,7 +2480,7 @@ mod tests {
     /// cuando el programa importa `std/alarm`.
     #[test]
     fn the_alarm_components_are_declared_only_when_the_program_uses_std_alarm() {
-        let with = android_manifest(false, false, None, false, true);
+        let with = android_manifest(false, false, None, false, true, false);
         for needle in [
             "android.permission.USE_EXACT_ALARM",
             "android.permission.SCHEDULE_EXACT_ALARM\" android:maxSdkVersion=\"32\"",
@@ -2422,19 +2493,19 @@ mod tests {
         ] {
             assert!(with.contains(needle), "{needle}\n{with}");
         }
-        let without = android_manifest(false, false, None, false, false);
+        let without = android_manifest(false, false, None, false, false, false);
         for needle in ["USE_EXACT_ALARM", "USE_FULL_SCREEN_INTENT", "RayAlarm"] {
             assert!(!without.contains(needle), "{needle}");
         }
         // Con background_audio los permisos del servicio no se duplican; con exact_alarms, SCHEDULE sin tope.
-        let both = android_manifest(false, true, None, true, true);
+        let both = android_manifest(false, true, None, true, true, false);
         assert_eq!(both.matches("android.permission.FOREGROUND_SERVICE\"").count(), 1, "{both}");
         assert_eq!(both.matches("android.permission.SCHEDULE_EXACT_ALARM").count(), 1, "{both}");
         assert!(!both.contains("maxSdkVersion"), "{both}");
         let base = std::env::temp_dir().join(format!("ray_android_alarm_{}", std::process::id()));
         for alarm in [true, false] {
             let _ = std::fs::remove_dir_all(&base);
-            write_project(&base, "App", "org.example.app", "1.0.0", 1, "'arm64-v8a'", false, false, false, None, false, alarm).unwrap();
+            write_project(&base, "App", "org.example.app", "1.0.0", 1, "'arm64-v8a'", false, false, false, None, false, alarm, false).unwrap();
             let java = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/RayAlarm.java")).unwrap();
             assert_eq!(java.contains("static final boolean ENABLED = true;"), alarm);
             for f in ["RayAlarmReceiver.java", "RayAlarmService.java", "RayAlarmActivity.java"] {
@@ -2471,13 +2542,13 @@ mod tests {
     /// permisos no produce un `lifecycle` fantasma y RayBridge atiende las peticiones.
     #[test]
     fn the_shell_ships_the_notification_bridge_and_exact_alarms_are_opt_in() {
-        let plain = android_manifest(false, false, None, false, false);
+        let plain = android_manifest(false, false, None, false, false, false);
         assert!(plain.contains("android.permission.POST_NOTIFICATIONS"));
         assert!(plain.contains("android.permission.RECEIVE_BOOT_COMPLETED"));
         assert!(plain.contains("android:name=\".RayNotifyReceiver\"") && plain.contains("android:enabled=\"false\""), "{plain}");
         assert!(plain.contains("android.intent.action.BOOT_COMPLETED"));
         assert!(!plain.contains("SCHEDULE_EXACT_ALARM"));
-        assert!(android_manifest(false, false, None, true, false).contains("android.permission.SCHEDULE_EXACT_ALARM"));
+        assert!(android_manifest(false, false, None, true, false, false).contains("android.permission.SCHEDULE_EXACT_ALARM"));
         assert!(MAIN_ACTIVITY_JAVA.contains("rayNotificationIntent(getIntent());"));
         assert!(MAIN_ACTIVITY_JAVA.contains("if (raySuppressLifecycle) { return; }"));
         assert!(MAIN_ACTIVITY_JAVA.contains("RayNotify.permissionResult(this, grantResults)"));
@@ -2492,7 +2563,7 @@ mod tests {
         let base = std::env::temp_dir().join(format!("ray_android_notify_{}", std::process::id()));
         for (exact, want) in [(true, "EXACT_ALARMS = true;"), (false, "EXACT_ALARMS = false;")] {
             let _ = std::fs::remove_dir_all(&base);
-            write_project(&base, "App", "org.example.app", "1.0.0", 1, "'arm64-v8a'", false, false, false, None, exact, false).unwrap();
+            write_project(&base, "App", "org.example.app", "1.0.0", 1, "'arm64-v8a'", false, false, false, None, exact, false, false).unwrap();
             let notify = std::fs::read_to_string(base.join("app/src/main/java/org/raylang/shell/RayNotify.java")).unwrap();
             assert!(notify.contains(want) && !notify.contains("/*RAY_EXACT_ALARMS*/"), "exact={exact}");
             assert!(base.join("app/src/main/java/org/raylang/shell/RayNotifyReceiver.java").is_file());

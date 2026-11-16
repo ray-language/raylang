@@ -20568,3 +20568,38 @@ La revisión del rango `v1.27.100..main` (M462–M464) encontró diez puntos; lo
   en nativo; una tupla de más de 8 elementos como clave da un error de raylang, no de rustc.
 
 Sin cambio: el espejo selfhost acepta `Option` de claves pero no tuplas (no tiene tipo tupla).
+
+## 444. M465 — la entrada de audio en Linux, Android y Windows (nov 2026)
+
+La fase 3 de IDEAS §125: `audio.open_input` deja de ser cosa de Apple. La forma no cambia — el
+programa lee bloques de frames enteros de un handle, aparcando la fibra —; cambia quién escribe.
+
+**Un hilo lector en vez de un callback.** ALSA (`snd_pcm_readi`) y AAudio (`AAudioStream_read`)
+tienen lectura bloqueante: un hilo por entrada pide bloques de un cuarto de la latencia y los
+entrega. WASAPI en modo compartido se sondea (`GetNextPacketSize`) a la cadencia del motor y se
+acumula hasta el mismo tamaño de bloque. El hilo termina cuando la entrega falla porque el
+programa cerró, o cuando el dispositivo desaparece.
+
+**El formato.** Se pide el del programa; si el dispositivo lo rechaza (ALSA sin plug, AAudio
+I24/I32 antes de la API 31), se captura en s16le y `from_s16le` lo lleva al pedido. El programa
+recibe siempre el formato que pidió, aunque en ese caso con 16 bits de resolución.
+
+**El pipe en Windows.** El par de datagramas de unix da dos cosas: cada lectura es un bloque
+entero, y la fuente nunca espera. El pipe anónimo de Windows no da ninguna (es un flujo, y sin
+modo no bloqueante), así que la entrada usa un pipe CON NOMBRE en modo mensaje con el lado de la
+fuente en `PIPE_NOWAIT`: `ReadFile` devuelve un mensaje y `WriteFile` sin sitio vuelve con cero
+octetos. Una sola instancia que el propio proceso conecta en el acto. El lado del programa se
+lee con la misma maquinaria que el stdout de un hijo (`PeekNamedPipe` + aparcar), sin cambios
+en los motores. La fuente de pruebas (`RAY_AUDIO_SOURCE`) funciona ya también en Windows.
+
+**El permiso en Android.** `RECORD_AUDIO` es un permiso «peligroso»: se declara en el manifest
+y además lo concede el usuario. La declaración es explícita (`[android] record_audio = true`):
+Play revisa los permisos sensibles, y una app que no graba no debe llevarlo. El diálogo lo abre
+el shell la primera vez que el programa llama a `open_input`, que espera la respuesta; si el
+manifest no lo declara, el error dice qué clave falta (pedirlo así se deniega sin mostrar nada).
+
+Verificado: en la VM de Linux, la captura real por ALSA en los cuatro formatos (a ritmo, por
+frames enteros, y el hilo termina al cerrar); en la VM de Windows, WASAPI y el pipe con nombre,
+con el dispositivo y con la fuente de pruebas; en el emulador de Android, el diálogo de permiso
+(concedido y denegado) y la grabación del micrófono virtual en tres formatos. Las tarjetas de
+las VMs entregan silencio: falta grabar de un micrófono físico en Linux y en Windows.

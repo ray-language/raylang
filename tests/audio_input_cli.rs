@@ -3,11 +3,13 @@
 //! micrófono) en la VM, el intérprete y el binario nativo. Lo que se comprueba: los bloques
 //! llegan alineados a frame, a su ritmo (leer medio segundo tarda medio segundo: `read` aparca
 //! la fibra, no gira), el reloj de captura avanza aunque nadie lea, y lo que no se lee a tiempo
-//! se descarta por frames enteros.
-#![cfg(unix)]
+//! se descarta por frames enteros. M465: también en Windows, donde el pipe es uno con nombre en
+//! modo mensaje (la batería nativa se queda en unix).
+#![cfg(any(unix, windows))]
 
 use std::process::Command;
 
+#[cfg(unix)]
 fn has_rustc() -> bool {
     Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
 }
@@ -91,6 +93,7 @@ fn input_reads_paced_aligned_frames_on_the_vm_and_the_interpreter() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+#[cfg(unix)]
 #[test]
 fn input_reads_paced_aligned_frames_natively() {
     if !has_rustc() {

@@ -2593,7 +2593,7 @@ fn cmd_bundle(args: &[String]) {
         }
         let abis = abis.join(", ");
         if let Err(e) =
-            crate::bundle_android::write_project(&proj, &name, &app_id, &version, build_number.or(manifest.as_ref().and_then(|m| m.app_build)).unwrap_or(1), &abis, mipmaps.is_some(), devtools, manifest.as_ref().is_some_and(|m| m.android_background_audio), if dev { Some(app_id.as_str()) } else { None }, manifest.as_ref().is_some_and(|m| m.android_exact_alarms), dev || uses_module(&path, "std/alarm"))
+            crate::bundle_android::write_project(&proj, &name, &app_id, &version, build_number.or(manifest.as_ref().and_then(|m| m.app_build)).unwrap_or(1), &abis, mipmaps.is_some(), devtools, manifest.as_ref().is_some_and(|m| m.android_background_audio), if dev { Some(app_id.as_str()) } else { None }, manifest.as_ref().is_some_and(|m| m.android_exact_alarms), dev || uses_module(&path, "std/alarm"), dev || manifest.as_ref().is_some_and(|m| m.android_record_audio))
         {
             eprintln!("bundle: could not write the Gradle project: {e}");
             process::exit(74);

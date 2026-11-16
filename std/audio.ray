@@ -135,9 +135,10 @@ pub fn drain(h: int) -> Result<int, string> {
 /// `"s32le"` or `"f32le"`). `latency_ms` (20–1000, or 0 for the default of 100) sizes the blocks
 /// the capture arrives in. Returns a handle for `read`; `close(h)` stops recording.
 ///
-/// Available on macOS and iOS; other platforms return `Err`. The first time, the system asks
-/// for microphone permission (on iOS the app also needs `NSMicrophoneUsageDescription`); without
-/// it the input delivers silence. `RAY_AUDIO_SOURCE=null` (silence) or `=tone` (440 Hz) replace
+/// Available on macOS, iOS, Linux (ALSA), Android and Windows. The first time, the system asks
+/// for microphone permission: on iOS the app needs `[ios] audio_session = "play_and_record"`
+/// and on Android `[android] record_audio = true`. Without the permission the input delivers
+/// silence on macOS and iOS, and `open_input` returns `Err` on Android and Windows. `RAY_AUDIO_SOURCE=null` (silence) or `=tone` (440 Hz) replace
 /// the device with a real-time source, for tests.
 // M463 (ray-daw #422).
 pub fn open_input(

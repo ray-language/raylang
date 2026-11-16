@@ -469,7 +469,13 @@ documentada:
   callback que solo lee el búfer que AudioQueue le entrega (longitud `mAudioDataByteSize`) y escribe
   en su extremo no bloqueante; el estado del callback es un `Arc` filtrado como `user_data` que un
   hilo vigilante recupera tras `AudioQueueStop`/`Dispose` inmediatos (ya sin callbacks), y que
-  detecta el cierre del programa con `getpeername` sobre el fd propio.
+  detecta el cierre del programa con `getpeername` sobre el fd propio. M465 añade las fuentes de
+  Linux (`snd_pcm_readi` de ALSA por `dlopen`, sobre un búfer propio del tamaño pedido), Android
+  (`AAudioStream_read`, ídem) y Windows (WASAPI por COM a mano: `IAudioCaptureClient::GetBuffer`
+  presta un tramo que se copia y se devuelve con `ReleaseBuffer`). En Windows el pipe es uno
+  **con nombre** en modo mensaje (`\\.\pipe\ray-audio-in-<pid>-<n>`, una sola instancia con
+  `FILE_FLAG_FIRST_PIPE_INSTANCE` y `PIPE_REJECT_REMOTE_CLIENTS`): el propio proceso abre el
+  único extremo cliente en el acto, así que ningún otro proceso puede conectarse a él.
 - **`crates/ray-runtime/src/midi.rs`** (M464) — `std/midi` sobre **CoreMIDI** (macOS e iOS; el
   framework se enlaza, **sin crates**): `MIDIClientCreate` en un hilo propio que se queda en
   `CFRunLoopRun`; los puertos y extremos virtuales son `UInt32` opacos que creamos y desmontamos

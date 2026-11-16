@@ -159,6 +159,32 @@ pub fn to_s16le(from: Format, data: &[u8], out: &mut Vec<u8>) {
     }
 }
 
+/// La inversa de `to_s16le` (M465): lleva muestras s16le entrelazadas al formato `to`, para una
+/// ENTRADA cuyo dispositivo solo entrega s16le. Los enteros se desplazan (los bits bajos a cero)
+/// y el flotante se escala a [-1, 1). Pura.
+#[allow(dead_code)] // CoreAudio captura en los cuatro formatos y no la usa
+pub fn from_s16le(to: Format, data: &[u8], out: &mut Vec<u8>) {
+    match to {
+        Format::S16 => out.extend_from_slice(&data[..data.len() / 2 * 2]),
+        Format::S24 => {
+            for s in data.chunks_exact(2) {
+                out.extend_from_slice(&[0, s[0], s[1]]);
+            }
+        }
+        Format::S32 => {
+            for s in data.chunks_exact(2) {
+                out.extend_from_slice(&[0, 0, s[0], s[1]]);
+            }
+        }
+        Format::F32 => {
+            for s in data.chunks_exact(2) {
+                let v = i16::from_le_bytes([s[0], s[1]]) as f32 / 32768.0;
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+    }
+}
+
 /// Escala IN PLACE la muestra `s` (un canal) por `k` en su formato. Para las rampas anti-clic.
 #[allow(dead_code)] // solo CoreAudio tiene rampa propia; el resto de backends no la usa
 fn scale_sample(s: &mut [u8], fmt: Format, k: f32) {
@@ -558,16 +584,18 @@ fn peek_pipe(handle: i64) -> Result<usize, ()> {
 // cabe se DESCARTA entero (un desbordamiento, contado) — nunca se bloquea el hilo del
 // dispositivo ni se desalinea el flujo.
 //
-// Fuentes: AudioQueue de entrada en macOS e iOS; `RAY_AUDIO_SOURCE=null` (silencio) o `=tone`
+// Fuentes: AudioQueue de entrada en macOS e iOS; ALSA en Linux (M465: un hilo que lee el
+// dispositivo de captura por defecto en bloques); `RAY_AUDIO_SOURCE=null` (silencio) o `=tone`
 // (un La de 440 Hz) a ritmo de tiempo real y sin hardware, para tests y CI, en cualquier unix.
-// Linux, Android y Windows no tienen fuente de dispositivo todavía: `open_input` da `Err`.
+// Android (M465): AAudio en dirección de entrada, con el mismo hilo lector; antes de abrir pide
+// al shell el permiso de micrófono (`RECORD_AUDIO`, que el bundle declara con
+// `[android] record_audio = true`). Windows (M465): WASAPI en modo compartido; el pipe es uno con
+// nombre en modo mensaje (`win_pipe`), que da lo mismo que el par de datagramas.
 
 /// Cuánto audio capturado se guarda sin leer antes de descartar.
-#[cfg(unix)]
 const INPUT_QUEUE_MS: i64 = 1000;
 
 /// El estado de una entrada abierta, compartido entre la fuente y `recorded_ms`.
-#[cfg_attr(windows, allow(dead_code))] // en Windows aún no hay entrada: nadie lo construye
 pub struct InCtl {
     /// Frames que el dispositivo entregó desde que se abrió, se hayan leído o no: el reloj de
     /// captura (`recorded_ms`).
@@ -585,7 +613,6 @@ fn in_ctls() -> &'static Mutex<HashMap<i64, Arc<InCtl>>> {
 
 /// Como `forget_ctl`: la fuente retira su entrada del mapa solo si sigue siendo la suya (el SO
 /// reutiliza el fd en cuanto se cierra).
-#[cfg(unix)]
 fn forget_in_ctl(key: i64, own: &Arc<InCtl>) {
     let mut map = in_ctls().lock().unwrap();
     if map.get(&key).is_some_and(|c| Arc::ptr_eq(c, own)) {
@@ -608,73 +635,170 @@ pub fn recorded_ms(key: i64) -> Result<i64, String> {
 }
 
 /// El datagrama más largo que se entrega: cabe en el búfer de lectura del runtime (64 KiB).
-#[cfg(unix)]
 const INPUT_DATAGRAM_MAX: usize = 32 * 1024;
 
-/// Entrega `data` (frames enteros recién capturados) al programa, en datagramas de frames
-/// enteros. `false` = el programa cerró la entrada: la fuente debe parar. Nunca bloquea: el
-/// bloque que no cabe se descarta entero.
+/// El extremo de la FUENTE en el pipe de una entrada: un fd en unix (un socket de datagramas),
+/// un HANDLE en Windows (M465: el lado servidor de un pipe con nombre en modo mensaje).
 #[cfg(unix)]
-fn push_captured(fd_w: i32, ctl: &InCtl, data: &[u8]) -> bool {
+type SourceEnd = i32;
+#[cfg(windows)]
+type SourceEnd = isize;
+
+/// El resultado de entregar un bloque al programa.
+enum Wrote {
+    Done,
+    /// La cola está llena: el bloque se descarta.
+    Full,
+    /// El programa cerró la entrada.
+    Closed,
+}
+
+#[cfg(unix)]
+fn write_block(end: SourceEnd, block: &[u8]) -> Wrote {
+    loop {
+        // SAFETY: el tramo vive durante la llamada; `end` es de la fuente.
+        let n = unsafe { write(end, block.as_ptr(), block.len()) };
+        if n >= 0 {
+            return Wrote::Done;
+        }
+        let err = std::io::Error::last_os_error();
+        if err.kind() == std::io::ErrorKind::Interrupted {
+            continue;
+        }
+        // Cola llena: WouldBlock, o ENOBUFS en un socket de datagramas (55 en macOS, 105 en Linux).
+        if err.kind() == std::io::ErrorKind::WouldBlock || matches!(err.raw_os_error(), Some(55) | Some(105)) {
+            return Wrote::Full;
+        }
+        return Wrote::Closed;
+    }
+}
+
+#[cfg(unix)]
+fn close_end(end: SourceEnd) {
+    // SAFETY: `end` es de la fuente que lo cierra, una sola vez.
+    unsafe { close(end) };
+}
+
+#[cfg(windows)]
+mod win_pipe {
+    //! M465: el pipe de una entrada en Windows. Un pipe ANÓNIMO es un flujo de octetos y no tiene
+    //! modo no bloqueante; aquí hacen falta las dos cosas que en unix da el par de datagramas:
+    //! que cada lectura del programa sea un bloque de frames enteros y que la fuente nunca espere.
+    //! Un pipe CON NOMBRE en modo mensaje (`PIPE_TYPE_MESSAGE`) con el lado de la fuente en
+    //! `PIPE_NOWAIT` da ambas: `ReadFile` devuelve un mensaje, y `WriteFile` sin sitio vuelve con
+    //! cero octetos escritos. Una sola instancia, conectada en el acto por este proceso: nadie
+    //! más puede abrirlo.
+    use super::{SourceEnd, Wrote};
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CreateNamedPipeW(name: *const u16, open_mode: u32, pipe_mode: u32, max_instances: u32, out_size: u32, in_size: u32, timeout: u32, security: *const core::ffi::c_void) -> isize;
+        fn CreateFileW(name: *const u16, access: u32, share: u32, security: *const core::ffi::c_void, disposition: u32, flags: u32, template: isize) -> isize;
+        fn SetNamedPipeHandleState(handle: isize, mode: *const u32, max_collection: *const u32, collect_timeout: *const u32) -> i32;
+        fn WriteFile(handle: isize, buf: *const u8, len: u32, written: *mut u32, overlapped: *mut core::ffi::c_void) -> i32;
+        fn CloseHandle(handle: isize) -> i32;
+        fn GetCurrentProcessId() -> u32;
+    }
+    const INVALID_HANDLE_VALUE: isize = -1;
+    const PIPE_ACCESS_OUTBOUND: u32 = 0x0000_0002;
+    const FILE_FLAG_FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
+    const PIPE_TYPE_MESSAGE: u32 = 0x4;
+    const PIPE_NOWAIT: u32 = 0x1;
+    const PIPE_REJECT_REMOTE_CLIENTS: u32 = 0x8;
+    const PIPE_READMODE_MESSAGE: u32 = 0x2;
+    const GENERIC_READ: u32 = 0x8000_0000;
+    const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+    const OPEN_EXISTING: u32 = 3;
+
+    /// Crea el pipe con sitio para `budget` octetos: (extremo de lectura del programa, extremo
+    /// de la fuente).
+    pub fn create(budget: i32) -> Result<(std::fs::File, SourceEnd), String> {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        // SAFETY: llamada sin punteros.
+        let pid = unsafe { GetCurrentProcessId() };
+        let name: Vec<u16> = format!(r"\\.\pipe\ray-audio-in-{pid}-{seq}").encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: `name` termina en NUL y vive durante las llamadas; los handles devueltos son nuestros.
+        unsafe {
+            let server = CreateNamedPipeW(
+                name.as_ptr(),
+                PIPE_ACCESS_OUTBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_TYPE_MESSAGE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                1,
+                budget as u32,
+                0,
+                0,
+                std::ptr::null(),
+            );
+            if server == INVALID_HANDLE_VALUE {
+                return Err(format!("audio: could not create the pipe: {}", std::io::Error::last_os_error()));
+            }
+            // FILE_WRITE_ATTRIBUTES: lo exige SetNamedPipeHandleState en el lado cliente.
+            let client = CreateFileW(name.as_ptr(), GENERIC_READ | FILE_WRITE_ATTRIBUTES, 0, std::ptr::null(), OPEN_EXISTING, 0, 0);
+            if client == INVALID_HANDLE_VALUE {
+                let e = std::io::Error::last_os_error();
+                CloseHandle(server);
+                return Err(format!("audio: could not open the pipe: {e}"));
+            }
+            let mode = PIPE_READMODE_MESSAGE;
+            if SetNamedPipeHandleState(client, &mode, std::ptr::null(), std::ptr::null()) == 0 {
+                let e = std::io::Error::last_os_error();
+                CloseHandle(client);
+                CloseHandle(server);
+                return Err(format!("audio: could not configure the pipe: {e}"));
+            }
+            let reader: std::fs::File = std::os::windows::io::FromRawHandle::from_raw_handle(client as *mut core::ffi::c_void);
+            Ok((reader, server))
+        }
+    }
+
+    pub fn write_block(end: SourceEnd, block: &[u8]) -> Wrote {
+        let mut written = 0u32;
+        // SAFETY: el tramo vive durante la llamada; `end` es de la fuente.
+        let ok = unsafe { WriteFile(end, block.as_ptr(), block.len() as u32, &mut written, std::ptr::null_mut()) };
+        if ok == 0 {
+            return Wrote::Closed; // ERROR_NO_DATA: el programa cerró su extremo
+        }
+        if written == 0 { Wrote::Full } else { Wrote::Done }
+    }
+
+    pub fn close_end(end: SourceEnd) {
+        // SAFETY: `end` es de la fuente que lo cierra, una sola vez.
+        unsafe { CloseHandle(end) };
+    }
+}
+#[cfg(windows)]
+use win_pipe::{close_end, write_block};
+
+/// Entrega `data` (frames enteros recién capturados) al programa, en bloques de frames enteros.
+/// `false` = el programa cerró la entrada: la fuente debe parar. Nunca bloquea: el bloque que no
+/// cabe se descarta entero.
+fn push_captured(end: SourceEnd, ctl: &InCtl, data: &[u8]) -> bool {
     let fb = ctl.frame_bytes;
     ctl.captured_frames.fetch_add((data.len() / fb) as i64, Ordering::SeqCst);
     let piece = (INPUT_DATAGRAM_MAX / fb).max(1) * fb;
     for block in data.chunks(piece) {
-        loop {
-            // SAFETY: el tramo vive durante la llamada; fd_w es de la fuente.
-            let n = unsafe { write(fd_w, block.as_ptr(), block.len()) };
-            if n >= 0 {
-                break;
-            }
-            let err = std::io::Error::last_os_error();
-            if err.kind() == std::io::ErrorKind::Interrupted {
-                continue;
-            }
-            // Cola llena: WouldBlock, o ENOBUFS en un socket de datagramas (55 en macOS, 105 en Linux).
-            if err.kind() == std::io::ErrorKind::WouldBlock || matches!(err.raw_os_error(), Some(55) | Some(105)) {
+        match write_block(end, block) {
+            Wrote::Done => {}
+            Wrote::Full => {
                 ctl.dropped_frames.fetch_add((block.len() / fb) as i64, Ordering::SeqCst);
-                break;
             }
-            return false; // el programa cerró la entrada
+            Wrote::Closed => return false,
         }
     }
     true
 }
 
-/// Abre una ENTRADA PCM (`sample_rate` Hz, `channels` canales, muestras en `format`) y devuelve
-/// el extremo de lectura del pipe, no bloqueante y listo para el registro de handles: el
-/// llamador lee de ahí los frames entrelazados que captura el dispositivo. `latency_ms` (20–1000,
-/// o 0 = 100) es el tamaño de los bloques en que llegan.
+/// El pipe de una entrada con sitio para `budget` octetos: (el extremo de lectura del programa,
+/// no bloqueante; el extremo de la fuente, que nunca espera).
 #[cfg(unix)]
-pub fn open_input(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> Result<std::fs::File, String> {
-    let fmt = Format::parse(format)?;
-    if !(8000..=192000).contains(&sample_rate) {
-        return Err(format!("audio: unsupported sample rate {sample_rate} (8000–192000)"));
-    }
-    if !(1..=8).contains(&channels) {
-        return Err(format!("audio: unsupported channel count {channels} (1–8)"));
-    }
-    if latency_ms != 0 && !(20..=1000).contains(&latency_ms) {
-        return Err(format!("audio: unsupported latency {latency_ms} ms (20–1000, or 0 = default)"));
-    }
-    let latency_ms = if latency_ms == 0 { 100 } else { latency_ms };
-    let frame_bytes = channels as usize * fmt.sample_bytes();
-    let bytes_per_sec = sample_rate as usize * frame_bytes;
-    let source = std::env::var("RAY_AUDIO_SOURCE").ok();
-    let test_source = matches!(source.as_deref(), Some("null") | Some("tone"));
-    if !test_source && !cfg!(any(target_os = "macos", target_os = "ios")) {
-        return Err("audio: input is not supported on this platform yet (macOS and iOS only; RAY_AUDIO_SOURCE=null gives a silent real-time source)".to_string());
-    }
-
+fn input_pipe(budget: i32) -> Result<(std::fs::File, SourceEnd), String> {
     let mut fds = [0i32; 2];
     // SAFETY: socketpair escribe dos fds válidos.
     if unsafe { socketpair(AF_UNIX, SOCK_DGRAM, 0, fds.as_mut_ptr()) } != 0 {
         return Err(format!("audio: could not create the pipe: {}", std::io::Error::last_os_error()));
     }
     let (fd_r, fd_w) = (fds[0], fds[1]);
-    // La cola (y con ella el datagrama más largo que admite el socket): 1 s de audio, y nunca
-    // menos de dos datagramas máximos.
-    let budget = ((bytes_per_sec as i64 * INPUT_QUEUE_MS / 1000).max(2 * INPUT_DATAGRAM_MAX as i64)).min(i32::MAX as i64) as i32;
     // SAFETY: fds recién creados y nuestros; los valores viven durante cada llamada.
     unsafe {
         let v = &budget as *const i32 as *const core::ffi::c_void;
@@ -695,7 +819,56 @@ pub fn open_input(sample_rate: i64, channels: i64, latency_ms: i64, format: &str
             fcntl_raw(fd, F_SETFL, fl | O_NONBLOCK);
         }
     }
-    let key = fd_r as i64;
+    // SAFETY: fd_r es nuestro; File toma la propiedad (su Drop = close = fin de la captura).
+    Ok((unsafe { std::os::unix::io::FromRawFd::from_raw_fd(fd_r) }, fd_w))
+}
+#[cfg(windows)]
+fn input_pipe(budget: i32) -> Result<(std::fs::File, SourceEnd), String> {
+    win_pipe::create(budget)
+}
+
+/// La clave de una entrada en el mapa de controles: el fd o el HANDLE de su extremo de lectura,
+/// como entero (lo mismo que calcula el registro de handles del llamador).
+fn input_key(f: &std::fs::File) -> i64 {
+    #[cfg(unix)]
+    {
+        std::os::unix::io::AsRawFd::as_raw_fd(f) as i64
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::io::AsRawHandle::as_raw_handle(f) as i64
+    }
+}
+
+/// Abre una ENTRADA PCM (`sample_rate` Hz, `channels` canales, muestras en `format`) y devuelve
+/// el extremo de lectura del pipe, no bloqueante y listo para el registro de handles: el
+/// llamador lee de ahí los frames entrelazados que captura el dispositivo. `latency_ms` (20–1000,
+/// o 0 = 100) es el tamaño de los bloques en que llegan.
+pub fn open_input(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> Result<std::fs::File, String> {
+    let fmt = Format::parse(format)?;
+    if !(8000..=192000).contains(&sample_rate) {
+        return Err(format!("audio: unsupported sample rate {sample_rate} (8000–192000)"));
+    }
+    if !(1..=8).contains(&channels) {
+        return Err(format!("audio: unsupported channel count {channels} (1–8)"));
+    }
+    if latency_ms != 0 && !(20..=1000).contains(&latency_ms) {
+        return Err(format!("audio: unsupported latency {latency_ms} ms (20–1000, or 0 = default)"));
+    }
+    let latency_ms = if latency_ms == 0 { 100 } else { latency_ms };
+    let frame_bytes = channels as usize * fmt.sample_bytes();
+    let bytes_per_sec = sample_rate as usize * frame_bytes;
+    let source = std::env::var("RAY_AUDIO_SOURCE").ok();
+    let test_source = matches!(source.as_deref(), Some("null") | Some("tone"));
+    if !test_source && !cfg!(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android", windows)) {
+        return Err("audio: no input backend for this platform (macOS/iOS/Linux/Android/Windows; RAY_AUDIO_SOURCE=null gives a silent real-time source anywhere)".to_string());
+    }
+
+    // La cola (y con ella el bloque más largo que admite el pipe): 1 s de audio, y nunca menos
+    // de dos bloques máximos.
+    let budget = ((bytes_per_sec as i64 * INPUT_QUEUE_MS / 1000).max(2 * INPUT_DATAGRAM_MAX as i64)).min(i32::MAX as i64) as i32;
+    let (reader, end) = input_pipe(budget)?;
+    let key = input_key(&reader);
     let ctl = Arc::new(InCtl {
         captured_frames: AtomicI64::new(0),
         dropped_frames: AtomicI64::new(0),
@@ -703,42 +876,46 @@ pub fn open_input(sample_rate: i64, channels: i64, latency_ms: i64, format: &str
         frame_bytes,
     });
     let started = if test_source {
-        test_source_start(fd_w, key, ctl.clone(), sample_rate, channels, latency_ms, fmt, source.as_deref() == Some("tone"));
+        test_source_start(end, key, ctl.clone(), sample_rate, channels, latency_ms, fmt, source.as_deref() == Some("tone"));
         Ok(())
     } else {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
-            coreaudio::open_input(sample_rate, channels, latency_ms, fmt, fd_w, key, ctl.clone())
+            coreaudio::open_input(sample_rate, channels, latency_ms, fmt, end, key, ctl.clone())
         }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        // M465: Linux — ALSA por dlopen, con un hilo que lee el dispositivo en bloques.
+        #[cfg(target_os = "linux")]
         {
-            Err("audio: input is not supported on this platform yet".to_string())
+            alsa::open_input(sample_rate, channels, latency_ms, fmt, end, key, ctl.clone())
+        }
+        // M465: Android — AAudio en dirección de entrada (pide antes el permiso de micrófono).
+        #[cfg(target_os = "android")]
+        {
+            aaudio::open_input(sample_rate, channels, latency_ms, fmt, end, key, ctl.clone())
+        }
+        // M465: Windows — WASAPI en modo compartido sobre el dispositivo de captura por defecto.
+        #[cfg(windows)]
+        {
+            wasapi::open_input(sample_rate, channels, latency_ms, fmt, end, key, ctl.clone())
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android", windows)))]
+        {
+            Err("audio: no input backend for this platform".to_string())
         }
     };
     if let Err(e) = started {
-        // SAFETY: los dos fds siguen siendo nuestros (nadie más los recibió).
-        unsafe {
-            close(fd_r);
-            close(fd_w);
-        }
-        return Err(e);
+        // Los dos extremos siguen siendo nuestros (la fuente no llegó a arrancar).
+        close_end(end);
+        return Err(e); // `reader` se cierra al salir
     }
     in_ctls().lock().unwrap().insert(key, ctl);
-    // SAFETY: fd_r es nuestro; File toma la propiedad (su Drop = close = fin de la captura).
-    Ok(unsafe { std::os::unix::io::FromRawFd::from_raw_fd(fd_r) })
-}
-
-/// En Windows aún no hay entrada (ni la fuente de pruebas: el pipe anónimo no es sondeable).
-#[cfg(windows)]
-pub fn open_input(_sample_rate: i64, _channels: i64, _latency_ms: i64, _format: &str) -> Result<std::fs::File, String> {
-    Err("audio: input is not supported on this platform yet (macOS and iOS only)".to_string())
+    Ok(reader)
 }
 
 /// La fuente de pruebas (`RAY_AUDIO_SOURCE=null|tone`): un hilo que entrega bloques de
 /// `latency_ms / 4` a ritmo de tiempo real — silencio, o un La de 440 Hz a media escala.
-#[cfg(unix)]
 #[allow(clippy::too_many_arguments)]
-fn test_source_start(fd_w: i32, key: i64, ctl: Arc<InCtl>, rate: i64, channels: i64, latency_ms: i64, fmt: Format, tone: bool) {
+fn test_source_start(end: SourceEnd, key: i64, ctl: Arc<InCtl>, rate: i64, channels: i64, latency_ms: i64, fmt: Format, tone: bool) {
     std::thread::spawn(move || {
         let block_frames = ((rate * latency_ms / 4000).max(64)) as usize;
         let sb = fmt.sample_bytes();
@@ -768,12 +945,11 @@ fn test_source_start(fd_w: i32, key: i64, ctl: Arc<InCtl>, rate: i64, channels: 
             if due > now {
                 std::thread::sleep(due - now);
             }
-            if !push_captured(fd_w, &ctl, &buf) {
+            if !push_captured(end, &ctl, &buf) {
                 break;
             }
         }
-        // SAFETY: fd_w es de este hilo desde que arrancó.
-        unsafe { close(fd_w) };
+        close_end(end);
         forget_in_ctl(key, &ctl);
     });
 }
@@ -1753,6 +1929,92 @@ mod alsa {
         }
     }
 
+    const SND_PCM_STREAM_CAPTURE: i32 = 1;
+    type FnReadi = unsafe extern "C" fn(Pcm, *mut u8, u64) -> i64;
+
+    /// M465: abre el dispositivo de CAPTURA por defecto y lanza el hilo que lo lee en bloques de
+    /// un cuarto de la latencia pedida y los entrega al programa. Si el dispositivo no acepta el
+    /// formato pedido, captura en s16le y convierte (`from_s16le`). El hilo termina cuando el
+    /// programa cierra la entrada (la escritura en el par falla) o el dispositivo deja de dar.
+    pub fn open_input(
+        rate: i64,
+        channels: i64,
+        latency_ms: i64,
+        fmt: super::Format,
+        fd_w: i32,
+        key: i64,
+        ctl: Arc<super::InCtl>,
+    ) -> Result<(), String> {
+        // SAFETY: literal NUL-terminado; dlopen es seguro de llamar.
+        let lib = unsafe { dlopen(b"libasound.so.2\0".as_ptr(), RTLD_NOW) };
+        if lib.is_null() {
+            return Err("audio: libasound.so.2 not found (install ALSA, e.g. libasound2)".to_string());
+        }
+        // SAFETY de los transmutes: las firmas replican el header de ALSA (API estable).
+        let (pcm, native, readi, recover, close) = unsafe {
+            let f_open: FnOpen = std::mem::transmute(sym(lib, b"snd_pcm_open\0")?);
+            let f_params: FnSetParams = std::mem::transmute(sym(lib, b"snd_pcm_set_params\0")?);
+            let readi: FnReadi = std::mem::transmute(sym(lib, b"snd_pcm_readi\0")?);
+            let recover: FnRecover = std::mem::transmute(sym(lib, b"snd_pcm_recover\0")?);
+            let close: FnClose = std::mem::transmute(sym(lib, b"snd_pcm_close\0")?);
+            let mut pcm: Pcm = std::ptr::null_mut();
+            let st = f_open(&mut pcm, b"default\0".as_ptr(), SND_PCM_STREAM_CAPTURE, 0);
+            if st != 0 {
+                return Err(format!("audio: could not open the input device (snd_pcm_open, {st}); is there a microphone or capture device?"));
+            }
+            // El búfer del dispositivo: la latencia pedida entera (los bloques son un cuarto).
+            let dev_latency_us = (latency_ms * 1000).clamp(20_000, 1_000_000) as u32;
+            let mut native = fmt;
+            let mut st = f_params(pcm, alsa_format(fmt), SND_PCM_ACCESS_RW_INTERLEAVED, channels as u32, rate as u32, 1, dev_latency_us);
+            if st != 0 && fmt != super::Format::S16 {
+                native = super::Format::S16;
+                st = f_params(pcm, SND_PCM_FORMAT_S16_LE, SND_PCM_ACCESS_RW_INTERLEAVED, channels as u32, rate as u32, 1, dev_latency_us);
+            }
+            if st != 0 {
+                close(pcm);
+                return Err(format!("audio: the input device does not accept {rate} Hz, {channels} channel(s) (snd_pcm_set_params, {st})"));
+            }
+            (pcm as usize, native, readi, recover, close)
+        };
+        std::thread::spawn(move || {
+            let pcm = pcm as Pcm;
+            let native_frame = channels as usize * native.sample_bytes();
+            let block_frames = ((rate * latency_ms / 4000).max(64)) as usize;
+            let mut buf = vec![0u8; block_frames * native_frame];
+            let mut converted = Vec::new();
+            loop {
+                // SAFETY: `buf` tiene sitio para `block_frames`; readi BLOQUEA hasta tenerlos.
+                let n = unsafe { readi(pcm, buf.as_mut_ptr(), block_frames as u64) };
+                if n < 0 {
+                    // Desbordamiento (el hilo llegó tarde) u otro tropiezo: recover y se sigue.
+                    // SAFETY: pcm válido hasta el close de abajo.
+                    if unsafe { recover(pcm, n as i32, 1) } < 0 {
+                        break;
+                    }
+                    continue;
+                }
+                let got = &buf[..n as usize * native_frame];
+                let data = if native == fmt {
+                    got
+                } else {
+                    converted.clear();
+                    super::from_s16le(fmt, got, &mut converted);
+                    &converted[..]
+                };
+                if !super::push_captured(fd_w, &ctl, data) {
+                    break;
+                }
+            }
+            // SAFETY: el pcm y `fd_w` son de este hilo desde que arrancó.
+            unsafe {
+                close(pcm);
+                super::close(fd_w);
+            }
+            super::forget_in_ctl(key, &ctl);
+        });
+        Ok(())
+    }
+
     impl Sink for AlsaSink {
         fn play(&mut self, data: &[u8]) {
             let mut off = 0;
@@ -1941,6 +2203,131 @@ mod aaudio {
             });
             Ok(if native == fmt { sink } else { super::Convert::wrap(fmt, sink) })
         }
+    }
+
+    const AAUDIO_DIRECTION_INPUT: i32 = 1;
+    type FnRead = unsafe extern "C" fn(Stream, *mut std::ffi::c_void, i32, i64) -> i32;
+
+    /// M465: el permiso de micrófono. `RECORD_AUDIO` es un permiso «peligroso»: además de
+    /// declararse en el manifest (`[android] record_audio = true`) el usuario lo concede en un
+    /// diálogo, que el shell abre la primera vez. Bloquea hasta la respuesta.
+    fn microphone_permission() -> Result<(), String> {
+        #[cfg(feature = "ui")]
+        {
+            match crate::ui::shell_request("audio_permission", "") {
+                Ok(v) if v == "granted" => Ok(()),
+                Ok(v) if v == "undeclared" => Err("audio: the app does not declare the microphone permission (add `record_audio = true` to [android] in ray.toml and rebuild the bundle)".to_string()),
+                Ok(_) => Err("audio: the user denied the microphone permission".to_string()),
+                Err(e) => Err(format!("audio: could not ask for the microphone permission: {e}")),
+            }
+        }
+        #[cfg(not(feature = "ui"))]
+        {
+            Ok(()) // sin shell no hay a quién pedirlo: el stream dirá si se puede
+        }
+    }
+
+    /// M465: abre un stream de ENTRADA y lanza el hilo que lo lee en bloques de un cuarto de la
+    /// latencia pedida. Como en la salida, si el stream no abre con el formato pedido (I24/I32
+    /// piden API 31) captura en s16le y convierte.
+    pub fn open_input(
+        rate: i64,
+        channels: i64,
+        latency_ms: i64,
+        fmt: super::Format,
+        fd_w: i32,
+        key: i64,
+        ctl: Arc<super::InCtl>,
+    ) -> Result<(), String> {
+        microphone_permission()?;
+        // SAFETY: dlopen/dlsym con literales; las firmas replican aaudio/AAudio.h (NDK).
+        let (stream, native, read, request_stop, close) = unsafe {
+            let lib = dlopen(b"libaaudio.so\0".as_ptr(), RTLD_NOW);
+            if lib.is_null() {
+                return Err("audio: libaaudio.so not found (AAudio needs Android 8.0+)".to_string());
+            }
+            let create: FnCreateBuilder = std::mem::transmute(sym(lib, b"AAudio_createStreamBuilder\0")?);
+            let set_rate: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setSampleRate\0")?);
+            let set_channels: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setChannelCount\0")?);
+            let set_format: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setFormat\0")?);
+            let set_direction: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setDirection\0")?);
+            let set_perf: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setPerformanceMode\0")?);
+            let open_stream: FnOpenStream = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_openStream\0")?);
+            let builder_delete: FnBuilderDelete = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_delete\0")?);
+            let request_start: FnRequest = std::mem::transmute(sym(lib, b"AAudioStream_requestStart\0")?);
+            let request_stop: FnRequest = std::mem::transmute(sym(lib, b"AAudioStream_requestStop\0")?);
+            let read: FnRead = std::mem::transmute(sym(lib, b"AAudioStream_read\0")?);
+            let close: FnClose = std::mem::transmute(sym(lib, b"AAudioStream_close\0")?);
+            let mut native = fmt;
+            let mut stream: Stream = std::ptr::null_mut();
+            let mut st;
+            loop {
+                let mut builder: Builder = std::ptr::null_mut();
+                st = create(&mut builder);
+                if st != 0 {
+                    return Err(format!("audio: AAudio_createStreamBuilder failed ({st})"));
+                }
+                set_direction(builder, AAUDIO_DIRECTION_INPUT);
+                set_rate(builder, rate as i32);
+                set_channels(builder, channels as i32);
+                set_format(builder, aaudio_format(native));
+                set_perf(
+                    builder,
+                    if latency_ms <= 50 { AAUDIO_PERFORMANCE_MODE_LOW_LATENCY } else { AAUDIO_PERFORMANCE_MODE_NONE },
+                );
+                st = open_stream(builder, &mut stream);
+                builder_delete(builder);
+                if st == 0 || native == super::Format::S16 {
+                    break;
+                }
+                native = super::Format::S16;
+            }
+            if st != 0 {
+                return Err(format!("audio: could not open the input device (AAudioStreamBuilder_openStream, {st}); is the microphone permission granted?"));
+            }
+            let st = request_start(stream);
+            if st != 0 {
+                close(stream);
+                return Err(format!("audio: could not start recording (AAudioStream_requestStart, {st})"));
+            }
+            (stream as usize, native, read, request_stop, close)
+        };
+        std::thread::spawn(move || {
+            let stream = stream as Stream;
+            let native_frame = channels as usize * native.sample_bytes();
+            let block_frames = ((rate * latency_ms / 4000).max(64)) as usize;
+            let mut buf = vec![0u8; block_frames * native_frame];
+            let mut converted = Vec::new();
+            loop {
+                // SAFETY: `buf` tiene sitio para `block_frames`; read espera hasta 1 s por ellos.
+                let n = unsafe { read(stream, buf.as_mut_ptr() as *mut std::ffi::c_void, block_frames as i32, 1_000_000_000) };
+                if n < 0 {
+                    break; // el stream se desconectó (cambio de dispositivo) o falló
+                }
+                if n == 0 {
+                    continue;
+                }
+                let got = &buf[..n as usize * native_frame];
+                let data = if native == fmt {
+                    got
+                } else {
+                    converted.clear();
+                    super::from_s16le(fmt, got, &mut converted);
+                    &converted[..]
+                };
+                if !super::push_captured(fd_w, &ctl, data) {
+                    break;
+                }
+            }
+            // SAFETY: el stream y `fd_w` son de este hilo desde que arrancó.
+            unsafe {
+                request_stop(stream);
+                close(stream);
+                super::close(fd_w);
+            }
+            super::forget_in_ctl(key, &ctl);
+        });
+        Ok(())
     }
 
     impl Sink for AAudioSink {
@@ -2220,6 +2607,180 @@ mod wasapi {
         }))
     }
 
+    const IID_IAUDIO_CAPTURE_CLIENT: Guid =
+        Guid { d1: 0xC8AD_BD64, d2: 0xE71E, d3: 0x48A0, d4: [0xA4, 0xDE, 0x18, 0x5C, 0x39, 0x5C, 0xD3, 0x17] };
+    const E_CAPTURE: u32 = 1; // EDataFlow::eCapture
+    const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
+    const AUDCLNT_BUFFERFLAGS_SILENT: u32 = 0x2;
+    const E_ACCESSDENIED: u32 = 0x8007_0005;
+
+    #[repr(C)]
+    struct IAudioCaptureClientVtbl {
+        base: IUnknownVtbl,
+        get_buffer: unsafe extern "system" fn(Ptr, *mut *mut u8, *mut u32, *mut u32, *mut u64, *mut u64) -> Hr,
+        release_buffer: unsafe extern "system" fn(Ptr, u32) -> Hr,
+        get_next_packet_size: unsafe extern "system" fn(Ptr, *mut u32) -> Hr,
+    }
+
+    /// Los objetos COM de una captura, para soltarlos juntos.
+    struct Capture {
+        enumerator: Ptr,
+        device: Ptr,
+        client: Ptr,
+        capture: Ptr,
+    }
+    // SAFETY: los objetos de WASAPI son free-threaded; tras crearse solo los usa el hilo lector.
+    unsafe impl Send for Capture {}
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            release(self.capture);
+            release(self.client);
+            release(self.device);
+            release(self.enumerator);
+        }
+    }
+
+    /// M465: abre el dispositivo de CAPTURA por defecto en modo compartido y lanza el hilo que
+    /// recoge sus paquetes y los entrega en bloques de un cuarto de la latencia pedida. El motor
+    /// convierte al formato pedido (`AUTOCONVERTPCM`); si lo rechaza, se captura en s16le y se
+    /// convierte aquí.
+    pub fn open_input(
+        rate: i64,
+        channels: i64,
+        latency_ms: i64,
+        fmt: super::Format,
+        end: super::SourceEnd,
+        key: i64,
+        ctl: Arc<super::InCtl>,
+    ) -> Result<(), String> {
+        com_init();
+        let mut cap = Capture { enumerator: std::ptr::null_mut(), device: std::ptr::null_mut(), client: std::ptr::null_mut(), capture: std::ptr::null_mut() };
+        // SAFETY: CoCreateInstance escribe un puntero COM si devuelve S_OK.
+        let hr = unsafe {
+            CoCreateInstance(&CLSID_MM_DEVICE_ENUMERATOR, std::ptr::null_mut(), CLSCTX_ALL, &IID_IMM_DEVICE_ENUMERATOR, &mut cap.enumerator)
+        };
+        if hr < 0 || cap.enumerator.is_null() {
+            return Err(format!("audio: could not create the WASAPI device enumerator (0x{:08X})", hr as u32));
+        }
+        // SAFETY: método del vtable transcrito sobre un objeto vivo; escribe `device`.
+        let hr = unsafe { (vtbl::<IMMDeviceEnumeratorVtbl>(cap.enumerator).get_default_audio_endpoint)(cap.enumerator, E_CAPTURE, E_CONSOLE, &mut cap.device) };
+        if hr < 0 || cap.device.is_null() {
+            return Err("audio: could not open the input device (WASAPI: no default capture endpoint); is there a microphone or audio interface?".to_string());
+        }
+        // El búfer del motor: la latencia pedida entera (los bloques son un cuarto), en 100 ns.
+        let hns = latency_ms.clamp(20, 1000) * 10_000;
+        let flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+        let mut native = fmt;
+        let mut hr;
+        loop {
+            // Un cliente por intento: `Initialize` solo se puede llamar una vez sobre cada uno.
+            release(cap.client);
+            cap.client = std::ptr::null_mut();
+            // SAFETY: `Activate` escribe la interfaz pedida.
+            hr = unsafe { (vtbl::<IMMDeviceVtbl>(cap.device).activate)(cap.device, &IID_IAUDIO_CLIENT, CLSCTX_ALL, std::ptr::null_mut(), &mut cap.client) };
+            if hr < 0 || cap.client.is_null() {
+                return Err(format!("audio: could not activate the audio client (0x{:08X})", hr as u32));
+            }
+            let sb = native.sample_bytes();
+            let wf = WaveFormatEx {
+                format_tag: if native == super::Format::F32 { WAVE_FORMAT_IEEE_FLOAT } else { WAVE_FORMAT_PCM },
+                channels: channels as u16,
+                samples_per_sec: rate as u32,
+                avg_bytes_per_sec: (rate * channels * sb as i64) as u32,
+                block_align: (channels as usize * sb) as u16,
+                bits_per_sample: (sb * 8) as u16,
+                cb_size: 0,
+            };
+            // SAFETY: `wf` vive durante la llamada; sin GUID de sesión (nulo).
+            hr = unsafe { (vtbl::<IAudioClientVtbl>(cap.client).initialize)(cap.client, AUDCLNT_SHAREMODE_SHARED, flags, hns, 0, &wf, std::ptr::null()) };
+            if hr >= 0 || native == super::Format::S16 || hr as u32 == E_ACCESSDENIED {
+                break;
+            }
+            native = super::Format::S16;
+        }
+        if hr as u32 == E_ACCESSDENIED {
+            return Err("audio: Windows denied access to the microphone (Settings > Privacy & security > Microphone: allow desktop apps)".to_string());
+        }
+        if hr < 0 {
+            return Err(format!("audio: the input device does not accept {rate} Hz, {channels} channel(s) (WASAPI Initialize, 0x{:08X})", hr as u32));
+        }
+        // SAFETY: `GetService` escribe la interfaz pedida.
+        let hr = unsafe { (vtbl::<IAudioClientVtbl>(cap.client).get_service)(cap.client, &IID_IAUDIO_CAPTURE_CLIENT, &mut cap.capture) };
+        if hr < 0 || cap.capture.is_null() {
+            return Err(format!("audio: could not get the capture client (0x{:08X})", hr as u32));
+        }
+        // SAFETY: arranca la captura.
+        let hr = unsafe { (vtbl::<IAudioClientVtbl>(cap.client).start)(cap.client) };
+        if hr < 0 {
+            return Err(format!("audio: could not start recording (WASAPI Start, 0x{:08X})", hr as u32));
+        }
+        std::thread::spawn(move || {
+            com_init();
+            let cap = cap;
+            let native_frame = channels as usize * native.sample_bytes();
+            let block_bytes = ((rate * latency_ms / 4000).max(64)) as usize * native_frame;
+            let mut pending: Vec<u8> = Vec::with_capacity(block_bytes * 2);
+            let mut converted = Vec::new();
+            // El motor entrega paquetes de su periodo (~10 ms): se sondea a esa cadencia.
+            let nap = std::time::Duration::from_millis((latency_ms / 8).clamp(2, 10) as u64);
+            'capture: loop {
+                loop {
+                    let mut frames = 0u32;
+                    // SAFETY: escribe un u32 propio; el cliente de captura está vivo.
+                    let hr = unsafe { (vtbl::<IAudioCaptureClientVtbl>(cap.capture).get_next_packet_size)(cap.capture, &mut frames) };
+                    if hr < 0 {
+                        break 'capture; // el dispositivo se desconectó o cambió
+                    }
+                    if frames == 0 {
+                        break;
+                    }
+                    let mut data: *mut u8 = std::ptr::null_mut();
+                    let mut flags = 0u32;
+                    // SAFETY: `GetBuffer` presta `frames` frames legibles hasta `ReleaseBuffer`.
+                    let hr = unsafe {
+                        (vtbl::<IAudioCaptureClientVtbl>(cap.capture).get_buffer)(cap.capture, &mut data, &mut frames, &mut flags, std::ptr::null_mut(), std::ptr::null_mut())
+                    };
+                    if hr < 0 {
+                        break 'capture;
+                    }
+                    let bytes = frames as usize * native_frame;
+                    if flags & AUDCLNT_BUFFERFLAGS_SILENT != 0 || data.is_null() {
+                        pending.resize(pending.len() + bytes, 0);
+                    } else {
+                        // SAFETY: `data` apunta a `bytes` octetos prestados por el motor.
+                        pending.extend_from_slice(unsafe { std::slice::from_raw_parts(data, bytes) });
+                    }
+                    // SAFETY: devuelve el préstamo de `GetBuffer`.
+                    unsafe { (vtbl::<IAudioCaptureClientVtbl>(cap.capture).release_buffer)(cap.capture, frames) };
+                }
+                while pending.len() >= block_bytes {
+                    let delivered = {
+                        let got = &pending[..block_bytes];
+                        let data = if native == fmt {
+                            got
+                        } else {
+                            converted.clear();
+                            super::from_s16le(fmt, got, &mut converted);
+                            &converted[..]
+                        };
+                        super::push_captured(end, &ctl, data)
+                    };
+                    if !delivered {
+                        break 'capture;
+                    }
+                    pending.drain(..block_bytes);
+                }
+                std::thread::sleep(nap);
+            }
+            // SAFETY: para la captura; los objetos COM se sueltan con `cap`.
+            unsafe { (vtbl::<IAudioClientVtbl>(cap.client).stop)(cap.client) };
+            drop(cap);
+            super::close_end(end);
+            super::forget_in_ctl(key, &ctl);
+        });
+        Ok(())
+    }
+
     impl WasapiSink {
         fn padding(&self) -> u32 {
             let mut pad = 0u32;
@@ -2283,6 +2844,37 @@ mod wasapi {
             self.device = std::ptr::null_mut();
             self.enumerator = std::ptr::null_mut();
         }
+    }
+}
+
+#[cfg(test)]
+mod convert_tests {
+    use super::{Format, from_s16le, to_s16le};
+
+    /// M465: una entrada que el dispositivo solo da en s16le llega al programa en el formato que
+    /// pidió, y la conversión es la inversa de la de la salida.
+    #[test]
+    fn from_s16le_widens_each_sample_and_round_trips() {
+        let src: Vec<u8> = [0i16, 1, -1, 12345, i16::MAX, i16::MIN].iter().flat_map(|v| v.to_le_bytes()).collect();
+        for fmt in [Format::S16, Format::S24, Format::S32, Format::F32] {
+            let mut wide = Vec::new();
+            from_s16le(fmt, &src, &mut wide);
+            assert_eq!(wide.len(), src.len() / 2 * fmt.sample_bytes(), "{fmt:?}");
+            let mut back = Vec::new();
+            to_s16le(fmt, &wide, &mut back);
+            if fmt == Format::F32 {
+                // El flotante se escala por 32768 a la ida y 32767 a la vuelta: un paso de error.
+                for (a, b) in src.chunks(2).zip(back.chunks(2)) {
+                    let (a, b) = (i16::from_le_bytes([a[0], a[1]]) as i32, i16::from_le_bytes([b[0], b[1]]) as i32);
+                    assert!((a - b).abs() <= 1, "{a} vs {b}");
+                }
+            } else {
+                assert_eq!(back, src, "{fmt:?}");
+            }
+        }
+        let mut f = Vec::new();
+        from_s16le(Format::F32, &i16::MIN.to_le_bytes(), &mut f);
+        assert_eq!(f32::from_le_bytes([f[0], f[1], f[2], f[3]]), -1.0);
     }
 }
 

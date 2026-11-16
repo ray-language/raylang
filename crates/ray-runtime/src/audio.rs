@@ -642,10 +642,11 @@ const INPUT_DATAGRAM_MAX: usize = 32 * 1024;
 #[cfg(unix)]
 type SourceEnd = i32;
 #[cfg(windows)]
-type SourceEnd = isize;
+pub(crate) type SourceEnd = isize;
 
 /// El resultado de entregar un bloque al programa.
-enum Wrote {
+#[cfg_attr(unix, allow(dead_code))]
+pub(crate) enum Wrote {
     Done,
     /// La cola está llena: el bloque se descarta.
     Full,
@@ -680,7 +681,7 @@ fn close_end(end: SourceEnd) {
 }
 
 #[cfg(windows)]
-mod win_pipe {
+pub(crate) mod win_pipe {
     //! M465: el pipe de una entrada en Windows. Un pipe ANÓNIMO es un flujo de octetos y no tiene
     //! modo no bloqueante; aquí hacen falta las dos cosas que en unix da el par de datagramas:
     //! que cada lectura del programa sea un bloque de frames enteros y que la fuente nunca espere.
@@ -688,6 +689,10 @@ mod win_pipe {
     //! `PIPE_NOWAIT` da ambas: `ReadFile` devuelve un mensaje, y `WriteFile` sin sitio vuelve con
     //! cero octetos escritos. Una sola instancia, conectada en el acto por este proceso: nadie
     //! más puede abrirlo.
+    //!
+    //! M466: `std/midi` usa el mismo pipe para sus entradas, y pregunta con `peer_alive` si el
+    //! programa cerró la suya (por eso el lado de la fuente se abre dúplex: `PeekNamedPipe`
+    //! exige acceso de lectura, aunque por él nunca llegue nada).
     use super::{SourceEnd, Wrote};
 
     #[link(name = "kernel32")]
@@ -698,9 +703,11 @@ mod win_pipe {
         fn WriteFile(handle: isize, buf: *const u8, len: u32, written: *mut u32, overlapped: *mut core::ffi::c_void) -> i32;
         fn CloseHandle(handle: isize) -> i32;
         fn GetCurrentProcessId() -> u32;
+        // El handle como `usize`, igual que la otra declaración del crate.
+        fn PeekNamedPipe(handle: usize, buf: *mut core::ffi::c_void, len: u32, read: *mut u32, avail: *mut u32, left: *mut u32) -> i32;
     }
     const INVALID_HANDLE_VALUE: isize = -1;
-    const PIPE_ACCESS_OUTBOUND: u32 = 0x0000_0002;
+    const PIPE_ACCESS_DUPLEX: u32 = 0x0000_0003;
     const FILE_FLAG_FIRST_PIPE_INSTANCE: u32 = 0x0008_0000;
     const PIPE_TYPE_MESSAGE: u32 = 0x4;
     const PIPE_NOWAIT: u32 = 0x1;
@@ -713,16 +720,21 @@ mod win_pipe {
     /// Crea el pipe con sitio para `budget` octetos: (extremo de lectura del programa, extremo
     /// de la fuente).
     pub fn create(budget: i32) -> Result<(std::fs::File, SourceEnd), String> {
+        create_named("audio", budget).map_err(|e| format!("audio: {e}"))
+    }
+
+    /// Como `create`, con la etiqueta del subsistema en el nombre del pipe y el error sin prefijo.
+    pub fn create_named(label: &str, budget: i32) -> Result<(std::fs::File, SourceEnd), String> {
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         // SAFETY: llamada sin punteros.
         let pid = unsafe { GetCurrentProcessId() };
-        let name: Vec<u16> = format!(r"\\.\pipe\ray-audio-in-{pid}-{seq}").encode_utf16().chain(std::iter::once(0)).collect();
+        let name: Vec<u16> = format!(r"\\.\pipe\ray-{label}-in-{pid}-{seq}").encode_utf16().chain(std::iter::once(0)).collect();
         // SAFETY: `name` termina en NUL y vive durante las llamadas; los handles devueltos son nuestros.
         unsafe {
             let server = CreateNamedPipeW(
                 name.as_ptr(),
-                PIPE_ACCESS_OUTBOUND | FILE_FLAG_FIRST_PIPE_INSTANCE,
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
                 PIPE_TYPE_MESSAGE | PIPE_NOWAIT | PIPE_REJECT_REMOTE_CLIENTS,
                 1,
                 budget as u32,
@@ -731,21 +743,21 @@ mod win_pipe {
                 std::ptr::null(),
             );
             if server == INVALID_HANDLE_VALUE {
-                return Err(format!("audio: could not create the pipe: {}", std::io::Error::last_os_error()));
+                return Err(format!("could not create the pipe: {}", std::io::Error::last_os_error()));
             }
             // FILE_WRITE_ATTRIBUTES: lo exige SetNamedPipeHandleState en el lado cliente.
             let client = CreateFileW(name.as_ptr(), GENERIC_READ | FILE_WRITE_ATTRIBUTES, 0, std::ptr::null(), OPEN_EXISTING, 0, 0);
             if client == INVALID_HANDLE_VALUE {
                 let e = std::io::Error::last_os_error();
                 CloseHandle(server);
-                return Err(format!("audio: could not open the pipe: {e}"));
+                return Err(format!("could not open the pipe: {e}"));
             }
             let mode = PIPE_READMODE_MESSAGE;
             if SetNamedPipeHandleState(client, &mode, std::ptr::null(), std::ptr::null()) == 0 {
                 let e = std::io::Error::last_os_error();
                 CloseHandle(client);
                 CloseHandle(server);
-                return Err(format!("audio: could not configure the pipe: {e}"));
+                return Err(format!("could not configure the pipe: {e}"));
             }
             let reader: std::fs::File = std::os::windows::io::FromRawHandle::from_raw_handle(client as *mut core::ffi::c_void);
             Ok((reader, server))
@@ -760,6 +772,14 @@ mod win_pipe {
             return Wrote::Closed; // ERROR_NO_DATA: el programa cerró su extremo
         }
         if written == 0 { Wrote::Full } else { Wrote::Done }
+    }
+
+    /// ¿Sigue abierto el extremo del programa? (`PeekNamedPipe` falla con ERROR_BROKEN_PIPE
+    /// cuando el cliente cerró.)
+    pub fn peer_alive(end: SourceEnd) -> bool {
+        let mut avail = 0u32;
+        // SAFETY: sin búfer; solo se pide `avail`, un u32 propio; `end` es de la fuente.
+        unsafe { PeekNamedPipe(end as usize, std::ptr::null_mut(), 0, std::ptr::null_mut(), &mut avail, std::ptr::null_mut()) != 0 }
     }
 
     pub fn close_end(end: SourceEnd) {
@@ -1853,6 +1873,26 @@ mod alsa {
     // SAFETY: el pcm se usa solo desde el hilo alimentador.
     unsafe impl Send for AlsaSink {}
 
+    /// El manejador de errores de alsa-lib: no imprime nada.
+    unsafe extern "C" fn quiet_alsa(_file: *const u8, _line: i32, _function: *const u8, _err: i32, _fmt: *const u8) {}
+
+    /// M466: alsa-lib escribe sus errores en stderr por su cuenta («Unknown PCM default»); aquí
+    /// cada fallo ya vuelve como `Err`, así que se le pone un manejador mudo (una vez).
+    fn quiet(lib: *mut std::ffi::c_void) {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            // SAFETY: el símbolo, si está, es `snd_lib_error_set_handler(handler)`; el manejador
+            // es variádico en C y este ignora todos sus argumentos.
+            unsafe {
+                let set = dlsym(lib, b"snd_lib_error_set_handler\0".as_ptr());
+                if !set.is_null() {
+                    let set: unsafe extern "C" fn(unsafe extern "C" fn(*const u8, i32, *const u8, i32, *const u8)) -> i32 = std::mem::transmute(set);
+                    set(quiet_alsa);
+                }
+            }
+        });
+    }
+
     fn sym(lib: *mut std::ffi::c_void, name: &[u8]) -> Result<*mut std::ffi::c_void, String> {
         // SAFETY: name termina en NUL (los llamadores usan literales b"...\0").
         let p = unsafe { dlsym(lib, name.as_ptr()) };
@@ -1875,6 +1915,7 @@ mod alsa {
         if lib.is_null() {
             return Err("audio: libasound.so.2 not found (install ALSA, e.g. libasound2)".to_string());
         }
+        quiet(lib);
         // SAFETY de los transmutes: las firmas replican el header de ALSA (API estable).
         unsafe {
             let f_open: FnOpen = std::mem::transmute(sym(lib, b"snd_pcm_open\0")?);
@@ -1950,6 +1991,7 @@ mod alsa {
         if lib.is_null() {
             return Err("audio: libasound.so.2 not found (install ALSA, e.g. libasound2)".to_string());
         }
+        quiet(lib);
         // SAFETY de los transmutes: las firmas replican el header de ALSA (API estable).
         let (pcm, native, readi, recover, close) = unsafe {
             let f_open: FnOpen = std::mem::transmute(sym(lib, b"snd_pcm_open\0")?);

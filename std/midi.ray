@@ -9,7 +9,8 @@
 //! print("${msg.timestamp_ns}: ${msg.data}");
 //! ```
 //!
-//! Available on macOS and iOS (CoreMIDI); other platforms return `Err`.
+//! Available on macOS and iOS (CoreMIDI) and on Linux (the ALSA sequencer); other platforms
+//! return `Err`.
 
 // std/midi (M464, ray-daw #423) — sobre el primitivo `__midi_op` del runtime (CoreMIDI a mano en
 // `ray_runtime::midi`). Una entrada es un pipe de lectura donde cada lectura es UN mensaje
@@ -101,6 +102,10 @@ pub fn read(h: int) -> Result<Message, string> {
             return Result.Err(from_utf8(r[1]).unwrap_or("midi: read failed"));
         }
         let raw = r[1];
+        if (raw.len() == 0) {
+            // Fin de flujo: el runtime soltó el puerto (el secuenciador desapareció).
+            return Result.Err("midi: the input was closed");
+        }
         if (raw.len() >= 8) {
             var ns = 0;
             var i = 7;

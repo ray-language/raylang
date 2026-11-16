@@ -1,8 +1,32 @@
 //! M464 (ray-daw #423) — std/midi. En macOS la batería corre de verdad contra CoreMIDI, sin
 //! hardware: un puerto VIRTUAL creado por el programa aparece en la lista del sistema, se abre
-//! como cualquier otro y lo enviado por un extremo llega por el otro. En el resto de sistemas
-//! aún no hay backend: toda operación da `Err` y las listas salen vacías.
+//! como cualquier otro y lo enviado por un extremo llega por el otro. M466: lo mismo en Linux
+//! contra el secuenciador de ALSA, cuando la máquina lo tiene (`/dev/snd/seq`; los runners de
+//! CI no). Windows no tiene puertos virtuales: allí se comprueba que todo falla con un `Err`.
 use std::process::Command;
+
+/// ¿Hay un backend con puertos virtuales contra el que correr la batería?
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn virtual_ports_available() -> bool {
+    if cfg!(target_os = "macos") {
+        return true;
+    }
+    // Una sola sonda por proceso: los tests corren en paralelo y comparten su directorio.
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(probe_virtual_ports)
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn probe_virtual_ports() -> bool {
+    let d = workdir("probe", "import std/midi;\nfn main() -> int {\n    print(midi.watch().is_ok());\n    0\n}\n");
+    let o = Command::new(env!("CARGO_BIN_EXE_ray")).args(["run", "prog.ray"]).current_dir(&d).output().unwrap();
+    let _ = std::fs::remove_dir_all(&d);
+    let available = String::from_utf8_lossy(&o.stdout).trim() == "true";
+    if !available {
+        eprintln!("midi_cli: no ALSA sequencer here (/dev/snd/seq), skipping the virtual-port tests");
+    }
+    available
+}
 
 fn workdir(name: &str, src: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("ray_midi_{name}_{}", std::process::id()));
@@ -12,15 +36,18 @@ fn workdir(name: &str, src: &str) -> std::path::PathBuf {
     d
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn has_rustc() -> bool {
     Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false)
 }
 
 /// Salida virtual → entrada: una nota va y vuelve con su marca de tiempo, en los tres motores.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn a_virtual_output_loops_back_through_an_input_in_the_three_engines() {
+    if !virtual_ports_available() {
+        return;
+    }
     let src = r#"import std/midi;
 fn main() -> int {
     print("inputs before: ${midi.inputs().len() >= 0}");
@@ -61,9 +88,12 @@ fn main() -> int {
 
 /// Entrada virtual, SysEx largo, abrir y cerrar muchas veces, un id inexistente y el aviso de
 /// cambios al aparecer un puerto.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn virtual_inputs_sysex_churn_and_change_notifications() {
+    if !virtual_ports_available() {
+        return;
+    }
     let src = r#"import std/midi;
 import std/time;
 fn main() -> int {
@@ -123,36 +153,59 @@ fn main() -> int {
     let _ = std::fs::remove_dir_all(&d);
 }
 
-/// Sin backend, MIDI no rompe nada: listas vacías y un `Err` que dice dónde funciona.
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+/// Un puerto que no existe da `Err` en cualquier sistema, haya o no backend, y listar no rompe.
 #[test]
-fn midi_reports_unsupported_where_there_is_no_backend() {
+fn a_missing_port_is_an_error_everywhere() {
     let src = r#"import std/midi;
 fn main() -> int {
-    print("${midi.inputs().len()} ${midi.outputs().len()}");
-    match (midi.open_input(1)) {
-        Result.Ok(_) => print("bad: opened"),
-        Result.Err(e) => print(e.contains("not supported on this platform")),
-    }
-    print(midi.create_output("x").is_err());
-    print(midi.watch().is_err());
+    print("${midi.inputs().len() >= 0} ${midi.outputs().len() >= 0}");
+    print(midi.open_input(987654321).is_err());
+    print(midi.open_output(987654321).is_err());
     0
 }
 "#;
-    let d = workdir("unsupported", src);
+    let d = workdir("missing", src);
     for args in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
         let o = Command::new(env!("CARGO_BIN_EXE_ray")).args(args).current_dir(&d).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&o.stderr), "", "{args:?}");
-        assert_eq!(String::from_utf8_lossy(&o.stdout), "0 0\ntrue\ntrue\ntrue\n", "{args:?}");
+        assert_eq!(String::from_utf8_lossy(&o.stdout), "true true\ntrue\ntrue\n", "{args:?}");
     }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// M466: Windows (WinMM) no tiene puertos virtuales: crearlos da un `Err` que lo dice, y vigilar
+/// los cambios funciona (sondea la lista de dispositivos).
+#[cfg(windows)]
+#[test]
+fn windows_has_no_virtual_ports_and_watch_opens() {
+    let src = r#"import std/midi;
+fn main() -> int {
+    match (midi.create_output("x")) {
+        Result.Ok(_) => print("bad: created"),
+        Result.Err(e) => print(e.contains("no virtual MIDI ports")),
+    }
+    print(midi.create_input("x").is_err());
+    let w = midi.watch();
+    print(w.is_ok());
+    let _ = close(w.unwrap());
+    0
+}
+"#;
+    let d = workdir("windows", src);
+    let o = Command::new(env!("CARGO_BIN_EXE_ray")).args(["run", "prog.ray"]).current_dir(&d).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&o.stderr), "");
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "true\ntrue\ntrue\n");
     let _ = std::fs::remove_dir_all(&d);
 }
 
 /// Revisión de 1.27.101: listar puertos sondeaba cada entrada abierta con un datagrama; en una
 /// entrada que nadie leía llenaban la cola y los mensajes de verdad se perdían.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn listing_ports_does_not_fill_an_idle_input() {
+    if !virtual_ports_available() {
+        return;
+    }
     let src = r#"import std/midi;
 fn main() -> int {
     let inp = midi.create_input("ray idle in").unwrap();

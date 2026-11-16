@@ -1656,9 +1656,10 @@ let _ = close(mic);                   // para la captura
 El dispositivo captura a su ritmo, lo leas o no: lo que no se lee en cosa de un segundo se
 descarta (por frames enteros, sin desalinear el flujo). `audio.recorded_ms(mic)` es el reloj de
 captura; junto con el `played_ms` de una salida sirve para alinear una toma con lo que sonaba.
-Hoy funciona en macOS y en iOS (con `[ios] audio_session = "play_and_record"`); en el resto,
-`open_input` da `Err`. La primera vez el sistema pide permiso de micrófono, y sin él la entrada
-entrega silencio. Una app de macOS empaquetada con `ray bundle` debe declarar el texto del
+Funciona en macOS, iOS (con `[ios] audio_session = "play_and_record"`), Linux (ALSA), Android
+(con `[android] record_audio = true`) y Windows. La primera vez el sistema pide permiso de
+micrófono: sin él, en macOS e iOS la entrada entrega silencio, y en Android y Windows
+`open_input` da `Err`. Una app de macOS empaquetada con `ray bundle` debe declarar el texto del
 permiso en `[app.plist]` (`NSMicrophoneUsageDescription = "…"`), y si va firmada con el runtime
 endurecido, el entitlement `com.apple.security.device.audio-input`. Para tests, `RAY_AUDIO_SOURCE=tone` (un La de 440 Hz) o `=null` (silencio)
 sustituyen al dispositivo.

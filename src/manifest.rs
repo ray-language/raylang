@@ -185,6 +185,9 @@ pub struct Manifest {
     /// permite («Alarmas y recordatorios» en Ajustes); sin la clave, alarmas inexactas (ventana de
     /// minutos, sin permiso especial). Solo para apps cuya función lo exige (política de Play).
     pub android_exact_alarms: bool,
+    /// M465: `[android] record_audio = true` — el shell declara `RECORD_AUDIO` (el micrófono, para
+    /// `audio.open_input`); el diálogo de permiso sale la primera vez que el programa abre una entrada.
+    pub android_record_audio: bool,
 }
 
 impl Manifest {
@@ -272,6 +275,7 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut ios_background_audio = false;
     let mut android_background_audio = false;
     let mut android_exact_alarms = false;
+    let mut android_record_audio = false;
     let mut ios_background = None;
     let mut ios_background_dark = None;
     let mut ios_audio_session = None;
@@ -436,6 +440,8 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "background_audio" => android_background_audio = as_bool()?,
                 // M442: alarmas exactas para las notificaciones programadas de std/notify.
                 "exact_alarms" => android_exact_alarms = as_bool()?,
+                // M465: el micrófono (RECORD_AUDIO) para audio.open_input.
+                "record_audio" => android_record_audio = as_bool()?,
                 // M447 (pepa #331): sonidos de notificación → res/raw/.
                 "sounds" => android_sounds = parse_string_array(value_raw).ok_or_else(|| err(num, "sounds must be an array of paths"))?,
                 _ => {} // otras claves de [android] se ignoran por ahora (extensibilidad)
@@ -559,6 +565,7 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         android_sounds,
         android_background_audio,
         android_exact_alarms,
+        android_record_audio,
         android_application_id,
         app_copyright,
         app_name,

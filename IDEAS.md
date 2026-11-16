@@ -4742,8 +4742,8 @@ Fases:
 2. **`std/midi` en macOS/iOS** — M464, hecha (DESIGN §442). CoreMIDI: listar puertos, entradas y
    salidas reales y virtuales, y el aviso de conexión o desconexión. Probado con puertos
    virtuales; falta un dispositivo físico.
-3. **Entrada de audio en Linux (ALSA), Android (AAudio) y Windows (WASAPI)**. Cada una en su PR;
-   Linux y Windows necesitan un dispositivo de entrada en la VM para probarse de verdad.
+3. **Entrada de audio en Linux (ALSA), Android (AAudio) y Windows (WASAPI)** — M465, hecha
+   (DESIGN §444). Android declara el permiso con `[android] record_audio = true`.
 4. **MIDI en Linux (ALSA seq), Windows (WinMM) y Android (AMidi)**.
 5. **Elegir dispositivo y latencia baja** (#424): `audio.devices()`, `open_device`, y un camino
    AudioUnit HAL para bajar de los ~50 ms de AudioQueue. Es lo que un DAW necesita para tocar en

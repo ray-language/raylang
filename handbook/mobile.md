@@ -546,6 +546,7 @@ Y lo que se declara en el `ray.toml`:
 | `[ios] sounds` | archivos (caf/aiff/wav, ≤ 30 s) copiados al bundle para `Notification.sound_name` de `std/notify` |
 | `[android] application_id` | un application id distinto del de `[app] id` |
 | `[android] background_audio` | lo mismo en Android, con un servicio en primer plano |
+| `[android] record_audio` | declara el permiso de micrófono para grabar con `audio.open_input`; el diálogo sale la primera vez que el programa abre una entrada |
 | `[android] sounds` | archivos (ogg/wav/mp3) copiados a `res/raw/` para `Channel.sound` de `std/notify` (el nombre, en minúsculas y sin extensión) |
 | `[android] exact_alarms` | las notificaciones programadas con `std/notify` usan alarmas exactas (permiso «Alarmas y recordatorios»); sin la clave, inexactas, con minutos de margen |
 | `[frontend]` | los comandos y la carpeta del frontend (sección 2) |

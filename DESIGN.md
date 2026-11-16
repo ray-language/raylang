@@ -20672,3 +20672,50 @@ para el programa); `RayMidi` los traduce.
 Verificado en el emulador: el shell compila, las listas (vacías), los errores de puerto
 inexistente y de puerto virtual, y abrir, cerrar y reabrir `watch`. **Sin probar: el tráfico
 MIDI real** — el emulador no tiene dispositivos MIDI.
+
+## 447. M468 — `std/audio` deja elegir el dispositivo (nov 2026)
+
+La primera mitad de ray-daw #424: hasta ahora todo sonaba y se grababa por el dispositivo por
+defecto, y un programa no podía ni saber cuál era.
+
+**La API.** `audio.devices()` devuelve `Device { id, name, input_channels, output_channels,
+default_input, default_output, sample_rate, transport }`, y `open_device` / `open_input_device`
+son `open_format` / `open_input` con un `id` delante. El id es una cadena y es lo que cada
+sistema usa para nombrar el dispositivo: el UID de CoreAudio y el id del endpoint de WASAPI
+(estables entre reconexiones), el nombre PCM de ALSA, el número de Android.
+
+**`transport`** no estaba en la propuesta del hallazgo y sale de otro (#431): una salida
+Bluetooth crepita con hints por debajo de ~80 ms, y la app no podía saber que la salida era
+Bluetooth. Con el campo, elige el hint. Que el backend lo suba por su cuenta queda para el
+arco de latencia.
+
+**Sin primitivos nuevos.** El dispositivo viaja pegado al formato (`s16le@<id>`, tras la
+primera arroba, porque los ids de WASAPI llevan llaves y puntos pero el formato nunca lleva
+arroba), y el listado sale por `__audio_open(0, 0, 0, "devices")`. Es el mismo truco que
+`input:<fmt>` de M463: el primitivo ya cruzaba una cadena y los tres motores no se enteran.
+
+**Por plataforma.**
+
+- macOS: la HAL de CoreAudio para listar, y `kAudioQueueProperty_CurrentDevice` para dirigir
+  la cola. La cola acepta cualquier UID y falla al arrancar con un código opaco, así que antes
+  se comprueba contra la lista que el dispositivo existe y tiene canales en esa dirección.
+- Linux: ALSA no tiene dispositivos sino nombres PCM, decenas por tarjeta. Se listan los que
+  un programa abriría: `default` (y `pipewire` / `pulse`) y el `plughw:` de cada tarjeta. Los
+  canales se preguntan abriendo `hw:` sin bloquear; si otro programa lo tiene, estéreo.
+- Windows: `EnumAudioEndpoints` y el almacén de propiedades. Un endpoint es de salida o de
+  entrada, nunca los dos.
+- Android: la lista es de `AudioManager` (Java) y la da el shell; AAudio recibe el número con
+  `setDeviceId`. Android no dice cuál es el dispositivo por defecto.
+- iOS: lista vacía. El sistema enruta el audio y no hay nada que elegir.
+
+**Dos fallos de M465 que esto destapó en Linux.** Grabar de un `hw:` directo no entregaba
+nada: `snd_pcm_set_params` deja el umbral de arranque en el búfer entero, una lectura de un
+bloque no lo alcanza y la captura no arrancaba (con `default` sí, porque el plugin arranca
+solo). Ahora se llama a `snd_pcm_start`. Y cuando el hilo lector moría, el programa se quedaba
+en `audio.read` para siempre, porque un par de datagramas no tiene fin de flujo: en Linux y
+Android la entrada pasa a `SOCK_SEQPACKET`, como las de MIDI.
+
+Verificado: en este Mac (cuatro dispositivos, salida por los audífonos y grabación del
+micrófono por id); en la VM de Linux (`default` y `plughw:`, salida y captura por id); en la VM
+de Windows (altavoces y línea de entrada por id); en el emulador de Android (altavoz y
+micrófono por id). Sin probar: una interfaz USB o un dispositivo Bluetooth de verdad.

@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/audio` deja elegir el dispositivo**: `audio.devices()` lista los dispositivos con sus
+  canales, su frecuencia y cómo están conectados (`transport`: integrado, USB, Bluetooth…), y
+  `audio.open_device(id, …)` y `audio.open_input_device(id, …)` abren uno concreto en vez del
+  por defecto. En macOS, Linux, Windows y Android; en iOS la lista sale vacía.
+- En Linux, grabar directamente de una tarjeta (`plughw:` o `hw:`) no entregaba nada: la
+  captura no llegaba a arrancar. Y si el dispositivo de entrada desaparece, `audio.read`
+  devuelve el fin de flujo en vez de quedarse esperando.
 - **`std/midi` en Android**: dentro de la app (`ray bundle --android`), con los dispositivos
   USB y los Bluetooth que el sistema ya tenga emparejados. Sin puertos virtuales. Hay que
   regenerar el shell.

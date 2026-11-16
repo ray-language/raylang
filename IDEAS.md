@@ -4747,9 +4747,10 @@ Fases:
 4. **MIDI en Linux (ALSA seq) y Windows (WinMM)** — M466, hecha (DESIGN §445). **Android** —
    M467, hecha (DESIGN §446) sobre `android.media.midi` en el shell, no AMidi; sin probar con
    un dispositivo.
-5. **Elegir dispositivo y latencia baja** (#424): `audio.devices()`, `open_device`, y un camino
-   AudioUnit HAL para bajar de los ~50 ms de AudioQueue. Es lo que un DAW necesita para tocar en
-   directo; no bloquea grabar.
+5. **Elegir dispositivo** (#424) — M468, hecha (DESIGN §447): `audio.devices()`,
+   `open_device` y `open_input_device` en macOS, Linux, Windows y Android. **Latencia baja**:
+   un camino AudioUnit HAL para bajar de los ~50 ms de AudioQueue. Es lo que un DAW necesita
+   para tocar en directo; no bloquea grabar.
 
 **Impacto**: todo aditivo. **Riesgo**: los backends de las fases 3 y 4 no se pueden grabar ni
 tocar de verdad en este equipo; se escribirían contra la fuente de pruebas.

@@ -476,6 +476,13 @@ documentada:
   **con nombre** en modo mensaje (`\\.\pipe\ray-audio-in-<pid>-<n>`, una sola instancia con
   `FILE_FLAG_FIRST_PIPE_INSTANCE` y `PIPE_REJECT_REMOTE_CLIENTS`): el propio proceso abre el
   único extremo cliente en el acto, así que ningún otro proceso puede conectarse a él.
+- **`crates/ray-runtime/src/audio.rs`, dispositivos** (M468) — `audio.devices()`: en macOS, la HAL
+  de CoreAudio (`AudioObjectGetPropertyData` sobre búferes propios del tamaño que la propia API
+  dice, alineados a 8; los `CFString` devueltos se sueltan); en Linux, `snd_device_name_hint` (las
+  cadenas son de alsa-lib y se liberan con `free`) y un `snd_pcm_open` sin bloquear para
+  preguntar los canales; en Windows, `IMMDeviceCollection` e `IPropertyStore` por COM a mano (las
+  cadenas y el formato de mezcla se liberan con `CoTaskMemFree`, el `PROPVARIANT` con
+  `PropVariantClear`); en Android, una petición al shell (`AudioManager`).
 - **`crates/ray-runtime/src/midi.rs`, Linux y Windows** (M466) — en Linux, `dlopen("libasound.so.2")`
   y `transmute` de una treintena de `snd_seq_*`/`snd_midi_event_*` a sus firmas (API estable de
   alsa-lib); cada puerto es un cliente del secuenciador usado por un solo hilo; `snd_seq_event_t`

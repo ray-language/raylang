@@ -39,7 +39,10 @@ unsafe extern "C" {
     fn setsockopt(fd: i32, level: i32, name: i32, value: *const core::ffi::c_void, len: u32) -> i32;
     fn read(fd: i32, buf: *mut u8, n: usize) -> isize;
     /// M463: la fuente de entrada escribe lo capturado en el extremo no bloqueante del pipe.
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     fn write(fd: i32, buf: *const u8, n: usize) -> isize;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn send(fd: i32, buf: *const u8, n: usize, flags: i32) -> isize;
     fn close(fd: i32) -> i32;
     /// M463: falla (ENOTCONN) cuando el otro extremo del par de datagramas ya se cerró.
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -78,8 +81,12 @@ const AF_UNIX: i32 = 1;
 #[cfg(unix)]
 const SOCK_STREAM: i32 = 1;
 /// M463: la entrada usa DATAGRAMAS — cada lectura del programa es un bloque de frames enteros.
-#[cfg(unix)]
-const SOCK_DGRAM: i32 = 2;
+/// M468: en Linux y Android, `SOCK_SEQPACKET`: lo mismo, y además el programa ve el fin de
+/// flujo si la fuente muere (un dispositivo desenchufado); con datagramas se quedaba esperando.
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
+const INPUT_SOCKET: i32 = 2; // SOCK_DGRAM
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const INPUT_SOCKET: i32 = 5; // SOCK_SEQPACKET
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const SOL_SOCKET: i32 = 1;
 #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -132,6 +139,80 @@ impl Format {
             Format::F32 => "f32le",
         }
     }
+}
+
+/// M468 (ray-daw #424): un dispositivo de audio del sistema.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DeviceInfo {
+    /// Lo que se pasa para abrirlo: el UID de CoreAudio, el nombre PCM de ALSA, el id del
+    /// endpoint de WASAPI o el id numérico de Android. Estable entre reconexiones donde el
+    /// sistema lo da así (CoreAudio, WASAPI).
+    pub id: String,
+    pub name: String,
+    /// Canales de entrada (0 = no graba) y de salida (0 = no suena).
+    pub input_channels: i64,
+    pub output_channels: i64,
+    pub default_input: bool,
+    pub default_output: bool,
+    /// La frecuencia de muestreo actual del dispositivo, o 0 si no se sabe.
+    pub sample_rate: i64,
+    /// Cómo está conectado: "builtin", "usb", "bluetooth", "hdmi", "network", "virtual",
+    /// "aggregate", "wired", o "" si no se sabe.
+    pub transport: String,
+}
+
+/// Los dispositivos de audio presentes ahora. En iOS la lista sale vacía: el sistema enruta el
+/// audio por su cuenta y solo existe «el dispositivo actual».
+pub fn devices() -> Result<Vec<DeviceInfo>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        coreaudio::devices()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        alsa::devices()
+    }
+    #[cfg(windows)]
+    {
+        wasapi::devices()
+    }
+    #[cfg(target_os = "android")]
+    {
+        aaudio::devices()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "android", windows)))]
+    {
+        Ok(Vec::new())
+    }
+}
+
+/// El listado de `devices` como texto, una línea por dispositivo con sus campos separados por
+/// tabuladores (id, nombre, canales de entrada, de salida, por defecto de entrada, de salida,
+/// frecuencia, transporte): lo que cruza al programa por el primitivo `__audio_open`.
+pub fn devices_text() -> Result<String, String> {
+    let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
+    Ok(devices()?
+        .iter()
+        .map(|d| {
+            format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                clean(&d.id),
+                clean(&d.name),
+                d.input_channels,
+                d.output_channels,
+                d.default_input as u8,
+                d.default_output as u8,
+                d.sample_rate,
+                clean(&d.transport)
+            )
+        })
+        .collect())
+}
+
+/// Parte `formato[@dispositivo]`: el formato de muestra y el id del dispositivo ("" = el
+/// dispositivo por defecto). El id va detrás de la PRIMERA arroba y puede contener otras.
+fn split_device(format: &str) -> (&str, &str) {
+    format.split_once('@').unwrap_or((format, ""))
 }
 
 /// Convierte muestras entrelazadas de `from` a s16le (lo que entienden todos los backends). Un
@@ -263,6 +344,8 @@ fn forget_ctl(key: i64, own: &Arc<Ctl>) {
 /// listo para el registro de handles) — el llamador escribe samples ahí y el hilo alimentador los
 /// toca. `RAY_AUDIO_SINK=null` → sumidero de tiempo real.
 pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> Result<std::fs::File, String> {
+    // M468: `formato@dispositivo` abre un dispositivo concreto (de `devices`).
+    let (format, device) = split_device(format);
     let fmt = Format::parse(format)?;
     if !(8000..=192000).contains(&sample_rate) {
         return Err(format!("audio: unsupported sample rate {sample_rate} (8000–192000)"));
@@ -279,7 +362,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
     let latency_ms = if latency_ms == 0 { 200 } else { latency_ms };
     let played_frames = Arc::new(AtomicI64::new(-1));
     // El backend se abre ANTES del pipe: un dispositivo ausente falla en `open`, no a mitad.
-    let sink = make_sink(sample_rate, channels, latency_ms, fmt, played_frames.clone())?;
+    let sink = make_sink(sample_rate, channels, latency_ms, fmt, played_frames.clone(), device)?;
 
     // El chunk del alimentador es ~latencia/4: reactivo sin syscalls de más (alineado a frame).
     let frame_bytes = (channels as usize) * fmt.sample_bytes();
@@ -658,7 +741,11 @@ pub(crate) enum Wrote {
 fn write_block(end: SourceEnd, block: &[u8]) -> Wrote {
     loop {
         // SAFETY: el tramo vive durante la llamada; `end` es de la fuente.
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         let n = unsafe { write(end, block.as_ptr(), block.len()) };
+        // Con SOCK_SEQPACKET, escribir a un par cerrado levanta SIGPIPE: MSG_NOSIGNAL lo evita.
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        let n = unsafe { send(end, block.as_ptr(), block.len(), 0x4000) };
         if n >= 0 {
             return Wrote::Done;
         }
@@ -815,7 +902,7 @@ fn push_captured(end: SourceEnd, ctl: &InCtl, data: &[u8]) -> bool {
 fn input_pipe(budget: i32) -> Result<(std::fs::File, SourceEnd), String> {
     let mut fds = [0i32; 2];
     // SAFETY: socketpair escribe dos fds válidos.
-    if unsafe { socketpair(AF_UNIX, SOCK_DGRAM, 0, fds.as_mut_ptr()) } != 0 {
+    if unsafe { socketpair(AF_UNIX, INPUT_SOCKET, 0, fds.as_mut_ptr()) } != 0 {
         return Err(format!("audio: could not create the pipe: {}", std::io::Error::last_os_error()));
     }
     let (fd_r, fd_w) = (fds[0], fds[1]);
@@ -865,6 +952,8 @@ fn input_key(f: &std::fs::File) -> i64 {
 /// llamador lee de ahí los frames entrelazados que captura el dispositivo. `latency_ms` (20–1000,
 /// o 0 = 100) es el tamaño de los bloques en que llegan.
 pub fn open_input(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> Result<std::fs::File, String> {
+    // M468: `formato@dispositivo` graba de un dispositivo concreto (de `devices`).
+    let (format, device) = split_device(format);
     let fmt = Format::parse(format)?;
     if !(8000..=192000).contains(&sample_rate) {
         return Err(format!("audio: unsupported sample rate {sample_rate} (8000–192000)"));
@@ -895,31 +984,33 @@ pub fn open_input(sample_rate: i64, channels: i64, latency_ms: i64, format: &str
         sample_rate,
         frame_bytes,
     });
+    let _ = device; // la fuente de pruebas no tiene dispositivos
     let started = if test_source {
         test_source_start(end, key, ctl.clone(), sample_rate, channels, latency_ms, fmt, source.as_deref() == Some("tone"));
         Ok(())
     } else {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
-            coreaudio::open_input(sample_rate, channels, latency_ms, fmt, end, key, ctl.clone())
+            coreaudio::open_input(sample_rate, channels, latency_ms, fmt, end, key, ctl.clone(), device)
         }
         // M465: Linux — ALSA por dlopen, con un hilo que lee el dispositivo en bloques.
         #[cfg(target_os = "linux")]
         {
-            alsa::open_input(sample_rate, channels, latency_ms, fmt, end, key, ctl.clone())
+            alsa::open_input(sample_rate, channels, latency_ms, fmt, end, key, ctl.clone(), device)
         }
         // M465: Android — AAudio en dirección de entrada (pide antes el permiso de micrófono).
         #[cfg(target_os = "android")]
         {
-            aaudio::open_input(sample_rate, channels, latency_ms, fmt, end, key, ctl.clone())
+            aaudio::open_input(sample_rate, channels, latency_ms, fmt, end, key, ctl.clone(), device)
         }
         // M465: Windows — WASAPI en modo compartido sobre el dispositivo de captura por defecto.
         #[cfg(windows)]
         {
-            wasapi::open_input(sample_rate, channels, latency_ms, fmt, end, key, ctl.clone())
+            wasapi::open_input(sample_rate, channels, latency_ms, fmt, end, key, ctl.clone(), device)
         }
         #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android", windows)))]
         {
+            let _ = device;
             Err("audio: no input backend for this platform".to_string())
         }
     };
@@ -986,6 +1077,7 @@ fn make_sink(
     latency_ms: i64,
     fmt: Format,
     played: Arc<AtomicI64>,
+    device: &str,
 ) -> Result<Box<dyn Sink>, String> {
     if std::env::var("RAY_AUDIO_SINK").as_deref() == Ok("null") {
         return Ok(Box::new(NullSink {
@@ -997,25 +1089,25 @@ fn make_sink(
     }
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     {
-        coreaudio::open(rate, channels, latency_ms, fmt, played)
+        coreaudio::open(rate, channels, latency_ms, fmt, played, device)
     }
     #[cfg(target_os = "linux")]
     {
-        alsa::open(rate, channels, latency_ms, fmt, played)
+        alsa::open(rate, channels, latency_ms, fmt, played, device)
     }
     // M158: Android — AAudio por dlopen (API 26+; el patrón ALSA).
     #[cfg(target_os = "android")]
     {
-        aaudio::open(rate, channels, latency_ms, fmt, played)
+        aaudio::open(rate, channels, latency_ms, fmt, played, device)
     }
     // M178: Windows — WASAPI por COM a mano (s16le; otros formatos convertidos en el alimentador).
     #[cfg(windows)]
     {
-        Ok(Convert::wrap(fmt, wasapi::open(rate, channels, latency_ms, played)?))
+        Ok(Convert::wrap(fmt, wasapi::open(rate, channels, latency_ms, played, device)?))
     }
     #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "linux", target_os = "android", windows)))]
     {
-        let _ = (rate, channels, latency_ms, fmt, played);
+        let _ = (rate, channels, latency_ms, fmt, played, device);
         Err("audio: no backend for this platform (macOS/iOS/Linux/Android/Windows; RAY_AUDIO_SINK=null works anywhere)".to_string())
     }
 }
@@ -1150,6 +1242,216 @@ mod coreaudio {
         fn AudioQueueStop(q: AudioQueueRef, immediate: u8) -> i32;
         fn AudioQueueDispose(q: AudioQueueRef, immediate: u8) -> i32;
         fn AudioQueueSetParameter(q: AudioQueueRef, param: u32, value: f32) -> i32;
+        /// M468: `kAudioQueueProperty_CurrentDevice` elige el dispositivo de la cola.
+        #[cfg(target_os = "macos")]
+        fn AudioQueueSetProperty(q: AudioQueueRef, id: u32, data: *const std::ffi::c_void, size: u32) -> i32;
+    }
+
+    // ── M468 (ray-daw #424): los dispositivos del sistema (HAL de CoreAudio, solo macOS) ──
+    //
+    // iOS no tiene esta API: el sistema enruta el audio y la app solo ve «el dispositivo
+    // actual». En macOS cada dispositivo es un `AudioObjectID` con propiedades que se leen por
+    // (selector, ámbito, elemento); el UID es la cadena estable con la que se abre.
+    #[cfg(target_os = "macos")]
+    mod hal {
+        use std::ffi::c_void;
+
+        #[repr(C)]
+        struct PropertyAddress {
+            selector: u32,
+            scope: u32,
+            element: u32,
+        }
+        type CFStringRef = *const c_void;
+
+        #[link(name = "CoreAudio", kind = "framework")]
+        unsafe extern "C" {
+            fn AudioObjectGetPropertyDataSize(object: u32, address: *const PropertyAddress, qualifier_size: u32, qualifier: *const c_void, size: *mut u32) -> i32;
+            fn AudioObjectGetPropertyData(object: u32, address: *const PropertyAddress, qualifier_size: u32, qualifier: *const c_void, size: *mut u32, data: *mut c_void) -> i32;
+        }
+        #[link(name = "CoreFoundation", kind = "framework")]
+        unsafe extern "C" {
+            fn CFStringCreateWithBytes(alloc: *const c_void, bytes: *const u8, len: isize, encoding: u32, external: u8) -> CFStringRef;
+            fn CFStringGetLength(s: CFStringRef) -> isize;
+            fn CFStringGetMaximumSizeForEncoding(len: isize, encoding: u32) -> isize;
+            fn CFStringGetCString(s: CFStringRef, buf: *mut u8, len: isize, encoding: u32) -> u8;
+            fn CFRelease(obj: *const c_void);
+        }
+        const UTF8: u32 = 0x0800_0100; // kCFStringEncodingUTF8
+
+        const fn fourcc(code: &[u8; 4]) -> u32 {
+            u32::from_be_bytes(*code)
+        }
+        const SYSTEM_OBJECT: u32 = 1; // kAudioObjectSystemObject
+        const SCOPE_GLOBAL: u32 = fourcc(b"glob");
+        const SCOPE_INPUT: u32 = fourcc(b"inpt");
+        const SCOPE_OUTPUT: u32 = fourcc(b"outp");
+        const DEVICES: u32 = fourcc(b"dev#"); // kAudioHardwarePropertyDevices
+        const DEFAULT_INPUT: u32 = fourcc(b"dIn "); // kAudioHardwarePropertyDefaultInputDevice
+        const DEFAULT_OUTPUT: u32 = fourcc(b"dOut"); // kAudioHardwarePropertyDefaultOutputDevice
+        const NAME: u32 = fourcc(b"lnam"); // kAudioObjectPropertyName
+        const DEVICE_UID: u32 = fourcc(b"uid "); // kAudioDevicePropertyDeviceUID
+        const STREAM_CONFIGURATION: u32 = fourcc(b"slay"); // kAudioDevicePropertyStreamConfiguration
+        const NOMINAL_SAMPLE_RATE: u32 = fourcc(b"nsrt"); // kAudioDevicePropertyNominalSampleRate
+        const TRANSPORT_TYPE: u32 = fourcc(b"tran"); // kAudioDevicePropertyTransportType
+
+        /// Lee una propiedad de tamaño fijo en `out`; `false` si el objeto no la tiene.
+        fn get<T>(object: u32, selector: u32, scope: u32, out: &mut T) -> bool {
+            let address = PropertyAddress { selector, scope, element: 0 };
+            let mut size = std::mem::size_of::<T>() as u32;
+            // SAFETY: `out` es nuestro y tiene exactamente `size` octetos.
+            unsafe { AudioObjectGetPropertyData(object, &address, 0, std::ptr::null(), &mut size, out as *mut T as *mut c_void) == 0 }
+        }
+
+        /// Lee una propiedad de tamaño variable entera.
+        fn get_bytes(object: u32, selector: u32, scope: u32) -> Vec<u8> {
+            let address = PropertyAddress { selector, scope, element: 0 };
+            let mut size = 0u32;
+            // SAFETY: consulta de tamaño; después el búfer tiene los octetos que CoreAudio pidió.
+            unsafe {
+                if AudioObjectGetPropertyDataSize(object, &address, 0, std::ptr::null(), &mut size) != 0 || size == 0 {
+                    return Vec::new();
+                }
+                // Alineado a 8: las listas llevan punteros.
+                let mut buf = vec![0u64; (size as usize).div_ceil(8)];
+                if AudioObjectGetPropertyData(object, &address, 0, std::ptr::null(), &mut size, buf.as_mut_ptr() as *mut c_void) != 0 {
+                    return Vec::new();
+                }
+                std::slice::from_raw_parts(buf.as_ptr() as *const u8, size as usize).to_vec()
+            }
+        }
+
+        /// Una propiedad de texto (un CFString que poseemos y soltamos).
+        fn get_text(object: u32, selector: u32) -> String {
+            let mut s: CFStringRef = std::ptr::null();
+            if !get(object, selector, SCOPE_GLOBAL, &mut s) || s.is_null() {
+                return String::new();
+            }
+            // SAFETY: `s` es un CFString vivo; el búfer tiene el tamaño que CF pide para UTF-8.
+            unsafe {
+                let cap = CFStringGetMaximumSizeForEncoding(CFStringGetLength(s), UTF8) + 1;
+                let mut buf = vec![0u8; cap.max(1) as usize];
+                let ok = CFStringGetCString(s, buf.as_mut_ptr(), buf.len() as isize, UTF8) != 0;
+                CFRelease(s);
+                if !ok {
+                    return String::new();
+                }
+                let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+                String::from_utf8_lossy(&buf[..end]).into_owned()
+            }
+        }
+
+        /// Los canales de un dispositivo en un ámbito: la suma de los de sus búferes
+        /// (`AudioBufferList`: un `u32` de cuenta y, alineados a 8, búferes de 16 octetos que
+        /// empiezan por su número de canales).
+        fn channels(device: u32, scope: u32) -> i64 {
+            let list = get_bytes(device, STREAM_CONFIGURATION, scope);
+            if list.len() < 8 {
+                return 0;
+            }
+            let count = u32::from_ne_bytes([list[0], list[1], list[2], list[3]]) as usize;
+            (0..count)
+                .filter_map(|i| list.get(8 + i * 16..12 + i * 16))
+                .map(|b| u32::from_ne_bytes([b[0], b[1], b[2], b[3]]) as i64)
+                .sum()
+        }
+
+        fn transport(device: u32) -> &'static str {
+            let mut code = 0u32;
+            get(device, TRANSPORT_TYPE, SCOPE_GLOBAL, &mut code);
+            match &code.to_be_bytes() {
+                b"bltn" => "builtin",
+                b"usb " => "usb",
+                b"blue" | b"blea" => "bluetooth",
+                b"hdmi" | b"dprt" => "hdmi",
+                b"airp" | b"eavb" => "network",
+                b"virt" => "virtual",
+                b"grup" => "aggregate",
+                b"1394" | b"thun" | b"pci " => "wired",
+                _ => "",
+            }
+        }
+
+        pub fn devices() -> Result<Vec<super::super::DeviceInfo>, String> {
+            let ids = get_bytes(SYSTEM_OBJECT, DEVICES, SCOPE_GLOBAL);
+            let (mut default_in, mut default_out) = (0u32, 0u32);
+            get(SYSTEM_OBJECT, DEFAULT_INPUT, SCOPE_GLOBAL, &mut default_in);
+            get(SYSTEM_OBJECT, DEFAULT_OUTPUT, SCOPE_GLOBAL, &mut default_out);
+            let mut out = Vec::new();
+            for id in ids.chunks_exact(4).map(|b| u32::from_ne_bytes([b[0], b[1], b[2], b[3]])) {
+                let uid = get_text(id, DEVICE_UID);
+                if uid.is_empty() {
+                    continue;
+                }
+                let mut rate = 0f64;
+                get(id, NOMINAL_SAMPLE_RATE, SCOPE_GLOBAL, &mut rate);
+                out.push(super::super::DeviceInfo {
+                    id: uid,
+                    name: get_text(id, NAME),
+                    input_channels: channels(id, SCOPE_INPUT),
+                    output_channels: channels(id, SCOPE_OUTPUT),
+                    default_input: id == default_in,
+                    default_output: id == default_out,
+                    sample_rate: rate as i64,
+                    transport: transport(id).to_string(),
+                });
+            }
+            Ok(out)
+        }
+
+        /// Un CFString con el UID, para `kAudioQueueProperty_CurrentDevice`. Hay que soltarlo.
+        pub fn uid_string(uid: &str) -> CFStringRef {
+            // SAFETY: el puntero y la longitud describen el `str`; CF copia los octetos.
+            unsafe { CFStringCreateWithBytes(std::ptr::null(), uid.as_ptr(), uid.len() as isize, UTF8, 0) }
+        }
+
+        pub fn release(s: CFStringRef) {
+            // SAFETY: `s` lo creó `uid_string`.
+            unsafe { CFRelease(s) };
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn devices() -> Result<Vec<super::DeviceInfo>, String> {
+        hal::devices()
+    }
+
+    /// M468: dirige la cola `q` (aún sin arrancar) al dispositivo `device`, o no hace nada si
+    /// es "" (el dispositivo por defecto, que además sigue los cambios del sistema).
+    fn select_device(q: AudioQueueRef, device: &str, input: bool) -> Result<(), String> {
+        if device.is_empty() {
+            return Ok(());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            const CURRENT_DEVICE: u32 = u32::from_be_bytes(*b"aqcd"); // kAudioQueueProperty_CurrentDevice
+            // La cola acepta cualquier UID y falla al arrancar con un código opaco: se comprueba
+            // antes que el dispositivo existe y sirve para esta dirección.
+            let direction = if input { "input" } else { "output" };
+            match hal::devices()?.iter().find(|d| d.id == device) {
+                None => return Err(format!("audio: no {direction} device with id '{device}' (was it disconnected?); list them with audio.devices()")),
+                Some(d) if (if input { d.input_channels } else { d.output_channels }) == 0 => {
+                    return Err(format!("audio: the device '{}' has no {direction} channels", d.name));
+                }
+                Some(_) => {}
+            }
+            let uid = hal::uid_string(device);
+            // SAFETY: `q` es una cola viva; la propiedad es un CFStringRef (se pasa su dirección).
+            let st = unsafe { AudioQueueSetProperty(q, CURRENT_DEVICE, &uid as *const _ as *const std::ffi::c_void, std::mem::size_of_val(&uid) as u32) };
+            hal::release(uid);
+            if st != 0 {
+                return Err(format!(
+                    "audio: no {} device with id '{device}' (OSStatus {st}); list them with audio.devices()",
+                    if input { "input" } else { "output" }
+                ));
+            }
+            Ok(())
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (q, input);
+            Err(format!("audio: iOS routes audio by itself: the device '{device}' cannot be chosen (open the default one)"))
+        }
     }
     const PARAM_VOLUME: u32 = 1; // kAudioQueueParam_Volume
     const PARAM_VOLUME_RAMP_TIME: u32 = 4; // kAudioQueueParam_VolumeRampTime (segundos)
@@ -1439,6 +1741,7 @@ mod coreaudio {
         latency_ms: i64,
         fmt: super::Format,
         played: Arc<super::AtomicI64>,
+        device: &str,
     ) -> Result<Box<dyn Sink>, String> {
         // M398: AudioQueue acepta los cuatro formatos tal cual (enteros empaquetados o float).
         let sb = fmt.sample_bytes();
@@ -1521,6 +1824,14 @@ mod coreaudio {
             unsafe { drop(Arc::from_raw(user as *const Shared)) };
             return Err(format!("audio: AudioQueueNewOutput failed (OSStatus {st})"));
         }
+        if let Err(e) = select_device(q, device, false) {
+            // SAFETY: la cola no llegó a arrancar; se desmonta y se recupera el Arc filtrado.
+            unsafe {
+                AudioQueueDispose(q, 1);
+                drop(Arc::from_raw(user as *const Shared));
+            }
+            return Err(e);
+        }
         let buffers = if cfg!(target_os = "ios") { 4 } else { 3 };
         unsafe {
             for _ in 0..buffers {
@@ -1587,6 +1898,7 @@ mod coreaudio {
         fd_w: i32,
         key: i64,
         ctl: Arc<super::InCtl>,
+        device: &str,
     ) -> Result<(), String> {
         let sb = fmt.sample_bytes();
         let bytes_per_frame = (channels as usize * sb) as u32;
@@ -1615,6 +1927,14 @@ mod coreaudio {
             // SAFETY: recupera el Arc filtrado (la cola no llegó a existir).
             unsafe { drop(Arc::from_raw(user as *const InputState)) };
             return Err(format!("audio: could not open the input device (AudioQueueNewInput, OSStatus {st}); is there a microphone or audio interface?"));
+        }
+        if let Err(e) = select_device(q, device, true) {
+            // SAFETY: la cola no llegó a arrancar; se desmonta y se recupera el Arc filtrado.
+            unsafe {
+                AudioQueueDispose(q, 1);
+                drop(Arc::from_raw(user as *const InputState));
+            }
+            return Err(e);
         }
         // SAFETY: `q` es la cola recién creada; los búferes son suyos.
         unsafe {
@@ -1909,6 +2229,7 @@ mod alsa {
         latency_ms: i64,
         fmt: super::Format,
         played: Arc<super::AtomicI64>,
+        device: &str,
     ) -> Result<Box<dyn Sink>, String> {
         // SAFETY: literal NUL-terminado; dlopen es seguro de llamar.
         let lib = unsafe { dlopen(b"libasound.so.2\0".as_ptr(), RTLD_NOW) };
@@ -1931,9 +2252,14 @@ mod alsa {
                 _ => None,
             };
             let mut pcm: Pcm = std::ptr::null_mut();
-            let st = f_open(&mut pcm, b"default\0".as_ptr(), SND_PCM_STREAM_PLAYBACK, 0);
+            let name = pcm_name(device);
+            let st = f_open(&mut pcm, name.as_ptr(), SND_PCM_STREAM_PLAYBACK, 0);
             if st != 0 {
-                return Err(format!("audio: snd_pcm_open failed ({st})"));
+                return Err(if device.is_empty() {
+                    format!("audio: snd_pcm_open failed ({st})")
+                } else {
+                    format!("audio: could not open the output device '{device}' (snd_pcm_open, {st}); list them with audio.devices()")
+                });
             }
             // M158: la latencia del dispositivo sigue el hint (default 200 ms → 100 ms aquí,
             // el valor validado de rallyx; con hint explícito, la mitad del hint acotada).
@@ -1970,6 +2296,162 @@ mod alsa {
         }
     }
 
+    /// El nombre PCM de ALSA de `device` ("" = `default`), terminado en NUL.
+    fn pcm_name(device: &str) -> Vec<u8> {
+        let name = if device.is_empty() { "default" } else { device };
+        name.bytes().filter(|&b| b != 0).chain(std::iter::once(0)).collect()
+    }
+
+    // ── M468 (ray-daw #424): los dispositivos de ALSA ──────────────────────────────────────
+    //
+    // ALSA no tiene «dispositivos» sino nombres PCM, y `snd_device_name_hint` da decenas por
+    // tarjeta (`front:`, `surround51:`, `dmix:`…). Se listan los que un programa abriría: el
+    // `default` (y `pipewire` / `pulse` si existen) y, por cada tarjeta, su `plughw:` — el
+    // hardware directo con conversión de formato. El id es ese nombre PCM.
+    type FnNameHint = unsafe extern "C" fn(i32, *const u8, *mut *mut *mut std::ffi::c_void) -> i32;
+    type FnGetHint = unsafe extern "C" fn(*const std::ffi::c_void, *const u8) -> *mut std::ffi::c_char;
+    type FnFreeHint = unsafe extern "C" fn(*mut *mut std::ffi::c_void) -> i32;
+    type FnParamsMalloc = unsafe extern "C" fn(*mut *mut std::ffi::c_void) -> i32;
+    type FnParamsFree = unsafe extern "C" fn(*mut std::ffi::c_void);
+    type FnParamsAny = unsafe extern "C" fn(Pcm, *mut std::ffi::c_void) -> i32;
+    type FnParamsChannelsMax = unsafe extern "C" fn(*const std::ffi::c_void, *mut u32) -> i32;
+    const SND_PCM_NONBLOCK: i32 = 1;
+
+    unsafe extern "C" {
+        fn free(p: *mut std::ffi::c_void);
+    }
+
+    /// Una pista de `snd_device_name_hint` como texto (alsa-lib la reserva con malloc).
+    fn hint_text(get: FnGetHint, hint: *const std::ffi::c_void, id: &[u8]) -> Option<String> {
+        // SAFETY: `hint` es una entrada viva de la lista; `id` termina en NUL; la cadena
+        // devuelta es nuestra y se libera con `free`.
+        unsafe {
+            let p = get(hint, id.as_ptr());
+            if p.is_null() {
+                return None;
+            }
+            let text = std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned();
+            free(p as *mut std::ffi::c_void);
+            Some(text)
+        }
+    }
+
+    /// Cómo está conectada la tarjeta de un nombre `…:CARD=<id>,…`: el bus de su dispositivo
+    /// en sysfs.
+    fn card_transport(name: &str) -> &'static str {
+        let Some(card) = name.split_once("CARD=").map(|(_, rest)| rest.split(',').next().unwrap_or("")) else {
+            return "";
+        };
+        // La tarjeta cuyo `id` de sysfs es ese: `/sys/class/sound/cardN/id`.
+        let Some(dir) = std::fs::read_dir("/sys/class/sound").ok().and_then(|entries| {
+            entries.flatten().map(|e| e.path()).find(|p| std::fs::read_to_string(p.join("id")).is_ok_and(|id| id.trim() == card))
+        }) else {
+            return "";
+        };
+        let Ok(bus) = std::fs::read_link(dir.join("device/subsystem")) else {
+            return "";
+        };
+        match bus.file_name().and_then(|n| n.to_str()) {
+            Some("usb") => "usb",
+            Some("pci") | Some("platform") => "builtin",
+            Some("hdmi") => "hdmi",
+            Some("bluetooth") => "bluetooth",
+            _ => "",
+        }
+    }
+
+    pub fn devices() -> Result<Vec<super::DeviceInfo>, String> {
+        // SAFETY: literal NUL-terminado; dlopen es seguro de llamar.
+        let lib = unsafe { dlopen(b"libasound.so.2\0".as_ptr(), RTLD_NOW) };
+        if lib.is_null() {
+            return Ok(Vec::new()); // sin ALSA no hay dispositivos que listar
+        }
+        quiet(lib);
+        let mut out = Vec::new();
+        // SAFETY de los transmutes: las firmas replican el header de ALSA (API estable).
+        unsafe {
+            let name_hint: FnNameHint = std::mem::transmute(sym(lib, b"snd_device_name_hint\0")?);
+            let get_hint: FnGetHint = std::mem::transmute(sym(lib, b"snd_device_name_get_hint\0")?);
+            let free_hint: FnFreeHint = std::mem::transmute(sym(lib, b"snd_device_name_free_hint\0")?);
+            let f_open: FnOpen = std::mem::transmute(sym(lib, b"snd_pcm_open\0")?);
+            let f_close: FnClose = std::mem::transmute(sym(lib, b"snd_pcm_close\0")?);
+            let params_malloc: FnParamsMalloc = std::mem::transmute(sym(lib, b"snd_pcm_hw_params_malloc\0")?);
+            let params_free: FnParamsFree = std::mem::transmute(sym(lib, b"snd_pcm_hw_params_free\0")?);
+            let params_any: FnParamsAny = std::mem::transmute(sym(lib, b"snd_pcm_hw_params_any\0")?);
+            let channels_max: FnParamsChannelsMax = std::mem::transmute(sym(lib, b"snd_pcm_hw_params_get_channels_max\0")?);
+            // Los canales del hardware en una dirección: se abre `hw:` sin bloquear y se
+            // pregunta. Si otro programa lo tiene cogido no se puede saber: estéreo. Si no se
+            // puede abrir por otra causa, la tarjeta no tiene esa dirección.
+            let probe = |plug_name: &str, stream: i32| -> i64 {
+                let hw = pcm_name(plug_name.strip_prefix("plug").unwrap_or(plug_name));
+                let mut pcm: Pcm = std::ptr::null_mut();
+                match f_open(&mut pcm, hw.as_ptr(), stream, SND_PCM_NONBLOCK) {
+                    0 => {}
+                    -16 => return 2, // EBUSY: existe, pero lo tiene otro programa
+                    _ => return 0,   // la tarjeta no tiene esta dirección
+                }
+                let mut params: *mut std::ffi::c_void = std::ptr::null_mut();
+                let mut max = 0u32;
+                if params_malloc(&mut params) == 0 {
+                    if params_any(pcm, params) >= 0 {
+                        channels_max(params, &mut max);
+                    }
+                    params_free(params);
+                }
+                f_close(pcm);
+                if max == 0 { 2 } else { max.min(64) as i64 }
+            };
+            let mut hints: *mut *mut std::ffi::c_void = std::ptr::null_mut();
+            if name_hint(-1, b"pcm\0".as_ptr(), &mut hints) != 0 || hints.is_null() {
+                return Ok(out);
+            }
+            let mut at = hints;
+            while !(*at).is_null() {
+                let hint = *at as *const std::ffi::c_void;
+                at = at.add(1);
+                let Some(name) = hint_text(get_hint, hint, b"NAME\0") else { continue };
+                let card = name.starts_with("plughw:");
+                if !card && !matches!(name.as_str(), "default" | "pipewire" | "pulse") {
+                    continue;
+                }
+                // IOID: «Input», «Output», o ausente si sirve para las dos direcciones.
+                let io = hint_text(get_hint, hint, b"IOID\0");
+                let (input, output) = (io.as_deref() != Some("Output"), io.as_deref() != Some("Input"));
+                let desc = hint_text(get_hint, hint, b"DESC\0").unwrap_or_default();
+                let label = desc.lines().next().unwrap_or("").trim();
+                let is_default = name == "default";
+                out.push(super::DeviceInfo {
+                    name: if label.is_empty() { name.clone() } else { label.to_string() },
+                    input_channels: if !input { 0 } else if card { probe(&name, SND_PCM_STREAM_CAPTURE) } else { 2 },
+                    output_channels: if !output { 0 } else if card { probe(&name, SND_PCM_STREAM_PLAYBACK) } else { 2 },
+                    default_input: is_default && input,
+                    default_output: is_default && output,
+                    sample_rate: 0,
+                    transport: card_transport(&name).to_string(),
+                    id: name,
+                });
+            }
+            free_hint(hints);
+        }
+        // En un ALSA sin servidor de sonido `default` no trae descripción y no sale en las
+        // pistas, pero existe siempre que haya una tarjeta: es lo que abre `open`.
+        if !out.is_empty() && !out.iter().any(|d| d.id == "default") {
+            out.insert(
+                0,
+                super::DeviceInfo {
+                    id: "default".to_string(),
+                    name: "Default".to_string(),
+                    input_channels: if out.iter().any(|d| d.input_channels > 0) { 2 } else { 0 },
+                    output_channels: if out.iter().any(|d| d.output_channels > 0) { 2 } else { 0 },
+                    default_input: true,
+                    default_output: true,
+                    ..Default::default()
+                },
+            );
+        }
+        Ok(out)
+    }
+
     const SND_PCM_STREAM_CAPTURE: i32 = 1;
     type FnReadi = unsafe extern "C" fn(Pcm, *mut u8, u64) -> i64;
 
@@ -1985,6 +2467,7 @@ mod alsa {
         fd_w: i32,
         key: i64,
         ctl: Arc<super::InCtl>,
+        device: &str,
     ) -> Result<(), String> {
         // SAFETY: literal NUL-terminado; dlopen es seguro de llamar.
         let lib = unsafe { dlopen(b"libasound.so.2\0".as_ptr(), RTLD_NOW) };
@@ -1993,16 +2476,22 @@ mod alsa {
         }
         quiet(lib);
         // SAFETY de los transmutes: las firmas replican el header de ALSA (API estable).
-        let (pcm, native, readi, recover, close) = unsafe {
+        let (pcm, native, readi, recover, close, start) = unsafe {
             let f_open: FnOpen = std::mem::transmute(sym(lib, b"snd_pcm_open\0")?);
             let f_params: FnSetParams = std::mem::transmute(sym(lib, b"snd_pcm_set_params\0")?);
             let readi: FnReadi = std::mem::transmute(sym(lib, b"snd_pcm_readi\0")?);
+            let start: FnDrain = std::mem::transmute(sym(lib, b"snd_pcm_start\0")?);
             let recover: FnRecover = std::mem::transmute(sym(lib, b"snd_pcm_recover\0")?);
             let close: FnClose = std::mem::transmute(sym(lib, b"snd_pcm_close\0")?);
             let mut pcm: Pcm = std::ptr::null_mut();
-            let st = f_open(&mut pcm, b"default\0".as_ptr(), SND_PCM_STREAM_CAPTURE, 0);
+            let name = pcm_name(device);
+            let st = f_open(&mut pcm, name.as_ptr(), SND_PCM_STREAM_CAPTURE, 0);
             if st != 0 {
-                return Err(format!("audio: could not open the input device (snd_pcm_open, {st}); is there a microphone or capture device?"));
+                return Err(if device.is_empty() {
+                    format!("audio: could not open the input device (snd_pcm_open, {st}); is there a microphone or capture device?")
+                } else {
+                    format!("audio: could not open the input device '{device}' (snd_pcm_open, {st}); list them with audio.devices()")
+                });
             }
             // El búfer del dispositivo: la latencia pedida entera (los bloques son un cuarto).
             let dev_latency_us = (latency_ms * 1000).clamp(20_000, 1_000_000) as u32;
@@ -2016,7 +2505,10 @@ mod alsa {
                 close(pcm);
                 return Err(format!("audio: the input device does not accept {rate} Hz, {channels} channel(s) (snd_pcm_set_params, {st})"));
             }
-            (pcm as usize, native, readi, recover, close)
+            // La captura no arranca sola: `set_params` deja el umbral de arranque en el búfer
+            // entero y una lectura de un bloque (un cuarto) no lo alcanza en un `hw:` directo.
+            start(pcm);
+            (pcm as usize, native, readi, recover, close, start)
         };
         std::thread::spawn(move || {
             let pcm = pcm as Pcm;
@@ -2028,11 +2520,17 @@ mod alsa {
                 // SAFETY: `buf` tiene sitio para `block_frames`; readi BLOQUEA hasta tenerlos.
                 let n = unsafe { readi(pcm, buf.as_mut_ptr(), block_frames as u64) };
                 if n < 0 {
-                    // Desbordamiento (el hilo llegó tarde) u otro tropiezo: recover y se sigue.
+                    // Desbordamiento (el hilo llegó tarde) u otro tropiezo: recover, volver a
+                    // arrancar y seguir.
                     // SAFETY: pcm válido hasta el close de abajo.
                     if unsafe { recover(pcm, n as i32, 1) } < 0 {
+                        if std::env::var_os("RAY_AUDIO_TRACE").is_some() {
+                            eprintln!("audio input: the device stopped (snd_pcm_readi, {n})");
+                        }
                         break;
                     }
+                    // SAFETY: ídem.
+                    unsafe { start(pcm) };
                     continue;
                 }
                 let got = &buf[..n as usize * native_frame];
@@ -2174,7 +2672,9 @@ mod aaudio {
         latency_ms: i64,
         fmt: super::Format,
         played: Arc<super::AtomicI64>,
+        device: &str,
     ) -> Result<Box<dyn Sink>, String> {
+        let device = device_id(device, false)?;
         // SAFETY: dlopen/dlsym con literales; las firmas replican aaudio/AAudio.h (NDK).
         unsafe {
             let lib = dlopen(b"libaaudio.so\0".as_ptr(), RTLD_NOW);
@@ -2186,6 +2686,7 @@ mod aaudio {
             let set_channels: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setChannelCount\0")?);
             let set_format: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setFormat\0")?);
             let set_perf: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setPerformanceMode\0")?);
+            let set_device: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setDeviceId\0")?);
             let open_stream: FnOpenStream = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_openStream\0")?);
             let builder_delete: FnBuilderDelete = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_delete\0")?);
             let request_start: FnRequest = std::mem::transmute(sym(lib, b"AAudioStream_requestStart\0")?);
@@ -2209,6 +2710,9 @@ mod aaudio {
                 st = create(&mut builder);
                 if st != 0 {
                     return Err(format!("audio: AAudio_createStreamBuilder failed ({st})"));
+                }
+                if let Some(id) = device {
+                    set_device(builder, id);
                 }
                 set_rate(builder, rate as i32);
                 set_channels(builder, channels as i32);
@@ -2247,6 +2751,49 @@ mod aaudio {
         }
     }
 
+    /// M468 (ray-daw #424): los dispositivos de audio de Android. La lista es de `AudioManager`,
+    /// en Java: la da el shell (`audio_devices`), ya en el formato de `devices_text`. Sin shell,
+    /// vacía. El id es el número que acepta `AAudioStreamBuilder_setDeviceId`.
+    pub fn devices() -> Result<Vec<super::DeviceInfo>, String> {
+        #[cfg(feature = "ui")]
+        {
+            let text = crate::ui::shell_request("audio_devices", "")?;
+            Ok(text
+                .lines()
+                .filter_map(|line| {
+                    let f: Vec<&str> = line.split('\t').collect();
+                    if f.len() < 8 {
+                        return None;
+                    }
+                    Some(super::DeviceInfo {
+                        id: f[0].to_string(),
+                        name: f[1].to_string(),
+                        input_channels: f[2].parse().unwrap_or(0),
+                        output_channels: f[3].parse().unwrap_or(0),
+                        default_input: f[4] == "1",
+                        default_output: f[5] == "1",
+                        sample_rate: f[6].parse().unwrap_or(0),
+                        transport: f[7].to_string(),
+                    })
+                })
+                .collect())
+        }
+        #[cfg(not(feature = "ui"))]
+        {
+            Ok(Vec::new())
+        }
+    }
+
+    /// El id numérico de `device` para AAudio; `None` = el dispositivo por defecto.
+    fn device_id(device: &str, input: bool) -> Result<Option<i32>, String> {
+        if device.is_empty() {
+            return Ok(None);
+        }
+        device.parse::<i32>().map(Some).map_err(|_| {
+            format!("audio: no {} device with id '{device}'; list them with audio.devices()", if input { "input" } else { "output" })
+        })
+    }
+
     const AAUDIO_DIRECTION_INPUT: i32 = 1;
     type FnRead = unsafe extern "C" fn(Stream, *mut std::ffi::c_void, i32, i64) -> i32;
 
@@ -2280,7 +2827,9 @@ mod aaudio {
         fd_w: i32,
         key: i64,
         ctl: Arc<super::InCtl>,
+        device: &str,
     ) -> Result<(), String> {
+        let device = device_id(device, true)?;
         microphone_permission()?;
         // SAFETY: dlopen/dlsym con literales; las firmas replican aaudio/AAudio.h (NDK).
         let (stream, native, read, request_stop, close) = unsafe {
@@ -2294,6 +2843,7 @@ mod aaudio {
             let set_format: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setFormat\0")?);
             let set_direction: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setDirection\0")?);
             let set_perf: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setPerformanceMode\0")?);
+            let set_device: FnSetI32 = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_setDeviceId\0")?);
             let open_stream: FnOpenStream = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_openStream\0")?);
             let builder_delete: FnBuilderDelete = std::mem::transmute(sym(lib, b"AAudioStreamBuilder_delete\0")?);
             let request_start: FnRequest = std::mem::transmute(sym(lib, b"AAudioStream_requestStart\0")?);
@@ -2310,6 +2860,9 @@ mod aaudio {
                     return Err(format!("audio: AAudio_createStreamBuilder failed ({st})"));
                 }
                 set_direction(builder, AAUDIO_DIRECTION_INPUT);
+                if let Some(id) = device {
+                    set_device(builder, id);
+                }
                 set_rate(builder, rate as i32);
                 set_channels(builder, channels as i32);
                 set_format(builder, aaudio_format(native));
@@ -2462,6 +3015,7 @@ mod wasapi {
     const COINIT_MULTITHREADED: u32 = 0x0;
     const CLSCTX_ALL: u32 = 0x17;
     const E_RENDER: u32 = 0; // EDataFlow::eRender
+    const E_CAPTURE: u32 = 1; // EDataFlow::eCapture
     const E_CONSOLE: u32 = 0; // ERole::eConsole
     const AUDCLNT_SHAREMODE_SHARED: u32 = 0;
     const AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM: u32 = 0x8000_0000;
@@ -2472,6 +3026,229 @@ mod wasapi {
     unsafe extern "system" {
         fn CoInitializeEx(reserved: Ptr, coinit: u32) -> i32;
         fn CoCreateInstance(clsid: *const Guid, outer: Ptr, ctx: u32, iid: *const Guid, out: *mut Ptr) -> i32;
+        fn CoTaskMemFree(p: Ptr);
+        fn PropVariantClear(value: *mut PropVariant) -> i32;
+    }
+
+    // ── M468 (ray-daw #424): los endpoints de WASAPI ───────────────────────────────────────
+    //
+    // Un endpoint es de salida o de entrada (nunca los dos), y su id es una cadena estable
+    // («{0.0.0.00000000}.{guid}»). El nombre y el bus salen de su almacén de propiedades; los
+    // canales y la frecuencia, del formato de mezcla del motor.
+    #[repr(C)]
+    struct PropertyKey {
+        fmtid: Guid,
+        pid: u32,
+    }
+    /// `PROPVARIANT` (24 octetos en 64 bits): el tipo y, para `VT_LPWSTR`, un puntero.
+    #[repr(C)]
+    struct PropVariant {
+        vt: u16,
+        reserved: [u16; 3],
+        pointer: *mut u16,
+        padding: usize,
+    }
+    const VT_LPWSTR: u16 = 31;
+    const DEVPKEY_GUID: Guid = Guid { d1: 0xA45C_254E, d2: 0xDF1C, d3: 0x4EFD, d4: [0x80, 0x20, 0x67, 0xD1, 0x46, 0xA8, 0x50, 0xE0] };
+    const PKEY_FRIENDLY_NAME: PropertyKey = PropertyKey { fmtid: DEVPKEY_GUID, pid: 14 };
+    const PKEY_ENUMERATOR_NAME: PropertyKey = PropertyKey { fmtid: DEVPKEY_GUID, pid: 24 };
+    const DEVICE_STATE_ACTIVE: u32 = 1;
+
+    #[repr(C)]
+    struct IMMDeviceCollectionVtbl {
+        base: IUnknownVtbl,
+        get_count: unsafe extern "system" fn(Ptr, *mut u32) -> Hr,
+        item: unsafe extern "system" fn(Ptr, u32, *mut Ptr) -> Hr,
+    }
+    #[repr(C)]
+    struct IPropertyStoreVtbl {
+        base: IUnknownVtbl,
+        get_count: usize,
+        get_at: usize,
+        get_value: unsafe extern "system" fn(Ptr, *const PropertyKey, *mut PropVariant) -> Hr,
+        set_value: usize,
+        commit: usize,
+    }
+    type FnEnumEndpoints = unsafe extern "system" fn(Ptr, u32, u32, *mut Ptr) -> Hr;
+    type FnGetDevice = unsafe extern "system" fn(Ptr, *const u16, *mut Ptr) -> Hr;
+    type FnOpenPropertyStore = unsafe extern "system" fn(Ptr, u32, *mut Ptr) -> Hr;
+    type FnGetId = unsafe extern "system" fn(Ptr, *mut *mut u16) -> Hr;
+    type FnGetMixFormat = unsafe extern "system" fn(Ptr, *mut *mut WaveFormatEx) -> Hr;
+
+    /// Una cadena ancha terminada en NUL, copiada.
+    unsafe fn wide_text(p: *const u16) -> String {
+        if p.is_null() {
+            return String::new();
+        }
+        // SAFETY (del llamador): `p` apunta a una cadena ancha terminada en NUL.
+        unsafe {
+            let mut len = 0;
+            while *p.add(len) != 0 {
+                len += 1;
+            }
+            String::from_utf16_lossy(std::slice::from_raw_parts(p, len))
+        }
+    }
+
+    fn enumerator() -> Result<Ptr, String> {
+        com_init();
+        let mut enumerator: Ptr = std::ptr::null_mut();
+        // SAFETY: CoCreateInstance escribe un puntero COM si devuelve S_OK.
+        let hr = unsafe { CoCreateInstance(&CLSID_MM_DEVICE_ENUMERATOR, std::ptr::null_mut(), CLSCTX_ALL, &IID_IMM_DEVICE_ENUMERATOR, &mut enumerator) };
+        if hr < 0 || enumerator.is_null() {
+            return Err(format!("audio: could not create the WASAPI device enumerator (0x{:08X})", hr as u32));
+        }
+        Ok(enumerator)
+    }
+
+    /// El id de un endpoint (la cadena la reserva COM y se libera aquí).
+    fn endpoint_id(device: Ptr) -> String {
+        let mut id: *mut u16 = std::ptr::null_mut();
+        // SAFETY: `GetId` escribe una cadena reservada con CoTaskMemAlloc.
+        unsafe {
+            let get_id: FnGetId = std::mem::transmute(vtbl::<IMMDeviceVtbl>(device).get_id);
+            if get_id(device, &mut id) < 0 {
+                return String::new();
+            }
+            let text = wide_text(id);
+            CoTaskMemFree(id as Ptr);
+            text
+        }
+    }
+
+    fn property_text(store: Ptr, key: &PropertyKey) -> String {
+        let mut value = PropVariant { vt: 0, reserved: [0; 3], pointer: std::ptr::null_mut(), padding: 0 };
+        // SAFETY: `GetValue` rellena el PROPVARIANT; `PropVariantClear` libera lo que reservó.
+        unsafe {
+            if (vtbl::<IPropertyStoreVtbl>(store).get_value)(store, key, &mut value) < 0 {
+                return String::new();
+            }
+            let text = if value.vt == VT_LPWSTR { wide_text(value.pointer) } else { String::new() };
+            PropVariantClear(&mut value);
+            text
+        }
+    }
+
+    /// El endpoint por defecto de un flujo (`E_RENDER` / `E_CAPTURE`), o el de id `device`.
+    fn endpoint(enumerator: Ptr, flow: u32, device: &str) -> Result<Ptr, String> {
+        let direction = if flow == E_CAPTURE { "input" } else { "output" };
+        let mut found: Ptr = std::ptr::null_mut();
+        if device.is_empty() {
+            // SAFETY: método del vtable transcrito sobre un objeto vivo; escribe `found`.
+            let hr = unsafe { (vtbl::<IMMDeviceEnumeratorVtbl>(enumerator).get_default_audio_endpoint)(enumerator, flow, E_CONSOLE, &mut found) };
+            if hr < 0 || found.is_null() {
+                return Err(if flow == E_CAPTURE {
+                    "audio: could not open the input device (WASAPI: no default capture endpoint); is there a microphone or audio interface?".to_string()
+                } else {
+                    "audio: no output device (WASAPI: no default render endpoint)".to_string()
+                });
+            }
+            return Ok(found);
+        }
+        // Un endpoint de la otra dirección se activaría sin queja y fallaría más abajo con un
+        // código opaco: se comprueba antes contra la lista.
+        match devices()?.iter().find(|d| d.id == device) {
+            None => return Err(format!("audio: no {direction} device with id '{device}' (was it disconnected?); list them with audio.devices()")),
+            Some(d) if (if flow == E_CAPTURE { d.input_channels } else { d.output_channels }) == 0 => {
+                return Err(format!("audio: the device '{}' has no {direction} channels", d.name));
+            }
+            Some(_) => {}
+        }
+        let wide: Vec<u16> = device.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: `wide` termina en NUL; `GetDevice` escribe `found`.
+        let hr = unsafe {
+            let get_device: FnGetDevice = std::mem::transmute(vtbl::<IMMDeviceEnumeratorVtbl>(enumerator).get_device);
+            get_device(enumerator, wide.as_ptr(), &mut found)
+        };
+        if hr < 0 || found.is_null() {
+            return Err(format!("audio: no {direction} device with id '{device}' (0x{:08X})", hr as u32));
+        }
+        Ok(found)
+    }
+
+    pub fn devices() -> Result<Vec<super::DeviceInfo>, String> {
+        let enumerator = enumerator()?;
+        let mut out = Vec::new();
+        for flow in [E_RENDER, E_CAPTURE] {
+            // El id del endpoint por defecto de este flujo.
+            let mut default: Ptr = std::ptr::null_mut();
+            // SAFETY: método del vtable transcrito; escribe `default` o lo deja nulo.
+            unsafe { (vtbl::<IMMDeviceEnumeratorVtbl>(enumerator).get_default_audio_endpoint)(enumerator, flow, E_CONSOLE, &mut default) };
+            let default_id = if default.is_null() { String::new() } else { endpoint_id(default) };
+            release(default);
+            let mut collection: Ptr = std::ptr::null_mut();
+            // SAFETY: `EnumAudioEndpoints` escribe la colección de endpoints activos.
+            let hr = unsafe {
+                let enum_endpoints: FnEnumEndpoints = std::mem::transmute(vtbl::<IMMDeviceEnumeratorVtbl>(enumerator).enum_audio_endpoints);
+                enum_endpoints(enumerator, flow, DEVICE_STATE_ACTIVE, &mut collection)
+            };
+            if hr < 0 || collection.is_null() {
+                continue;
+            }
+            let mut count = 0u32;
+            // SAFETY: escribe un u32 propio.
+            unsafe { (vtbl::<IMMDeviceCollectionVtbl>(collection).get_count)(collection, &mut count) };
+            for i in 0..count {
+                let mut device: Ptr = std::ptr::null_mut();
+                // SAFETY: `Item` escribe el endpoint `i`.
+                if unsafe { (vtbl::<IMMDeviceCollectionVtbl>(collection).item)(collection, i, &mut device) } < 0 || device.is_null() {
+                    continue;
+                }
+                let id = endpoint_id(device);
+                let (mut name, mut bus) = (String::new(), String::new());
+                let mut store: Ptr = std::ptr::null_mut();
+                // SAFETY: `OpenPropertyStore(STGM_READ)` escribe el almacén.
+                unsafe {
+                    let open_store: FnOpenPropertyStore = std::mem::transmute(vtbl::<IMMDeviceVtbl>(device).open_property_store);
+                    if open_store(device, 0, &mut store) >= 0 && !store.is_null() {
+                        name = property_text(store, &PKEY_FRIENDLY_NAME);
+                        bus = property_text(store, &PKEY_ENUMERATOR_NAME);
+                    }
+                }
+                release(store);
+                // Canales y frecuencia: el formato de mezcla del motor para este endpoint.
+                let (mut channels, mut rate) = (0i64, 0i64);
+                let mut client: Ptr = std::ptr::null_mut();
+                // SAFETY: `Activate` escribe el cliente; `GetMixFormat` reserva el formato con
+                // CoTaskMemAlloc y se libera aquí.
+                unsafe {
+                    if (vtbl::<IMMDeviceVtbl>(device).activate)(device, &IID_IAUDIO_CLIENT, CLSCTX_ALL, std::ptr::null_mut(), &mut client) >= 0 && !client.is_null() {
+                        let get_mix_format: FnGetMixFormat = std::mem::transmute(vtbl::<IAudioClientVtbl>(client).get_mix_format);
+                        let mut format: *mut WaveFormatEx = std::ptr::null_mut();
+                        if get_mix_format(client, &mut format) >= 0 && !format.is_null() {
+                            channels = std::ptr::addr_of!((*format).channels).read_unaligned() as i64;
+                            rate = std::ptr::addr_of!((*format).samples_per_sec).read_unaligned() as i64;
+                            CoTaskMemFree(format as Ptr);
+                        }
+                    }
+                }
+                release(client);
+                release(device);
+                if id.is_empty() {
+                    continue;
+                }
+                out.push(super::DeviceInfo {
+                    default_input: flow == E_CAPTURE && id == default_id,
+                    default_output: flow == E_RENDER && id == default_id,
+                    input_channels: if flow == E_CAPTURE { channels.max(1) } else { 0 },
+                    output_channels: if flow == E_RENDER { channels.max(1) } else { 0 },
+                    sample_rate: rate,
+                    transport: match bus.to_ascii_uppercase().as_str() {
+                        "USB" => "usb",
+                        "BTHENUM" | "BTHHFENUM" | "BTHLEDEVICE" => "bluetooth",
+                        "HDAUDIO" | "INTELAUDIO" => "builtin",
+                        "ROOT" | "SWD" => "virtual",
+                        _ => "",
+                    }
+                    .to_string(),
+                    name,
+                    id,
+                });
+            }
+            release(collection);
+        }
+        release(enumerator);
+        Ok(out)
     }
 
     /// `WAVEFORMATEX` (mmreg.h, empaquetado a 1 byte: 18 bytes).
@@ -2567,23 +3344,15 @@ mod wasapi {
         unsafe { CoInitializeEx(std::ptr::null_mut(), COINIT_MULTITHREADED) };
     }
 
-    pub fn open(rate: i64, channels: i64, latency_ms: i64, played: Arc<AtomicI64>) -> Result<Box<dyn Sink>, String> {
-        com_init();
-        let mut enumerator: Ptr = std::ptr::null_mut();
-        // SAFETY: CoCreateInstance escribe un puntero COM en `enumerator` si devuelve S_OK.
-        let hr = unsafe {
-            CoCreateInstance(&CLSID_MM_DEVICE_ENUMERATOR, std::ptr::null_mut(), CLSCTX_ALL, &IID_IMM_DEVICE_ENUMERATOR, &mut enumerator)
+    pub fn open(rate: i64, channels: i64, latency_ms: i64, played: Arc<AtomicI64>, device_id: &str) -> Result<Box<dyn Sink>, String> {
+        let enumerator = enumerator()?;
+        let device = match endpoint(enumerator, E_RENDER, device_id) {
+            Ok(d) => d,
+            Err(e) => {
+                release(enumerator);
+                return Err(e);
+            }
         };
-        if hr < 0 || enumerator.is_null() {
-            return Err(format!("audio: could not create the WASAPI device enumerator (0x{:08X})", hr as u32));
-        }
-        let mut device: Ptr = std::ptr::null_mut();
-        // SAFETY: método del vtable transcrito sobre un objeto vivo; escribe `device`.
-        let hr = unsafe { (vtbl::<IMMDeviceEnumeratorVtbl>(enumerator).get_default_audio_endpoint)(enumerator, E_RENDER, E_CONSOLE, &mut device) };
-        if hr < 0 || device.is_null() {
-            release(enumerator);
-            return Err("audio: no output device (WASAPI: no default render endpoint)".to_string());
-        }
         let mut client: Ptr = std::ptr::null_mut();
         // SAFETY: ídem; `Activate` escribe la interfaz pedida.
         let hr = unsafe { (vtbl::<IMMDeviceVtbl>(device).activate)(device, &IID_IAUDIO_CLIENT, CLSCTX_ALL, std::ptr::null_mut(), &mut client) };
@@ -2651,7 +3420,6 @@ mod wasapi {
 
     const IID_IAUDIO_CAPTURE_CLIENT: Guid =
         Guid { d1: 0xC8AD_BD64, d2: 0xE71E, d3: 0x48A0, d4: [0xA4, 0xDE, 0x18, 0x5C, 0x39, 0x5C, 0xD3, 0x17] };
-    const E_CAPTURE: u32 = 1; // EDataFlow::eCapture
     const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
     const AUDCLNT_BUFFERFLAGS_SILENT: u32 = 0x2;
     const E_ACCESSDENIED: u32 = 0x8007_0005;
@@ -2694,21 +3462,11 @@ mod wasapi {
         end: super::SourceEnd,
         key: i64,
         ctl: Arc<super::InCtl>,
+        device: &str,
     ) -> Result<(), String> {
-        com_init();
         let mut cap = Capture { enumerator: std::ptr::null_mut(), device: std::ptr::null_mut(), client: std::ptr::null_mut(), capture: std::ptr::null_mut() };
-        // SAFETY: CoCreateInstance escribe un puntero COM si devuelve S_OK.
-        let hr = unsafe {
-            CoCreateInstance(&CLSID_MM_DEVICE_ENUMERATOR, std::ptr::null_mut(), CLSCTX_ALL, &IID_IMM_DEVICE_ENUMERATOR, &mut cap.enumerator)
-        };
-        if hr < 0 || cap.enumerator.is_null() {
-            return Err(format!("audio: could not create the WASAPI device enumerator (0x{:08X})", hr as u32));
-        }
-        // SAFETY: método del vtable transcrito sobre un objeto vivo; escribe `device`.
-        let hr = unsafe { (vtbl::<IMMDeviceEnumeratorVtbl>(cap.enumerator).get_default_audio_endpoint)(cap.enumerator, E_CAPTURE, E_CONSOLE, &mut cap.device) };
-        if hr < 0 || cap.device.is_null() {
-            return Err("audio: could not open the input device (WASAPI: no default capture endpoint); is there a microphone or audio interface?".to_string());
-        }
+        cap.enumerator = enumerator()?;
+        cap.device = endpoint(cap.enumerator, E_CAPTURE, device)?;
         // El búfer del motor: la latencia pedida entera (los bloques son un cuarto), en 100 ns.
         let hns = latency_ms.clamp(20, 1000) * 10_000;
         let flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
@@ -2885,6 +3643,32 @@ mod wasapi {
             self.client = std::ptr::null_mut();
             self.device = std::ptr::null_mut();
             self.enumerator = std::ptr::null_mut();
+        }
+    }
+}
+
+#[cfg(test)]
+mod device_tests {
+    use super::{DeviceInfo, split_device};
+
+    /// M468: el dispositivo viaja pegado al formato tras la primera arroba; un id puede llevar
+    /// arrobas, llaves y puntos (los de WASAPI).
+    #[test]
+    fn the_device_id_rides_after_the_first_at_sign() {
+        assert_eq!(split_device("s16le"), ("s16le", ""));
+        assert_eq!(split_device("f32le@BuiltInSpeakerDevice"), ("f32le", "BuiltInSpeakerDevice"));
+        assert_eq!(split_device("s24le@{0.0.0.00000000}.{6507-a3e7}"), ("s24le", "{0.0.0.00000000}.{6507-a3e7}"));
+        assert_eq!(split_device("s16le@a@b"), ("s16le", "a@b"));
+        assert_eq!(split_device("s16le@"), ("s16le", ""));
+    }
+
+    /// El listado no rompe aunque no haya tarjeta, y cada dispositivo tiene id y dirección.
+    #[test]
+    fn devices_have_an_id_and_a_direction() {
+        for d in super::devices().unwrap_or_default() {
+            let DeviceInfo { id, input_channels, output_channels, .. } = d;
+            assert!(!id.is_empty());
+            assert!(input_channels + output_channels > 0, "{id}");
         }
     }
 }

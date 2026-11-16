@@ -964,6 +964,11 @@ public final class RayMidi {
         MidiInputPort sink;
         MidiManager.DeviceCallback watch;
         final ArrayDeque<String> queue = new ArrayDeque<>();
+        // El troceado de la entrada en mensajes (solo lo toca el hilo que entrega `onSend`).
+        final byte[] message = new byte[3];
+        int have = 0; // octetos de `message` ya recibidos (0 = sin estado en curso)
+        int need = 0; // longitud del mensaje en curso
+        java.io.ByteArrayOutputStream sysex; // un SysEx a medias, o null
         long waiting = 0; // la petición midi_read que espera, o 0
         Runnable timeout;
     }
@@ -1062,7 +1067,7 @@ public final class RayMidi {
                         port.source.connect(new MidiReceiver() {
                             @Override
                             public void onSend(byte[] msg, int offset, int count, long timestamp) {
-                                deliver(port, timestamp + " " + hex(msg, offset, count));
+                                split(port, msg, offset, count, timestamp);
                             }
                         });
                     }
@@ -1098,6 +1103,52 @@ public final class RayMidi {
         long token = nextToken++;
         PORTS.put(token, port);
         return token;
+    }
+
+    // Android no entrega un mensaje por `onSend`: puede traer varios seguidos, estado en curso
+    // (running status) o un SysEx partido. El programa lee UN mensaje completo por lectura,
+    // como en el resto de sistemas, así que se trocea aquí.
+    private static void split(Port port, byte[] data, int offset, int count, long timestamp) {
+        for (int i = offset; i < offset + count; i++) {
+            int b = data[i] & 0xff;
+            if (b >= 0xf8) { // tiempo real: un octeto, puede ir en medio de otro mensaje
+                deliver(port, timestamp + " " + hex(new byte[] { (byte) b }, 0, 1));
+                continue;
+            }
+            if (port.sysex != null) {
+                if (b < 0x80) { port.sysex.write(b); continue; }
+                if (b == 0xf7) {
+                    port.sysex.write(b);
+                    byte[] whole = port.sysex.toByteArray();
+                    port.sysex = null;
+                    deliver(port, timestamp + " " + hex(whole, 0, whole.length));
+                    continue;
+                }
+                port.sysex = null; // otro estado lo corta: el SysEx a medias se descarta
+            }
+            if (b == 0xf0) {
+                port.sysex = new java.io.ByteArrayOutputStream();
+                port.sysex.write(b);
+                port.have = 0;
+                port.need = 0;
+                continue;
+            }
+            if (b >= 0x80) {
+                int kind = b & 0xf0;
+                port.message[0] = (byte) b;
+                port.have = 1;
+                port.need = b >= 0xf0 ? (b == 0xf2 ? 3 : (b == 0xf1 || b == 0xf3) ? 2 : 1) : (kind == 0xc0 || kind == 0xd0) ? 2 : 3;
+            } else {
+                if (port.need == 0) { continue; } // datos sin estado: se ignoran
+                port.message[port.have++] = (byte) b;
+            }
+            if (port.have == port.need) {
+                deliver(port, timestamp + " " + hex(port.message, 0, port.need));
+                // Los mensajes de canal dejan su estado para los datos que sigan; los de sistema no.
+                if ((port.message[0] & 0xff) >= 0xf0) { port.need = 0; }
+                port.have = port.need == 0 ? 0 : 1;
+            }
+        }
     }
 
     // Un mensaje (o un aviso) para el programa: contesta la lectura que espera, o lo encola.

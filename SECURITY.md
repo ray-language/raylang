@@ -476,6 +476,13 @@ documentada:
   **con nombre** en modo mensaje (`\\.\pipe\ray-audio-in-<pid>-<n>`, una sola instancia con
   `FILE_FLAG_FIRST_PIPE_INSTANCE` y `PIPE_REJECT_REMOTE_CLIENTS`): el propio proceso abre el
   único extremo cliente en el acto, así que ningún otro proceso puede conectarse a él.
+- **`crates/ray-runtime/src/audio.rs`, baja latencia** (M469, solo macOS) — el AudioUnit de la HAL
+  (`AudioComponentInstanceNew`, `AudioUnitSetProperty` con valores propios del tamaño declarado):
+  el callback de render copia del anillo al búfer que CoreAudio presta (`mDataByteSize` acota la
+  copia) y el de entrada pide los frames con `AudioUnitRender` sobre un búfer propio; el estado
+  de ambos es un `Arc` filtrado que se recupera tras `AudioOutputUnitStop` + `Uninitialize` (ya
+  sin callbacks). `AudioObjectSetPropertyData` cambia el tamaño del búfer de E/S del dispositivo
+  para este proceso.
 - **`crates/ray-runtime/src/audio.rs`, dispositivos** (M468) — `audio.devices()`: en macOS, la HAL
   de CoreAudio (`AudioObjectGetPropertyData` sobre búferes propios del tamaño que la propia API
   dice, alineados a 8; los `CFString` devueltos se sueltan); en Linux, `snd_device_name_hint` (las
@@ -492,6 +499,11 @@ documentada:
   de `midiInOpen` recibe un `Arc` filtrado que el hilo vigilante recupera tras `midiInClose` (ya
   sin callbacks); el búfer de SysEx es memoria propia prestada con `midiInAddBuffer` y recuperada
   con `midiInReset` antes de soltarla.
+- **`crates/ray-runtime/src/midi.rs`, Android** (M467) — sin API nativa de MIDI: cada puerto es un
+  `socketpair` (`SOCK_SEQPACKET`) que un hilo propio alimenta con lo que contesta el shell
+  (`RayMidi.java`); el `unsafe` es solo libc (`socketpair`, `setsockopt`, `fcntl`, `poll`, `send`,
+  `read`, `close`) sobre descriptores y búferes propios, y un `from_raw_fd` del extremo que se
+  entrega al programa (que pasa a ser su dueño).
 - **`crates/ray-runtime/src/midi.rs`** (M464) — `std/midi` sobre **CoreMIDI** (macOS e iOS; el
   framework se enlaza, **sin crates**): `MIDIClientCreate` en un hilo propio que se queda en
   `CFRunLoopRun`; los puertos y extremos virtuales son `UInt32` opacos que creamos y desmontamos

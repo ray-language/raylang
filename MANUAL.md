@@ -1622,7 +1622,7 @@ let _ = close(h);
 ```
 
 Si el juego es rítmico, pide la latencia que necesitas: `audio.open_latency(44100, 2, 30)` (en
-ms, 20–1000; `0` = el default de `open`) dimensiona el anillo, los buffers del dispositivo, el
+ms, 3–1000; `0` = el default de `open`) dimensiona el anillo, los buffers del dispositivo, el
 chunk del alimentador y la cola entre tu programa y el dispositivo: `write` aparca cuando hay
 ~esa latencia encolada EN TOTAL (el presupuesto se reparte entre las etapas: la cola
 del programa ½, el anillo del backend ¼ y los buffers del dispositivo ¼). A tasas bajas mandan los
@@ -1663,6 +1663,14 @@ micrófono: sin él, en macOS e iOS la entrada entrega silencio, y en Android y 
 permiso en `[app.plist]` (`NSMicrophoneUsageDescription = "…"`), y si va firmada con el runtime
 endurecido, el entitlement `com.apple.security.device.audio-input`. Para tests, `RAY_AUDIO_SOURCE=tone` (un La de 440 Hz) o `=null` (silencio)
 sustituyen al dispositivo.
+
+**Tocar en directo.** Un hint por debajo de 20 ms pide baja latencia. En macOS la salida va
+entonces directa al dispositivo, con búferes de 32 a 128 frames, y la cola entre `write` y el
+altavoz queda en torno al hint: unos 4 ms con `5`, 8 ms con `10`. La entrada hace lo mismo:
+`open_input(48000, 1, "f32le", 5)` entrega bloques de 32 frames cada milisegundo, si pides la
+frecuencia y los canales del dispositivo (`audio.devices()` los dice). A cambio no hay rampas
+anti-clic ni margen: escribe bloques pequeños (64–256 frames) y a tiempo, y mira `gaps` en
+`RAY_AUDIO_TRACE=1`. En el resto de sistemas el hint se acepta y cada uno lo sube a su suelo.
 
 **Elegir el dispositivo.** `open` y `open_input` usan el dispositivo por defecto del sistema.
 `audio.devices()` lista los que hay, y `open_device` / `open_input_device` abren uno concreto

@@ -24,10 +24,15 @@ pub fn open(sample_rate: int, channels: int) -> Result<int, string> {
 
 /// Like `open`, with a LATENCY HINT (M158): `latency_ms` sizes the ring/device buffers and
 /// the feeder chunk — a rhythm game wants 20-50 ms, a radio tolerates 200-1000. Accepted
-/// range: 20–1000 (or 0 = the default); anything else is `Err`. The hint is the TOTAL queued
-/// between `write` and the speaker (`write` parks once ~that much is pending). Floor on macOS:
-/// ~50 ms in total (a 20 ms socket, three 5 ms device buffers and a ring that keeps the
-/// anti-click ramp plus three buffers); from 50 ms up the queue follows the hint. iOS floor:
+/// range: 3–1000 (or 0 = the default); anything else is `Err`. The hint is the TOTAL queued
+/// between `write` and the speaker (`write` parks once ~that much is pending). From 20 ms up,
+/// macOS queues ~50 ms at least (a 20 ms socket, three 5 ms device buffers and a ring that
+/// keeps the anti-click ramp plus three buffers) and follows the hint from 50 ms. **Below
+/// 20 ms is LOW LATENCY** (M469): on macOS the output goes straight to the device with I/O
+/// buffers of 32–128 frames and the queue stays at about the hint (5 → ~4 ms, 10 → ~8 ms) —
+/// what playing an instrument live needs. It has no anti-click ramps: write small blocks
+/// (64–256 frames) on time, and check `gaps` in the trace. Other systems accept the hint and
+/// raise it to their own floor. A Bluetooth output is always given 80 ms at least. iOS floor:
 /// ~240 ms (the system freezes the app for ~200 ms on lock/unlock). `RAY_AUDIO_TRACE=1` prints
 /// the ring size, the keepalive silence inserted, fade-outs, flushes and gaps when the output
 /// closes (a clean stream has 1 fade-out, 0 gaps, and one flush per `flush` call). Smaller =
@@ -203,7 +208,8 @@ pub fn open_input_device(
 
 /// Opens an audio INPUT (the default microphone or audio interface) and starts recording:
 /// `sample_rate` Hz, `channels` interleaved channels, samples in `format` (`"s16le"`, `"s24le"`,
-/// `"s32le"` or `"f32le"`). `latency_ms` (20–1000, or 0 for the default of 100) sizes the blocks
+/// `"s32le"` or `"f32le"`). `latency_ms` (3–1000, or 0 for the default of 100; below 20 the
+/// blocks are small and, on macOS, so is the device's I/O buffer) sizes the blocks
 /// the capture arrives in. Returns a handle for `read`; `close(h)` stops recording.
 ///
 /// Available on macOS, iOS, Linux (ALSA), Android and Windows. The first time, the system asks

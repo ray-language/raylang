@@ -141,9 +141,12 @@ pub fn watch() -> Result<int, string> { handle(op("watch", "", 0)) }
 /// `outputs()` again.
 pub fn next_change(h: int) -> Result<int, string> {
     let r = __midi_read(h);
-    if (r[0] == b"ok") {
-        Result.Ok(0)
-    } else {
-        Result.Err(from_utf8(r[1]).unwrap_or("midi: watch failed"))
+    if (r[0] != b"ok") {
+        return Result.Err(from_utf8(r[1]).unwrap_or("midi: watch failed"));
     }
+    if (r[1].len() == 0) {
+        // Fin de flujo: el runtime dejó de vigilar (el secuenciador desapareció).
+        return Result.Err("midi: the watch was closed");
+    }
+    Result.Ok(0)
 }

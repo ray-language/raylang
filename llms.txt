@@ -544,7 +544,7 @@ Linux/Windows; aliases `command super meta primary`), `ctrl`/`control`, `alt`/`o
 `shift`, and key a character, `f1`–`f12`, `enter`/`return`, `escape`/`esc`, `tab`, `space`,
 `backspace`, `delete`/`del`, `up down left right home end pageup pagedown`, case-insensitive;
 anything else makes `ui.menu`/`replace_menu` return `Err`), `ui.menu_at(pos,
-…)`, `ui.set_menu_item(tag, enabled, checked)`, `ui.set_menu_title(tag, title)` (the TEXT of one item by its tag, state and shortcut kept: "Undo" → "Undo Move clip"), `ui.accept_drops(h, true)` (macOS: files dropped on the window arrive as a "drop" event — `ui.drop_paths(e)` are their paths, `ui.drop_point(e)` the (x, y) in page coordinates; the page alone never sees the path), `ui.rename_menu(old, new)` (1.27.81: a menu's title,
+…)`, `ui.set_menu_item(tag, enabled, checked)`, `ui.set_menu_title(tag, title)` (the TEXT of one item by its tag, state and shortcut kept: "Undo" → "Undo Move clip"), `ui.accept_drops(h, true)` (desktop: files dropped on the window arrive as a "drop" event — `ui.drop_paths(e)` are their paths, `ui.drop_point(e)` the (x, y) in page coordinates; the page alone never sees the path), `ui.rename_menu(old, new)` (1.27.81: a menu's title,
 for switching language at run time), `ui.replace_menu(title, items)` (swaps a menu's
 contents after creation: new titles/shortcuts, old tags vanish), `ui.app_menu`, `MenuItem.icon`;
 standard edit roles: items tagged `role:undo|redo|cut|copy|paste|select_all|close` act natively

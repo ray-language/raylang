@@ -4756,7 +4756,7 @@ Fases:
 **Impacto**: todo aditivo. **Riesgo**: los backends de las fases 3 y 4 no se pueden grabar ni
 tocar de verdad en este equipo; se escribirían contra la fuente de pruebas.
 
-## 126. Sueltas de archivos en Linux y Windows (ray-sublime #436) — PENDIENTE
+## 126. Sueltas de archivos en Linux y Windows (ray-sublime #436) — ✅ EJECUTADO (DESIGN §453)
 
 `ui.accept_drops` y el evento `drop` existen en macOS (DESIGN §450). Falta:
 

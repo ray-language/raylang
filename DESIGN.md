@@ -20891,3 +20891,32 @@ CLEAR_TOP | SINGLE_TOP`: una nueva recargaría la página), y el botón de la no
 esa pantalla, porque un servicio lanzado desde una notificación no puede abrir actividades.
 
 Los campos nuevos rompen un literal `Alarm { … }` escrito a mano; `alarm.message` los rellena.
+
+## 453. Sueltas de archivos en Linux y Windows (ray-sublime #436, nov 2026)
+
+`ui.accept_drops` existía solo en macOS (§450). Las otras dos plataformas tienen el mismo
+problema de fondo —el webview es el destino del arrastre y entrega a la página un archivo sin
+ruta— y cada una su salida.
+
+**Linux (GTK 3 + WebKitGTK).** Se conecta `drag-drop` en el webview, que corre antes que el
+manejador de clase de WebKit. Si la ventana lo pidió y el arrastre ofrece `text/uri-list`, se
+corta la emisión (`g_signal_stop_emission_by_name`: la página no ve la suelta), se piden los
+datos con `gtk_drag_get_data` y, cuando llegan por `drag-data-received`, se convierten con
+`g_filename_from_uri` y se emite `drop`. WebKit pide datos por su cuenta mientras el arrastre
+pasa por encima, así que solo se atiende el `drag-data-received` que sigue a una suelta nuestra
+(`awaiting`); el resto se deja pasar. Los símbolos se cargan aparte (`DropApi`), todos
+obligatorios: si falta alguno, `accept_drops` devuelve `Err` y la ventana sigue como estaba.
+
+**Windows (WebView2).** WebView2 es el destino del arrastre en sus ventanas hijas, que son de
+otro proceso. El primer intento fue apagar `AllowExternalDrop` y recibir `WM_DROPFILES` en la
+ventana anfitriona: no sirve, porque el webview sigue siendo el destino y RECHAZA la suelta
+(cursor de prohibido) en vez de cederla. La vía que WebView2 ofrece va al revés: la página recibe
+la suelta y pasa los `File` al anfitrión con `postMessageWithAdditionalObjects`; el anfitrión sí
+lee la ruta (`ICoreWebView2WebMessageReceivedEventArgs2::AdditionalObjects` →
+`ICoreWebView2File::Path`). Un script nuestro lo hace en fase de captura y corta la propagación,
+así que la página del programa no ve la suelta, como en las otras dos plataformas. Se registra
+para los documentos que carguen después (`AddScriptToExecuteOnDocumentCreated`, y se retira al
+apagar) y se ejecuta en el actual. El punto es `clientX`/`clientY`, ya en píxeles de la página.
+
+Compilado en las dos VMs (elementary OS 8 con Wayland, Windows 11 arm64), y la suelta real
+probada a mano en las dos.

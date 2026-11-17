@@ -2815,8 +2815,20 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
                 mac::accept_drops(*webview, on);
                 Ok(())
             }
+            #[cfg(target_os = "linux")]
+            Win::Gtk { webview, alive, .. } => {
+                let (webview, alive) = (*webview, alive.clone());
+                drop(map);
+                gtk::accept_drops(id, webview, alive, on)
+            }
+            #[cfg(windows)]
+            Win::Windows { hwnd, alive } => {
+                let (hwnd, alive) = (*hwnd, alive.clone());
+                drop(map);
+                win::accept_drops(hwnd, alive, on)
+            }
             #[allow(unreachable_patterns)]
-            _ => Err("ui: accept_drops is only available on macOS for now".to_string()),
+            _ => Err("ui: accept_drops is not available on this platform".to_string()),
         };
     }
     // M441 (rayreq #316): en headless el marco cambia solo por estas órdenes → el evento `frame`
@@ -8201,6 +8213,176 @@ mod gtk {
     }
 
     /// M257: `gtk_window_set_title` en el hilo gtk.
+    // ── ray-sublime #436: archivos soltados sobre la ventana ────────────────────────────────
+    //
+    // WebKitGTK es el destino del arrastre y entrega la suelta a la página sin la ruta. En las
+    // ventanas que lo pidieron (`accept_drops`) se conecta `drag-drop` ANTES que el manejador
+    // de WebKit: si el arrastre trae `text/uri-list`, se corta la emisión (la página no ve la
+    // suelta), se piden los datos con `gtk_drag_get_data` y, cuando llegan por
+    // `drag-data-received`, se emite el evento `drop`. Los `drag-data-received` que el propio
+    // WebKit provoca mientras el arrastre pasa por encima no son nuestros y se dejan pasar.
+
+    struct DropApi {
+        atom_intern: unsafe extern "C" fn(*const std::ffi::c_char, i32) -> *mut c_void,
+        list_targets: unsafe extern "C" fn(*mut c_void) -> *mut GList,
+        get_data: unsafe extern "C" fn(Widget, *mut c_void, *mut c_void, u32),
+        finish: unsafe extern "C" fn(*mut c_void, i32, i32, u32),
+        get_uris: unsafe extern "C" fn(*mut c_void) -> *mut *mut std::ffi::c_char,
+        filename_from_uri: unsafe extern "C" fn(*const std::ffi::c_char, *mut *mut std::ffi::c_char, *mut *mut c_void) -> *mut std::ffi::c_char,
+        strfreev: unsafe extern "C" fn(*mut *mut std::ffi::c_char),
+        free: unsafe extern "C" fn(*mut c_void),
+        stop_emission: unsafe extern "C" fn(Widget, *const std::ffi::c_char),
+        connect: *mut c_void,
+    }
+    // SAFETY: punteros a funciones de librerías cargadas para toda la vida del proceso.
+    unsafe impl Send for DropApi {}
+    unsafe impl Sync for DropApi {}
+
+    #[repr(C)]
+    struct GList {
+        data: *mut c_void,
+        next: *mut GList,
+        prev: *mut GList,
+    }
+
+    fn drop_api() -> Option<&'static DropApi> {
+        static API: std::sync::OnceLock<Option<DropApi>> = std::sync::OnceLock::new();
+        API.get_or_init(|| {
+            // SAFETY: dlopen de la misma libgtk que ya usa el backend (sus dependencias traen
+            // gdk, glib y gobject); cada símbolo se castea a su firma C documentada.
+            unsafe {
+                let gtk = dlopen(c"libgtk-3.so.0".as_ptr(), RTLD_NOW);
+                if gtk.is_null() {
+                    return None;
+                }
+                let get = |name: &std::ffi::CStr| -> Option<*mut c_void> {
+                    let p = dlsym(gtk, name.as_ptr());
+                    (!p.is_null()).then_some(p)
+                };
+                Some(DropApi {
+                    atom_intern: std::mem::transmute::<*mut c_void, _>(get(c"gdk_atom_intern")?),
+                    list_targets: std::mem::transmute::<*mut c_void, _>(get(c"gdk_drag_context_list_targets")?),
+                    get_data: std::mem::transmute::<*mut c_void, _>(get(c"gtk_drag_get_data")?),
+                    finish: std::mem::transmute::<*mut c_void, _>(get(c"gtk_drag_finish")?),
+                    get_uris: std::mem::transmute::<*mut c_void, _>(get(c"gtk_selection_data_get_uris")?),
+                    filename_from_uri: std::mem::transmute::<*mut c_void, _>(get(c"g_filename_from_uri")?),
+                    strfreev: std::mem::transmute::<*mut c_void, _>(get(c"g_strfreev")?),
+                    free: std::mem::transmute::<*mut c_void, _>(get(c"g_free")?),
+                    stop_emission: std::mem::transmute::<*mut c_void, _>(get(c"g_signal_stop_emission_by_name")?),
+                    connect: get(c"g_signal_connect_data")?,
+                })
+            }
+        })
+        .as_ref()
+    }
+
+    /// Por ventana: ¿acepta sueltas?, y el punto de la suelta cuyos datos se están esperando.
+    #[derive(Default)]
+    struct DropState {
+        on: bool,
+        connected: bool,
+        awaiting: Option<(i32, i32)>,
+    }
+    fn drop_states() -> &'static std::sync::Mutex<std::collections::HashMap<i64, DropState>> {
+        static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<i64, DropState>>> = std::sync::OnceLock::new();
+        S.get_or_init(Default::default)
+    }
+
+    extern "C" fn on_drag_drop(widget: Widget, context: *mut c_void, x: i32, y: i32, time: u32, user: *mut c_void) -> i32 {
+        let id = user as usize as i64;
+        let Some(api) = drop_api() else { return 0 };
+        if !drop_states().lock().unwrap().get(&id).is_some_and(|s| s.on) {
+            return 0; // esta ventana no lo pidió: la suelta es de WebKit
+        }
+        // SAFETY: `context` es el GdkDragContext vivo de esta señal; la lista es suya.
+        unsafe {
+            let uri_list = (api.atom_intern)(c"text/uri-list".as_ptr(), 0);
+            let mut node = (api.list_targets)(context);
+            let mut has_files = false;
+            while !node.is_null() {
+                if (*node).data == uri_list {
+                    has_files = true;
+                    break;
+                }
+                node = (*node).next;
+            }
+            if !has_files {
+                return 0; // texto, un enlace…: lo gestiona la página
+            }
+            if let Some(state) = drop_states().lock().unwrap().get_mut(&id) {
+                state.awaiting = Some((x, y));
+            }
+            (api.stop_emission)(widget, c"drag-drop".as_ptr());
+            (api.get_data)(widget, context, uri_list, time);
+        }
+        1
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    extern "C" fn on_drag_data(widget: Widget, context: *mut c_void, _x: i32, _y: i32, data: *mut c_void, _info: u32, time: u32, user: *mut c_void) {
+        let id = user as usize as i64;
+        let Some(api) = drop_api() else { return };
+        let Some((x, y)) = drop_states().lock().unwrap().get_mut(&id).and_then(|s| s.awaiting.take()) else {
+            return; // datos que pidió WebKit al pasar por encima: no es nuestra suelta
+        };
+        // SAFETY: `data` es el GtkSelectionData de esta señal; las cadenas que devuelve glib se
+        // liberan con sus funciones.
+        unsafe {
+            (api.stop_emission)(widget, c"drag-data-received".as_ptr());
+            let mut paths: Vec<String> = Vec::new();
+            let uris = (api.get_uris)(data);
+            if !uris.is_null() {
+                let mut at = uris;
+                while !(*at).is_null() {
+                    let path = (api.filename_from_uri)(*at, std::ptr::null_mut(), std::ptr::null_mut());
+                    if !path.is_null() {
+                        paths.push(std::ffi::CStr::from_ptr(path).to_string_lossy().into_owned());
+                        (api.free)(path as *mut c_void);
+                    }
+                    at = at.add(1);
+                }
+                (api.strfreev)(uris);
+            }
+            (api.finish)(context, (!paths.is_empty()) as i32, 0, time);
+            if !paths.is_empty() {
+                super::push_event("drop", id, &format!("{x},{y}\n{}", paths.join("\n")));
+            }
+        }
+    }
+
+    pub(super) fn accept_drops(id: i64, webview: usize, alive: Arc<AtomicBool>, on: bool) -> Result<(), String> {
+        let Some(api) = drop_api() else {
+            return Err("ui: accept_drops needs GTK 3 drag and drop, which this system does not provide".to_string());
+        };
+        let connect_now = {
+            let mut states = drop_states().lock().unwrap();
+            let state = states.entry(id).or_default();
+            state.on = on;
+            let was_connected = state.connected;
+            state.connected = was_connected || on;
+            on && !was_connected
+        };
+        if !connect_now {
+            return Ok(());
+        }
+        on_main_sync(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return Err("ui: not an open window".to_string());
+            }
+            type ConnectDrop = unsafe extern "C" fn(Widget, *const std::ffi::c_char, extern "C" fn(Widget, *mut c_void, i32, i32, u32, *mut c_void) -> i32, *mut c_void, *mut c_void, i32) -> u64;
+            type ConnectData = unsafe extern "C" fn(Widget, *const std::ffi::c_char, extern "C" fn(Widget, *mut c_void, i32, i32, *mut c_void, u32, u32, *mut c_void), *mut c_void, *mut c_void, i32) -> u64;
+            // SAFETY: webview vivo (alive) en el hilo del loop; `g_signal_connect_data` con la
+            // firma de cada señal; el dato de usuario es el id de la ventana (sin memoria propia).
+            unsafe {
+                let connect_drop: ConnectDrop = std::mem::transmute(api.connect);
+                let connect_data: ConnectData = std::mem::transmute(api.connect);
+                connect_drop(webview as Widget, c"drag-drop".as_ptr(), on_drag_drop, id as usize as *mut c_void, std::ptr::null_mut(), 0);
+                connect_data(webview as Widget, c"drag-data-received".as_ptr(), on_drag_data, id as usize as *mut c_void, std::ptr::null_mut(), 0);
+            }
+            Ok(())
+        })
+    }
+
     pub(super) fn set_title_async(window: usize, alive: Arc<AtomicBool>, title: &str) {
         let title = std::ffi::CString::new(title.replace('\0', "")).unwrap();
         on_main(move || {
@@ -9518,6 +9700,9 @@ mod win {
         /// M327: el color (COLORREF) con que se borra el fondo del HWND hasta que WebView2 pinta;
         /// `None` = el pincel de la clase (blanco).
         background: Option<u32>,
+        /// ray-sublime #436: el id del script de sueltas registrado para los documentos nuevos
+        /// (`None` = la ventana no acepta sueltas).
+        drops_script: Option<String>,
         /// M441 (rayreq #316): dentro del bucle modal de mover/redimensionar (WM_ENTERSIZEMOVE …
         /// WM_EXITSIZEMOVE): el evento `frame` se emite al salir, no en cada paso.
         in_size_move: bool,
@@ -10389,6 +10574,15 @@ mod win {
                         if args.TryGetWebMessageAsString(&mut message).is_ok() {
                             let message = CoTaskMemPWSTR::from(message);
                             let text = message.to_string();
+                            // ray-sublime #436: una suelta de archivos que entrega nuestro script.
+                            if let Some(point) = text.strip_prefix(DROP_MESSAGE) {
+                                // SAFETY: `args` es el del evento en curso.
+                                let paths = unsafe { dropped_paths(&args) };
+                                if !paths.is_empty() {
+                                    super::push_event("drop", id, &format!("{point}\n{}", paths.join("\n")));
+                                }
+                                return Ok(());
+                            }
                             // M328: arrastre/zoom desde una zona `data-ray-drag` de la página: el
                             // clic no-cliente de la barra de título, sintetizado (el mismo truco de
                             // Electron); no llegan al programa.
@@ -10532,7 +10726,7 @@ mod win {
                 // M327: el fondo hasta que la página pinte — el HWND lo borra de ese color y
                 // WebView2 lo usa como fondo por defecto.
                 let background = super::effective_background(&opts);
-                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels, min_track, fullscreen_saved: None, background: background.map(colorref), in_size_move: false, frame_armed: false });
+                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels, min_track, fullscreen_saved: None, background: background.map(colorref), drops_script: None, in_size_move: false, frame_armed: false });
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(ctx) as isize);
                 let _ = ShowWindow(hwnd, SW_SHOW);
                 match attach_webview(hwnd, id, &url) {
@@ -10779,6 +10973,105 @@ mod win {
     }
 
     /// M257: `SetWindowTextW` en el hilo 1.
+    // ── ray-sublime #436: archivos soltados sobre la ventana ────────────────────────────────
+    //
+    // WebView2 es el destino del arrastre (en sus ventanas hijas, de otro proceso) y entrega a
+    // la página un `File` sin ruta. Apagar `AllowExternalDrop` no sirve: el webview sigue siendo
+    // el destino y RECHAZA la suelta (cursor de prohibido), no se la cede a la ventana. La vía
+    // que WebView2 ofrece es al revés: la página recibe la suelta y le pasa los `File` al
+    // anfitrión con `postMessageWithAdditionalObjects`; el anfitrión sí lee su ruta
+    // (`ICoreWebView2File::Path`). Un script nuestro lo hace en fase de captura y corta la
+    // propagación, así que la página del programa no ve la suelta, como en macOS y Linux.
+
+    /// El prefijo del mensaje con que el script entrega una suelta (`<prefijo>x,y`).
+    const DROP_MESSAGE: &str = "\u{1f}ray-drop:";
+
+    fn drop_script() -> String {
+        // El prefijo viaja escapado dentro del literal de JavaScript.
+        r#"(function(){
+if(window.__rayDropsInstalled){window.__rayDrops=true;return;}
+window.__rayDropsInstalled=true;window.__rayDrops=true;
+var files=function(e){var t=e.dataTransfer&&e.dataTransfer.types;return window.__rayDrops&&t&&Array.prototype.indexOf.call(t,'Files')>=0;};
+var over=function(e){if(files(e)){e.preventDefault();e.stopPropagation();e.dataTransfer.dropEffect='copy';}};
+window.addEventListener('dragenter',over,true);
+window.addEventListener('dragover',over,true);
+window.addEventListener('drop',function(e){if(files(e)){e.preventDefault();e.stopPropagation();
+window.chrome.webview.postMessageWithAdditionalObjects('\u001fray-drop:'+Math.round(e.clientX)+','+Math.round(e.clientY),e.dataTransfer.files);}},true);
+})();"#
+            .to_string()
+    }
+
+    pub(super) fn accept_drops(hwnd: usize, alive: Arc<AtomicBool>, on: bool) -> Result<(), String> {
+        on_main_sync_wait(move || {
+            if !alive.load(Ordering::SeqCst) {
+                return Err("ui: not an open window".to_string());
+            }
+            // SAFETY: hilo 1, ventana viva; GWLP_USERDATA es el Box<WinCtx> de `open_window`.
+            unsafe {
+                let ctx = GetWindowLongPtrW(HWND(hwnd as *mut _), GWLP_USERDATA) as *mut WinCtx;
+                let Some(wv) = (if ctx.is_null() { None } else { (*ctx).webview.clone() }) else {
+                    return Err("ui: the window has no webview yet".to_string());
+                };
+                let run = |js: &str| {
+                    let code = wide(js);
+                    let handler = ExecuteScriptCompletedHandler::create(Box::new(|_e, _r: String| Ok(())));
+                    let _ = wv.ExecuteScript(PCWSTR(code.as_ptr()), &handler);
+                };
+                if on {
+                    if (*ctx).drops_script.is_none() {
+                        // Para los documentos que carguen después; el de ahora, justo debajo.
+                        let js = wide(&drop_script());
+                        let wv2 = wv.clone();
+                        let script_id = Arc::new(std::sync::Mutex::new(None::<String>));
+                        let slot = script_id.clone();
+                        let _ = AddScriptToExecuteOnDocumentCreatedCompletedHandler::wait_for_async_operation(
+                            Box::new(move |handler| wv2.AddScriptToExecuteOnDocumentCreated(PCWSTR(js.as_ptr()), &handler).map_err(webview2_com::Error::WindowsError)),
+                            Box::new(move |error_code, id: String| {
+                                *slot.lock().unwrap() = Some(id);
+                                error_code
+                            }),
+                        );
+                        (*ctx).drops_script = script_id.lock().unwrap().take();
+                    }
+                    run(&drop_script());
+                } else {
+                    if let Some(id) = (*ctx).drops_script.take() {
+                        let _ = wv.RemoveScriptToExecuteOnDocumentCreated(PCWSTR(wide(&id).as_ptr()));
+                    }
+                    run("window.__rayDrops=false;");
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// Las rutas de los archivos que acompañan a un mensaje de suelta.
+    unsafe fn dropped_paths(args: &ICoreWebView2WebMessageReceivedEventArgs) -> Vec<String> {
+        use windows::core::Interface;
+        let mut paths = Vec::new();
+        // SAFETY: interfaces COM vivas durante el evento; cada ruta es un PWSTR que se libera
+        // con `CoTaskMemFree` (lo hace `CoTaskMemPWSTR`).
+        unsafe {
+            let Ok(args2) = args.cast::<ICoreWebView2WebMessageReceivedEventArgs2>() else { return paths };
+            let Ok(objects) = args2.AdditionalObjects() else { return paths };
+            let mut count = 0u32;
+            if objects.Count(&mut count).is_err() {
+                return paths;
+            }
+            for i in 0..count {
+                let Ok(file) = objects.GetValueAtIndex(i).and_then(|o| o.cast::<ICoreWebView2File>()) else { continue };
+                let mut path = PWSTR::null();
+                if file.Path(&mut path).is_ok() {
+                    let text = CoTaskMemPWSTR::from(path).to_string();
+                    if !text.is_empty() {
+                        paths.push(text);
+                    }
+                }
+            }
+        }
+        paths
+    }
+
     pub(super) fn set_title_async(hwnd: usize, alive: Arc<AtomicBool>, title: &str) {
         let title = title.to_string();
         on_main(move || {

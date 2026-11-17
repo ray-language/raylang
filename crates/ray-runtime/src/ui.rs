@@ -9700,6 +9700,9 @@ mod win {
         /// M327: el color (COLORREF) con que se borra el fondo del HWND hasta que WebView2 pinta;
         /// `None` = el pincel de la clase (blanco).
         background: Option<u32>,
+        /// ray-sublime #436: el id del script de sueltas registrado para los documentos nuevos
+        /// (`None` = la ventana no acepta sueltas).
+        drops_script: Option<String>,
         /// M441 (rayreq #316): dentro del bucle modal de mover/redimensionar (WM_ENTERSIZEMOVE …
         /// WM_EXITSIZEMOVE): el evento `frame` se emite al salir, no en cada paso.
         in_size_move: bool,
@@ -9772,13 +9775,6 @@ mod win {
                             (*mmi).ptMinTrackSize.y = ctx.min_track.1;
                         }
                     }
-                }
-                LRESULT(0)
-            }
-            WM_DROPFILES => {
-                if !ctx_ptr.is_null() {
-                    // SAFETY: el ctx vive mientras la ventana; wparam es el HDROP del mensaje.
-                    unsafe { on_drop_files(hwnd, &*ctx_ptr, wparam) };
                 }
                 LRESULT(0)
             }
@@ -10578,6 +10574,15 @@ mod win {
                         if args.TryGetWebMessageAsString(&mut message).is_ok() {
                             let message = CoTaskMemPWSTR::from(message);
                             let text = message.to_string();
+                            // ray-sublime #436: una suelta de archivos que entrega nuestro script.
+                            if let Some(point) = text.strip_prefix(DROP_MESSAGE) {
+                                // SAFETY: `args` es el del evento en curso.
+                                let paths = unsafe { dropped_paths(&args) };
+                                if !paths.is_empty() {
+                                    super::push_event("drop", id, &format!("{point}\n{}", paths.join("\n")));
+                                }
+                                return Ok(());
+                            }
                             // M328: arrastre/zoom desde una zona `data-ray-drag` de la página: el
                             // clic no-cliente de la barra de título, sintetizado (el mismo truco de
                             // Electron); no llegan al programa.
@@ -10721,7 +10726,7 @@ mod win {
                 // M327: el fondo hasta que la página pinte — el HWND lo borra de ese color y
                 // WebView2 lo usa como fondo por defecto.
                 let background = super::effective_background(&opts);
-                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels, min_track, fullscreen_saved: None, background: background.map(colorref), in_size_move: false, frame_armed: false });
+                let ctx = Box::new(WinCtx { id, alive: alive2, controller: None, webview: None, menu_tags, accels, min_track, fullscreen_saved: None, background: background.map(colorref), drops_script: None, in_size_move: false, frame_armed: false });
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(ctx) as isize);
                 let _ = ShowWindow(hwnd, SW_SHOW);
                 match attach_webview(hwnd, id, &url) {
@@ -10968,63 +10973,103 @@ mod win {
     }
 
     /// M257: `SetWindowTextW` en el hilo 1.
-    /// ray-sublime #436: los archivos soltados sobre la ventana. WebView2 registra su propio
-    /// destino de arrastre en sus ventanas hijas y entrega la suelta a la página sin la ruta;
-    /// con `AllowExternalDrop` apagado deja de hacerlo y la suelta sube a la ventana anfitriona,
-    /// que la recibe como `WM_DROPFILES` (`DragAcceptFiles`).
+    // ── ray-sublime #436: archivos soltados sobre la ventana ────────────────────────────────
+    //
+    // WebView2 es el destino del arrastre (en sus ventanas hijas, de otro proceso) y entrega a
+    // la página un `File` sin ruta. Apagar `AllowExternalDrop` no sirve: el webview sigue siendo
+    // el destino y RECHAZA la suelta (cursor de prohibido), no se la cede a la ventana. La vía
+    // que WebView2 ofrece es al revés: la página recibe la suelta y le pasa los `File` al
+    // anfitrión con `postMessageWithAdditionalObjects`; el anfitrión sí lee su ruta
+    // (`ICoreWebView2File::Path`). Un script nuestro lo hace en fase de captura y corta la
+    // propagación, así que la página del programa no ve la suelta, como en macOS y Linux.
+
+    /// El prefijo del mensaje con que el script entrega una suelta (`<prefijo>x,y`).
+    const DROP_MESSAGE: &str = "\u{1f}ray-drop:";
+
+    fn drop_script() -> String {
+        // El prefijo viaja escapado dentro del literal de JavaScript.
+        r#"(function(){
+if(window.__rayDropsInstalled){window.__rayDrops=true;return;}
+window.__rayDropsInstalled=true;window.__rayDrops=true;
+var files=function(e){var t=e.dataTransfer&&e.dataTransfer.types;return window.__rayDrops&&t&&Array.prototype.indexOf.call(t,'Files')>=0;};
+var over=function(e){if(files(e)){e.preventDefault();e.stopPropagation();e.dataTransfer.dropEffect='copy';}};
+window.addEventListener('dragenter',over,true);
+window.addEventListener('dragover',over,true);
+window.addEventListener('drop',function(e){if(files(e)){e.preventDefault();e.stopPropagation();
+window.chrome.webview.postMessageWithAdditionalObjects('\u001fray-drop:'+Math.round(e.clientX)+','+Math.round(e.clientY),e.dataTransfer.files);}},true);
+})();"#
+            .to_string()
+    }
+
     pub(super) fn accept_drops(hwnd: usize, alive: Arc<AtomicBool>, on: bool) -> Result<(), String> {
-        use windows::core::Interface;
-        on_main_sync(move || {
+        on_main_sync_wait(move || {
             if !alive.load(Ordering::SeqCst) {
                 return Err("ui: not an open window".to_string());
             }
-            let hwnd = HWND(hwnd as *mut _);
             // SAFETY: hilo 1, ventana viva; GWLP_USERDATA es el Box<WinCtx> de `open_window`.
             unsafe {
-                let ctx = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const WinCtx;
-                let controller = if ctx.is_null() { None } else { (*ctx).controller.as_ref() };
-                let Some(c4) = controller.and_then(|c| c.cast::<ICoreWebView2Controller4>().ok()) else {
-                    return Err("ui: accept_drops needs a newer WebView2 runtime (1.0.992 or later)".to_string());
+                let ctx = GetWindowLongPtrW(HWND(hwnd as *mut _), GWLP_USERDATA) as *mut WinCtx;
+                let Some(wv) = (if ctx.is_null() { None } else { (*ctx).webview.clone() }) else {
+                    return Err("ui: the window has no webview yet".to_string());
                 };
-                c4.SetAllowExternalDrop(!on).map_err(|e| format!("ui: could not change the webview's drop handling: {e}"))?;
-                windows::Win32::UI::Shell::DragAcceptFiles(hwnd, on);
+                let run = |js: &str| {
+                    let code = wide(js);
+                    let handler = ExecuteScriptCompletedHandler::create(Box::new(|_e, _r: String| Ok(())));
+                    let _ = wv.ExecuteScript(PCWSTR(code.as_ptr()), &handler);
+                };
+                if on {
+                    if (*ctx).drops_script.is_none() {
+                        // Para los documentos que carguen después; el de ahora, justo debajo.
+                        let js = wide(&drop_script());
+                        let wv2 = wv.clone();
+                        let script_id = Arc::new(std::sync::Mutex::new(None::<String>));
+                        let slot = script_id.clone();
+                        let _ = AddScriptToExecuteOnDocumentCreatedCompletedHandler::wait_for_async_operation(
+                            Box::new(move |handler| wv2.AddScriptToExecuteOnDocumentCreated(PCWSTR(js.as_ptr()), &handler).map_err(webview2_com::Error::WindowsError)),
+                            Box::new(move |error_code, id: String| {
+                                *slot.lock().unwrap() = Some(id);
+                                error_code
+                            }),
+                        );
+                        (*ctx).drops_script = script_id.lock().unwrap().take();
+                    }
+                    run(&drop_script());
+                } else {
+                    if let Some(id) = (*ctx).drops_script.take() {
+                        let _ = wv.RemoveScriptToExecuteOnDocumentCreated(PCWSTR(wide(&id).as_ptr()));
+                    }
+                    run("window.__rayDrops=false;");
+                }
             }
             Ok(())
         })
     }
 
-    /// `WM_DROPFILES`: las rutas y el punto (en píxeles de la página) → evento `drop`.
-    unsafe fn on_drop_files(hwnd: HWND, ctx: &WinCtx, wparam: WPARAM) {
+    /// Las rutas de los archivos que acompañan a un mensaje de suelta.
+    unsafe fn dropped_paths(args: &ICoreWebView2WebMessageReceivedEventArgs) -> Vec<String> {
         use windows::core::Interface;
-        use windows::Win32::UI::Shell::{DragFinish, DragQueryFileW, DragQueryPoint, HDROP};
-        let hdrop = HDROP(wparam.0 as *mut _);
-        // SAFETY: `hdrop` es el de este mensaje; los búferes son nuestros y del tamaño pedido.
+        let mut paths = Vec::new();
+        // SAFETY: interfaces COM vivas durante el evento; cada ruta es un PWSTR que se libera
+        // con `CoTaskMemFree` (lo hace `CoTaskMemPWSTR`).
         unsafe {
-            let count = DragQueryFileW(hdrop, u32::MAX, None);
-            let mut paths: Vec<String> = Vec::new();
+            let Ok(args2) = args.cast::<ICoreWebView2WebMessageReceivedEventArgs2>() else { return paths };
+            let Ok(objects) = args2.AdditionalObjects() else { return paths };
+            let mut count = 0u32;
+            if objects.Count(&mut count).is_err() {
+                return paths;
+            }
             for i in 0..count {
-                let len = DragQueryFileW(hdrop, i, None) as usize;
-                let mut buf = vec![0u16; len + 1];
-                let got = DragQueryFileW(hdrop, i, Some(&mut buf)) as usize;
-                paths.push(String::from_utf16_lossy(&buf[..got.min(len)]));
-            }
-            let mut point = windows::Win32::Foundation::POINT::default();
-            let _ = DragQueryPoint(hdrop, &mut point);
-            DragFinish(hdrop);
-            // El punto llega en píxeles físicos del área cliente; la página cuenta en CSS.
-            let mut scale = 1.0f64;
-            if let Some(c3) = ctx.controller.as_ref().and_then(|c| c.cast::<ICoreWebView2Controller3>().ok()) {
-                let _ = c3.RasterizationScale(&mut scale);
-            }
-            let scale = if scale > 0.0 { scale } else { 1.0 };
-            if !paths.is_empty() {
-                super::push_event(
-                    "drop",
-                    ctx.id,
-                    &format!("{},{}\n{}", (point.x as f64 / scale).round() as i64, (point.y as f64 / scale).round() as i64, paths.join("\n")),
-                );
+                let Ok(file) = objects.GetValueAtIndex(i).and_then(|o| o.cast::<ICoreWebView2File>()) else { continue };
+                let mut path = PWSTR::null();
+                if file.Path(&mut path).is_ok() {
+                    let text = CoTaskMemPWSTR::from(path).to_string();
+                    if !text.is_empty() {
+                        paths.push(text);
+                    }
+                }
             }
         }
+        paths
     }
 
     pub(super) fn set_title_async(hwnd: usize, alive: Arc<AtomicBool>, title: &str) {

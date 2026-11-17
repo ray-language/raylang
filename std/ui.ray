@@ -758,8 +758,7 @@ pub fn intercept_close(h: int, on: bool) -> Result<int, string> {
 /// Makes window `h` take the FILES dropped on it (dragged from Finder, …): each drop emits a
 /// `"drop"` event (`window` = h) instead of reaching the page, which would get the files
 /// without their paths. Read it with `drop_paths(e)` and `drop_point(e)`. `false` gives the
-/// drops back to the page. On macOS, Linux and Windows (there it needs the WebView2 runtime
-/// 1.0.992 or later); `Err` for a closed window.
+/// drops back to the page. On macOS, Linux and Windows; `Err` for a closed window.
 pub fn accept_drops(h: int, on: bool) -> Result<int, string> {
     let r = __ui_window(h, "accept_drops", if (on) { "1" } else { "0" });
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }

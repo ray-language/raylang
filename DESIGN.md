@@ -20907,11 +20907,15 @@ pasa por encima, así que solo se atiende el `drag-data-received` que sigue a un
 (`awaiting`); el resto se deja pasar. Los símbolos se cargan aparte (`DropApi`), todos
 obligatorios: si falta alguno, `accept_drops` devuelve `Err` y la ventana sigue como estaba.
 
-**Windows (WebView2).** WebView2 registra su propio destino en sus ventanas hijas. Con
-`ICoreWebView2Controller4::SetAllowExternalDrop(false)` deja de hacerlo y la suelta sube a la
-ventana anfitriona, que la recibe como `WM_DROPFILES` tras `DragAcceptFiles`: sin implementar
-`IDropTarget` a mano. El punto llega en píxeles físicos del área cliente y se divide por la
-escala de rasterización del webview. Un runtime sin `ICoreWebView2Controller4` (anterior a
-1.0.992) da `Err`.
+**Windows (WebView2).** WebView2 es el destino del arrastre en sus ventanas hijas, que son de
+otro proceso. El primer intento fue apagar `AllowExternalDrop` y recibir `WM_DROPFILES` en la
+ventana anfitriona: no sirve, porque el webview sigue siendo el destino y RECHAZA la suelta
+(cursor de prohibido) en vez de cederla. La vía que WebView2 ofrece va al revés: la página recibe
+la suelta y pasa los `File` al anfitrión con `postMessageWithAdditionalObjects`; el anfitrión sí
+lee la ruta (`ICoreWebView2WebMessageReceivedEventArgs2::AdditionalObjects` →
+`ICoreWebView2File::Path`). Un script nuestro lo hace en fase de captura y corta la propagación,
+así que la página del programa no ve la suelta, como en las otras dos plataformas. Se registra
+para los documentos que carguen después (`AddScriptToExecuteOnDocumentCreated`, y se retira al
+apagar) y se ejecuta en el actual. El punto es `clientX`/`clientY`, ya en píxeles de la página.
 
-Compilado en las dos VMs, donde `accept_drops` devuelve `Ok`; la suelta real se prueba a mano.
+Compilado en las dos VMs. La suelta real se probó a mano en Windows; en Linux, pendiente.

@@ -1288,6 +1288,23 @@ public final class RayNotify {
                 case "audio_devices": // M468: audio.devices()
                     RayBridge.requestResult(id, audioDevices(c), null);
                     return;
+                case "audio_duck": { // pepa #346: audio.duck_others
+                    String failure = duck(c, arg.equals("on"));
+                    RayBridge.requestResult(id, failure == null ? "" : null, failure);
+                    return;
+                }
+                case "sound_list": // pepa #331: ui.system_sounds
+                    RayBridge.requestResult(id, systemSounds(c, arg), null);
+                    return;
+                case "sound_play": { // pepa #331: ui.play_system_sound
+                    String failure = playSystemSound(c, arg);
+                    RayBridge.requestResult(id, failure == null ? "" : null, failure);
+                    return;
+                }
+                case "sound_stop":
+                    stopSystemSound();
+                    RayBridge.requestResult(id, "", null);
+                    return;
                 case "notify_status":
                     RayBridge.requestResult(id, status(c), null);
                     return;
@@ -1414,6 +1431,105 @@ public final class RayNotify {
         pendingRecord = id;
         a.raySuppressLifecycle = true;
         a.requestPermissions(new String[] { RECORD }, RECORD_REQUEST);
+    }
+
+    // pepa #346: `audio.duck_others` — el foco de audio transitorio que deja a las otras apps
+    // seguir sonando más bajo; soltarlo les devuelve su volumen. Devuelve el error, o null.
+    static final android.media.AudioManager.OnAudioFocusChangeListener DUCK_LISTENER = change -> { };
+    static android.media.AudioFocusRequest duckRequest; // API 26+
+    static boolean ducking = false;
+
+    static String duck(Context c, boolean on) {
+        android.media.AudioManager am = (android.media.AudioManager) c.getSystemService(Context.AUDIO_SERVICE);
+        if (am == null) { return "audio: this device has no audio service"; }
+        if (ducking) {
+            if (Build.VERSION.SDK_INT >= 26) {
+                if (duckRequest != null) { am.abandonAudioFocusRequest(duckRequest); }
+                duckRequest = null;
+            } else {
+                am.abandonAudioFocus(DUCK_LISTENER);
+            }
+            ducking = false;
+        }
+        if (!on) { return null; }
+        int result;
+        if (Build.VERSION.SDK_INT >= 26) {
+            duckRequest = new android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                .setAudioAttributes(new android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                    .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build())
+                .setOnAudioFocusChangeListener(DUCK_LISTENER)
+                .build();
+            result = am.requestAudioFocus(duckRequest);
+        } else {
+            result = am.requestAudioFocus(DUCK_LISTENER, android.media.AudioManager.STREAM_MUSIC,
+                android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK);
+        }
+        if (result != android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
+            duckRequest = null;
+            return "audio: the system did not grant the audio focus (a call in progress?)";
+        }
+        ducking = true;
+        return null;
+    }
+
+    // pepa #331: los sonidos del sistema (`RingtoneManager`). El id que ve el programa es
+    // `<kind>:<uri>`: la clase decide por qué volumen suena (alarma, notificación o llamada).
+    static android.media.Ringtone playingSound;
+
+    static int soundType(String kind) {
+        switch (kind) {
+            case "alarm": return android.media.RingtoneManager.TYPE_ALARM;
+            case "ringtone": return android.media.RingtoneManager.TYPE_RINGTONE;
+            default: return android.media.RingtoneManager.TYPE_NOTIFICATION;
+        }
+    }
+
+    // Una línea `id<TAB>título` por sonido de esa clase.
+    static String systemSounds(Context c, String kind) {
+        android.media.RingtoneManager rm = new android.media.RingtoneManager(c);
+        rm.setType(soundType(kind));
+        StringBuilder out = new StringBuilder();
+        android.database.Cursor cursor = rm.getCursor(); // lo gestiona el RingtoneManager
+        while (cursor.moveToNext()) {
+            String title = cursor.getString(android.media.RingtoneManager.TITLE_COLUMN_INDEX);
+            android.net.Uri uri = rm.getRingtoneUri(cursor.getPosition());
+            if (uri == null) { continue; }
+            out.append(kind).append(':').append(uri).append('\t')
+                .append(title == null ? "" : title.replace('\t', ' ').replace('\n', ' ')).append('\n');
+        }
+        return out.toString();
+    }
+
+    // Toca `id` una vez (parando el anterior). Devuelve el error, o null.
+    static String playSystemSound(Context c, String id) {
+        int colon = id.indexOf(':');
+        String kind = colon < 0 ? id : id.substring(0, colon);
+        android.net.Uri uri = colon < 0
+            ? android.media.RingtoneManager.getActualDefaultRingtoneUri(c, soundType(kind))
+            : android.net.Uri.parse(id.substring(colon + 1));
+        if (uri == null) { return "ui: there is no default " + kind + " sound on this device"; }
+        android.media.Ringtone r = android.media.RingtoneManager.getRingtone(c, uri);
+        if (r == null) { return "ui: no system sound with id '" + id + "'"; }
+        stopSystemSound();
+        int usage = kind.equals("alarm") ? android.media.AudioAttributes.USAGE_ALARM
+            : kind.equals("ringtone") ? android.media.AudioAttributes.USAGE_NOTIFICATION_RINGTONE
+            : android.media.AudioAttributes.USAGE_NOTIFICATION;
+        r.setAudioAttributes(new android.media.AudioAttributes.Builder()
+            .setUsage(usage)
+            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build());
+        r.play();
+        playingSound = r;
+        return null;
+    }
+
+    static void stopSystemSound() {
+        if (playingSound != null) {
+            playingSound.stop();
+            playingSound = null;
+        }
     }
 
     // M468 (ray-daw #424): los dispositivos de audio, una línea por dispositivo con los campos

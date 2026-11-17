@@ -4063,7 +4063,7 @@ impl<'a> Vm<'a> {
                         unreachable!("the checker guarantees a string");
                     };
                     let elems = match crate::builtins::ui_desktop(&kind, &path) {
-                        Ok(()) => vec![HeapValue::Str("ok".to_string().into())],
+                        Ok(text) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(text.into())],
                         Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));

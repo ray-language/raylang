@@ -1085,6 +1085,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "            Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
             "        }));\n",
             "    }\n",
+            // pepa #346: `duck:on` / `duck:off` — el volumen de lo que suena en otras apps.
+            "    if let Some(state) = format.strip_prefix(\"duck:\") {\n",
+            "        return Rc::new(std::cell::RefCell::new(match ray_runtime::audio::duck_others(state == \"on\") {\n",
+            "            Ok(()) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(\"\")],\n",
+            "            Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
+            "        }));\n",
+            "    }\n",
             "    if format == \"devices\" {\n",
             "        return Rc::new(std::cell::RefCell::new(match ray_runtime::audio::devices_text() {\n",
             "            Ok(text) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(text.as_str())],\n",
@@ -1268,7 +1275,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // M235: escritorio (abrir/revelar) y portapapeles.
             "fn __ray_ui_desktop(kind: &str, path: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let r = ray_runtime::ui::desktop(kind, path);\n",
-            "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
+            "    Rc::new(std::cell::RefCell::new(match r { Ok(s) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(s.as_str())], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             "fn __ray_ui_clipboard(op: &str, text: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let r = match op { \"write\" => ray_runtime::ui::clipboard_write(text).map(|_| String::new()), \"read\" => ray_runtime::ui::clipboard_read(), other => Err(format!(\"ui: unknown clipboard op '{other}'\")) };\n",
             "    Rc::new(std::cell::RefCell::new(match r { Ok(s) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(s.as_str())], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",

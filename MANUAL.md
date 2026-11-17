@@ -1201,7 +1201,9 @@ Tres capas (catálogo completo en [`REFERENCE.md`](REFERENCE.md#10-la-biblioteca
    prelude dice en qué SO corre (`"macos"`/`"linux"`/`"windows"`), `ui.open_path(p)` abre un
    archivo con su aplicación, `ui.open_url(u)` abre una web `http(s)` o un `mailto:` en el
    navegador del sistema (el inicio de sesión OAuth de una app), `ui.haptic("success")` hace vibrar
-   el teléfono (y el trackpad Force Touch en macOS; en Linux/Windows no hace nada), `ui.reveal(p)` lo muestra en el gestor de archivos y
+   el teléfono (y el trackpad Force Touch en macOS; en Linux/Windows no hace nada),
+   `ui.system_sounds("alarm")` lista los tonos del sistema y `ui.play_system_sound(id)` toca uno
+   (solo en Android: iOS no deja usarlos, allí la app trae su propio archivo), `ui.reveal(p)` lo muestra en el gestor de archivos y
    `ui.clipboard_write`/`clipboard_read` mueven texto por el portapapeles (también desde una
    app de terminal en macOS y Windows). Nada de eso pasa por una shell. Una ventana se abre
    donde se le pida, sin saltar después: `ui.place_at(ui.options(800, 600), x, y)` o
@@ -1637,6 +1639,10 @@ escrito, que es lo que hace falta para pintar el compás exacto. `audio.queued_m
 cuánto de lo escrito aún no ha sonado: la muestra que suena es «escritas − queued», también
 después de un `flush` o de un hueco.
 
+En el teléfono, una alarma o una indicación hablada suele sonar encima de la música de otra app.
+`audio.duck_others(true)` le baja el volumen a esa música mientras suena lo tuyo y
+`audio.duck_others(false)` se lo devuelve; en el escritorio no hace nada.
+
 Backends: AudioQueue en macOS, ALSA en Linux (cargada en runtime: sin `libasound` el `open` da
 un `Err` claro) y AAudio en Android (≤50 ms de latencia pide el modo LOW_LATENCY). Con `RAY_AUDIO_SINK=null` en el entorno, un sumidero de tiempo real "reproduce"
 en silencio — para tests y CI sin tarjeta de sonido. En el binario nativo, `--without audio` lo
@@ -1790,7 +1796,8 @@ sin que la app escriba nada:
 - `std/ui` lo sirve en `ray://app/node_modules/<nombre npm>/` (donde lo pondría npm; las hojas
   de estilo se enlazan por esa ruta: `href="/node_modules/@raylang/elements/tokens.css"`) y a cada
   página HTML de `ray://app/` le inyecta, justo tras `<head>`, un **import map** construido con
-  los `exports` del `package.json`. `ui.import_map()` lo devuelve; una página con su propio
+  los `exports` del `package.json` (un patrón como `"./strings/*": "./strings/*.js"` da una entrada
+  por archivo). `ui.import_map()` lo devuelve; una página con su propio
   `<script type="importmap">` se sirve tal cual (copia ahí las entradas). En vivo con `ray run`,
   horneado en el binario nativo y en el bundle: el espacio embed lo lleva como
   `node_modules/<nombre npm>/…`.

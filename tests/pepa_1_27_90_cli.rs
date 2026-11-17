@@ -154,3 +154,33 @@ fn a_zero_event_timeout_does_not_wait() {
     .unwrap();
     three_engines(&d, "Result.Ok(Option.None)\nOption.None\nResult.Ok(Option.None)\n", "");
 }
+
+/// pepa #331: los sonidos del sistema (solo Android). Headless: el listado sale vacío y tocar o
+/// parar deja su traza; una clase o un id que no existen dan `Err` sin tocar el sistema.
+#[test]
+fn system_sounds_trace_headless_and_reject_unknown_kinds() {
+    let d = tmp("system_sounds");
+    std::fs::write(
+        d.join("prog.ray"),
+        "import std/ui;\nfn main() -> int {\n    print(ui.system_sounds(\"alarm\").unwrap().len());\n    print(ui.system_sounds(\"beep\").is_err());\n    print(ui.play_system_sound(\"alarm\"));\n    print(ui.play_system_sound(\"alarm:content://media/internal/audio/media/7\"));\n    print(ui.play_system_sound(\"beep\"));\n    print(ui.stop_system_sound());\n    0\n}\n",
+    )
+    .unwrap();
+    three_engines(
+        &d,
+        "0\ntrue\nResult.Ok(0)\nResult.Ok(0)\nResult.Err(ui: 'beep' is not a system sound (an id from system_sounds, or notification, alarm or ringtone for the default one))\nResult.Ok(0)\n",
+        "[ui] sound_play alarm\n[ui] sound_play alarm:content://media/internal/audio/media/7\n[ui] sound_stop \n",
+    );
+}
+
+/// pepa #346: `audio.duck_others` — en el escritorio no hay a quién bajar: `Ok` sin efecto en
+/// los tres motores (iOS y Android se prueban en el dispositivo).
+#[test]
+fn ducking_other_apps_is_a_no_op_on_the_desktop() {
+    let d = tmp("duck");
+    std::fs::write(
+        d.join("prog.ray"),
+        "import std/audio;\nfn main() -> int {\n    print(audio.duck_others(true));\n    print(audio.duck_others(false));\n    0\n}\n",
+    )
+    .unwrap();
+    three_engines(&d, "Result.Ok(0)\nResult.Ok(0)\n", "");
+}

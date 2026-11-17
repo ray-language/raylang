@@ -1677,6 +1677,10 @@ fn web_packages_of_dependencies_are_mounted_with_an_import_map() {
     )
     .unwrap();
     std::fs::write(ds.join("web/index.js"), "export const x = 1;\n").unwrap();
+    std::fs::create_dir_all(ds.join("web/x/sub")).unwrap();
+    std::fs::write(ds.join("web/x/es.js"), "export default {};\n").unwrap();
+    std::fs::write(ds.join("web/x/es.d.ts"), "export {};\n").unwrap();
+    std::fs::write(ds.join("web/x/sub/en.js"), "export default {};\n").unwrap();
     std::fs::write(ds.join("web/components/button/button.js"), "export const b = 1;\n").unwrap();
     std::fs::write(app.join("assets/index.html"), "<head></head>\n").unwrap();
     std::fs::write(
@@ -1689,9 +1693,10 @@ fn web_packages_of_dependencies_are_mounted_with_an_import_map() {
         "import std/ui;\nimport std/embed;\nfn main() {\n    print(ui.import_map());\n    match (ui.mount_embed_at(\"\", \"assets\")) { Result.Ok(n) => print(\"ok ${n}\"), Result.Err(e) => print(e) }\n    for k in embed.list().unwrap() {\n        print(k);\n    }\n}\n",
     )
     .unwrap();
-    // Las claves de `exports` se recorren en orden de clave (Map); `./x/*` → `./x/*.js` no se mapea.
-    const MAP: &str = r#"{"imports":{"@ds/elements":"/node_modules/@ds/elements/index.js","@ds/elements/button":"/node_modules/@ds/elements/components/button/button.js","@ds/elements/icons/":"/node_modules/@ds/elements/icons/","@ds/elements/":"/node_modules/@ds/elements/"}}"#;
-    let want = format!("{MAP}\nok 1\nassets/index.html\nnode_modules/@ds/elements/components/button/button.js\nnode_modules/@ds/elements/index.js\nnode_modules/@ds/elements/package.json\n");
+    // Las claves de `exports` se recorren en orden de clave (Map); `./x/*` → `./x/*.js` da una entrada
+    // por archivo que encaja (pepa #421), subcarpetas incluidas.
+    const MAP: &str = r#"{"imports":{"@ds/elements":"/node_modules/@ds/elements/index.js","@ds/elements/button":"/node_modules/@ds/elements/components/button/button.js","@ds/elements/icons/":"/node_modules/@ds/elements/icons/","@ds/elements/x/es":"/node_modules/@ds/elements/x/es.js","@ds/elements/x/sub/en":"/node_modules/@ds/elements/x/sub/en.js","@ds/elements/":"/node_modules/@ds/elements/"}}"#;
+    let want = format!("{MAP}\nok 1\nassets/index.html\nnode_modules/@ds/elements/components/button/button.js\nnode_modules/@ds/elements/index.js\nnode_modules/@ds/elements/package.json\nnode_modules/@ds/elements/x/es.d.ts\nnode_modules/@ds/elements/x/es.js\nnode_modules/@ds/elements/x/sub/en.js\n");
     for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
         let out = Command::new(env!("CARGO_BIN_EXE_ray"))
             .args(engine)

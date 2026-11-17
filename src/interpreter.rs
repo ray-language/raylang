@@ -2483,7 +2483,7 @@ impl<'a> Interpreter<'a> {
             "__ui_desktop" => {
                 let arr = match (&values[0], &values[1]) {
                     (Value::Str(k), Value::Str(p)) => match crate::builtins::ui_desktop(k, p) {
-                        Ok(()) => vec![Value::Str("ok".to_string())],
+                        Ok(text) => vec![Value::Str("ok".to_string()), Value::Str(text)],
                         Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
                     },
                     _ => unreachable!("the checker guarantees strings"),

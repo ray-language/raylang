@@ -6,6 +6,18 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`audio.duck_others(on)` (pepa #346)**: baja el volumen de la música de otras apps mientras
+  suena una alarma o una indicación, y lo devuelve al terminar. iOS (opciones de la sesión de
+  audio) y Android (foco de audio, con un shell regenerado); en el escritorio es un `Ok` sin
+  efecto.
+- **Sonidos del sistema en Android (pepa #331)**: `ui.system_sounds(kind)` lista los tonos de
+  notificación, alarma o llamada del teléfono, `ui.play_system_sound(id)` toca uno (o el que el
+  usuario tiene por defecto) y `ui.stop_system_sound()` lo para. Solo Android, con un shell
+  regenerado: iOS no deja usar los tonos del sistema y allí dan `Err`.
+- **`ui.import_map` mapea los patrones de `exports` (pepa #421)**: `"./strings/*":
+  "./strings/*.js"` da una entrada por cada archivo del paquete que encaja, así que
+  `import "@raylang/elements/strings/es"` resuelve como con un bundler en vez de dar 404.
+
 - **`audio.watch()` y `audio.next_change(h)`**: el programa se entera cuando se enchufa o se
   desenchufa un dispositivo de audio, o cambia el por defecto, sin tener que consultar la lista
   cada poco. La documentación dice además qué pasa con una salida abierta cuyo dispositivo

@@ -38,7 +38,9 @@ from std/ui import UiEvent;
 /// `action` adds a button of your own: `action_label` is its text and `action` what
 /// `Response.action` says when the user presses it (`"taken"`) — on Android it is the first
 /// button of the alarm, above "Stop" and "Snooze"; on iOS it takes the place of "Snooze" (the
-/// system allows one button besides its own stop);
+/// system allows one button besides its own stop); `action_opens = true` makes that button
+/// also OPEN the app (by default it only answers, like "Stop", and the response waits for the
+/// next time the app runs);
 /// `data` comes back in the response; `max_minutes` silences an unanswered alarm (0 = the
 /// shell's cap, 60 minutes) and reports it as a `"timeout"` response.
 pub struct Alarm {
@@ -52,6 +54,7 @@ pub struct Alarm {
     max_minutes: int,
     action: string,
     action_label: string,
+    action_opens: bool,
 }
 
 /// When an alarm rings. `At(unix_seconds)` (once), `Daily(hour, minute)` (local time, every
@@ -84,7 +87,8 @@ pub fn message(title: string) -> Alarm {
         data: "",
         max_minutes: 0,
         action: "",
-        action_label: ""
+        action_label: "",
+        action_opens: false
     }
 }
 
@@ -157,6 +161,8 @@ pub fn schedule(a: Alarm, when: Trigger) -> Result<string, string> {
             + a.action
             + sep()
             + a.action_label
+            + sep()
+            + if (a.action_opens) { "1" } else { "0" }
     )
 }
 

@@ -35,6 +35,8 @@ pub struct Alarm {
     /// botón) y `action_label` su texto.
     pub action: String,
     pub action_label: String,
+    /// Pulsar el botón propio abre además la app (por defecto solo responde, como «Stop»).
+    pub action_opens: bool,
 }
 
 /// Cuándo suena. Los días de `Weekly` son ISO: 1 = lunes … 7 = domingo.
@@ -119,7 +121,7 @@ pub fn trigger_text(t: &Trigger) -> String {
 }
 
 /// `trigger ␟ id ␟ title ␟ sound ␟ snooze_minutes ␟ stop_label ␟ data ␟ max_minutes
-/// [␟ snooze_label [␟ action ␟ action_label]]`.
+/// [␟ snooze_label [␟ action ␟ action_label [␟ action_opens]]]`.
 /// Valida y rellena el id si falta.
 pub fn parse_alarm(arg: &str) -> Result<(Trigger, Alarm), String> {
     let f: Vec<&str> = arg.split(SEP).collect();
@@ -138,6 +140,7 @@ pub fn parse_alarm(arg: &str) -> Result<(Trigger, Alarm), String> {
         snooze_label: f.get(8).map(|s| s.to_string()).unwrap_or_default(),
         action: f.get(9).map(|s| s.trim().to_string()).unwrap_or_default(),
         action_label: f.get(10).map(|s| s.to_string()).unwrap_or_default(),
+        action_opens: f.get(11).is_some_and(|s| s.trim() == "1"),
     };
     if a.title.trim().is_empty() {
         return Err("alarm: an alarm needs a title".to_string());
@@ -172,8 +175,8 @@ pub fn parse_alarm(arg: &str) -> Result<(Trigger, Alarm), String> {
         }
     }
     // El separador de campos no puede viajar dentro de uno (desplazaría los demás).
-    // (8 campos, 9 con `snooze_label` u 11 con el botón propio: cualquier otra cuenta lo delata).
-    if !matches!(f.len(), 8 | 9 | 11) {
+    // (8 campos, 9 con `snooze_label`, 11 o 12 con el botón propio: cualquier otra cuenta lo delata).
+    if !matches!(f.len(), 8 | 9 | 11 | 12) {
         return Err("alarm: a field contains the unit separator U+001F".to_string());
     }
     Ok((trigger, a))
@@ -193,6 +196,7 @@ pub fn alarm_text(trigger: &Trigger, a: &Alarm) -> String {
         a.snooze_label.clone(),
         a.action.clone(),
         a.action_label.clone(),
+        if a.action_opens { "1" } else { "0" }.to_string(),
     ]
     .join(&SEP.to_string())
 }
@@ -411,7 +415,10 @@ mod tests {
         assert!(bad(&["daily:8:0", "x", "T", "", "500", "", "", "0"]).contains("snooze_minutes"));
         // pepa #435: el botón propio.
         let (_, a) = parse_alarm(&["daily:8:0", "x", "T", "", "0", "", "", "0", "", "taken", "Ya la tomé"].join(&SEP.to_string())).unwrap();
-        assert_eq!((a.action.as_str(), a.action_label.as_str()), ("taken", "Ya la tomé"));
+        assert_eq!((a.action.as_str(), a.action_label.as_str(), a.action_opens), ("taken", "Ya la tomé", false));
+        let (t2, opens) = parse_alarm(&enc(&["daily:8:0", "x", "T", "", "0", "", "", "0", "", "taken", "Ya la tomé", "1"])).unwrap();
+        assert!(opens.action_opens);
+        assert_eq!(parse_alarm(&alarm_text(&t2, &opens)).unwrap(), (t2, opens));
         assert!(bad(&["daily:8:0", "x", "T", "", "0", "", "", "0", "", "snooze", "Luego"]).contains("response of the system"));
         assert!(bad(&["daily:8:0", "x", "T", "", "0", "", "", "0", "", "taken", ""]).contains("action_label"));
         assert!(bad(&["daily:8:0", "x", "T", "", "0", "", "", "90"]).contains("max_minutes"));

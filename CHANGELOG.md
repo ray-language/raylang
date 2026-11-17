@@ -11,7 +11,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   el reloj del dispositivo y en macOS e iOS cuenta además el silencio de relleno.
 - **`std/alarm`: un botón propio en la alarma.** `a.action = "taken"` y `a.action_label = "Ya la
   tomé"` añaden un botón cuya respuesta llega como `action == "taken"`, distinta de «detener».
-  En Android es el primer botón; en iOS ocupa el sitio de posponer. Desde iOS 26.1 el sistema
+  En Android es el primer botón; en iOS ocupa el sitio de posponer. Con `a.action_opens = true`
+  el botón además abre la app. Desde iOS 26.1 el sistema
   pone su propio botón de detener y no muestra `stop_label`: la documentación lo avisa.
 - La traza `RAY_AUDIO_TRACE=1` de macOS dice `underruns N` (las veces que el flujo se quedó sin
   datos) en lugar de `gaps`, que marcaba 0 con el audio entrecortado.

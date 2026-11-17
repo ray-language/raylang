@@ -530,7 +530,7 @@ macOS, iOS (needs `[ios] background_audio = true`), Android (MediaSession, regen
 `[app.plist]` values may be strings, booleans or string arrays;
 a REAL alarm (rings in a loop with the alarm volume until answered, screen locked, app CLOSED): `import std/alarm;`
 `var a = alarm.message(title); a.id = …; a.sound = "melody"` (a file of `[android] sounds`, no extension)`; a.snooze_minutes = 10;
-a.stop_label = … (Android only: iOS 26.1+ shows the system's own "Stop", so there "stop" may just mean silencing); a.snooze_label = …; a.action = "taken"; a.action_label = "Ya la tomé" (a button of your own: the response says action == "taken"; on iOS it replaces Snooze); a.data = …;` then `alarm.schedule(a, alarm.Trigger.At(unix) | .Daily(h, m) | .Weekly([1, 3, 5], h, m))`
+a.stop_label = … (Android only: iOS 26.1+ shows the system's own "Stop", so there "stop" may just mean silencing); a.snooze_label = …; a.action = "taken"; a.action_label = "Ya la tomé" (a button of your own: the response says action == "taken"; on iOS it replaces Snooze; a.action_opens = true also opens the app); a.data = …;` then `alarm.schedule(a, alarm.Trigger.At(unix) | .Daily(h, m) | .Weekly([1, 3, 5], h, m))`
 (`request_permission()`, `status()`, `cancel(id)`, `cancel_all()`, `pending()`); the answer is an `"alarm"` event —
 `alarm.event_response(e)` gives `Response { id, action, data }` with action `"stop" | "snooze" | "timeout" | "missed"` (missed = its time passed while the phone was off), queued for the next
 launch when the app was closed. Android (shell ≥ 1.27.93) and iOS 26+ (AlarmKit, shell ≥ 1.27.94: the system rings and shows the alert; answers `"stop"`/`"snooze"`; ask the

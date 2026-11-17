@@ -20882,4 +20882,12 @@ separador dentro de un campo.
 - **Android**: la pantalla es nuestra: el botón propio va primero, sobre «Stop» y «Snooze», y
   también en la notificación (`ACTION_CUSTOM`).
 
+**`action_opens`.** Probado en un iPhone, el botón respondía sin abrir la app, como «Detener»:
+correcto para silenciar, pero quien pulsa «Ya la tomé» suele querer ver la app. Es un tercer
+campo, `action_opens` (campo 12 del registro), apagado por defecto. En iOS elige otro intent
+(`RayAlarmOpenIntent`, con `openAppWhenRun = true`: es estático por tipo, de ahí los dos tipos).
+En Android la pantalla de la alarma trae al frente la actividad que ya existe (`NEW_TASK |
+CLEAR_TOP | SINGLE_TOP`: una nueva recargaría la página), y el botón de la notificación pasa por
+esa pantalla, porque un servicio lanzado desde una notificación no puede abrir actividades.
+
 Los campos nuevos rompen un literal `Alarm { … }` escrito a mano; `alarm.message` los rellena.

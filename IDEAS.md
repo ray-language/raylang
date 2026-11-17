@@ -4768,3 +4768,18 @@ tocar de verdad en este equipo; se escribirían contra la fuente de pruebas.
 
 **Impacto**: aditivo; hoy `accept_drops` devuelve `Err` allí. **Riesgo**: bajo; se prueba en las
 VMs con una suelta real, que no se puede automatizar.
+
+## 127. Un segundo botón propio en la alarma (pepa #435) — PENDIENTE
+
+Desde iOS 26.1 AlarmKit ignora `stopButton`: el sistema pone «Detener» y `stop_label` no se ve.
+Para una app de medicación «Detener» no puede significar «ya la tomé». El hueco que queda es el
+segundo botón, que hoy solo puede ser posponer.
+
+**Propuesta**: dos campos en `alarm.Alarm`, `action` y `action_label`: con `action` puesto, el
+segundo botón muestra `action_label` y la respuesta llega como `Response.action == action`. En
+iOS ocupa el sitio de posponer (AlarmKit solo tiene un botón secundario); en Android la pantalla
+de la alarma es nuestra y puede mostrar los tres.
+
+**Impacto**: aditivo para quien construye la alarma con `alarm.message` (los campos nuevos rompen
+un literal `Alarm { … }` escrito a mano). **Riesgo**: hay que probarlo en un iPhone con iOS 26 y
+en Android con la app cerrada.

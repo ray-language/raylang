@@ -107,6 +107,23 @@ pub fn played_ms(h: int) -> Result<int, string> {
     }
 }
 
+/// What the program has written and has NOT sounded yet, in ms (ray-daw #429): what waits in
+/// the queue plus what the device still holds. Unlike `played_ms` — the device's clock, which
+/// on macOS and iOS also counts the silence the backend plays while the queue is empty — it
+/// follows the program's own samples: the sample sounding right now is `written − queued`,
+/// whatever `flush` calls or gaps happened before. Granularity: one device buffer.
+pub fn queued_ms(h: int) -> Result<int, string> {
+    let r = __audio_open(h, 0, 0, "queued");
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(ms) => Result.Ok(ms),
+            Option.None => Result.Err("invalid position"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
 /// Writes interleaved samples (in the format the output was opened with; s16le unless
 /// `open_format` said otherwise) to the output. Writes ALL of `samples`, parking the fiber
 /// while the device buffer is full — backpressure IS the pacing: write your audio as fast as

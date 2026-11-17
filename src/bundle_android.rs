@@ -1685,6 +1685,7 @@ public final class RayAlarm {
     static final String ACTION_FIRE = "org.raylang.shell.ALARM_FIRE";
     static final String ACTION_STOP = "org.raylang.shell.ALARM_STOP";
     static final String ACTION_SNOOZE = "org.raylang.shell.ALARM_SNOOZE";
+    static final String ACTION_CUSTOM = "org.raylang.shell.ALARM_ACTION";
     static final String ACTION_DONE = "org.raylang.shell.ALARM_DONE";
     static final String SEP = "\u001f";
     // La clave de la posposición: el separador de campos no puede ir en un id (pepa #347: `|` sí).
@@ -1888,6 +1889,20 @@ public final class RayAlarm {
         return f.length > 8 && !f[8].isEmpty() ? f[8] : "Snooze";
     }
 
+    // El botón propio de la alarma: lo que responde ("" = no tiene) y su texto.
+    static String customAction(String[] f) {
+        return f.length > 9 ? f[9].trim() : "";
+    }
+
+    // ¿Abre además la app el botón propio?
+    static boolean customOpens(String[] f) {
+        return f.length > 11 && f[11].trim().equals("1");
+    }
+
+    static String customLabel(String[] f) {
+        return f.length > 10 && !f[10].isEmpty() ? f[10] : customAction(f);
+    }
+
     static void snooze(Context c, String[] f) {
         int minutes = 0;
         try { minutes = Integer.parseInt(f[4].trim()); } catch (NumberFormatException ignored) { }
@@ -2034,6 +2049,9 @@ public class RayAlarmService extends Service {
             finishWith("stop");
         } else if (RayAlarm.ACTION_SNOOZE.equals(action)) {
             finishWith("snooze");
+        } else if (RayAlarm.ACTION_CUSTOM.equals(action)) {
+            String own = current != null ? RayAlarm.customAction(current) : "";
+            finishWith(own.isEmpty() ? "stop" : own);
         } else if (current == null) {
             stopSelf();
         }
@@ -2083,8 +2101,19 @@ public class RayAlarmService extends Service {
             .setVisibility(Notification.VISIBILITY_PUBLIC)
             .setOngoing(true)
             .setContentIntent(full)
-            .setFullScreenIntent(full, true)
-            .addAction(new Notification.Action.Builder(icon, stop, self(RayAlarm.ACTION_STOP)).build());
+            .setFullScreenIntent(full, true);
+        if (!RayAlarm.customAction(f).isEmpty()) {
+            // Si además abre la app, el botón pasa por la pantalla de la alarma: una actividad
+            // lanzada por el toque sí puede abrir otra; un servicio no (trampolín de notificación).
+            PendingIntent own = self(RayAlarm.ACTION_CUSTOM);
+            if (RayAlarm.customOpens(f)) {
+                Intent via = new Intent(this, RayAlarmActivity.class).setAction(RayAlarm.ACTION_CUSTOM);
+                via.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NO_USER_ACTION);
+                own = PendingIntent.getActivity(this, RayAlarm.ACTION_CUSTOM.hashCode(), via, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+            }
+            b.addAction(new Notification.Action.Builder(icon, RayAlarm.customLabel(f), own).build());
+        }
+        b.addAction(new Notification.Action.Builder(icon, stop, self(RayAlarm.ACTION_STOP)).build());
         if (snooze > 0) {
             b.addAction(new Notification.Action.Builder(icon, RayAlarm.snoozeLabel(f), self(RayAlarm.ACTION_SNOOZE)).build());
         }
@@ -2192,6 +2221,10 @@ public class RayAlarmActivity extends Activity {
             finish();
             return;
         }
+        if (RayAlarm.ACTION_CUSTOM.equals(getIntent().getAction())) { // el botón propio de la notificación
+            answerOwn(f);
+            return;
+        }
         int snooze = 0;
         try { snooze = Integer.parseInt(f[4].trim()); } catch (NumberFormatException ignored) { }
         float d = getResources().getDisplayMetrics().density;
@@ -2204,6 +2237,16 @@ public class RayAlarmActivity extends Activity {
         title.setTextSize(28);
         title.setGravity(Gravity.CENTER);
         box.addView(title, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
+        if (!RayAlarm.customAction(f).isEmpty()) {
+            Button own = new Button(this);
+            own.setText(RayAlarm.customLabel(f));
+            own.setTextSize(20);
+            own.setAllCaps(false);
+            own.setOnClickListener(v -> answerOwn(f));
+            LinearLayout.LayoutParams lp0 = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (int) (64 * d));
+            lp0.topMargin = (int) (12 * d);
+            box.addView(own, lp0);
+        }
         Button stop = new Button(this);
         stop.setText(f[5].isEmpty() ? "Stop" : f[5]);
         stop.setTextSize(20);
@@ -2240,9 +2283,23 @@ public class RayAlarmActivity extends Activity {
         finish();
     }
 
+    // El botón propio: responde y, si la alarma lo pide, abre la app.
+    private void answerOwn(String[] f) {
+        startService(new Intent(this, RayAlarmService.class).setAction(RayAlarm.ACTION_CUSTOM));
+        if (RayAlarm.customOpens(f)) {
+            // La actividad de la app que ya exista vuelve al frente tal cual (SINGLE_TOP): una
+            // nueva recargaría la página y el programa perdería su pantalla.
+            Intent main = new Intent(this, MainActivity.class);
+            main.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+            startActivity(main);
+        }
+        finish();
+    }
+
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        setIntent(intent);
         recreate(); // otra alarma tomó el relevo: su título y sus botones
     }
 

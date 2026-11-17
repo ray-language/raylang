@@ -664,18 +664,27 @@ enum RayAlarmKit {
     }
 
     /// The fields of an alarm: trigger, id, title, sound, snooze_minutes, stop_label, data,
-    /// max_minutes, snooze_label.
+    /// max_minutes, snooze_label, action, action_label. AlarmKit has ONE button besides the
+    /// system's stop: the alarm's own action takes it when there is one, snooze otherwise.
     static func configuration(_ f: [String], uuid: UUID, schedule: Alarm.Schedule) -> AlarmManager.AlarmConfiguration<RayAlarmMeta> {
         let snooze = Int(f[4].trimmingCharacters(in: .whitespaces)) ?? 0
         let stopText = f[5].isEmpty ? "Stop" : f[5]
         let snoozeText = f.count > 8 && !f[8].isEmpty ? f[8] : "Snooze"
         let text = { (s: String) in LocalizedStringResource(String.LocalizationValue(s)) }
         let stop = AlarmButton(text: text(stopText), textColor: .white, systemImageName: "stop.circle")
-        let later = snooze > 0 ? AlarmButton(text: text(snoozeText), textColor: .white, systemImageName: "zzz") : nil
+        let own = f.count > 9 ? f[9].trimmingCharacters(in: .whitespaces) : ""
+        let ownText = f.count > 10 && !f[10].isEmpty ? f[10] : own
+        let later = !own.isEmpty
+            ? AlarmButton(text: text(ownText), textColor: .white, systemImageName: "checkmark.circle")
+            : (snooze > 0 ? AlarmButton(text: text(snoozeText), textColor: .white, systemImageName: "zzz") : nil)
         let alert = AlarmPresentation.Alert(title: text(f[2]), stopButton: stop, secondaryButton: later, secondaryButtonBehavior: later == nil ? nil : .custom)
         let attributes = AlarmAttributes<RayAlarmMeta>(presentation: AlarmPresentation(alert: alert), metadata: RayAlarmMeta(), tintColor: .accentColor)
         let sound: AlertConfiguration.AlertSound = soundFile(f[3]).map { .named($0) } ?? .default
-        let secondary: (any LiveActivityIntent)? = snooze > 0 ? RayAlarmSnoozeIntent(alarmID: uuid.uuidString) : nil
+        let opens = f.count > 11 && f[11].trimmingCharacters(in: .whitespaces) == "1"
+        let ownIntent: any LiveActivityIntent = opens ? RayAlarmOpenIntent(alarmID: uuid.uuidString) : RayAlarmActionIntent(alarmID: uuid.uuidString)
+        let secondary: (any LiveActivityIntent)? = !own.isEmpty
+            ? ownIntent
+            : (snooze > 0 ? RayAlarmSnoozeIntent(alarmID: uuid.uuidString) : nil)
         return .alarm(schedule: schedule, attributes: attributes, stopIntent: RayAlarmStopIntent(alarmID: uuid.uuidString), secondaryIntent: secondary, sound: sound)
     }
 
@@ -730,6 +739,9 @@ enum RayAlarmKit {
         guard let (id, rec) = store().first(where: { $0.value["uuid"] == uuid || $0.value["snooze"] == uuid }) else { return }
         let f = (rec["fields"] ?? "").components(separatedBy: RayAlarm.sep)
         let minutes = f.count > 4 ? (Int(f[4].trimmingCharacters(in: .whitespaces)) ?? 0) : 0
+        // The alarm's own button answers with the action the program named.
+        let own = f.count > 9 ? f[9].trimmingCharacters(in: .whitespaces) : ""
+        let action = action == "custom" ? (own.isEmpty ? "stop" : own) : action
         var next: UUID? = nil
         if action == "snooze" && minutes > 0 && f.count >= 8 {
             let candidate = UUID()
@@ -791,6 +803,51 @@ struct RayAlarmSnoozeIntent: LiveActivityIntent {
 
     func perform() async throws -> some IntentResult {
         await RayAlarmKit.answered(uuid: alarmID, action: "snooze")
+        return .result()
+    }
+}
+
+@available(iOS 26.0, *)
+struct RayAlarmActionIntent: LiveActivityIntent {
+    static let title: LocalizedStringResource = "Answer alarm"
+    static let openAppWhenRun: Bool = false
+
+    @Parameter(title: "Alarm")
+    var alarmID: String
+
+    init() {
+        self.alarmID = ""
+    }
+
+    init(alarmID: String) {
+        self.alarmID = alarmID
+    }
+
+    func perform() async throws -> some IntentResult {
+        await RayAlarmKit.answered(uuid: alarmID, action: "custom")
+        return .result()
+    }
+}
+
+/// The alarm's own button when it also opens the app (`action_opens`).
+@available(iOS 26.0, *)
+struct RayAlarmOpenIntent: LiveActivityIntent {
+    static let title: LocalizedStringResource = "Answer alarm and open"
+    static let openAppWhenRun: Bool = true
+
+    @Parameter(title: "Alarm")
+    var alarmID: String
+
+    init() {
+        self.alarmID = ""
+    }
+
+    init(alarmID: String) {
+        self.alarmID = alarmID
+    }
+
+    func perform() async throws -> some IntentResult {
+        await RayAlarmKit.answered(uuid: alarmID, action: "custom")
         return .result()
     }
 }

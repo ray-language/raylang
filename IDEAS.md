@@ -4769,7 +4769,7 @@ tocar de verdad en este equipo; se escribirían contra la fuente de pruebas.
 **Impacto**: aditivo; hoy `accept_drops` devuelve `Err` allí. **Riesgo**: bajo; se prueba en las
 VMs con una suelta real, que no se puede automatizar.
 
-## 127. Un segundo botón propio en la alarma (pepa #435) — PENDIENTE
+## 127. Un segundo botón propio en la alarma (pepa #435) — ✅ EJECUTADO (DESIGN §452)
 
 Desde iOS 26.1 AlarmKit ignora `stopButton`: el sistema pone «Detener» y `stop_label` no se ve.
 Para una app de medicación «Detener» no puede significar «ya la tomé». El hueco que queda es el

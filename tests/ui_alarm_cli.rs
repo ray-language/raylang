@@ -168,3 +168,48 @@ fn an_id_with_a_pipe_is_accepted_on_all_engines() {
         );
     }
 }
+
+/// pepa #435: el botón propio — `action` + `action_label` viajan con la alarma, se validan, y
+/// su respuesta llega con el nombre que le dio el programa.
+const ACTION_PROG: &str = r#"import std/ui;
+import std/alarm;
+
+fn main() -> int {
+    let w = ui.open("t", "about:blank", 300, 200).unwrap();
+    var a = alarm.message("Losartán");
+    a.id = "med";
+    a.action = "taken";
+    a.action_label = "Ya la tomé";
+    a.data = "dose-1";
+    print(alarm.schedule(a, alarm.Trigger.Daily(8, 0)));
+    var bad = alarm.message("x");
+    bad.action = "stop";
+    bad.action_label = "Parar";
+    print(alarm.schedule(bad, alarm.Trigger.Daily(8, 0)));
+    var bare = alarm.message("x");
+    bare.action = "taken";
+    print(alarm.schedule(bare, alarm.Trigger.Daily(8, 0)));
+    match (ui.try_next_event()) {
+        Option.Some(e) => match (alarm.event_response(e)) {
+            Option.Some(r) => print("response " + r.id + " / " + r.action + " / " + r.data),
+            Option.None => print("other " + e.kind),
+        },
+        Option.None => print("no event"),
+    }
+    0
+}
+"#;
+
+#[test]
+fn an_alarm_can_carry_a_button_of_its_own() {
+    let d = tmp("action");
+    std::fs::write(d.join("prog.ray"), ACTION_PROG).unwrap();
+    const WANT: &str = "Result.Ok(med)
+Result.Err(alarm: action 'stop' is a response of the system (pick another name, e.g. 'taken'))
+Result.Err(alarm: an action needs its action_label (the text of the button))
+response med / taken / dose-1
+";
+    for (name, out, err) in engines(&d, &[("RAY_UI_ALARM_RESPONSE", "taken")]) {
+        assert_eq!(out, WANT, "{name}: {err}");
+    }
+}

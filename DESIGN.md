@@ -20837,3 +20837,29 @@ llega a `read` con 1.27.101 y 1.27.102, en la VM, en nativo y por el MCP, y `mid
 en CI. Con el acceso a memoria compartida POSIX denegado por un sandbox, CoreMIDI no entrega (y
 su propio `MIDIIORingBufferWriter` llega a caerse): lo más probable es que la medición corriera
 dentro de uno. Se documenta el bucle, el caso del sandbox y que los ids pueden ser negativos.
+
+## 451. `audio.queued_ms` y la traza que no veía los cortes (ray-daw #429, #430, nov 2026)
+
+**`played_ms` es el reloj del dispositivo.** En CoreAudio la cola no puede pararse entre
+escrituras, así que el callback encola silencio de mantenimiento cuando el anillo está seco, y
+`AudioQueueGetCurrentTime` lo cuenta. Un motor que corta con `flush` y se re-ancla en
+`played_ms` acaba hasta ~30 ms por delante de lo que suena: medido aquí, `escrito − played_ms`
+pasa de 106 a −4 ms en tres cortes, mientras lo realmente encolado sigue en ~125 ms.
+
+**`queued_ms(h)`**: lo escrito que aún no ha sonado = lo que espera en el pipe + lo que el
+alimentador tiene en la mano + lo entregado al backend que no ha sonado. Para lo último el
+alimentador lleva tres cuentas en frames del programa (`Ctl`): entregados, descartados por un
+`flush` y sonados. `Sink` gana dos métodos con valor por defecto: `program_frames()` (frames del
+programa sonados; `None` = el backend no mete relleno y vale `played_frames`) y
+`flushed_frames()` (lo que el último `flush` quitó; `None` = todo lo pendiente, que es lo que
+hace un `drop` de ALSA/AAudio/WASAPI). En la cola de CoreAudio, `Timeline` apunta por cada
+búfer encolado hasta dónde llega en la línea de tiempo de la cola y cuántos frames del programa
+van hasta ahí; con la posición de la cola se busca el último búfer ya sonado. La granularidad es
+un búfer del dispositivo. El AudioUnit de baja latencia ya contaba solo frames del programa.
+
+No hay builtin nuevo: viaja por `__audio_open(h, 0, 0, "queued")`, como `devices`.
+
+**La traza (#430).** `gaps` contaba las transiciones dato → silencio, pero el fundido de salida
+ya dejaba puesta la bandera que el contador miraba, así que marcaba 0 con 516 cortes. Se
+sustituye por `underruns` = fundidos − 1 (el último es el final del flujo), que es lo que la
+documentación ya decía que había que mirar. Cuenta también la pausa tras un `flush`.

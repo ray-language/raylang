@@ -322,6 +322,30 @@ pub struct Ctl {
     /// M398 (rayplay #166): `flush` la levanta; el alimentador descarta lo encolado en el pipe y
     /// en el backend, y la baja. Mientras está alta, nada de lo escrito suena.
     discard: std::sync::atomic::AtomicBool,
+    /// ray-daw #429 (`queued_ms`): octetos por frame, y la cuenta en frames del programa: los
+    /// entregados al backend, los que un `flush` descartó de ahí y los que ya sonaron (sin el
+    /// silencio de relleno del backend, que `played_frames` sí cuenta en CoreAudio).
+    frame_bytes: i64,
+    fed_frames: AtomicI64,
+    dropped_frames: AtomicI64,
+    sounded_frames: AtomicI64,
+}
+
+impl Ctl {
+    /// Tras entregar `n` octetos al backend (o en una espera): refresca lo sonado.
+    fn account(&self, sink: &mut dyn Sink, n: usize) {
+        self.fed_frames.fetch_add(n as i64 / self.frame_bytes, Ordering::SeqCst);
+        let sounded = sink.program_frames().unwrap_or_else(|| self.played_frames.load(Ordering::SeqCst)).max(0);
+        self.sounded_frames.store(sounded, Ordering::SeqCst);
+    }
+
+    /// Tras un `flush` del backend: lo descartado deja de contar como encolado.
+    fn account_flush(&self, sink: &mut dyn Sink) {
+        self.account(sink, 0);
+        let outstanding = (self.fed_frames.load(Ordering::SeqCst) - self.dropped_frames.load(Ordering::SeqCst) - self.sounded_frames.load(Ordering::SeqCst)).max(0);
+        let dropped = sink.flushed_frames().map_or(outstanding, |n| n.min(outstanding));
+        self.dropped_frames.fetch_add(dropped, Ordering::SeqCst);
+    }
 }
 
 /// El mapa extremo-de-escritura → control, para que `drain(key)` encuentre su salida. La clave
@@ -442,6 +466,10 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
             played_frames,
             sample_rate,
             discard: std::sync::atomic::AtomicBool::new(false),
+            frame_bytes: frame_bytes as i64,
+            fed_frames: AtomicI64::new(0),
+            dropped_frames: AtomicI64::new(0),
+            sounded_frames: AtomicI64::new(0),
         });
         ctls().lock().unwrap().insert(key, ctl.clone());
         // El alimentador: lee el pipe (bloqueante) y empuja al backend; EOF (close del handle) →
@@ -472,6 +500,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
                         }
                     }
                     sink.flush();
+                    ctl_thread.account_flush(sink.as_mut());
                     ctl_thread.discard.store(false, Ordering::SeqCst);
                     continue;
                 }
@@ -480,6 +509,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
                 let mut pfd = PollFd { fd: fd_r, events: POLLIN, revents: 0 };
                 // SAFETY: pfd es nuestro y vive durante la llamada.
                 if unsafe { poll(&mut pfd, 1, 20) } <= 0 {
+                    ctl_thread.account(sink.as_mut(), 0);
                     continue; // tiempo agotado o EINTR: nada que leer todavía
                 }
                 // SAFETY: buf vive durante la llamada; fd_r es nuestro hasta el close de abajo.
@@ -489,6 +519,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
                 }
                 ctl_thread.in_flight.fetch_add(n as i64, Ordering::SeqCst);
                 sink.play(&buf[..n as usize]);
+                ctl_thread.account(sink.as_mut(), n as usize);
                 ctl_thread.in_flight.fetch_sub(n as i64, Ordering::SeqCst);
             }
             sink.finish();
@@ -515,6 +546,10 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
             played_frames,
             sample_rate,
             discard: std::sync::atomic::AtomicBool::new(false),
+            frame_bytes: frame_bytes as i64,
+            fed_frames: AtomicI64::new(0),
+            dropped_frames: AtomicI64::new(0),
+            sounded_frames: AtomicI64::new(0),
         });
         ctls().lock().unwrap().insert(key, ctl.clone());
         let ctl_thread = ctl.clone();
@@ -532,6 +567,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
                         }
                     }
                     sink.flush();
+                    ctl_thread.account_flush(sink.as_mut());
                     ctl_thread.discard.store(false, Ordering::SeqCst);
                     continue;
                 }
@@ -542,6 +578,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
                     Err(()) => break, // el escritor cerró (ERROR_BROKEN_PIPE): fin de la sesión
                     Ok(0) => {
                         std::thread::sleep(std::time::Duration::from_millis(5));
+                        ctl_thread.account(sink.as_mut(), 0);
                         continue;
                     }
                     Ok(n) => n,
@@ -553,6 +590,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
                 };
                 ctl_thread.in_flight.fetch_add(n as i64, Ordering::SeqCst);
                 sink.play(&buf[..n]);
+                ctl_thread.account(sink.as_mut(), n);
                 ctl_thread.in_flight.fetch_sub(n as i64, Ordering::SeqCst);
             }
             sink.finish();
@@ -610,6 +648,26 @@ pub fn flush(key: i64) -> Result<(), String> {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     Ok(())
+}
+
+/// ray-daw #429: lo que el programa ha escrito y AÚN NO HA SONADO, en ms: lo que espera en el
+/// pipe, lo que el alimentador tiene en la mano y lo entregado al backend que no ha sonado.
+/// No cuenta el silencio de relleno del backend ni lo que un `flush` descartó: la muestra que
+/// suena ahora es `escritas − queued`, haya habido cortes o huecos. Granularidad: un búfer del
+/// dispositivo.
+pub fn queued_ms(key: i64) -> Result<i64, String> {
+    let ctl = ctls()
+        .lock()
+        .unwrap()
+        .get(&key)
+        .cloned()
+        .ok_or_else(|| "audio: not an open audio output".to_string())?;
+    // Lo en vuelo se lee ANTES que lo entregado: el alimentador suma a lo entregado antes de
+    // restar de lo en vuelo, así que este orden puede contar un chunk dos veces un instante,
+    // pero nunca perderlo.
+    let waiting = (pipe_pending(ctl.pipe_r) + ctl.in_flight.load(Ordering::SeqCst)) / ctl.frame_bytes;
+    let in_backend = (ctl.fed_frames.load(Ordering::SeqCst) - ctl.dropped_frames.load(Ordering::SeqCst) - ctl.sounded_frames.load(Ordering::SeqCst)).max(0);
+    Ok((waiting + in_backend) * 1000 / ctl.sample_rate)
 }
 
 // Octetos pendientes de lectura en el pipe (FIONREAD), 0 si no se puede saber.
@@ -1091,6 +1149,16 @@ trait Sink: Send {
     fn play(&mut self, data: &[u8]);
     fn finish(&mut self);
     fn flush(&mut self) {}
+    /// ray-daw #429: frames DEL PROGRAMA ya sonados, refrescando de paso la posición del
+    /// dispositivo. `None` = el backend no mete relleno propio y vale `played_frames`.
+    fn program_frames(&mut self) -> Option<i64> {
+        None
+    }
+    /// Frames del programa que el último `flush` descartó del backend. `None` = todo lo que
+    /// aún no había sonado.
+    fn flushed_frames(&mut self) -> Option<i64> {
+        None
+    }
 }
 
 fn make_sink(
@@ -1166,6 +1234,12 @@ impl Sink for Convert {
     }
     fn flush(&mut self) {
         self.inner.flush()
+    }
+    fn program_frames(&mut self) -> Option<i64> {
+        self.inner.program_frames()
+    }
+    fn flushed_frames(&mut self) -> Option<i64> {
+        self.inner.flushed_frames()
     }
 }
 
@@ -1723,6 +1797,8 @@ mod coreaudio {
             upmix_sample_bytes: usize,
             /// El dispositivo dejó de pedir audio: lo que se escriba se descarta.
             lost: bool,
+            /// Frames que el último `flush` quitó del anillo.
+            flushed: i64,
         }
         // SAFETY: el AudioUnit se crea en el hilo que abre y después solo lo toca el alimentador.
         unsafe impl Send for LowLatencySink {}
@@ -1831,7 +1907,7 @@ mod coreaudio {
                 hal::release_buffer_frames(device_id);
                 return Err(format!("audio: could not open the low-latency output ({name}, OSStatus {st})"));
             }
-            Ok(Box::new(LowLatencySink { unit, user, shared, played, device_frames, device_id, upmix_sample_bytes: if upmix { sb } else { 0 }, lost: false }))
+            Ok(Box::new(LowLatencySink { unit, user, shared, played, device_frames, device_id, upmix_sample_bytes: if upmix { sb } else { 0 }, lost: false, flushed: 0 }))
         }
 
         // ── La entrada de baja latencia ───────────────────────────────────────────────────
@@ -2047,8 +2123,21 @@ mod coreaudio {
             }
 
             fn flush(&mut self) {
-                self.shared.ring.lock().unwrap_or_else(|e| e.into_inner()).clear();
+                let mut ring = self.shared.ring.lock().unwrap_or_else(|e| e.into_inner());
+                self.flushed = (ring.len() / self.shared.frame_bytes) as i64;
+                ring.clear();
+                drop(ring);
                 self.shared.space.notify_all();
+            }
+
+            fn program_frames(&mut self) -> Option<i64> {
+                let rendered = self.shared.rendered_frames.load(Ordering::Relaxed);
+                self.played.store(rendered, Ordering::SeqCst);
+                Some(rendered)
+            }
+
+            fn flushed_frames(&mut self) -> Option<i64> {
+                Some(std::mem::take(&mut self.flushed))
             }
 
             fn finish(&mut self) {
@@ -2198,6 +2287,10 @@ mod coreaudio {
         /// detrás, lo nuevo que el programa escriba: la rampa de entrada va sobre lo nuevo, no
         /// sobre la cola (que ya es ~silencio). Lo pone `flush_ring` y lo consume el callback.
         fade_in_skip: std::sync::atomic::AtomicUsize,
+        /// ray-daw #429: qué parte de lo encolado en la cola es del programa (ver `Timeline`).
+        timeline: Mutex<Timeline>,
+        /// Frames del programa que el último `flush` quitó del anillo.
+        flushed_frames: std::sync::atomic::AtomicI64,
         /// M332: fotogramas de la rampa anti-clic (10 ms). Un corte a mitad de onda — `close`,
         /// cambio de pista, o el anillo vaciándose porque iOS congeló el proceso al bloquear la
         /// pantalla — suena como un clic; atenuado a cero en unos milisegundos es un silencio
@@ -2207,6 +2300,38 @@ mod coreaudio {
         /// de pista. No añade ni quita un octeto: la línea de tiempo no cambia (la regla de
         /// rallyx de arriba se mantiene).
         ramp_frames: usize,
+    }
+
+    /// ray-daw #429: la cola de AudioQueue cuenta TODO lo encolado, y eso incluye el silencio
+    /// de mantenimiento. Para saber cuántos frames DEL PROGRAMA han sonado se guarda, por cada
+    /// búfer encolado, hasta dónde llega en la línea de tiempo de la cola y cuántos frames del
+    /// programa van hasta ahí; con la posición de la cola se busca el último búfer ya sonado.
+    #[derive(Default)]
+    struct Timeline {
+        total: i64,
+        program: i64,
+        /// (fin del búfer en frames de la cola, frames del programa acumulados), los últimos.
+        marks: VecDeque<(i64, i64)>,
+        /// Frames del programa hasta el búfer más viejo ya olvidado.
+        base: i64,
+    }
+
+    impl Timeline {
+        fn enqueued(&mut self, frames: i64, from_program: bool) {
+            self.total += frames;
+            if from_program {
+                self.program += frames;
+            }
+            self.marks.push_back((self.total, self.program));
+            if self.marks.len() > 256 {
+                self.base = self.marks.pop_front().map_or(self.base, |m| m.1);
+            }
+        }
+
+        /// Frames del programa sonados cuando la cola va por `position`.
+        fn program_at(&self, position: i64) -> i64 {
+            self.marks.iter().take_while(|m| m.0 <= position).last().map_or(self.base, |m| m.1)
+        }
     }
 
     /// Rampa lineal sobre `frames` fotogramas de `out` (en el formato `fmt`) desde el fotograma
@@ -2253,6 +2378,8 @@ mod coreaudio {
                 gaps: std::sync::atomic::AtomicUsize::new(0),
                 flushes: std::sync::atomic::AtomicUsize::new(0),
                 fade_in_skip: std::sync::atomic::AtomicUsize::new(0),
+                timeline: Mutex::new(Timeline::default()),
+                flushed_frames: std::sync::atomic::AtomicI64::new(0),
                 ramp_frames,
             }))
         }
@@ -2357,6 +2484,7 @@ mod coreaudio {
                 shared.fade_in_skip.store(0, Relaxed);
             }
             shared.space.notify_all();
+            shared.timeline.lock().unwrap().enqueued(frames as i64, true);
             take
         } else {
             drop(ring);
@@ -2372,6 +2500,7 @@ mod coreaudio {
             }
             shared.fade_in_skip.store(0, Relaxed);
             shared.space.notify_all();
+            shared.timeline.lock().unwrap().enqueued((silence / fb) as i64, false);
             silence
         }
     }
@@ -2388,10 +2517,12 @@ mod coreaudio {
         let mut ring = shared.ring.lock().unwrap();
         let fb = shared.frame_bytes;
         let hold = shared.ramp_frames * fb;
+        let before = ring.len();
         if ring.len() > hold {
             ring.truncate(hold);
         }
         let kept = ring.len() / fb * fb;
+        shared.flushed_frames.store(((before - kept) / fb) as i64, Relaxed);
         ring.truncate(kept);
         if kept > 0 {
             let tail = ring.make_contiguous();
@@ -2485,6 +2616,8 @@ mod coreaudio {
             gaps: std::sync::atomic::AtomicUsize::new(0),
             flushes: std::sync::atomic::AtomicUsize::new(0),
             fade_in_skip: std::sync::atomic::AtomicUsize::new(0),
+            timeline: Mutex::new(Timeline::default()),
+            flushed_frames: std::sync::atomic::AtomicI64::new(0),
             ramp_frames: (rate as usize * ramp_ms / 1000).max(16),
         });
         let user = Arc::into_raw(shared.clone()) as *mut std::ffi::c_void;
@@ -2713,7 +2846,11 @@ mod coreaudio {
                 ring.push_back(b);
             }
             drop(ring);
-            // M158: refrescar la posición real (mismo hilo que posee la cola — sin carreras).
+        }
+
+        /// M158: refresca la posición real (mismo hilo que posee la cola — sin carreras) y, con
+        /// ella, dice cuántos frames del programa han sonado (ray-daw #429).
+        fn program_frames(&mut self) -> Option<i64> {
             let mut ts = AudioTimeStamp {
                 sample_time: 0.0,
                 host_time: 0,
@@ -2730,6 +2867,12 @@ mod coreaudio {
             if st == 0 && ts.flags & TS_SAMPLE_TIME_VALID != 0 && ts.sample_time >= 0.0 {
                 self.played.store(ts.sample_time as i64, super::Ordering::SeqCst);
             }
+            let position = self.played.load(super::Ordering::SeqCst).max(0);
+            Some(self.shared.timeline.lock().unwrap().program_at(position))
+        }
+
+        fn flushed_frames(&mut self) -> Option<i64> {
+            Some(self.shared.flushed_frames.swap(0, std::sync::atomic::Ordering::Relaxed))
         }
 
         /// M398 (rayplay #166) / M400 (#171, #173): descarta el anillo salvo la cola de la rampa,
@@ -2750,12 +2893,12 @@ mod coreaudio {
             live_queues().lock().unwrap_or_else(|e| e.into_inner()).retain(|&q| q != self.q as usize);
             if std::env::var_os("RAY_AUDIO_TRACE").is_some() {
                 eprintln!(
-                    "[audio] coreaudio: ring cap {} B, keepalive silence {} B (priming + tail included), fade-outs {}, flushes {}, gaps {} (1 = only the tail)",
+                    "[audio] coreaudio: ring cap {} B, keepalive silence {} B (priming + tail included), fade-outs {}, flushes {}, underruns {} (times the stream ran out of data before the end)",
                     self.shared.cap,
                     self.shared.silence_bytes.load(std::sync::atomic::Ordering::Relaxed),
                     self.shared.fade_outs.load(std::sync::atomic::Ordering::Relaxed),
                     self.shared.flushes.load(std::sync::atomic::Ordering::Relaxed),
-                    self.shared.gaps.load(std::sync::atomic::Ordering::Relaxed)
+                    self.shared.fade_outs.load(std::sync::atomic::Ordering::Relaxed).saturating_sub(1)
                 );
             }
             unsafe {

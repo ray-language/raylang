@@ -1639,6 +1639,15 @@ pub fn audio_open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str
     if format == "devices" {
         return ray_runtime::audio::devices_text();
     }
+    // ray-daw #429: `queued` tampoco abre nada: `sample_rate` trae el handle de una salida y
+    // vuelve lo que el programa ha escrito y aún no ha sonado, en ms.
+    if format == "queued" {
+        let key = match registry().lock().unwrap().open.get(&sample_rate) {
+            Some(OpenHandle::PipeW(f)) => audio_key(f),
+            _ => return Err("audio: not an open audio output".to_string()),
+        };
+        return ray_runtime::audio::queued_ms(key).map(|ms| ms.to_string());
+    }
     // M463 (ray-daw #422): `input:<formato>` abre una ENTRADA. Su handle es el extremo de
     // lectura del pipe (`Pipe`, como el stdout de un hijo): `__audio_read` aparca la fibra hasta
     // que el dispositivo entregue datos, y `close(h)` para la captura.

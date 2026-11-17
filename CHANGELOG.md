@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`audio.queued_ms(h)`**: lo que el programa ha escrito y aún no ha sonado. Con ello la muestra
+  que suena es «escritas − queued», también después de un `flush` o de un hueco; `played_ms` es
+  el reloj del dispositivo y en macOS e iOS cuenta además el silencio de relleno.
+- `std/alarm`: la documentación avisa de que desde iOS 26.1 el sistema pone su propio botón de
+  detener y no muestra `stop_label`.
+- La traza `RAY_AUDIO_TRACE=1` de macOS dice `underruns N` (las veces que el flujo se quedó sin
+  datos) en lugar de `gaps`, que marcaba 0 con el audio entrecortado.
 - **`ui.accept_drops(h, true)`** (macOS): los archivos soltados sobre una ventana llegan al
   programa como evento `"drop"`, con sus rutas (`ui.drop_paths(e)`) y el punto donde cayeron
   (`ui.drop_point(e)`). La página sola recibía el archivo sin su ruta.

@@ -1064,6 +1064,17 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
 ",
             "fn __ray_audio_open(rate: i64, ch: i64, latency_ms: i64, format: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             // M468: `devices` devuelve el listado de dispositivos en vez de un handle.
+            // ray-daw #429: `queued` — `rate` trae el handle de una salida; vuelve los ms encolados.
+            "    if format == \"queued\" {\n",
+            "        let r = match __ray_stdin_clone(rate) {\n",
+            "            Some(f) => ray_runtime::audio::queued_ms(__ray_audio_key(&*f)),\n",
+            "            None => Err(\"audio: not an open audio output\".to_string()),\n",
+            "        };\n",
+            "        return Rc::new(std::cell::RefCell::new(match r {\n",
+            "            Ok(ms) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(ms.to_string().as_str())],\n",
+            "            Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
+            "        }));\n",
+            "    }\n",
             "    if format == \"devices\" {\n",
             "        return Rc::new(std::cell::RefCell::new(match ray_runtime::audio::devices_text() {\n",
             "            Ok(text) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(text.as_str())],\n",

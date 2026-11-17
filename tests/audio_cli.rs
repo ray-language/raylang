@@ -352,3 +352,55 @@ fn flush_discards_the_queue_without_closing_on_vm_and_native() {
         assert_eq!(out, WANT_FLUSH, "nativo ≡ VM");
     }
 }
+
+/// ray-daw #429: `queued_ms` es lo escrito que aún no ha sonado — sube al escribir, vuelve a 0
+/// tras `drain` y tras `flush`, y es `Err` sobre un handle que no es una salida.
+const QUEUED_PROG: &str = r#"import std/audio;
+
+fn main() {
+    var chunk = b"";
+    var i = 0;
+    while (i < 3200) {
+        chunk = chunk + b"\x00\x00";
+        i = i + 1;
+    }
+    let h = audio.open_latency(8000, 1, 200).unwrap();
+    print("empty: " + to_string(audio.queued_ms(h).unwrap_or(-1)));
+    let _ = audio.write(h, chunk);
+    let q = audio.queued_ms(h).unwrap_or(-1);
+    print("queued after a write: " + to_string(q > 0 && q <= 400));
+    let _ = audio.drain(h);
+    print("after drain: " + to_string(audio.queued_ms(h).unwrap_or(-1)));
+    let _ = audio.write(h, chunk);
+    let _ = audio.flush(h);
+    print("after flush: " + to_string(audio.queued_ms(h).unwrap_or(-1)));
+    let _ = close(h);
+    print("closed: " + to_string(audio.queued_ms(h).is_err()));
+}
+"#;
+
+#[test]
+fn queued_ms_follows_what_was_written_and_not_yet_played() {
+    const WANT: &str = "empty: 0\nqueued after a write: true\nafter drain: 0\nafter flush: 0\nclosed: true\n";
+    let base = tmp("queued");
+    std::fs::write(base.join("prog.ray"), QUEUED_PROG).unwrap();
+    for engine in ["--vm", "--interp"] {
+        let (out, code, _) = run_timed(
+            Command::new(env!("CARGO_BIN_EXE_ray")).args([engine, "prog.ray"]).current_dir(&base),
+        );
+        assert_eq!(code, 0, "{engine}: exit 0\n{out}");
+        assert_eq!(out, WANT, "{engine}: exact output");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let (out, code, _) = run_timed(&mut Command::new(&bin));
+        assert_eq!(code, 0, "nativo: exit 0\n{out}");
+        assert_eq!(out, WANT, "nativo ≡ VM");
+    }
+}

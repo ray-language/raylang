@@ -20801,3 +20801,39 @@ La revisión del arco M465–M469 encontró lo que sigue; se corrigió antes del
 
 Queda sin hacer, anotado: unificar los helpers de socket repetidos entre los tres backends de
 `midi.rs`, y validar un id en WASAPI sin enumerar todos los extremos.
+
+## 450. Ronda ray-daw / ray-sublime: nombres reservados, texto de un ítem de menú y sueltas de archivos (nov 2026)
+
+**Palabra reservada como nombre (ray-daw #433).** `fn import(…)` decía «expected the function
+name» con un nombre justo debajo del subrayado. `expect_ident` ya distinguía los tipos primitivos
+(M385); ahora también las palabras reservadas: «expected the function name, but 'import' is a
+reserved word and cannot be used as an identifier (rename it)». Vale para cualquier posición de
+identificador (función, parámetro, campo, variable). El espejo selfhost emite lo mismo para las
+palabras que su lexer conoce.
+
+**`ui.set_menu_title(tag, title)` (ray-daw #434).** «Deshacer» que dice qué deshace obligaba a
+rehacer el menú entero en cada edición, perdiendo el estado puesto con `set_menu_item`. La
+operación viaja por `__ui_window(0, "set_menu_title", "tag\ntitle")`, sin builtin nuevo. En macOS
+es `setTitle:` sobre los ítems vivos del registro por tag. En Linux y Windows se cambia el spec y
+se reconstruye ESE menú (lo mismo que hace `rename_menu`): en Windows el texto del ítem lleva el
+atajo dentro, y reconstruir es lo que lo conserva sin duplicar la lógica. El estado
+(`enabled`/`checked`) vive en los specs, así que sobrevive.
+
+**`ui.accept_drops(h, on)` y el evento `drop` (ray-sublime #436).** WKWebView es el destino del
+arrastre y entrega a la página un `File` sin ruta, por seguridad: la página no puede abrirlo ni
+pasarlo a otro programa. El webview pasa a ser `RayWebView`, una subclase que sobrescribe
+`draggingEntered:`, `draggingUpdated:` y `performDragOperation:`. Si la ventana lo pidió y el
+arrastre trae archivos, emite `drop` con `"x,y\nruta\nruta…"` y no se lo pasa a la página; en
+cualquier otro caso delega en WKWebView (`objc_msgSendSuper`), así que una app que no lo pide
+conserva el comportamiento de siempre. El punto va en coordenadas de la vista con el origen
+arriba a la izquierda, que son las de la página. Es **opt-in por ventana** porque interceptar
+cambia lo que ve la página. `UiEvent` no gana campos: `drop_paths(e)` y `drop_point(e)` leen el
+`tag`. Linux (`drag-data-received` con `text/uri-list`) y Windows (WebView2 se queda las sueltas
+en sus ventanas hijas) quedan para otra fase: allí `accept_drops` devuelve `Err` (IDEAS §126).
+Headless: `RAY_UI_DROP=/a:/b` encola una suelta de prueba al activar.
+
+**std/midi: el bucle propio (ray-daw #439).** No se reproduce: enviar a un puerto virtual propio
+llega a `read` con 1.27.101 y 1.27.102, en la VM, en nativo y por el MCP, y `midi_cli` lo cubre
+en CI. Con el acceso a memoria compartida POSIX denegado por un sandbox, CoreMIDI no entrega (y
+su propio `MIDIIORingBufferWriter` llega a caerse): lo más probable es que la medición corriera
+dentro de uno. Se documenta el bucle, el caso del sandbox y que los ids pueden ser negativos.

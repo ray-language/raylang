@@ -6,6 +6,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ui.accept_drops(h, true)`** (macOS): los archivos soltados sobre una ventana llegan al
+  programa como evento `"drop"`, con sus rutas (`ui.drop_paths(e)`) y el punto donde cayeron
+  (`ui.drop_point(e)`). La página sola recibía el archivo sin su ruta.
+- **`ui.set_menu_title(tag, title)`** cambia el texto de un elemento de menú ya declarado, sin
+  rehacer el menú ni perder su estado: «Deshacer» puede decir qué deshace.
+- Usar una palabra reservada como nombre (`fn import(…)`, un parámetro `for`) da un error que lo
+  dice: «'import' is a reserved word and cannot be used as an identifier».
+- `std/midi`: la documentación explica que un programa puede leer lo que envía a sus propios
+  puertos virtuales, que dentro de un sandbox sin acceso al servidor MIDI no llega nada, y que
+  los ids de CoreMIDI pueden ser negativos.
+
 ## 1.27.102 — 2026-11-16
 
 - `std/midi` en Android entrega un mensaje completo por lectura, como el resto de sistemas,

@@ -2170,9 +2170,46 @@ impl Parser {
             Err(self.error_here(format!(
                 "expected {}, but '{}' is a type name and cannot be used as an identifier (rename it)", what, ty
             )))
+        } else if let Some(word) = self.reserved_word() {
+            // ray-daw #433: `fn import(…)` o `let match = …` decían «expected the function name»
+            // con un nombre justo ahí: es una palabra reservada, y el mensaje lo dice.
+            Err(self.error_here(format!(
+                "expected {}, but '{}' is a reserved word and cannot be used as an identifier (rename it)", what, word
+            )))
         } else {
             Err(self.error_here(format!("expected {}", what)))
         }
+    }
+
+    /// La palabra reservada (no de tipo) del token actual, si lo es.
+    fn reserved_word(&self) -> Option<&'static str> {
+        Some(match &self.peek().kind {
+            TokenKind::Let => "let",
+            TokenKind::Var => "var",
+            TokenKind::Fn => "fn",
+            TokenKind::Return => "return",
+            TokenKind::Break => "break",
+            TokenKind::Continue => "continue",
+            TokenKind::If => "if",
+            TokenKind::Else => "else",
+            TokenKind::While => "while",
+            TokenKind::For => "for",
+            TokenKind::In => "in",
+            TokenKind::True => "true",
+            TokenKind::False => "false",
+            TokenKind::Struct => "struct",
+            TokenKind::Const => "const",
+            TokenKind::Enum => "enum",
+            TokenKind::Match => "match",
+            TokenKind::Trait => "trait",
+            TokenKind::Impl => "impl",
+            TokenKind::Dyn => "dyn",
+            TokenKind::Pub => "pub",
+            TokenKind::Import => "import",
+            TokenKind::Extern => "extern",
+            TokenKind::As => "as",
+            _ => return None,
+        })
     }
 
     /// M217: el nombre del tipo primitivo si el token actual es una palabra clave de tipo.
@@ -2300,6 +2337,20 @@ mod tests {
             let tokens = crate::lexer::lex(src).unwrap();
             let e = crate::parser::parse(tokens).expect_err("debe fallar");
             assert!(e.msg.contains(&format!("'{prim}' is a primitive type and cannot name a function")), "{}", e.msg);
+        }
+    }
+
+    /// ray-daw #433: una palabra reservada donde va un nombre se dice, en vez de «expected …» a secas.
+    #[test]
+    fn a_reserved_word_as_a_name_says_so() {
+        for (src, word, what) in [
+            ("fn import(x: int) -> int { x }", "import", "the function name"),
+            ("fn match(x: int) -> int { x }", "match", "the function name"),
+            ("fn f(for: int) -> int { 1 }", "for", ""),
+        ] {
+            let e = crate::parser::parse(crate::lexer::lex(src).unwrap()).expect_err("debe fallar");
+            assert!(e.msg.contains(&format!("'{word}' is a reserved word and cannot be used as an identifier (rename it)")), "{}", e.msg);
+            assert!(e.msg.contains(what), "{}", e.msg);
         }
     }
     use super::*;

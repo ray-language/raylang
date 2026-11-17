@@ -19,7 +19,8 @@
 // cualquiera de los dos, sin opcodes propios.
 
 /// A MIDI port of the system. `id` is stable while the device stays connected (and usually
-/// across reconnections); pass it to `open_input` / `open_output`.
+/// across reconnections); pass it to `open_input` / `open_output`. It can be NEGATIVE (CoreMIDI
+/// ids are): do not use `-1` to mean "none".
 pub struct Port {
     id: int,
     name: string,
@@ -81,7 +82,9 @@ pub fn outputs() -> [Port] { ports(op("outputs", "", 0)) }
 pub fn open_input(id: int) -> Result<int, string> { handle(op("open_input", "", id)) }
 
 /// Creates a virtual input named `name`: other programs see it as a MIDI destination, and what
-/// they send to it is read with `read`. `close(h)` removes it.
+/// they send to it is read with `read`. `close(h)` removes it. The program itself can send to
+/// it too (find its id in `outputs()` and `open_output` it): a loop to test without hardware.
+/// Inside a sandbox that cannot reach the system MIDI server, nothing arrives.
 pub fn create_input(name: string) -> Result<int, string> { handle(op("create_input", name, 0)) }
 
 /// Opens the output port `id` (from `outputs()`). Returns a handle for `send`; `close(h)` releases it.

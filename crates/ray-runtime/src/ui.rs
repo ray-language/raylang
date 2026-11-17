@@ -2738,6 +2738,10 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
         let (old, new) = arg.split_once('\n').ok_or_else(|| "ui: rename_menu expects 'old\\nnew'".to_string())?;
         return rename_menu(old, new);
     }
+    if op == "set_menu_title" {
+        let (tag, title) = arg.split_once('\n').ok_or_else(|| "ui: set_menu_title expects 'tag\\ntitle'".to_string())?;
+        return set_menu_title(tag, title);
+    }
     if op == "intercept_quit" {
         INTERCEPT_QUIT.store(on, std::sync::atomic::Ordering::SeqCst);
         if ui_trace() {
@@ -2774,7 +2778,7 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
         "appearance" => Some(WindowCmd::Appearance(
             Appearance::parse(arg).ok_or_else(|| format!("ui: unknown appearance '{arg}' (system | light | dark)"))?,
         )),
-        "set_title" | "set_edited" | "intercept_close" => None,
+        "set_title" | "set_edited" | "intercept_close" | "accept_drops" => None,
         _ => return Err(format!("ui: unknown window operation '{op}'")),
     };
     let mut map = windows().lock().unwrap();
@@ -2787,6 +2791,33 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
             eprintln!("[ui] intercept close {id} {}", if on { "on" } else { "off" });
         }
         return Ok(());
+    }
+    // ray-sublime #436: los archivos soltados sobre la ventana llegan como evento `drop`.
+    if op == "accept_drops" {
+        return match &state.win {
+            Win::Headless { .. } => {
+                drop(map);
+                if ui_trace() {
+                    eprintln!("[ui] accept drops {id} {}", if on { "on" } else { "off" });
+                }
+                // `RAY_UI_DROP=/ruta/a:/ruta/b`: una suelta de prueba en (10, 20), una vez.
+                static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+                if on && !DONE.swap(true, std::sync::atomic::Ordering::SeqCst) && let Ok(list) = std::env::var("RAY_UI_DROP") {
+                    let paths: Vec<&str> = list.split(':').filter(|p| !p.is_empty()).collect();
+                    if !paths.is_empty() {
+                        push_event("drop", id, &format!("10,20\n{}", paths.join("\n")));
+                    }
+                }
+                Ok(())
+            }
+            #[cfg(target_os = "macos")]
+            Win::Mac { webview, .. } => {
+                mac::accept_drops(*webview, on);
+                Ok(())
+            }
+            #[allow(unreachable_patterns)]
+            _ => Err("ui: accept_drops is only available on macOS for now".to_string()),
+        };
     }
     // M441 (rayreq #316): en headless el marco cambia solo por estas órdenes → el evento `frame`
     // que en el escritorio emite el sistema al soltar el arrastre (tras la traza, abajo).
@@ -3513,6 +3544,44 @@ pub fn menu_at(position: i64, title: &str, items: &[String]) -> Result<(), Strin
     #[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
     {
         let _ = (title, position, decoded);
+        Err("ui: menus are not available on this platform".to_string())
+    }
+}
+
+/// ray-daw #434: cambia el TEXTO de un item ya declarado, por su tag, sin rehacer el menú ni
+/// perder su estado («Undo» → «Undo Move clip»). macOS: `setTitle:` sobre los items vivos;
+/// Linux y Windows: se actualiza el spec y se reconstruye ese menú en las barras abiertas (el
+/// texto de Windows lleva el atajo dentro, y así se conserva). `Err` si no hay item con ese tag.
+pub fn set_menu_title(tag: &str, title: &str) -> Result<(), String> {
+    if tag.is_empty() {
+        return Err("ui: set_menu_title needs a tag".to_string());
+    }
+    if title.is_empty() {
+        return Err("ui: a menu item title cannot be empty".to_string());
+    }
+    if headless() {
+        if !headless_menu_tags().lock().unwrap().contains(tag) {
+            return Err(format!("ui: no menu item with tag '{tag}'"));
+        }
+        if ui_trace() {
+            eprintln!("[ui] menu item {tag} title={title}");
+        }
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return mac::set_menu_title(tag, title);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        return gtk::set_menu_title(tag, title);
+    }
+    #[cfg(windows)]
+    {
+        return win::set_menu_title(tag, title);
+    }
+    #[allow(unreachable_code)]
+    {
         Err("ui: menus are not available on this platform".to_string())
     }
 }
@@ -4276,6 +4345,146 @@ mod mac {
         }) as Id
     }
 
+    // ── ray-sublime #436: archivos soltados sobre la ventana ────────────────────────────────
+    //
+    // WKWebView es el destino del arrastre y entrega la suelta a la página SIN la ruta (por
+    // seguridad). `RayWebView` (subclase) intercepta las sueltas de archivos en las ventanas
+    // que lo pidieron (`accept_drops`): emite un evento `drop` con las rutas y el punto, y no
+    // se la pasa a la página. En el resto de casos delega en WKWebView.
+
+    /// Los webviews que aceptan sueltas de archivos.
+    fn drop_views() -> &'static std::sync::Mutex<std::collections::HashSet<usize>> {
+        static V: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<usize>>> = std::sync::OnceLock::new();
+        V.get_or_init(Default::default)
+    }
+
+    pub(super) fn accept_drops(webview: usize, on: bool) {
+        let mut views = drop_views().lock().unwrap();
+        if on {
+            views.insert(webview);
+        } else {
+            views.remove(&webview);
+        }
+    }
+
+    #[repr(C)]
+    struct ObjcSuper {
+        receiver: Id,
+        class: Id,
+    }
+    unsafe extern "C" {
+        fn objc_msgSendSuper();
+    }
+
+    /// Las rutas de los archivos que trae el arrastre `info` (vacío si no trae archivos).
+    unsafe fn dragged_paths(info: Id) -> Vec<String> {
+        // SAFETY (de todo el cuerpo): mensajes estándar de NSDraggingInfo/NSPasteboard/NSURL en
+        // el hilo principal, sobre objetos que AppKit entrega vivos durante el arrastre.
+        unsafe {
+            let get: MsgId = std::mem::transmute(msg_send());
+            let with_obj: MsgIdId = std::mem::transmute(msg_send());
+            let read: unsafe extern "C" fn(Id, Sel, Id, Id) -> Id = std::mem::transmute(msg_send());
+            let count: unsafe extern "C" fn(Id, Sel) -> usize = std::mem::transmute(msg_send());
+            let at: unsafe extern "C" fn(Id, Sel, usize) -> Id = std::mem::transmute(msg_send());
+            let is_file: unsafe extern "C" fn(Id, Sel) -> u8 = std::mem::transmute(msg_send());
+            let utf8: unsafe extern "C" fn(Id, Sel) -> *const std::ffi::c_char = std::mem::transmute(msg_send());
+            let pasteboard = get(info, sel(b"draggingPasteboard\0"));
+            if pasteboard.is_null() {
+                return Vec::new();
+            }
+            let classes = with_obj(cls(b"NSArray\0"), sel(b"arrayWithObject:\0"), cls(b"NSURL\0"));
+            let urls = read(pasteboard, sel(b"readObjectsForClasses:options:\0"), classes, std::ptr::null_mut());
+            if urls.is_null() {
+                return Vec::new();
+            }
+            let mut paths = Vec::new();
+            for i in 0..count(urls, sel(b"count\0")) {
+                let url = at(urls, sel(b"objectAtIndex:\0"), i);
+                if url.is_null() || is_file(url, sel(b"isFileURL\0")) == 0 {
+                    continue;
+                }
+                let path = get(url, sel(b"path\0"));
+                if path.is_null() {
+                    continue;
+                }
+                let c = utf8(path, sel(b"UTF8String\0"));
+                if !c.is_null() {
+                    paths.push(std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned());
+                }
+            }
+            paths
+        }
+    }
+
+    /// ¿Intercepta esta vista la suelta `info`? Solo si lo pidió y el arrastre trae archivos.
+    unsafe fn takes_drop(this: Id, info: Id) -> bool {
+        drop_views().lock().unwrap().contains(&(this as usize)) && !unsafe { dragged_paths(info) }.is_empty()
+    }
+
+    extern "C" fn web_dragging(this: Id, cmd: Sel, info: Id) -> usize {
+        // SAFETY: `this` es el RayWebView que recibe el mensaje; si no es nuestra suelta se
+        // delega en WKWebView con el mismo selector.
+        unsafe {
+            if takes_drop(this, info) {
+                return 1; // NSDragOperationCopy
+            }
+            let sup = ObjcSuper { receiver: this, class: cls(b"WKWebView\0") };
+            let call: unsafe extern "C" fn(*const ObjcSuper, Sel, Id) -> usize = std::mem::transmute(objc_msgSendSuper as unsafe extern "C" fn() as *const c_void);
+            call(&sup, cmd, info)
+        }
+    }
+
+    extern "C" fn web_perform_drop(this: Id, cmd: Sel, info: Id) -> bool {
+        // SAFETY: como `web_dragging`; el punto llega en coordenadas de la ventana y se pasa a
+        // las de la vista (origen arriba a la izquierda, como la página).
+        unsafe {
+            if !takes_drop(this, info) {
+                let sup = ObjcSuper { receiver: this, class: cls(b"WKWebView\0") };
+                let call: unsafe extern "C" fn(*const ObjcSuper, Sel, Id) -> bool = std::mem::transmute(objc_msgSendSuper as unsafe extern "C" fn() as *const c_void);
+                return call(&sup, cmd, info);
+            }
+            let paths = dragged_paths(info);
+            let location: MsgPoint = std::mem::transmute(msg_send());
+            let convert: unsafe extern "C" fn(Id, Sel, CGPoint, Id) -> CGPoint = std::mem::transmute(msg_send());
+            let flipped: unsafe extern "C" fn(Id, Sel) -> u8 = std::mem::transmute(msg_send());
+            let rect_of: MsgRect = std::mem::transmute(msg_send());
+            let in_window = location(info, sel(b"draggingLocation\0"));
+            let p = convert(this, sel(b"convertPoint:fromView:\0"), in_window, std::ptr::null_mut());
+            let y = if flipped(this, sel(b"isFlipped\0")) != 0 { p.y } else { rect_of(this, sel(b"bounds\0")).h - p.y };
+            let id = {
+                let map = super::windows().lock().unwrap();
+                map.iter().find_map(|(id, w)| match &w.win {
+                    Win::Mac { webview, .. } if *webview == this as usize => Some(*id),
+                    _ => None,
+                })
+            };
+            if let Some(id) = id {
+                super::push_event("drop", id, &format!("{},{}\n{}", p.x.round() as i64, y.round() as i64, paths.join("\n")));
+            }
+            true
+        }
+    }
+
+    /// La clase del webview: WKWebView con las sueltas de archivos interceptables.
+    fn webview_class() -> Id {
+        static CLASS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        *CLASS.get_or_init(|| {
+            // SAFETY: registro de una subclase con métodos de firma `Q@:@` / `B@:@`, una vez.
+            unsafe {
+                let class = objc_allocateClassPair(cls(b"WKWebView\0"), c"RayWebView".as_ptr(), 0);
+                if class.is_null() {
+                    return cls(b"WKWebView\0") as usize;
+                }
+                let dragging = web_dragging as extern "C" fn(Id, Sel, Id) -> usize as *const c_void;
+                class_addMethod(class, sel(b"draggingEntered:\0"), dragging, c"Q@:@".as_ptr());
+                class_addMethod(class, sel(b"draggingUpdated:\0"), dragging, c"Q@:@".as_ptr());
+                class_addMethod(class, sel(b"performDragOperation:\0"), web_perform_drop as extern "C" fn(Id, Sel, Id) -> bool as *const c_void, c"B@:@".as_ptr());
+                objc_registerClassPair(class);
+                class as usize
+            }
+        }) as Id
+    }
+
     /// El id del programa de una NSWindow viva (solo entradas Mac del registro), o None.
     fn window_id_of(win: Id) -> Option<i64> {
         let map = super::windows().lock().unwrap();
@@ -4909,6 +5118,25 @@ mod mac {
                 for it in items {
                     set_bool(it as Id, sel(b"setEnabled:\0"), enabled as u8);
                     set_i64(it as Id, sel(b"setState:\0"), if checked { 1 } else { 0 });
+                }
+            }
+            Ok(())
+        })
+    }
+
+    /// ray-daw #434: el texto de un item por tag (en el hilo principal): `setTitle:`.
+    pub(super) fn set_menu_title(tag: &str, title: &str) -> Result<(), String> {
+        let (tag, title) = (tag.to_string(), title.to_string());
+        on_main_sync(move || {
+            let items = items_by_tag().lock().unwrap().get(&tag).cloned().unwrap_or_default();
+            if items.is_empty() {
+                return Err(format!("ui: no menu item with tag '{tag}'"));
+            }
+            // SAFETY: NSMenuItems vivos del registro por tag, en el hilo principal.
+            unsafe {
+                let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                for it in items {
+                    set_id(it as Id, sel(b"setTitle:\0"), nsstring(&title));
                 }
             }
             Ok(())
@@ -5600,7 +5828,7 @@ mod mac {
 
                 let init_frame_cfg: MsgInitFrameCfg = std::mem::transmute(msg_send());
                 let webview = init_frame_cfg(
-                    alloc(cls(b"WKWebView\0"), sel(b"alloc\0")),
+                    alloc(webview_class(), sel(b"alloc\0")),
                     sel(b"initWithFrame:configuration:\0"),
                     rect,
                     cfg,
@@ -6895,6 +7123,29 @@ mod gtk {
                 }
             }
         })
+    }
+
+    /// ray-daw #434: el texto de un item por tag — se cambia en los specs y se reconstruye cada
+    /// menú que lo lleva (como `rename_menu`), con lo que el estado y los atajos se conservan.
+    pub(super) fn set_menu_title(tag: &str, title: &str) -> Result<(), String> {
+        let mut touched: Vec<(String, Vec<super::MenuItemSpec>)> = Vec::new();
+        for (menu, items) in menu_specs().lock().unwrap().iter_mut() {
+            let mut found = false;
+            for it in items.iter_mut().filter(|it| it.tag == tag) {
+                it.label = title.to_string();
+                found = true;
+            }
+            if found {
+                touched.push((menu.clone(), items.clone()));
+            }
+        }
+        if touched.is_empty() {
+            return Err(format!("ui: no menu item with tag '{tag}'"));
+        }
+        for (menu, items) in touched {
+            replace_menu(&menu, &items)?;
+        }
+        Ok(())
     }
 
     /// M236: estado por tag — specs (ventanas futuras) + widgets vivos (en el hilo del loop).
@@ -9726,6 +9977,29 @@ mod win {
     fn items_by_tag() -> &'static std::sync::Mutex<TagItems> {
         static M: OnceLock<std::sync::Mutex<TagItems>> = OnceLock::new();
         M.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+    }
+
+    /// ray-daw #434: el texto de un item por tag — se cambia en los specs y se reconstruye cada
+    /// menú que lo lleva (como `rename_menu`), con lo que el estado y los atajos se conservan.
+    pub(super) fn set_menu_title(tag: &str, title: &str) -> Result<(), String> {
+        let mut touched: Vec<(String, Vec<super::MenuItemSpec>)> = Vec::new();
+        for (menu, items) in menu_specs().lock().unwrap().iter_mut() {
+            let mut found = false;
+            for it in items.iter_mut().filter(|it| it.tag == tag) {
+                it.label = title.to_string();
+                found = true;
+            }
+            if found {
+                touched.push((menu.clone(), items.clone()));
+            }
+        }
+        if touched.is_empty() {
+            return Err(format!("ui: no menu item with tag '{tag}'"));
+        }
+        for (menu, items) in touched {
+            replace_menu(&menu, &items)?;
+        }
+        Ok(())
     }
 
     /// M236: estado por tag — en los specs (ventanas futuras) y en las barras vivas.

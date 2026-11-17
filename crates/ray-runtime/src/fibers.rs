@@ -1115,6 +1115,8 @@ struct ReactorState {
     /// del read-timeout llegaban a ~1M de entradas a 100k rps con barrido O(n)).
     io_deadlines: std::collections::BinaryHeap<std::cmp::Reverse<IoDeadline>>,
     cancelled: std::collections::HashSet<u64>,
+    /// Los fds cuyo re-armado falló (cerrados): sus fibras despiertan en la siguiente espera.
+    dead: Vec<(i32, Dir)>,
     next_id: u64,
     /// M401: el bit de ESTE reactor en `FD_WAITERS` (ver `poke_fd`).
     home_bit: u64,
@@ -1151,6 +1153,7 @@ impl ReactorState {
             wait_polls: Vec::new(),
             io_deadlines: std::collections::BinaryHeap::new(),
             cancelled: std::collections::HashSet::new(),
+            dead: Vec::new(),
             next_id: 0,
         }
     }
@@ -1299,15 +1302,50 @@ impl ReactorState {
 
     /// Re-arma el interés de todos los fds con fibras aparcadas (tras un POKE: el knote/registro
     /// de un fd cerrado muere en silencio; re-armado, el fd muerto vuelve como error/listo).
+    /// En kqueue el fd muerto vuelve como evento de error; epoll RECHAZA el re-armado (`EBADF`)
+    /// y no habrá evento: esos fds se apuntan en `dead` y `wait` despierta a sus fibras, que
+    /// verán el error real en su syscall. Sin esto, un pipe cerrado por otra fibra dejaba a su
+    /// lector aparcado para siempre en Linux.
     fn rearm_all(&mut self) {
         for (&fd, w) in self.fds.iter() {
-            if !w.read.is_empty() {
-                let _ = self.poller.arm(fd, Dir::Read);
+            if !w.read.is_empty() && !self.poller.arm(fd, Dir::Read) {
+                self.dead.push((fd, Dir::Read));
             }
-            if !w.write.is_empty() {
-                let _ = self.poller.arm(fd, Dir::Write);
+            if !w.write.is_empty() && !self.poller.arm(fd, Dir::Write) {
+                self.dead.push((fd, Dir::Write));
             }
         }
+    }
+
+    /// Despierta por `out` a las fibras aparcadas en `fd` para `dir`.
+    fn wake_fd(&mut self, fd: i32, dir: Dir, out: &mut Vec<Task>) {
+        let home_bit = self.home_bit;
+        if let Some(w) = self.fds.get_mut(&fd) {
+            let v = match dir {
+                Dir::Read => &mut w.read,
+                Dir::Write => &mut w.write,
+            };
+            // Drena los waiters SIN liberar la capacidad del Vec (entrada persistente).
+            self.armed -= v.len();
+            for (id, had_dl, t) in v.drain(..) {
+                if had_dl {
+                    self.cancelled.insert(id); // su temporizador ya no debe despertar a nadie
+                }
+                out.push(t);
+            }
+            sync_fd_bit(home_bit, fd, &self.fds[&fd]);
+        }
+    }
+
+    /// Despierta a las fibras de los fds que `rearm_all` encontró cerrados. `true` si había alguno.
+    fn wake_dead(&mut self, out: &mut Vec<Task>) -> bool {
+        if self.dead.is_empty() {
+            return false;
+        }
+        for (fd, dir) in std::mem::take(&mut self.dead) {
+            self.wake_fd(fd, dir, out);
+        }
+        true
     }
 
     /// Espera readiness hasta `timeout_ms` y despierta por `out` a las fibras de los fds listos.
@@ -1316,6 +1354,9 @@ impl ReactorState {
     /// vuelve como error/listo y su fibra despierta al error real).
     fn wait(&mut self, timeout_ms: i32, out: &mut Vec<Task>) -> bool {
         let mut rearm_all = false;
+        // Si un re-armado anterior (`drain_wake`) dejó fds muertos, sus fibras ya tienen trabajo:
+        // no se duerme.
+        let timeout_ms = if self.wake_dead(out) { 0 } else { timeout_ms };
         let home_bit = self.home_bit;
         for &(fd, dir) in self.poller.wait(timeout_ms) {
             if fd == self.wake_rd {
@@ -1324,6 +1365,7 @@ impl ReactorState {
                 }
                 continue;
             }
+            // (El cuerpo de `wake_fd`, en línea: el préstamo de `poller` impide llamarlo aquí.)
             if let Some(w) = self.fds.get_mut(&fd) {
                 let v = match dir {
                     Dir::Read => &mut w.read,
@@ -1342,6 +1384,7 @@ impl ReactorState {
         }
         if rearm_all {
             self.rearm_all();
+            self.wake_dead(out);
         }
         rearm_all
     }

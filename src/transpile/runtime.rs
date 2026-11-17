@@ -857,7 +857,17 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         } else {
             ""
         };
-        write!(out, "fn __ray_close(h: i64) -> i64 {{ let __e = __ray_reg().lock().unwrap().open.remove(&h); if let Some(__RayHandle::Tcp(s)) = &__e {{ let _ = s.shutdown(std::net::Shutdown::Both); }} {ui_close}{sock_evict}{tls_evict}0 }}\n").unwrap();
+        // ray-daw #441: cerrar un pipe de lectura (el stdout de un hijo, una entrada de audio o
+        // MIDI, una vigilancia) en el que otra fibra está aparcada. El fd se cierra PRIMERO (el
+        // `drop` del handle) y después se avisa a los reactores: al re-armar, el fd muerto vuelve
+        // como error y el lector despierta a `invalid handle`. Sin esto, un programa sin red no
+        // avisaba a nadie y un lector sin datos se quedaba aparcado para siempre.
+        let pipe_poke = if t.needs_rt_process && t.fibers {
+            "let __pipe = matches!(&__e, Some(__RayHandle::Pipe(_))); drop(__e); if __pipe { ray_runtime::fibers::poke(); } "
+        } else {
+            ""
+        };
+        write!(out, "fn __ray_close(h: i64) -> i64 {{ let __e = __ray_reg().lock().unwrap().open.remove(&h); if let Some(__RayHandle::Tcp(s)) = &__e {{ let _ = s.shutdown(std::net::Shutdown::Both); }} {ui_close}{sock_evict}{tls_evict}{pipe_poke}0 }}\n").unwrap();
     }
     // Ops de archivo (open/read_line/write) — solo si se usan handles de archivo.
     if t.needs_handles {
@@ -2162,29 +2172,58 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    use std::io::Read;\n",
                 "    let Some(f) = __ray_pipe_clone(h) else { return __ray_proc_err(format!(\"handle {} is not a socket\", h)); };\n",
                 // M182: en Windows el pipe no es sondeable — lectura bloqueante en el pool.
-                "    #[cfg(windows)] { let fr = std::sync::Arc::clone(&f); return match ray_runtime::fibers::run_blocking(move || { let mut buf = vec![0u8; 65536]; let mut r = &*fr; r.read(&mut buf).map(|n| { buf.truncate(n); buf }).map_err(|e| e.to_string()) }) { Ok(b) => __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(&b[..])]), Err(e) => __ray_proc_err(e) }; }\n",
-                "    #[cfg(unix)] { let fd = __ray_fd(&*f);\n",
+                // ray-daw #441: mientras no hay datos se sondea sin retener el clon (1 ms), para
+                // que un `close(h)` desde otra fibra cierre de verdad y esta lectura termine.
+                "    #[cfg(windows)] { let mut f = f;\n",
+                "    while let Ok(0) = ray_runtime::process::pipe_available(&f) {\n",
+                "        drop(f);\n",
+                "        ray_runtime::fibers::sleep_ms(1);\n",
+                "        f = match __ray_pipe_clone(h) { Some(f) => f, None => return __ray_proc_err(format!(\"invalid handle: {}\", h)) };\n",
+                "    }\n",
+                "    let fr = std::sync::Arc::clone(&f); return match ray_runtime::fibers::run_blocking(move || { let mut buf = vec![0u8; 65536]; let mut r = &*fr; r.read(&mut buf).map(|n| { buf.truncate(n); buf }).map_err(|e| e.to_string()) }) { Ok(b) => __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(&b[..])]), Err(e) => __ray_proc_err(e) }; }\n",
+                // ray-daw #441: el clon del extremo NO se retiene mientras la fibra está aparcada. Si
+                // se retuviera, un `close(h)` desde otra fibra no cerraría el fd (quedaba este clon) y
+                // una lectura sin datos —la vigilancia de dispositivos— no despertaba nunca. Sin él,
+                // `close` cierra de verdad, su poke re-arma el fd y la vuelta siguiente ve que el
+                // handle ya no existe.
+                "    #[cfg(unix)] { let mut f = f;\n",
                 "    loop {\n",
+                "        let fd = __ray_fd(&*f);\n",
                 "        let res = __RAY_PROC_RDBUF.with(|__b| { let mut buf = __b.borrow_mut(); let mut r = &*f; match r.read(&mut buf[..]) {\n",
                 "            Ok(n) => Some(__ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(&buf[..n])])),\n",
                 "            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => None,\n",
                 "            Err(e) => Some(__ray_proc_err(e.to_string())) } });\n",
                 "        if let Some(v) = res { return v; }\n",
+                "        drop(f);\n",
                 "        ray_runtime::fibers::wait_readable(fd);\n",
+                "        f = match __ray_pipe_clone(h) { Some(f) => f, None => return __ray_proc_err(format!(\"invalid handle: {}\", h)) };\n",
                 "    } } }\n",
             ));
         } else {
             out.push_str(concat!(
                 "fn __ray_proc_read(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
                 "    use std::io::Read;\n",
-                "    let Some(f) = __ray_pipe_clone(h) else { return __ray_proc_err(format!(\"handle {} is not a socket\", h)); };\n",
+                "    let Some(mut f) = __ray_pipe_clone(h) else { return __ray_proc_err(format!(\"handle {} is not a socket\", h)); };\n",
+                // ray-daw #441: entre intento e intento el clon se suelta y se vuelve a pedir: así
+                // un `close(h)` desde otro hilo cierra de verdad y la lectura termina con
+                // `invalid handle`. En Windows el pipe bloquea, así que antes se mira si hay datos.
                 "    loop {\n",
+                "        #[cfg(windows)]\n",
+                "        if let Ok(0) = ray_runtime::process::pipe_available(&f) {\n",
+                "            drop(f);\n",
+                "            std::thread::sleep(std::time::Duration::from_millis(1));\n",
+                "            f = match __ray_pipe_clone(h) { Some(f) => f, None => return __ray_proc_err(format!(\"invalid handle: {}\", h)) };\n",
+                "            continue;\n",
+                "        }\n",
                 "        let res = __RAY_PROC_RDBUF.with(|__b| { let mut buf = __b.borrow_mut(); let mut r = &*f; match r.read(&mut buf[..]) {\n",
                 "            Ok(n) => Some(__ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(&buf[..n])])),\n",
                 "            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::Interrupted => None,\n",
                 "            Err(e) => Some(__ray_proc_err(e.to_string())) } });\n",
                 "        if let Some(v) = res { return v; }\n",
-                "        std::thread::sleep(std::time::Duration::from_millis(1)); } }\n",
+                "        drop(f);\n",
+                "        std::thread::sleep(std::time::Duration::from_millis(1));\n",
+                "        f = match __ray_pipe_clone(h) { Some(f) => f, None => return __ray_proc_err(format!(\"invalid handle: {}\", h)) };\n",
+                "    } }\n",
             ));
         }
     }

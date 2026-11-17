@@ -161,9 +161,44 @@ pub struct DeviceInfo {
     pub transport: String,
 }
 
+/// ray-daw #440: `RAY_AUDIO_DEVICES=a,b` declara los dispositivos de PRUEBA (el primero es el
+/// por defecto): es lo que lista `devices`, y con el sumidero o la fuente de pruebas abrir un id
+/// que no está ahí es `Err` — la rama de error de un selector de dispositivo se puede probar sin
+/// hardware. Sin la variable, el sumidero y la fuente de pruebas aceptan cualquier id.
+fn test_devices() -> Option<Vec<String>> {
+    let list = std::env::var("RAY_AUDIO_DEVICES").ok()?;
+    Some(list.split(',').map(str::trim).filter(|id| !id.is_empty()).map(str::to_string).collect())
+}
+
+/// Con dispositivos de prueba declarados: ¿existe `device`? ("" = el por defecto, siempre.)
+fn check_test_device(device: &str, direction: &str) -> Result<(), String> {
+    match test_devices() {
+        Some(ids) if !device.is_empty() && !ids.iter().any(|id| id == device) => {
+            Err(format!("audio: no {direction} device with id '{device}' (was it disconnected?); list them with audio.devices()"))
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Los dispositivos de audio presentes ahora. En iOS la lista sale vacía: el sistema enruta el
 /// audio por su cuenta y solo existe «el dispositivo actual».
 pub fn devices() -> Result<Vec<DeviceInfo>, String> {
+    if let Some(ids) = test_devices() {
+        return Ok(ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| DeviceInfo {
+                id: id.clone(),
+                name: id.clone(),
+                input_channels: 2,
+                output_channels: 2,
+                default_input: i == 0,
+                default_output: i == 0,
+                sample_rate: 48000,
+                transport: "virtual".to_string(),
+            })
+            .collect());
+    }
     #[cfg(target_os = "macos")]
     {
         coreaudio::devices()
@@ -355,6 +390,51 @@ impl Ctl {
     }
 }
 
+/// ray-daw #442: salidas cerradas cuyo alimentador aún está terminando (drenando el backend e
+/// imprimiendo el resumen de `RAY_AUDIO_TRACE`). `close` no espera a ese hilo, así que un
+/// programa que salía nada más cerrar perdía el resumen: con la traza activa, la salida del
+/// proceso espera (acotado) a que terminen.
+static FINISHING: AtomicI64 = AtomicI64::new(0);
+
+struct Finishing;
+
+impl Finishing {
+    fn begin() -> Finishing {
+        FINISHING.fetch_add(1, Ordering::SeqCst);
+        Finishing
+    }
+}
+
+impl Drop for Finishing {
+    fn drop(&mut self) {
+        FINISHING.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+unsafe extern "C" {
+    fn atexit(callback: extern "C" fn()) -> i32;
+}
+
+extern "C" fn wait_for_trace() {
+    // Un respiro para que el alimentador vea el cierre, y luego hasta 3 s por los que terminan.
+    std::thread::sleep(std::time::Duration::from_millis(30));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while FINISHING.load(Ordering::SeqCst) > 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// Registra (una vez, y solo con `RAY_AUDIO_TRACE`) la espera de la traza al salir.
+fn trace_at_exit() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    if std::env::var_os("RAY_AUDIO_TRACE").is_some() {
+        // SAFETY: `wait_for_trace` es una función estática sin estado propio.
+        ONCE.call_once(|| unsafe {
+            atexit(wait_for_trace);
+        });
+    }
+}
+
 /// El mapa extremo-de-escritura → control, para que `drain(key)` encuentre su salida. La clave
 /// es el fd (unix) o el handle de Windows, como entero (`AsRawFd`/`AsRawHandle` del `File`).
 fn ctls() -> &'static Mutex<HashMap<i64, Arc<Ctl>>> {
@@ -404,6 +484,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
     // fallo ocurre dentro de CoreAudio, invisible desde aquí): el hint se sube a ese suelo.
     #[cfg(target_os = "macos")]
     let latency_ms = if null_sink { latency_ms } else { coreaudio::raise_for_transport(device, latency_ms) };
+    trace_at_exit();
     let played_frames = Arc::new(AtomicI64::new(-1));
     // El backend se abre ANTES del pipe: un dispositivo ausente falla en `open`, no a mitad.
     let sink = make_sink(sample_rate, channels, latency_ms, fmt, played_frames.clone(), device)?;
@@ -529,7 +610,9 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
                 ctl_thread.account(sink.as_mut(), n as usize);
                 ctl_thread.in_flight.fetch_sub(n as i64, Ordering::SeqCst);
             }
+            let finishing = Finishing::begin();
             sink.finish();
+            drop(finishing);
             unsafe { close(fd_r) };
             forget_ctl(key, &ctl_thread);
         });
@@ -600,7 +683,9 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
                 ctl_thread.account(sink.as_mut(), n);
                 ctl_thread.in_flight.fetch_sub(n as i64, Ordering::SeqCst);
             }
+            let finishing = Finishing::begin();
             sink.finish();
+            drop(finishing);
             drop(reader);
             forget_ctl(key, &ctl_thread);
         });
@@ -1019,6 +1104,68 @@ fn input_pipe(budget: i32) -> Result<(std::fs::File, SourceEnd), String> {
     win_pipe::create(budget)
 }
 
+/// ¿Sigue abierto el extremo del programa?
+fn reader_alive(end: SourceEnd) -> bool {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        // Un par de datagramas no avisa con POLLHUP: se pregunta por el par.
+        let mut addr = [0u8; 128];
+        let mut len = addr.len() as u32;
+        // SAFETY: `addr` y `len` son nuestros y describen el búfer.
+        unsafe { getpeername(end, addr.as_mut_ptr(), &mut len) == 0 }
+    }
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios"))))]
+    {
+        const POLLERR: i16 = 0x8;
+        const POLLHUP: i16 = 0x10;
+        let mut pfd = PollFd { fd: end, events: 0, revents: 0 };
+        // SAFETY: pfd es nuestro y vive durante la llamada; timeout 0 = no espera.
+        unsafe { poll(&mut pfd, 1, 0) };
+        pfd.revents & (POLLERR | POLLHUP) == 0
+    }
+    #[cfg(windows)]
+    {
+        win_pipe::peer_alive(end)
+    }
+}
+
+/// ray-daw #441: un extremo de lectura que recibe un octeto cada vez que cambia la lista de
+/// dispositivos (se enchufó o se desenchufó uno, o cambió el por defecto). Ningún backend da
+/// un aviso que sirva igual en todos los sistemas, así que un hilo compara la lista una vez por
+/// segundo — lo que hacía el programa por su cuenta — y termina cuando el programa cierra.
+pub fn watch() -> Result<std::fs::File, String> {
+    let (reader, end) = input_pipe(4096)?;
+    std::thread::spawn(move || {
+        let snapshot = || -> Vec<(String, i64, i64, bool, bool)> {
+            let mut all: Vec<_> = devices()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|d| (d.id, d.input_channels, d.output_channels, d.default_input, d.default_output))
+                .collect();
+            all.sort();
+            all
+        };
+        let mut last = snapshot();
+        let mut ticks = 0u32;
+        while reader_alive(end) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            ticks += 1;
+            if ticks % 10 != 0 {
+                continue;
+            }
+            let now = snapshot();
+            if now != last {
+                last = now;
+                if let Wrote::Closed = write_block(end, &[1]) {
+                    break;
+                }
+            }
+        }
+        close_end(end);
+    });
+    Ok(reader)
+}
+
 /// La clave de una entrada en el mapa de controles: el fd o el HANDLE de su extremo de lectura,
 /// como entero (lo mismo que calcula el registro de handles del llamador).
 fn input_key(f: &std::fs::File) -> i64 {
@@ -1037,6 +1184,11 @@ fn input_key(f: &std::fs::File) -> i64 {
 /// llamador lee de ahí los frames entrelazados que captura el dispositivo. `latency_ms` (20–1000,
 /// o 0 = 100) es el tamaño de los bloques en que llegan.
 pub fn open_input(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> Result<std::fs::File, String> {
+    // ray-daw #441: `watch` no graba nada: es la vigilancia de la lista de dispositivos, que
+    // viaja como una entrada para reutilizar su handle y su lectura (un octeto por cambio).
+    if format == "watch" {
+        return watch();
+    }
     // M468: `formato@dispositivo` graba de un dispositivo concreto (de `devices`).
     let (format, device) = split_device(format);
     let fmt = Format::parse(format)?;
@@ -1071,8 +1223,11 @@ pub fn open_input(sample_rate: i64, channels: i64, latency_ms: i64, format: &str
         sample_rate,
         frame_bytes,
     });
-    let _ = device; // la fuente de pruebas no tiene dispositivos
     let started = if test_source {
+        if let Err(e) = check_test_device(device, "input") {
+            close_end(end);
+            return Err(e);
+        }
         test_source_start(end, key, ctl.clone(), sample_rate, channels, latency_ms, fmt, source.as_deref() == Some("tone"));
         Ok(())
     } else {
@@ -1177,6 +1332,7 @@ fn make_sink(
     device: &str,
 ) -> Result<Box<dyn Sink>, String> {
     if std::env::var("RAY_AUDIO_SINK").as_deref() == Ok("null") {
+        check_test_device(device, "output")?;
         return Ok(Box::new(NullSink {
             bytes_per_sec: rate * channels * fmt.sample_bytes() as i64,
             frame_bytes: channels as usize * fmt.sample_bytes(),

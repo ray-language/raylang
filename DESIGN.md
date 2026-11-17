@@ -20920,3 +20920,58 @@ apagar) y se ejecuta en el actual. El punto es `clientX`/`clientY`, ya en píxel
 
 Compilado en las dos VMs (elementary OS 8 con Wayland, Windows 11 arm64), y la suelta real
 probada a mano en las dos.
+
+## 454. Revisión previa a 1.27.103 y ronda ray-daw sobre 1.27.102 (#440–#442, nov 2026)
+
+**La revisión de §450–§453** (`/code-review high`) dejó diez hallazgos, todos corregidos antes
+del tag. Los de fondo: `queued_ms` solo refrescaba lo sonado al escribir en ALSA, WASAPI y
+AAudio, así que no bajaba tras el último `write` — ahora cada backend refresca su posición
+también en las esperas del alimentador (`program_frames`); un `flush` se descontaba dos veces
+donde el backend ya lo cuenta como salido; la cuenta de lo entregado va en octetos (s24le perdía
+un frame por lectura no alineada); la traza no cuenta como underrun la cola fundida de un
+`flush`; `set_menu_title` reetiqueta el widget vivo en GTK y Windows en vez de rehacer el menú;
+y la pista de palabra reservada solo sale cuando la palabra está en la misma línea que lo
+anterior (un nombre que FALTA no culpa al `let` de la línea siguiente).
+
+**#440 — el sumidero de pruebas y los ids.** Que `RAY_AUDIO_SINK=null` acepte cualquier id fue
+deliberado (M468): en CI no hay dispositivos y un programa que elige uno debe poder probarse.
+Pero así no se puede probar la rama de error. Validar contra los dispositivos reales haría el
+test depender de la máquina. La salida: `RAY_AUDIO_DEVICES=a,b` declara los dispositivos de
+prueba; `devices()` lista esos y, con el sumidero o la fuente de pruebas, un id fuera de la
+lista es `Err`. Sin la variable todo sigue igual.
+
+**#441 — `audio.watch` / `audio.next_change`.** Simétricos a los de `std/midi`. Ningún backend
+da un aviso que sirva igual en los cinco sistemas (CoreAudio tiene listeners de propiedad, ALSA
+nada sin udev, WASAPI exige implementar una interfaz COM, Android un callback de Java), así que
+un hilo compara la lista una vez por segundo y escribe un octeto cuando cambia — lo mismo que
+ya hace `midi.watch` en Windows, y lo que ray-daw hacía por su cuenta cada 2 s. Viaja como una
+entrada (`input:watch` por `__audio_open`, lectura por `__audio_read`): sin builtins nuevos.
+El hilo termina cuando el programa cierra el handle. Un listener nativo donde lo haya queda
+como mejora si el segundo de retraso llega a molestar.
+
+**#442 — la traza que se perdía al salir.** `close` no espera al hilo alimentador, que es quien
+drena el backend e imprime el resumen. Un programa que salía nada más cerrar no lo veía (con
+baja latencia siempre; con la normal, a veces). Con `RAY_AUDIO_TRACE` puesto se registra un
+`atexit` que espera, hasta 3 s, a los alimentadores que están terminando. Sin la variable no
+cambia nada: la salida del proceso no se retrasa.
+
+**El cierre que no despertaba al lector (nativo).** Al probar `watch` en nativo, `close(h)` desde
+otra fibra dejaba colgado a `next_change`. Dos causas, las dos anteriores a este arco y
+compartidas por toda lectura de pipe (`__ray_proc_read`: stdout de un hijo, entradas de audio y
+MIDI): la lectura retenía un clon del extremo mientras estaba aparcada, así que el `close` no
+cerraba el fd; y en un programa sin red `__ray_close` no avisaba a los reactores. Con datos
+llegando no se notaba (el lector despertaba solo); una vigilancia ociosa no despertaba nunca.
+Ahora el clon se suelta antes de aparcar y se vuelve a pedir al despertar, y `__ray_close` cierra
+el pipe y después hace `poke`: el fd muerto vuelve como error al re-armar y el lector recibe
+`invalid handle`, como en la VM.
+
+**El mismo cierre, en Linux y Windows.** El CI de esa PR se colgó: lo anterior solo se había
+probado en macOS. kqueue devuelve un fd cerrado como evento de error, y por eso allí bastaba el
+`poke`; epoll lo RECHAZA al re-armar (`EBADF`) y no da evento. El reactor nativo ignoraba ese
+rechazo y el poller de la VM también, así que el lector seguía aparcado. Ahora un fd rechazado
+cuenta como listo en los dos (la fibra reintenta y recibe `invalid handle`). En Windows un pipe
+no pasa por el poller: la VM despierta la lectura aparcada cuando su handle ya no está en el
+registro, y el nativo —que leía bloqueando con un clon del extremo, lo que impedía el cierre—
+sondea `PeekNamedPipe` cada 1 ms sin retener el clon mientras no hay datos. La variante sin
+fibras (hilo por tarea) suelta el clon entre intentos por la misma razón. Coste: hasta 1 ms más
+de latencia al leer la salida de un hijo en un binario nativo de Windows.

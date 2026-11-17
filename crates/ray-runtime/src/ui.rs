@@ -7111,6 +7111,8 @@ mod gtk {
         check_new: Option<FnItemNewLabel>,
         check_set_active: Option<unsafe extern "C" fn(Widget, i32)>,
         set_sensitive: Option<unsafe extern "C" fn(Widget, i32)>,
+        /// ray-daw #434: `gtk_menu_item_set_label`, para reetiquetar un item vivo.
+        set_label: Option<unsafe extern "C" fn(Widget, *const std::ffi::c_char)>,
         image_item_new: Option<FnItemNewLabel>,
         image_new_from_file: Option<unsafe extern "C" fn(*const std::ffi::c_char) -> Widget>,
         image_item_set_image: Option<FnWidgetPair>,
@@ -7154,6 +7156,7 @@ mod gtk {
                     check_new: opt(c"gtk_check_menu_item_new_with_label").map(|p| std::mem::transmute::<*mut c_void, FnItemNewLabel>(p)),
                     check_set_active: opt(c"gtk_check_menu_item_set_active").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
                     set_sensitive: opt(c"gtk_widget_set_sensitive").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
+                    set_label: opt(c"gtk_menu_item_set_label").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *const std::ffi::c_char)>(p)),
                     image_item_new: opt(c"gtk_image_menu_item_new_with_label").map(|p| std::mem::transmute::<*mut c_void, FnItemNewLabel>(p)),
                     image_new_from_file: opt(c"gtk_image_new_from_file").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*const std::ffi::c_char) -> Widget>(p)),
                     image_item_set_image: opt(c"gtk_image_menu_item_set_image").map(|p| std::mem::transmute::<*mut c_void, FnWidgetPair>(p)),
@@ -7168,8 +7171,8 @@ mod gtk {
         })
     }
 
-    /// ray-daw #434: el texto de un item por tag — se cambia en los specs y se reconstruye cada
-    /// menú que lo lleva (como `rename_menu`), con lo que el estado y los atajos se conservan.
+    /// ray-daw #434: el texto de un item por tag — se cambia en los specs (ventanas futuras) y
+    /// en los items vivos, sin rehacer el menú: estado y atajos se conservan.
     pub(super) fn set_menu_title(tag: &str, title: &str) -> Result<(), String> {
         let mut touched: Vec<(String, Vec<super::MenuItemSpec>)> = Vec::new();
         for (menu, items) in menu_specs().lock().unwrap().iter_mut() {
@@ -7185,10 +7188,30 @@ mod gtk {
         if touched.is_empty() {
             return Err(format!("ui: no menu item with tag '{tag}'"));
         }
-        for (menu, items) in touched {
-            replace_menu(&menu, &items)?;
+        // Con `gtk_menu_item_set_label` se reetiqueta el widget vivo (conserva estado, icono
+        // y atajo, y no cierra un menú abierto); sin él, se reconstruyen los menús afectados.
+        let Some(set_label) = item_api().set_label else {
+            for (menu, items) in touched {
+                replace_menu(&menu, &items)?;
+            }
+            return Ok(());
+        };
+        let live = items_by_tag().lock().unwrap().get(tag).cloned().unwrap_or_default();
+        if live.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        let title_c = std::ffi::CString::new(title.replace('\0', "")).unwrap();
+        on_main_sync(move || {
+            // SAFETY: widgets del loop; los de ventanas cerradas se saltan por su bandera.
+            unsafe {
+                for (w, alive) in live {
+                    if alive.load(Ordering::SeqCst) {
+                        set_label(w as Widget, title_c.as_ptr());
+                    }
+                }
+            }
+            Ok(())
+        })
     }
 
     /// M236: estado por tag — specs (ventanas futuras) + widgets vivos (en el hilo del loop).
@@ -10203,27 +10226,54 @@ mod win {
         M.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
     }
 
-    /// ray-daw #434: el texto de un item por tag — se cambia en los specs y se reconstruye cada
-    /// menú que lo lleva (como `rename_menu`), con lo que el estado y los atajos se conservan.
+    /// ray-daw #434: el texto de un item por tag — se cambia en los specs (ventanas futuras) y
+    /// en los items vivos, sin rehacer el menú: estado y atajos se conservan.
     pub(super) fn set_menu_title(tag: &str, title: &str) -> Result<(), String> {
-        let mut touched: Vec<(String, Vec<super::MenuItemSpec>)> = Vec::new();
-        for (menu, items) in menu_specs().lock().unwrap().iter_mut() {
-            let mut found = false;
+        // El texto vivo lleva el atajo detrás de un tabulador, como al construir el menú.
+        let mut shortcut: Option<String> = None;
+        for (_, items) in menu_specs().lock().unwrap().iter_mut() {
             for it in items.iter_mut().filter(|it| it.tag == tag) {
                 it.label = title.to_string();
-                found = true;
-            }
-            if found {
-                touched.push((menu.clone(), items.clone()));
+                shortcut.get_or_insert_with(|| it.shortcut.clone());
             }
         }
-        if touched.is_empty() {
+        let live = items_by_tag().lock().unwrap().get(tag).cloned().unwrap_or_default();
+        let Some(shortcut) = shortcut else {
             return Err(format!("ui: no menu item with tag '{tag}'"));
+        };
+        if live.is_empty() {
+            return Ok(());
         }
-        for (menu, items) in touched {
-            replace_menu(&menu, &items)?;
-        }
-        Ok(())
+        let label = match accel_for(&shortcut, 0) {
+            Some((text, _)) => format!("{title}\t{text}"),
+            None => title.to_string(),
+        };
+        on_main_sync(move || {
+            let text = wide(&label);
+            // SAFETY: handles de ventanas propias; IsWindow descarta las ya destruidas. Solo se
+            // cambia la cadena del item (MIIM_STRING): estado, icono y acelerador se conservan.
+            unsafe {
+                for (hwnd, id) in live {
+                    let hwnd = HWND(hwnd as *mut _);
+                    if !IsWindow(Some(hwnd)).as_bool() {
+                        continue;
+                    }
+                    let menu = GetMenu(hwnd);
+                    if menu.is_invalid() {
+                        continue;
+                    }
+                    let info = MENUITEMINFOW {
+                        cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                        fMask: MIIM_STRING,
+                        dwTypeData: windows::core::PWSTR(text.as_ptr() as *mut u16),
+                        ..Default::default()
+                    };
+                    let _ = SetMenuItemInfoW(menu, id as u32, false, &info);
+                    let _ = DrawMenuBar(hwnd);
+                }
+            }
+            Ok(())
+        })
     }
 
     /// M236: estado por tag — en los specs (ventanas futuras) y en las barras vivas.

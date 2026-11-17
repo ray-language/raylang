@@ -404,6 +404,27 @@ hasta que un terminal recorre la cadena (una sola pasada, sin arreglos intermedi
 Un tipo tuyo se vuelve iterable implementando `Iterator<T>` (solo `next`); hereda todos los
 adaptadores.
 
+**Un iterador propio** (raysolve #362): un struct con `impl Iterator<T>` y solo `next`; hereda
+`map`, `filter`, `take`, `collect` y el resto, y se recorre con `for`. El `impl` puede llevar
+bounds. Un literal de struct no puede ir en la cabeza del `for` (se confundiría con su bloque):
+pásalo por un `let`.
+
+```rust
+struct Above<V> { xs: [V], i: int, min: V, }
+impl<V: Ord> Iterator<V> for Above<V> {
+    fn next(self) -> Option<V> {
+        while (self.i < self.xs.len()) {
+            let x = self.xs[self.i];
+            self.i = self.i + 1;
+            if (self.min.less(x)) { return Option.Some(x); }
+        }
+        Option.None
+    }
+}
+let it = Above { xs: [1, 5, 2, 7], i: 0, min: 3 };
+for v in it { print(v); }                    // 5, 7
+```
+
 ## 10. La biblioteca estándar `std/`
 
 **Embebida en el binario** (funciona sin archivos en disco). Se importa por ruta y se usa
@@ -630,6 +651,11 @@ del símbolo).
 | `ptr` | puntero opaco | puntero opaco |
 | `Option<string>` / `Option<bytes>` | ✗ | `char*`: NULL → `None`; si no, **copia** hasta el NUL (nunca libera) |
 | `Option<ptr>` | ✗ | puntero: NULL → `None` |
+
+**Coste de una llamada** (medido en arm64, rayserial #396): ~0,5 µs en la VM y ~1 ns en nativo.
+`blocking` añade ~4 µs en nativo (un salto de hilo) y ~0,5 µs en la VM: decláralo solo para lo
+que de verdad puede esperar (un `read` de un dispositivo, un `poll` con plazo), nunca para un
+`poll(…, 0)` o un getter.
 
 Fuera de contrato: funciones **variádicas** (`printf` — UB en arm64), structs por valor, callbacks
 (anotados para un FFI v2). No disponible en el playground wasm.

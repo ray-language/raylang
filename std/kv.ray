@@ -1,3 +1,8 @@
+//! A persistent key/value store in pure raylang: an in-memory `Map<string, bytes>` backed by one
+//! file, written atomically. `kv.open(path)` loads it (a missing file is an empty store),
+//! `s.get(k)` / `s.set(k, v)` / `s.delete(k)` work in memory and `s.save()` persists, creating
+//! the folder of `path` if it does not exist. `kv.open_shared(path)` gives the same methods
+//! behind an owner fiber, for a store used from several fibers.
 // std/kv — estado clave/valor persistido en raylang puro (IDEAS §48 G-rev, 21 jul 2026).
 //
 // El caso que lo motiva: conservar sesiones/config entre reloads de `ray dev` sin
@@ -31,6 +36,19 @@ pub struct Store {
 
 /// Opens the store at `path`. A missing file yields an empty store; an existing file
 /// that cannot be read or decoded is an error (never silently discards data).
+// La posición de la última `/` (o `\\`) de `path`; -1 si no tiene carpeta.
+fn last_slash(path: string) -> int {
+    var at = -1;
+    var i = 0;
+    for c in path.chars() {
+        if (c == '/' || c == '\\') {
+            at = i;
+        }
+        i = i + 1;
+    }
+    at
+}
+
 pub fn open(path: string) -> Result<Store, string> {
     if (fs.exists(path)) {
         let b = fs.read_file_bytes(path)?;
@@ -65,7 +83,8 @@ pub trait StoreOps {
     fn get_string(self, key: string) -> Option<string>;
     /// Stores a string value, UTF-8 encoded (sugar over `set`).
     fn set_string(self, key: string, val: string);
-    /// Persists the store atomically: writes `<path>.tmp` and renames it over `path`
+    /// Persists the store atomically: creates the folder of `path` if it is missing, writes
+    /// `<path>.tmp` and renames it over `path`; an `Err` names the path that failed
     /// (a crash mid-write never corrupts the previous state). Returns the bytes written.
     fn save(self) -> Result<int, string>;
     /// Atomically adds `delta` to the integer under `key` and returns the new value;
@@ -122,9 +141,30 @@ impl StoreOps for Store {
 
     fn save(self) -> Result<int, string> {
         let b = encode(self.data);
+        // rayfocus #375: la carpeta del archivo se crea si falta (en iOS `Documents/App` no
+        // existe hasta que alguien la crea), y un fallo dice qué ruta no se pudo escribir.
+        let cut = last_slash(self.path);
+        if (cut > 0) {
+            match (fs.mkdir(self.path.substring(0, cut))) {
+                Result.Ok(_) => { },
+                Result.Err(e) => {
+                    return Result.Err("kv: could not create the folder of ${self.path}: ${e}");
+                },
+            }
+        }
         let tmp = self.path + ".tmp";
-        fs.write_file_bytes(tmp, b)?;
-        fs.rename(tmp, self.path)?;
+        match (fs.write_file_bytes(tmp, b)) {
+            Result.Ok(_) => { },
+            Result.Err(e) => {
+                return Result.Err("kv: could not write ${tmp}: ${e}");
+            },
+        }
+        match (fs.rename(tmp, self.path)) {
+            Result.Ok(_) => { },
+            Result.Err(e) => {
+                return Result.Err("kv: could not replace ${self.path}: ${e}");
+            },
+        }
         Result.Ok(b.len())
     }
 

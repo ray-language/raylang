@@ -216,7 +216,11 @@ pub fn show(n: Notification) -> Result<string, string> {
 
 /// Schedules `n` for `when` and returns its id; `cancel(id)` removes it before it fires. iOS and
 /// macOS `.app`: a native trigger; Android: `AlarmManager` + a receiver that shows it even with
-/// the app closed, re-armed after a reboot; Linux and a bare macOS binary: `Err`.
+/// the app closed, re-armed after a reboot; Linux and a bare macOS binary: `Err`. Ask for
+/// permission first (`request_permission`): while the user has not decided yet
+/// (`status() == "not_determined"`) the call returns `Ok(id)` but the system drops the
+/// notification, so `pending()` stays empty. A `Trigger.At` in the past is `Err` ("… is in the
+/// past"). The errors are plain text.
 pub fn schedule(n: Notification, when: Trigger) -> Result<string, string> {
     let t = match (when) {
         Trigger.After(secs, repeat) => "after:" + to_string(secs) + ":" + if (repeat) { "1" } else { "0" },

@@ -402,6 +402,27 @@ terminal walks the chain (a single pass, no intermediate arrays).
 
 A type of yours becomes iterable by implementing `Iterator<T>` (only `next`); it inherits every adapter.
 
+**An iterator of your own** (raysolve #362): a struct with `impl Iterator<T>` and only `next`; it
+inherits `map`, `filter`, `take`, `collect` and the rest, and `for` walks it. The `impl` may carry
+bounds. A struct literal cannot sit in the head of the `for` (it would be read as its block): bind
+it with a `let` first.
+
+```rust
+struct Above<V> { xs: [V], i: int, min: V, }
+impl<V: Ord> Iterator<V> for Above<V> {
+    fn next(self) -> Option<V> {
+        while (self.i < self.xs.len()) {
+            let x = self.xs[self.i];
+            self.i = self.i + 1;
+            if (self.min.less(x)) { return Option.Some(x); }
+        }
+        Option.None
+    }
+}
+let it = Above { xs: [1, 5, 2, 7], i: 0, min: 3 };
+for v in it { print(v); }                    // 5, 7
+```
+
 ## 10. The standard library `std/`
 
 **Embedded in the binary** (works without files on disk). Imported by path and used qualified by the
@@ -634,6 +655,10 @@ is called anyway fails on the VM with `library 'x' not found (tried libx.dylib, 
 | `Option<string>` / `Option<bytes>` | ✗ | `char*`: NULL → `None`; otherwise, **copies** up to the NUL (never frees) |
 | `Option<ptr>` | ✗ | pointer: NULL → `None` |
 
+**Cost of a call** (measured on arm64, rayserial #396): ~0.5 µs on the VM and ~1 ns natively.
+`blocking` adds ~4 µs natively (a thread hop) and ~0.5 µs on the VM: declare it only for what can
+really wait (a `read` on a device, a `poll` with a timeout), never for a `poll(…, 0)` or a getter.
+
 Out of contract: **variadic** functions (`printf` — UB on arm64), structs by value, callbacks (noted
 for an FFI v2). Not available in the wasm playground.
 
@@ -797,4 +822,4 @@ orientations) **replaces** it; the rest are added.
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:d98177b58cdc -->
+<!-- sync: sha256:fbda66af143b -->

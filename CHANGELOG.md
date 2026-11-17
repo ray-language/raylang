@@ -6,6 +6,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- `ray test tests/x.ray` en un paquete-librería (sin `src/main.ray`) encuentra los módulos de
+  `src/`, como ya hacía `ray test` a secas (raysolve #361).
+- `kv.save()` crea la carpeta del archivo si falta, y un fallo dice qué ruta no se pudo
+  escribir (rayfocus #375).
+- `ray doc sleep` (y `floor`, `now`…) dice de qué módulo es la función y cómo importarla, en vez
+  de presentarla como un global que el compilador no conoce (ray-sublime #411). `ray doc
+  try_join` tiene texto, y el de `spawn_isolated` dice que los canales cruzan dominios.
+- Aceptar sobre un listener de otro dominio da el mismo error en la VM y en nativo: `invalid
+  handle` (raycrawl #369).
+- Documentación: un ejemplo de iterador propio en la referencia y en `llms.txt` (raysolve #362),
+  el coste de una llamada FFI y cuándo declarar `blocking` (rayserial #396), y qué hace
+  `notify.schedule` con el permiso sin decidir o una hora pasada (rayfocus #376).
+
 ## 1.27.105 — 2026-11-17
 
 - **`std/midi`: varios `send` seguidos llegan todos, uno por lectura** (ray-daw #446). En macOS

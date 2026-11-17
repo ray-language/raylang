@@ -416,6 +416,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "to_lower" => "Returns the string converted to lowercase.",
         "substring" => "Returns the substring `[i, j)` by character index. Out-of-range indices are clamped, so it never fails at runtime. Costs like `s[i]`: O(1) on ASCII text, amortized O(1) walking non-ASCII text in order.",
         "repeat" => "Returns the string repeated `n` times (`n <= 0` gives the empty string).",
+        "try_join" => "Waits for the task like `join`, but gives its outcome as a value: `Result.Ok(value)`, or `Result.Err(message)` when the task panicked or was cancelled — the caller does not fail with it. Use it when one failed worker must not take the others down.",
         "join" => "With `(array, sep)`: joins a `[string]` into one string using the separator. With `(task)`: blocks until the task finishes and returns its value (re-raises if it failed).",
         "reverse" => "Returns a new array with the elements in reverse order.",
         // --- bytes ---
@@ -465,7 +466,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "spawn_local" => "Like `spawn`, but in a native binary the task is pinned to the CURRENT scheduler worker: no cross-thread wake-up, it runs when the caller yields (sub-microsecond for short helpers). The building block of per-worker state (one actor per worker, Seastar style: see `worker_id`). In the VM it is a plain `spawn`.",
         "worker_id" => "Index of the scheduler worker running this task (0..worker_count()). Stable for the task's whole life in a native binary (tasks never migrate); in the VM it is the current thread's worker index. Use it to pick per-worker state (one actor per worker).",
         "worker_count" => "Number of scheduler workers (cores, or `RAYLANG_THREADS`).",
-        "spawn_isolated" => "Like `spawn`, but the task starts in a fresh handle domain: it cannot use the files, sockets, processes or windows opened by other tasks (they behave as closed), and its own handles are invisible to them. Tasks it spawns inherit its domain. The building block for running plugins or less-trusted code in-process.",
+        "spawn_isolated" => "Like `spawn`, but the task starts in a fresh handle domain: it cannot use the files, sockets, processes or windows opened by other tasks (they behave as closed), and its own handles are invisible to them. Tasks it spawns (`spawn`, `spawn_local`) inherit its domain and share its handles. Channels DO cross domains: pass one in and talk to the isolated task through it. The building block for running plugins or less-trusted code in-process.",
         "scope" => "Runs the closure as a structured-concurrency scope: on return it joins every task spawned inside, cancelling siblings and re-raising the first failure.",
         "send" => "Sends a value into a channel. Blocks if the channel is bounded and full (backpressure). Runtime error on a closed channel (use `try_send` when the receiver may be gone).",
         // M190: las funciones ASOCIADAS (tabla ASSOC) también responden en `ray_doc`/hover — antes

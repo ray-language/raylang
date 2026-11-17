@@ -21046,3 +21046,29 @@ dispositivo y el número no separaba un flujo limpio de uno que crepita. El tama
 lee al abrir; si un flujo nuestro de baja latencia lo tiene bajado, vale el tamaño al que
 volverá. Queda sin cubrir una cola sin dispositivo fijado que sigue a un cambio del dispositivo
 por defecto hacia uno de ciclo mayor.
+
+## 457. Re-medición de la campaña 1.27.95 y ronda de pequeños (nov 2026)
+
+El índice de hallazgos seguía mostrando abiertos los de la campaña 1.27.95, pero las rondas
+§431–§440 ya habían corregido la mayoría y las apps no habían vuelto a medir. Antes de elegir
+trabajo se re-midieron los 48 de raylang contra el binario de 1.27.104: 26 corregidos, 2
+parciales, 19 abiertos y uno que necesita un APK. De los abiertos, esta ronda cierra los
+pequeños:
+
+- **#361.** Con una suite explícita, las raíces del loader eran solo `tests/`. En el modo
+  implícito la raíz `src/` la aportaba la primera suite, que en un paquete-librería es un módulo
+  de `src/`; con una explícita nadie la aportaba. Ahora se añade `src/` del proyecto.
+- **#369.** El nativo decía «is not a listener» para un handle que no está en el registro. La
+  VM distingue «no existe» (`invalid handle`) de «es de otra clase»; el nativo ahora también.
+- **#375.** `kv.save` crea la carpeta (como `fs.mkdir`, con sus padres) y nombra la ruta en el
+  error. Se prefirió a fallar en `open`: abrir un almacén cuyo archivo aún no existe es el caso
+  normal del primer arranque.
+- **#411.** La tabla de documentación de builtins describe también funciones que solo existen
+  dentro de un módulo. `ray doc` las presentaba peladas; ahora busca el módulo `std/*` que las
+  exporta y lo dice.
+
+Fuera de esta ronda, con su motivo: **#407** (un módulo suelto que define una función con
+nombre de builtin) pide que el checker resuelva los nombres como lo hace el loader al
+namespacear, en seis sitios; tiene rodeo trivial. **#377**: el backend headless concede las
+alarmas en cualquier plataforma a propósito, para poder probar la lógica en el escritorio, y
+`RAY_UI_ALARM_PERMISSION` ya lo fuerza. **#358** y **#357** son trabajo del checker y de la SPEC.

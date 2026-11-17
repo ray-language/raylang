@@ -512,6 +512,8 @@ without a ramp, so write your own fade before `flush` there; `RAY_AUDIO_TRACE=1`
 and `underruns N` (times the stream ran dry before the end); `audio.queued_ms(h)` = what you wrote
 and has NOT sounded yet (the sample sounding now is written − queued, also after a flush or a gap —
 `played_ms` is the device clock and on macOS/iOS also counts filler silence);
+`audio.duck_others(true)` lowers what OTHER apps play while your alarm or prompt sounds and
+`audio.duck_others(false)` gives it back (iOS session options, Android audio focus; no-op on desktop);
 a player also belongs in the system's Now Playing (lock screen, Control Center, headphone and
 keyboard buttons): `import std/media;` `media.controls(["play", "pause", "next", "seek"])` once,
 then `media.now_playing(t)` with `var t = media.track(title, artist, album); t.duration_ms = …;
@@ -603,7 +605,9 @@ stays `hidden`, rAF never fires and WebKit throttles timers to ~1 s; automate wi
 `mailto` URL in the system browser or mail client — the OAuth sign-in of a native app; also in
 the mobile shells: iOS `UIApplication`, Android an `ACTION_VIEW` intent from a shell ≥ 1.27.81), `ui.haptic(kind)`
 (`light|medium|heavy|soft|rigid|selection|success|warning|error`: UIKit generators on iOS, `HapticFeedbackConstants`
-on Android from a shell ≥ 1.27.91, the Force Touch trackpad on macOS, no-op elsewhere), `ui.reveal(p)`, `ui.clipboard_write(s)`/`ui.clipboard_read()`. Under
+on Android from a shell ≥ 1.27.91, the Force Touch trackpad on macOS, no-op elsewhere), ANDROID ONLY `ui.system_sounds("notification"|"alarm"|"ringtone")` →
+`[SystemSound { id, title }]`, `ui.play_system_sound(id)` (or just the kind = the user's default) and `ui.stop_system_sound()`
+(`Err` on iOS and desktop: ship your own sound file there), `ui.reveal(p)`, `ui.clipboard_write(s)`/`ui.clipboard_read()`. Under
 `ray dev` the window live-reloads on asset changes and the webview devtools are on; otherwise they
 are off (`ray run --devtools`, or a native/bundled build with `--devtools`, turns them on): no
 "Inspect Element". The webview's own context menu (Look Up, Translate, Services…) still appears on

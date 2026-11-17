@@ -221,6 +221,101 @@ pub fn devices() -> Result<Vec<DeviceInfo>, String> {
     }
 }
 
+/// pepa #346: baja el volumen de lo que suena en OTRAS apps mientras el programa toca algo que
+/// importa (una alarma, una indicación) y lo devuelve con `false`. iOS: la sesión de audio gana
+/// `MixWithOthers | DuckOthers` y con `false` recupera sus opciones de antes. Android: el foco
+/// de audio `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`, que pide el shell. En el escritorio no hay
+/// nada equivalente: `Ok` sin efecto.
+pub fn duck_others(on: bool) -> Result<(), String> {
+    if std::env::var_os("RAY_AUDIO_TRACE").is_some() {
+        eprintln!("[audio] duck_others {}", if on { "on" } else { "off" });
+    }
+    #[cfg(target_os = "ios")]
+    {
+        ios_session::duck(on)
+    }
+    #[cfg(target_os = "android")]
+    {
+        #[cfg(feature = "ui")]
+        {
+            crate::ui::shell_request("audio_duck", if on { "on" } else { "off" }).map(|_| ()).map_err(|e| {
+                if e.contains("unknown op") {
+                    "audio: this Android shell predates duck_others; regenerate it with `ray bundle --android`".to_string()
+                } else {
+                    e
+                }
+            })
+        }
+        #[cfg(not(feature = "ui"))]
+        {
+            Err("audio: duck_others needs the app shell (built without 'ui')".to_string())
+        }
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        Ok(())
+    }
+}
+
+/// pepa #346: la sesión de audio de iOS, por el runtime de Objective-C (AVAudioSession no tiene
+/// API en C). El shell la configura al arrancar (`[ios] audio_session`); aquí solo se le añaden
+/// y quitan las opciones de mezcla mientras dura el aviso.
+#[cfg(target_os = "ios")]
+mod ios_session {
+    use std::ffi::{c_char, c_void};
+    use std::sync::atomic::{AtomicIsize, Ordering};
+
+    #[link(name = "objc")]
+    unsafe extern "C" {
+        fn objc_getClass(name: *const c_char) -> *mut c_void;
+        fn sel_registerName(name: *const c_char) -> *mut c_void;
+        fn objc_msgSend();
+    }
+
+    const MIX_WITH_OTHERS: usize = 0x1;
+    const DUCK_OTHERS: usize = 0x2;
+    /// Las opciones de la sesión antes de `duck(true)`; -1 = no se está bajando a nadie.
+    static SAVED: AtomicIsize = AtomicIsize::new(-1);
+
+    pub fn duck(on: bool) -> Result<(), String> {
+        // SAFETY: mensajes a AVAudioSession con las firmas de su cabecera (AVAudioSession.h); la
+        // clase se comprueba antes, y `objc_msgSend` se llama con el tipo exacto de cada método.
+        unsafe {
+            let class = objc_getClass(c"AVAudioSession".as_ptr());
+            if class.is_null() {
+                return Err("audio: duck_others needs an audio session (set `audio_session` or `background_audio` in [ios] of ray.toml)".to_string());
+            }
+            let get: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let get_options: unsafe extern "C" fn(*mut c_void, *mut c_void) -> usize = std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let set_category: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void, usize, *mut *mut c_void) -> u8 =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let set_active: unsafe extern "C" fn(*mut c_void, *mut c_void, u8, *mut *mut c_void) -> u8 =
+                std::mem::transmute(objc_msgSend as unsafe extern "C" fn());
+            let session = get(class, sel_registerName(c"sharedInstance".as_ptr()));
+            let category = get(session, sel_registerName(c"category".as_ptr()));
+            let options = get_options(session, sel_registerName(c"categoryOptions".as_ptr()));
+            let wanted = if on {
+                // Dos `true` seguidos no pisan las opciones de partida.
+                let _ = SAVED.compare_exchange(-1, options as isize, Ordering::SeqCst, Ordering::SeqCst);
+                options | MIX_WITH_OTHERS | DUCK_OTHERS
+            } else {
+                match SAVED.swap(-1, Ordering::SeqCst) {
+                    -1 => return Ok(()), // nada que devolver
+                    saved => saved as usize,
+                }
+            };
+            let set = sel_registerName(c"setCategory:withOptions:error:".as_ptr());
+            if set_category(session, set, category, wanted, std::ptr::null_mut()) == 0 {
+                return Err("audio: the audio session rejected the change".to_string());
+            }
+            // Reactivar la sesión aplica las opciones nuevas: las otras apps bajan (o recuperan)
+            // su volumen ahora, sin parar lo que este programa está tocando.
+            set_active(session, sel_registerName(c"setActive:error:".as_ptr()), 1, std::ptr::null_mut());
+        }
+        Ok(())
+    }
+}
+
 /// El listado de `devices` como texto, una línea por dispositivo con sus campos separados por
 /// tabuladores (id, nombre, canales de entrada, de salida, por defecto de entrada, de salida,
 /// frecuencia, transporte): lo que cruza al programa por el primitivo `__audio_open`.

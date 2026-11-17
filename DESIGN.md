@@ -20975,3 +20975,45 @@ registro, y el nativo —que leía bloqueando con un clon del extremo, lo que im
 sondea `PeekNamedPipe` cada 1 ms sin retener el clon mientras no hay datos. La variante sin
 fibras (hilo por tarea) suelta el clon entre intentos por la misma razón. Coste: hasta 1 ms más
 de latencia al leer la salida de un hijo en un binario nativo de Windows.
+## 455. Ronda pepa: patrones de `exports`, ducking y sonidos del sistema (#421, #346, #331, nov 2026)
+
+**Patrones de `exports` (#421).** Un import map no tiene comodines: solo claves exactas y
+prefijos que acaban en `/`. Por eso `"./x/*": "./y/*"` ya salía como prefijo y `"./x/*":
+"./y/*.js"` se dejaba fuera, y la página pedía la ruta sin extensión y recibía un 404 que dejaba
+el módulo entero sin cargar. Los archivos del paquete ya están en el espacio embed, así que el
+patrón se expande ahí: una entrada por cada archivo que encaja con el destino. El `*` cubre
+subcarpetas, como en Node. El coste es un mapa más largo en paquetes con muchos archivos bajo un
+patrón; se aceptó porque la alternativa era que la importación documentada del paquete fallara.
+
+**Ducking (#346).** `audio.duck_others(on)` va en `std/audio` porque es donde el programa toca su
+sonido, y viaja por el primitivo `__audio_open` (`duck:on` / `duck:off`), como `devices` y
+`queued`, para no añadir un builtin. Se descartó un valor más de `[ios] audio_session`
+(`playback_duck`): bajaría la música todo el tiempo que la app estuviera abierta. En iOS el
+runtime habla con `AVAudioSession` por el runtime de Objective-C: guarda las opciones de la
+sesión, añade `MixWithOthers | DuckOthers` y reactiva; con `false` restaura las guardadas. No se
+desactiva la sesión para devolver el volumen porque eso fallaría (o cortaría el sonido) con la
+salida del programa en marcha; medido en un iPhone 12 con Spotify sonando, la música baja con
+`true` y recupera su volumen con `false`. En Android es el foco `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`, que
+pide el shell por la petición genérica `audio_duck`. En el escritorio no hay un equivalente del
+sistema y es `Ok` sin efecto, para que el mismo programa corra en todas partes.
+
+**Sonidos del sistema (#331).** Quedaron fuera en §418 (M445) porque iOS no deja leerlos ni tocarlos.
+Se entregan como API solo de Android (`ui.system_sounds`, `ui.play_system_sound`,
+`ui.stop_system_sound`, sobre `RingtoneManager`), con `Err` en el resto, en vez de inventar un
+catálogo falso en las otras plataformas. El id es `<kind>:<uri>` para que el sonido salga por el
+volumen de su clase (un tono de alarma, por el volumen de alarma). `__ui_desktop` pasa a devolver
+un texto en `r[1]` (el listado); las acciones que ya existían siguen mirando solo `r[0]`.
+
+**Revisión previa a 1.27.104.** Corregido antes del tag: un patrón de `exports` tapaba a una
+subruta exacta (ahora las exactas van primero y los patrones del más específico al más general,
+como resuelve Node); la máscara de interés de epoll sobrevivía al fd cerrado y la heredaba el
+siguiente archivo con ese número; el cursor de `RingtoneManager` no se cerraba; el aviso al
+cerrar un pipe era global en vez de dirigido (M401); y la lectura ociosa de un pipe en Windows
+sondeaba mil veces por segundo (ahora la espera crece de 1 a 16 ms). Queda anotado y sin
+resolver: (1) el despertar por cierre depende de que el fd cerrado se rechace al re-armar, así
+que si otro handle reutiliza ese número antes de que el reactor atienda el aviso, el lector
+viejo sigue aparcado — despertar por handle en el propio `close` lo quitaría en todas las
+plataformas; (2) la espera de `RAY_AUDIO_TRACE` al salir va por `atexit`, que en Windows no
+corre con `ExitProcess`, y sus 30 ms de margen no cubren un cierre sin `drain` con mucha cola;
+(3) `duck_others` en iOS está medido con `audio_session = "playback_mix"`; con una sesión que
+no mezcla no hay nada que bajar y `false` reactiva una sesión que interrumpe a las demás.

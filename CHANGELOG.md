@@ -6,6 +6,19 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.104 — 2026-11-17
+
+- **`audio.duck_others(on)` (pepa #346)**: baja el volumen de la música de otras apps mientras
+  suena una alarma o una indicación, y lo devuelve al terminar. iOS (opciones de la sesión de
+  audio) y Android (foco de audio, con un shell regenerado); en el escritorio es un `Ok` sin
+  efecto.
+- **Sonidos del sistema en Android (pepa #331)**: `ui.system_sounds(kind)` lista los tonos de
+  notificación, alarma o llamada del teléfono, `ui.play_system_sound(id)` toca uno (o el que el
+  usuario tiene por defecto) y `ui.stop_system_sound()` lo para. Solo Android, con un shell
+  regenerado: iOS no deja usar los tonos del sistema y allí dan `Err`.
+- **`ui.import_map` mapea los patrones de `exports` (pepa #421)**: `"./strings/*":
+  "./strings/*.js"` da una entrada por cada archivo del paquete que encaja, así que
+  `import "@raylang/elements/strings/es"` resuelve como con un bundler en vez de dar 404.
 - **`audio.watch()` y `audio.next_change(h)`**: el programa se entera cuando se enchufa o se
   desenchufa un dispositivo de audio, o cambia el por defecto, sin tener que consultar la lista
   cada poco. La documentación dice además qué pasa con una salida abierta cuyo dispositivo
@@ -13,11 +26,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 - `RAY_AUDIO_DEVICES=a,b` declara dispositivos de prueba: `audio.devices()` lista esos y, con
   el sumidero o la fuente de pruebas, abrir un id que no está da `Err`. Así se puede probar la
   rama de error de un selector de dispositivo sin hardware.
-- En un binario nativo sin red, cerrar desde otra fibra una entrada de audio o MIDI, una
-  vigilancia o la salida de un proceso hijo despierta a quien estaba leyendo de ella; antes se
-  quedaba esperando para siempre si no llegaban datos.
 - Con `RAY_AUDIO_TRACE=1`, el resumen de una salida ya no se pierde si el programa termina
   nada más cerrarla.
+- **Cerrar un handle de lectura desde otra fibra despierta al lector** en Linux y Windows (VM
+  y nativo) y en un binario nativo sin red de macOS (antes se quedaba esperando si no llegaban datos): una entrada
+  de audio o MIDI, la salida de un proceso hijo o la vigilancia de dispositivos.
 
 ## 1.27.103 — 2026-11-17
 

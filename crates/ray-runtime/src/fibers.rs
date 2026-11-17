@@ -1969,7 +1969,10 @@ mod sys {
                     return true;
                 }
             }
+            // El fd ya no vale (cerrado): su máscara tampoco. Si se quedara, el próximo archivo
+            // que reutilizara ese número heredaría un interés que nadie pidió.
             self.known.remove(&fd);
+            self.interest.remove(&fd);
             false
         }
 

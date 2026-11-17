@@ -863,7 +863,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         // como error y el lector despierta a `invalid handle`. Sin esto, un programa sin red no
         // avisaba a nadie y un lector sin datos se quedaba aparcado para siempre.
         let pipe_poke = if t.needs_rt_process && t.fibers {
-            "let __pipe = matches!(&__e, Some(__RayHandle::Pipe(_))); drop(__e); if __pipe { ray_runtime::fibers::poke(); } "
+            // Dirigido (M401): solo despierta al reactor que tiene una fibra aparcada en ese fd. En
+            // Windows un pipe no pasa por el poller: quien lee lo sondea y ve el cierre solo.
+            "#[cfg(unix)] let __pfd = if let Some(__RayHandle::Pipe(f)) = &__e { Some(std::os::fd::AsRawFd::as_raw_fd(&**f)) } else { None }; drop(__e); #[cfg(unix)] if let Some(fd) = __pfd { ray_runtime::fibers::poke_fd(fd); } "
         } else {
             ""
         };
@@ -1085,6 +1087,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "            Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
             "        }));\n",
             "    }\n",
+            // pepa #346: `duck:on` / `duck:off` — el volumen de lo que suena en otras apps.
+            "    if let Some(state) = format.strip_prefix(\"duck:\") {\n",
+            "        return Rc::new(std::cell::RefCell::new(match ray_runtime::audio::duck_others(state == \"on\") {\n",
+            "            Ok(()) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(\"\")],\n",
+            "            Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
+            "        }));\n",
+            "    }\n",
             "    if format == \"devices\" {\n",
             "        return Rc::new(std::cell::RefCell::new(match ray_runtime::audio::devices_text() {\n",
             "            Ok(text) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(text.as_str())],\n",
@@ -1268,7 +1277,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // M235: escritorio (abrir/revelar) y portapapeles.
             "fn __ray_ui_desktop(kind: &str, path: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let r = ray_runtime::ui::desktop(kind, path);\n",
-            "    Rc::new(std::cell::RefCell::new(match r { Ok(()) => vec![Rc::<str>::from(\"ok\")], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
+            "    Rc::new(std::cell::RefCell::new(match r { Ok(s) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(s.as_str())], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
             "fn __ray_ui_clipboard(op: &str, text: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let r = match op { \"write\" => ray_runtime::ui::clipboard_write(text).map(|_| String::new()), \"read\" => ray_runtime::ui::clipboard_read(), other => Err(format!(\"ui: unknown clipboard op '{other}'\")) };\n",
             "    Rc::new(std::cell::RefCell::new(match r { Ok(s) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(s.as_str())], Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())] }))\n}\n",
@@ -2174,10 +2183,12 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 // M182: en Windows el pipe no es sondeable — lectura bloqueante en el pool.
                 // ray-daw #441: mientras no hay datos se sondea sin retener el clon (1 ms), para
                 // que un `close(h)` desde otra fibra cierre de verdad y esta lectura termine.
-                "    #[cfg(windows)] { let mut f = f;\n",
+                // La espera crece de 1 a 16 ms mientras no llega nada: una lectura ociosa (una
+                // vigilancia, un hijo callado) no despierta mil veces por segundo.
+                "    #[cfg(windows)] { let mut f = f; let mut idle = 1i64;\n",
                 "    while let Ok(0) = ray_runtime::process::pipe_available(&f) {\n",
                 "        drop(f);\n",
-                "        ray_runtime::fibers::sleep_ms(1);\n",
+                "        ray_runtime::fibers::sleep_ms(idle); idle = (idle * 2).min(16);\n",
                 "        f = match __ray_pipe_clone(h) { Some(f) => f, None => return __ray_proc_err(format!(\"invalid handle: {}\", h)) };\n",
                 "    }\n",
                 "    let fr = std::sync::Arc::clone(&f); return match ray_runtime::fibers::run_blocking(move || { let mut buf = vec![0u8; 65536]; let mut r = &*fr; r.read(&mut buf).map(|n| { buf.truncate(n); buf }).map_err(|e| e.to_string()) }) { Ok(b) => __ray_proc_tag(vec![Rc::<[u8]>::from(&b\"ok\"[..]), Rc::<[u8]>::from(&b[..])]), Err(e) => __ray_proc_err(e) }; }\n",
@@ -2207,11 +2218,12 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 // ray-daw #441: entre intento e intento el clon se suelta y se vuelve a pedir: así
                 // un `close(h)` desde otro hilo cierra de verdad y la lectura termina con
                 // `invalid handle`. En Windows el pipe bloquea, así que antes se mira si hay datos.
+                "    #[allow(unused_mut, unused_variables)] let mut idle = 1u64;\n",
                 "    loop {\n",
                 "        #[cfg(windows)]\n",
                 "        if let Ok(0) = ray_runtime::process::pipe_available(&f) {\n",
                 "            drop(f);\n",
-                "            std::thread::sleep(std::time::Duration::from_millis(1));\n",
+                "            std::thread::sleep(std::time::Duration::from_millis(idle)); idle = (idle * 2).min(16);\n",
                 "            f = match __ray_pipe_clone(h) { Some(f) => f, None => return __ray_proc_err(format!(\"invalid handle: {}\", h)) };\n",
                 "            continue;\n",
                 "        }\n",

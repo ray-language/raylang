@@ -785,13 +785,63 @@ pub fn reveal_path(path: &str) -> Result<(), String> {
 
 /// Las acciones de escritorio de `std/ui` por nombre (`__ui_desktop` en los tres motores): una
 /// sola tabla, para que el nativo y la VM no tengan cada uno la suya.
-pub fn desktop(kind: &str, arg: &str) -> Result<(), String> {
+/// Devuelve un texto (vacío salvo en `system_sounds`, que da su listado).
+pub fn desktop(kind: &str, arg: &str) -> Result<String, String> {
     match kind {
-        "open_path" => open_path(arg),
-        "reveal" => reveal_path(arg),
-        "open_url" => open_url(arg),
-        "haptic" => haptic(arg),
+        "open_path" => open_path(arg).map(|_| String::new()),
+        "reveal" => reveal_path(arg).map(|_| String::new()),
+        "open_url" => open_url(arg).map(|_| String::new()),
+        "haptic" => haptic(arg).map(|_| String::new()),
+        "system_sounds" => system_sounds(arg),
+        "play_system_sound" => play_system_sound(arg),
+        "stop_system_sound" => system_sound_request("sound_stop", ""),
         other => Err(format!("ui: unknown desktop action '{other}'")),
+    }
+}
+
+/// pepa #331: los sonidos del SISTEMA — los tonos de notificación, alarma o llamada que trae el
+/// teléfono y los que el usuario eligió. Solo Android los expone (`RingtoneManager`, en el
+/// shell); iOS no deja leerlos ni tocarlos, y en el escritorio no hay un catálogo equivalente.
+/// El listado va como texto, una línea `id<TAB>título` por sonido; el id es `<kind>:<uri>`, para
+/// que al tocarlo suene por el volumen de su clase.
+pub fn system_sounds(kind: &str) -> Result<String, String> {
+    if !matches!(kind, "notification" | "alarm" | "ringtone") {
+        return Err(format!("ui: unknown system sound kind '{kind}' (notification, alarm or ringtone)"));
+    }
+    system_sound_request("sound_list", kind)
+}
+
+/// pepa #331: toca un sonido del sistema una vez — un id de `system_sounds`, o `notification`,
+/// `alarm` / `ringtone` a secas para el que el usuario tiene por defecto. Para el anterior.
+pub fn play_system_sound(id: &str) -> Result<String, String> {
+    let known = matches!(id, "notification" | "alarm" | "ringtone")
+        || ["notification:", "alarm:", "ringtone:"].iter().any(|k| id.len() > k.len() && id.starts_with(k));
+    if !known {
+        return Err(format!("ui: '{id}' is not a system sound (an id from system_sounds, or notification, alarm or ringtone for the default one)"));
+    }
+    system_sound_request("sound_play", id)
+}
+
+fn system_sound_request(op: &str, arg: &str) -> Result<String, String> {
+    if headless() {
+        if ui_trace() && op != "sound_list" {
+            eprintln!("[ui] {op} {arg}");
+        }
+        return Ok(String::new());
+    }
+    #[cfg(target_os = "android")]
+    {
+        shell_request(op, arg).map_err(|e| {
+            if e.contains("unknown op") {
+                "ui: this Android shell predates the system sounds; regenerate it with `ray bundle --android`".to_string()
+            } else {
+                e
+            }
+        })
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Err("ui: system sounds are only available on Android".to_string())
     }
 }
 

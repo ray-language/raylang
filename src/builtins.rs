@@ -1639,6 +1639,11 @@ pub fn audio_open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str
     if format == "devices" {
         return ray_runtime::audio::devices_text();
     }
+    // pepa #346: `duck:on` / `duck:off` tampoco abren nada: bajan (o devuelven) el volumen de
+    // lo que suena en otras apps.
+    if let Some(state) = format.strip_prefix("duck:") {
+        return ray_runtime::audio::duck_others(state == "on").map(|_| String::new());
+    }
     // ray-daw #429: `queued` tampoco abre nada: `sample_rate` trae el handle de una salida y
     // vuelve lo que el programa ha escrito y aún no ha sonado, en ms.
     if format == "queued" {
@@ -1845,11 +1850,11 @@ pub fn platform_name() -> &'static str {
 
 /// M235: `ui.open_path`/`ui.reveal` — el escritorio abre o revela una ruta (sin shell).
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
-pub fn ui_desktop(kind: &str, path: &str) -> Result<(), String> {
+pub fn ui_desktop(kind: &str, path: &str) -> Result<String, String> {
     ray_runtime::ui::desktop(kind, path)
 }
 #[cfg(any(not(all(feature = "ui", any(unix, windows))), target_arch = "wasm32"))]
-pub fn ui_desktop(_kind: &str, _path: &str) -> Result<(), String> {
+pub fn ui_desktop(_kind: &str, _path: &str) -> Result<String, String> {
     Err(UI_UNAVAILABLE.to_string())
 }
 

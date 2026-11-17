@@ -21017,3 +21017,32 @@ plataformas; (2) la espera de `RAY_AUDIO_TRACE` al salir va por `atexit`, que en
 corre con `ExitProcess`, y sus 30 ms de margen no cubren un cierre sin `drain` con mucha cola;
 (3) `duck_others` en iOS está medido con `audio_session = "playback_mix"`; con una sesión que
 no mezcla no hay nada que bajar y `false` reactiva una sesión que interrumpe a las demás.
+
+## 456. Ráfagas MIDI y el crepitado con hints medios (ray-daw #446, #449, nov 2026)
+
+**Ráfagas MIDI (#446).** CoreMIDI junta en un solo paquete los mensajes que llegan en el mismo
+instante. El callback escribía un registro por paquete, así que dos `send` seguidos llegaban como
+un mensaje de seis octetos y el segundo `read` del programa esperaba para siempre. `midi.read`
+promete un mensaje por lectura, de modo que el paquete se trocea (`split_messages`): mensajes de
+canal y de sistema por su longitud, *running status* repuesto, tiempo real intercalado aparte y
+SysEx entero si cabe o por tramos si viene partido, como antes. Que la campaña anterior pasara
+era suerte: los dos envíos caían a veces en paquetes distintos.
+
+**Crepitado con 20–40 ms (#449).** El camino normal de macOS es una cola de AudioQueue con tres
+búferes en rotación de `hint/12` (suelo de 5 ms). El dispositivo le saca un ciclo de E/S entero
+cada vez (512 frames, 10,7 ms, en los parlantes de un MacBook). Con hints de 20 y 40 los búferes
+eran de 5 ms: lo encolado no llegaba a ciclo y medio y la cola se quedaba sin audio entre dos
+entregas. El anillo seguía lleno, así que la traza no contaba ningún underrun. Con 80 ms (6,7 ms
+por búfer, casi dos ciclos) ya sonaba limpio, y con 5 y 10 ms el flujo va por el AudioUnit de
+baja latencia, que no tiene cola. Ahora un búfer nunca es menor que un ciclo de E/S del
+dispositivo (leído de la HAL): tres ciclos encolados. Coste: con hints de 20 a 40 lo encolado
+sube unos 35 ms, porque el anillo (rampa + 3 búferes) crece con ellos — el suelo real pasa de
+~50 a ~85 ms; por debajo de 20 sigue el camino de baja latencia. Escuchado por el
+usuario en los parlantes integrados con el tono del hallazgo: limpio con 20, 40, 80 y 120. Se descartó mandar
+esos hints por el AudioUnit porque baja el búfer del dispositivo para todo el proceso. La traza
+dice ahora el tamaño de los búferes. Se probó a medir el corte dentro de la cola (lo encolado
+menos el reloj de la cola al pedir un búfer) y se quitó: ese reloj incluye la latencia del
+dispositivo y el número no separaba un flujo limpio de uno que crepita. El tamaño del ciclo se
+lee al abrir; si un flujo nuestro de baja latencia lo tiene bajado, vale el tamaño al que
+volverá. Queda sin cubrir una cola sin dispositivo fijado que sigue a un cambio del dispositivo
+por defecto hacia uno de ciclo mayor.

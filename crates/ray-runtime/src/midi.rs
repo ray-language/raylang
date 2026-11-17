@@ -62,6 +62,94 @@ mod backend {
     }
 }
 
+/// Trocea los octetos de un paquete en mensajes MIDI y llama a `emit` con cada uno (ray-daw
+/// #446). CoreMIDI junta en un solo paquete los mensajes que llegan a la vez —un acorde, un Note
+/// Off y un Note On del mismo tick—, y `midi.read` promete un mensaje por lectura: sin trocear,
+/// dos `send` seguidos llegaban como uno de seis octetos y la segunda lectura no volvía nunca.
+/// Un SysEx se entrega entero si cabe en el paquete, o por tramos si viene partido (`in_sysex`
+/// recuerda entre paquetes que se está dentro de uno); un octeto de tiempo real (0xF8–0xFF) va
+/// solo, también en medio de otro mensaje; el *running status* se repone en cada mensaje.
+#[cfg_attr(not(any(target_os = "macos", target_os = "ios", test)), allow(dead_code))]
+fn split_messages(data: &[u8], in_sysex: &mut bool, mut emit: impl FnMut(&[u8])) {
+    let short_len = |status: u8| -> usize {
+        match status {
+            0x80..=0xBF | 0xE0..=0xEF | 0xF2 => 3,
+            0xC0..=0xDF | 0xF1 | 0xF3 => 2,
+            _ => 1,
+        }
+    };
+    let mut running = 0u8;
+    let mut message: Vec<u8> = Vec::with_capacity(16);
+    let mut i = 0;
+    while i < data.len() {
+        let b = data[i];
+        if b >= 0xF8 {
+            emit(&[b]);
+            i += 1;
+        } else if *in_sysex || b == 0xF0 {
+            // Hasta el 0xF7 (incluido), hasta otro estado (el SysEx quedó cortado) o hasta el
+            // final del paquete (sigue en el siguiente); el tiempo real intercalado sale aparte.
+            message.clear();
+            let continuing = *in_sysex;
+            *in_sysex = true;
+            let mut first = !continuing;
+            while i < data.len() {
+                let c = data[i];
+                if c >= 0xF8 {
+                    emit(&[c]);
+                } else if c == 0xF7 {
+                    message.push(c);
+                    *in_sysex = false;
+                    i += 1;
+                    break;
+                } else if c >= 0x80 && !first {
+                    *in_sysex = false;
+                    break; // otro mensaje empieza aquí: se procesa en la vuelta siguiente
+                } else {
+                    message.push(c);
+                }
+                first = false;
+                i += 1;
+            }
+            if !message.is_empty() {
+                emit(&message);
+            }
+            running = 0;
+        } else {
+            let (status, mut need) = if b >= 0x80 {
+                i += 1;
+                (b, short_len(b) - 1)
+            } else if running != 0 {
+                (running, short_len(running) - 1)
+            } else {
+                // Datos sin estado conocido: se entregan tal cual hasta el siguiente estado.
+                let start = i;
+                while i < data.len() && data[i] < 0x80 {
+                    i += 1;
+                }
+                emit(&data[start..i]);
+                continue;
+            };
+            message.clear();
+            message.push(status);
+            while need > 0 && i < data.len() {
+                let c = data[i];
+                if c >= 0xF8 {
+                    emit(&[c]);
+                } else if c >= 0x80 {
+                    break; // mensaje truncado
+                } else {
+                    message.push(c);
+                    need -= 1;
+                }
+                i += 1;
+            }
+            running = if (0x80..0xF0).contains(&status) { status } else { 0 };
+            emit(&message);
+        }
+    }
+}
+
 /// Los puertos de entrada (`inputs = true`: fuentes de las que se puede leer) o de salida
 /// (destinos a los que se puede enviar) presentes ahora.
 pub fn list(inputs: bool) -> Result<Vec<Port>, String> {
@@ -367,6 +455,8 @@ mod coremidi {
     struct Input {
         fd_w: i32,
         closed: AtomicBool,
+        /// Dentro de un SysEx que sigue en el paquete siguiente (solo lo toca `on_read`).
+        in_sysex: AtomicBool,
         /// El puerto de entrada (entrada real) o el destino virtual: lo que se desmonta.
         object: Mutex<(MidiRef, bool)>,
     }
@@ -377,7 +467,8 @@ mod coremidi {
         I.get_or_init(|| Mutex::new(Vec::new()))
     }
 
-    /// El callback de lectura de CoreMIDI: un datagrama por paquete, `[ns: 8 LE][octetos]`.
+    /// El callback de lectura de CoreMIDI: un datagrama por MENSAJE, `[ns: 8 LE][octetos]` (un
+    /// paquete puede traer varios: `split_messages`).
     /// Corre en un hilo de CoreMIDI; nunca bloquea (un mensaje que no cabe se pierde).
     extern "C" fn on_read(packets: *const u8, ref_con: *mut c_void, _conn: *mut c_void) {
         // SAFETY: `ref_con` es el `Arc<Input>` filtrado al abrir; vive hasta `sweep`, que solo
@@ -392,23 +483,35 @@ mod coremidi {
             let count = std::ptr::read_unaligned(packets as *const u32);
             let mut p = packets.add(4);
             let mut record = Vec::with_capacity(64);
+            let mut in_sysex = input.in_sysex.load(Ordering::SeqCst);
+            let mut gone = false;
             for _ in 0..count {
                 let stamp = std::ptr::read_unaligned(p as *const u64);
                 let len = std::ptr::read_unaligned(p.add(8) as *const u16) as usize;
                 let data = std::slice::from_raw_parts(p.add(10), len);
                 let ticks = if stamp == 0 { mach_absolute_time() } else { stamp };
-                record.clear();
-                record.extend_from_slice(&ticks_to_ns(ticks).to_le_bytes());
-                record.extend_from_slice(data);
-                let n = write(input.fd_w, record.as_ptr(), record.len());
-                if n < 0 && !is_full(&std::io::Error::last_os_error()) {
-                    input.closed.store(true, Ordering::SeqCst); // el programa cerró la entrada
+                let ns = ticks_to_ns(ticks).to_le_bytes();
+                super::split_messages(data, &mut in_sysex, |message| {
+                    if gone {
+                        return;
+                    }
+                    record.clear();
+                    record.extend_from_slice(&ns);
+                    record.extend_from_slice(message);
+                    let n = write(input.fd_w, record.as_ptr(), record.len());
+                    if n < 0 && !is_full(&std::io::Error::last_os_error()) {
+                        gone = true; // el programa cerró la entrada
+                    }
+                });
+                if gone {
+                    input.closed.store(true, Ordering::SeqCst);
                     return;
                 }
                 // `MIDIPacketNext`: en arm64 los paquetes van alineados a 4 octetos.
                 let next = p.add(10 + len);
                 p = if cfg!(target_arch = "aarch64") { ((next as usize + 3) & !3) as *const u8 } else { next };
             }
+            input.in_sysex.store(in_sysex, Ordering::SeqCst);
         }
     }
 
@@ -480,7 +583,7 @@ mod coremidi {
         };
         // Datagramas: uno por mensaje. El búfer fija también el mensaje más largo (un SysEx).
         let (fd_r, fd_w) = pair(SOCK_DGRAM, true, true, 256 * 1024)?;
-        let input = Arc::new(Input { fd_w, closed: AtomicBool::new(false), object: Mutex::new((0, source.is_none())) });
+        let input = Arc::new(Input { fd_w, closed: AtomicBool::new(false), in_sysex: AtomicBool::new(false), object: Mutex::new((0, source.is_none())) });
         let ref_con = Arc::into_raw(input.clone()) as *mut c_void;
         let label = cfstring(if name.is_empty() { "raylang input" } else { name });
         let mut object: MidiRef = 0;
@@ -1818,5 +1921,40 @@ mod android {
             unsafe { close(fd_r) };
         });
         Ok(file(fd_w))
+    }
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::split_messages;
+
+    fn split(packets: &[&[u8]]) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        let mut in_sysex = false;
+        for p in packets {
+            split_messages(p, &mut in_sysex, |m| out.push(m.to_vec()));
+        }
+        out
+    }
+
+    /// ray-daw #446: dos mensajes en un paquete son dos lecturas.
+    #[test]
+    fn a_packet_with_two_messages_gives_two() {
+        assert_eq!(split(&[&[0x90, 60, 100, 0x80, 60, 0]]), vec![vec![0x90, 60, 100], vec![0x80, 60, 0]]);
+        assert_eq!(split(&[&[0xC0, 5, 0xD0, 9, 0xE0, 1, 2]]), vec![vec![0xC0, 5], vec![0xD0, 9], vec![0xE0, 1, 2]]);
+    }
+
+    #[test]
+    fn running_status_and_realtime_are_split_out() {
+        assert_eq!(split(&[&[0x90, 60, 100, 62, 100]]), vec![vec![0x90, 60, 100], vec![0x90, 62, 100]]);
+        assert_eq!(split(&[&[0x90, 60, 0xF8, 100, 0xFE]]), vec![vec![0xF8], vec![0x90, 60, 100], vec![0xFE]]);
+    }
+
+    #[test]
+    fn a_sysex_stays_whole_or_comes_in_pieces() {
+        assert_eq!(split(&[&[0xF0, 1, 2, 0xF7, 0x90, 60, 1]]), vec![vec![0xF0, 1, 2, 0xF7], vec![0x90, 60, 1]]);
+        assert_eq!(split(&[&[0xF0, 1, 2], &[3, 4, 0xF7], &[0x80, 60, 0]]), vec![vec![0xF0, 1, 2], vec![3, 4, 0xF7], vec![0x80, 60, 0]]);
+        // Un SysEx cortado por otro estado no se traga el mensaje siguiente.
+        assert_eq!(split(&[&[0xF0, 1, 2, 0x90, 60, 1]]), vec![vec![0xF0, 1, 2], vec![0x90, 60, 1]]);
     }
 }

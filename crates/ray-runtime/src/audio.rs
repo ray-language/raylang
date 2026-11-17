@@ -1805,6 +1805,23 @@ mod coreaudio {
             rate
         }
 
+        /// El búfer de E/S del dispositivo, en segundos: cada cuánto pide audio (0 = no se sabe).
+        pub fn io_cycle_seconds(device: u32) -> f64 {
+            let mut frames = 0u32;
+            let rate = device_rate(device);
+            get(device, BUFFER_FRAME_SIZE, SCOPE_GLOBAL, &mut frames);
+            // Si un flujo nuestro de baja latencia lo tiene bajado, vale el tamaño al que
+            // volverá cuando ese flujo cierre: la cola puede seguir abierta entonces.
+            if let Some(&(before, _)) = lowered().lock().unwrap_or_else(|e| e.into_inner()).get(&device) {
+                frames = frames.max(before);
+            }
+            if frames > 0 && rate > 0.0 {
+                frames as f64 / rate
+            } else {
+                0.0
+            }
+        }
+
         /// Los dispositivos con el búfer de E/S bajado por un flujo de baja latencia: el tamaño
         /// que tenían antes y cuántos flujos nuestros lo mantienen bajado.
         fn lowered() -> &'static std::sync::Mutex<std::collections::HashMap<u32, (u32, usize)>> {
@@ -2408,7 +2425,7 @@ mod coreaudio {
                 std::thread::sleep(std::time::Duration::from_millis(5));
                 if std::env::var_os("RAY_AUDIO_TRACE").is_some() {
                     eprintln!(
-                        "[audio] coreaudio low latency: device buffer {} frames, ring cap {} B, gaps {} (1 = only the tail, after the last write)",
+                        "[audio] coreaudio low latency: device buffer {} frames, ring cap {} B, underruns {} (times the callback found no data; a pause before closing, as in drain, counts as one)",
                         self.device_frames,
                         self.shared.cap,
                         self.shared.gaps.load(Ordering::Relaxed)
@@ -2856,11 +2873,32 @@ mod coreaudio {
         let (min_buf_ms, min_ring_ms): (usize, usize) = if cfg!(target_os = "ios") { (60, 100) } else { (5, 0) };
         let ramp_ms = (latency_ms as usize / 8).clamp(2, 10);
         let buf_ms_floor = latency_ms as usize / 12;
+        // ray-daw #449: un búfer de la cola nunca es menor que un ciclo de E/S del dispositivo.
+        // La cola solo tiene tres búferes en rotación y el dispositivo le saca un ciclo entero
+        // de golpe (512 frames = 10,7 ms en los parlantes de un MacBook): con búferes de 5 ms
+        // (los de un hint de 20 o 40) lo encolado no llegaba a ciclo y medio, la cola se quedaba
+        // sin audio entre dos entregas y el tono crepitaba, con el anillo lleno y la traza sin
+        // un solo underrun. Desde 80 ms (búferes de 6,7 ms, dos ciclos encolados) ya sonaba bien.
+        #[cfg(target_os = "macos")]
+        let io_cycle_bytes = {
+            let seconds = hal::output_device(device).map(hal::io_cycle_seconds).unwrap_or(0.0);
+            (bytes_per_sec as f64 * seconds).ceil() as usize
+        };
+        #[cfg(not(target_os = "macos"))]
+        let io_cycle_bytes = 0usize;
         let buf_size = ((bytes_per_sec * buf_ms_floor / 1000)
             .max(bytes_per_sec * min_buf_ms / 1000)
+            .max(io_cycle_bytes)
             .max(256)
-            / frame_bytes
+            .div_ceil(frame_bytes)
             * frame_bytes) as u32;
+        if std::env::var_os("RAY_AUDIO_TRACE").is_some() && io_cycle_bytes > 0 {
+            eprintln!(
+                "[audio] coreaudio: queue buffers of {} frames (device I/O cycle {} frames at this rate)",
+                buf_size as usize / frame_bytes,
+                io_cycle_bytes / frame_bytes
+            );
+        }
         let ring_floor = bytes_per_sec * ramp_ms / 1000 + 3 * buf_size as usize;
         let cap = (bytes_per_sec * latency_ms as usize / 4000)
             .max(bytes_per_sec * min_ring_ms / 1000)

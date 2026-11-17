@@ -1682,7 +1682,7 @@ entonces directa al dispositivo, con búferes de 32 a 128 frames, y la cola entr
 altavoz queda en torno al hint: unos 4 ms con `5`, 8 ms con `10`. La entrada hace lo mismo:
 `open_input(48000, 1, "f32le", 5)` entrega bloques de 32 frames cada milisegundo, si pides la
 frecuencia y los canales del dispositivo (`audio.devices()` los dice). A cambio no hay rampas
-anti-clic ni margen: escribe bloques pequeños (64–256 frames) y a tiempo, y mira `gaps` en
+anti-clic ni margen: escribe bloques pequeños (64–256 frames) y a tiempo, y mira `underruns` en
 `RAY_AUDIO_TRACE=1`. En el resto de sistemas el hint se acepta y cada uno lo sube a su suelo.
 
 **Elegir el dispositivo.** `open` y `open_input` usan el dispositivo por defecto del sistema.

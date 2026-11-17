@@ -26,16 +26,18 @@ pub fn open(sample_rate: int, channels: int) -> Result<int, string> {
 /// the feeder chunk — a rhythm game wants 20-50 ms, a radio tolerates 200-1000. Accepted
 /// range: 3–1000 (or 0 = the default); anything else is `Err`. The hint is the TOTAL queued
 /// between `write` and the speaker (`write` parks once ~that much is pending). From 20 ms up,
-/// macOS queues ~50 ms at least (a 20 ms socket, three 5 ms device buffers and a ring that
-/// keeps the anti-click ramp plus three buffers) and follows the hint from 50 ms. **Below
+/// macOS queues ~85 ms at least on a device with a 10.7 ms I/O cycle (a 20 ms socket, three
+/// queue buffers never smaller than one cycle of the device, and a ring that keeps the
+/// anti-click ramp plus three buffers) and follows the hint from about 130 ms. **Below
 /// 20 ms is LOW LATENCY** (M469): on macOS the output goes straight to the device with I/O
 /// buffers of 32–128 frames and the queue stays at about the hint (5 → ~4 ms, 10 → ~8 ms) —
 /// what playing an instrument live needs. It has no anti-click ramps: write small blocks
-/// (64–256 frames) on time, and check `gaps` in the trace. Other systems accept the hint and
+/// (64–256 frames) on time, and check `underruns` in the trace. Other systems accept the hint and
 /// raise it to their own floor. A Bluetooth output is always given 80 ms at least. iOS floor:
 /// ~240 ms (the system freezes the app for ~200 ms on lock/unlock). `RAY_AUDIO_TRACE=1` prints
-/// the ring size, the keepalive silence inserted, fade-outs, flushes and gaps when the output
-/// closes (a clean stream has 1 fade-out, 0 gaps, and one flush per `flush` call). Smaller =
+/// the size of the queue buffers when the output opens, and the ring size, the keepalive
+/// silence inserted, fade-outs, flushes and underruns when it closes (a clean stream has 1
+/// fade-out, 0 underruns, and one flush per `flush` call). Smaller =
 /// more reactive but more underrun-prone; 0 (or plain `open`) = the 200 ms default. On
 /// Android, a hint of 50 ms or less requests the LOW_LATENCY performance mode.
 pub fn open_latency(sample_rate: int, channels: int, latency_ms: int) -> Result<int, string> {

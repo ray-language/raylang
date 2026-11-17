@@ -86,6 +86,53 @@ fn main() -> int {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// ray-daw #446: varios `send` seguidos (un acorde y su Note Off en el mismo tick) llegan todos
+/// y en orden, uno por lectura. CoreMIDI los junta en un solo paquete y el runtime lo entregaba
+/// como un único mensaje: la segunda lectura no volvía nunca.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+#[test]
+fn a_burst_of_sends_arrives_one_message_per_read() {
+    if !virtual_ports_available() {
+        return;
+    }
+    let src = r#"import std/midi;
+import std/time;
+fn main() -> int {
+    spawn(fn() { time.sleep(6000); print("watchdog: a message did not arrive"); exit(3); });
+    let out = midi.create_output("ray burst out").unwrap();
+    var id = 0;
+    for p in midi.inputs() {
+        if (p.name == "ray burst out") { id = p.id; }
+    }
+    let inp = midi.open_input(id).unwrap();
+    let _ = midi.send(out, b"\x90\x3c\x64");
+    let _ = midi.send(out, b"\x90\x40\x64");
+    let _ = midi.send(out, b"\x90\x43\x64");
+    let _ = midi.send(out, b"\x80\x3c\x00");
+    // Y un solo envío con dos mensajes: un paquete con los dos, siempre.
+    let _ = midi.send(out, b"\x90\x30\x10\x80\x30\x00");
+    var i = 0;
+    while (i < 6) {
+        print(midi.read(inp).unwrap().data);
+        i = i + 1;
+    }
+    exit(0);
+    0
+}
+"#;
+    let want = "903c64\n904064\n904364\n803c00\n903010\n803000\n";
+    let d = workdir("burst", src);
+    let o = Command::new(env!("CARGO_BIN_EXE_ray")).args(["run", "prog.ray"]).current_dir(&d).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&o.stdout), want, "vm: {}", String::from_utf8_lossy(&o.stderr));
+    if has_rustc() {
+        let bin = d.join("prog_bin");
+        let b = Command::new(env!("CARGO_BIN_EXE_ray")).args(["build", "--native", "prog.ray", "-o", bin.to_str().unwrap()]).current_dir(&d).output().unwrap();
+        assert!(b.status.success(), "build --native: {}", String::from_utf8_lossy(&b.stderr));
+        assert_eq!(String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout), want);
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 /// Entrada virtual, SysEx largo, abrir y cerrar muchas veces, un id inexistente y el aviso de
 /// cambios al aparecer un puerto.
 #[cfg(any(target_os = "macos", target_os = "linux"))]

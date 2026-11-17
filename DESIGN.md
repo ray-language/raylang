@@ -20918,4 +20918,5 @@ así que la página del programa no ve la suelta, como en las otras dos platafor
 para los documentos que carguen después (`AddScriptToExecuteOnDocumentCreated`, y se retira al
 apagar) y se ejecuta en el actual. El punto es `clientX`/`clientY`, ya en píxeles de la página.
 
-Compilado en las dos VMs. La suelta real se probó a mano en Windows; en Linux, pendiente.
+Compilado en las dos VMs (elementary OS 8 con Wayland, Windows 11 arm64), y la suelta real
+probada a mano en las dos.

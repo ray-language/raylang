@@ -440,7 +440,11 @@ documentada:
   WKWebView creada en caliente que sobrescribe `draggingEntered:`, `draggingUpdated:` y
   `performDragOperation:`; lo que no intercepta lo delega con `objc_msgSendSuper` (casteado por
   sitio a la firma exacta, como `objc_msgSend`). Lee `NSURL` del pasteboard del arrastre, que
-  AppKit entrega vivo durante la llamada, en el hilo principal.
+  AppKit entrega vivo durante la llamada, en el hilo principal. En Linux, una decena de símbolos
+  de GTK/GDK/GLib por `dlsym` con su firma C (`gtk_drag_get_data`, `gtk_selection_data_get_uris`,
+  `g_filename_from_uri`…); las cadenas de glib se liberan con `g_free`/`g_strfreev` y el dato de
+  usuario de las señales es el id de la ventana, sin memoria propia. En Windows, `DragQueryFileW`
+  sobre búferes propios del tamaño que la propia API dice, y `DragFinish` del `HDROP` del mensaje.
 - **`crates/ray-runtime/src/ui.rs`** — la ventana + webview de `std/ui` (M146), **sin crates**
   (la misma decisión que audio: `wry` exigiría toolchains GTK/WebKit en *build*): el self-pipe de
   la cola de eventos (`pipe`/`read`/`write`/`fcntl` variádico) y, en macOS, **Objective-C a

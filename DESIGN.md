@@ -20891,3 +20891,27 @@ CLEAR_TOP | SINGLE_TOP`: una nueva recargaría la página), y el botón de la no
 esa pantalla, porque un servicio lanzado desde una notificación no puede abrir actividades.
 
 Los campos nuevos rompen un literal `Alarm { … }` escrito a mano; `alarm.message` los rellena.
+
+## 453. Sueltas de archivos en Linux y Windows (ray-sublime #436, nov 2026)
+
+`ui.accept_drops` existía solo en macOS (§450). Las otras dos plataformas tienen el mismo
+problema de fondo —el webview es el destino del arrastre y entrega a la página un archivo sin
+ruta— y cada una su salida.
+
+**Linux (GTK 3 + WebKitGTK).** Se conecta `drag-drop` en el webview, que corre antes que el
+manejador de clase de WebKit. Si la ventana lo pidió y el arrastre ofrece `text/uri-list`, se
+corta la emisión (`g_signal_stop_emission_by_name`: la página no ve la suelta), se piden los
+datos con `gtk_drag_get_data` y, cuando llegan por `drag-data-received`, se convierten con
+`g_filename_from_uri` y se emite `drop`. WebKit pide datos por su cuenta mientras el arrastre
+pasa por encima, así que solo se atiende el `drag-data-received` que sigue a una suelta nuestra
+(`awaiting`); el resto se deja pasar. Los símbolos se cargan aparte (`DropApi`), todos
+obligatorios: si falta alguno, `accept_drops` devuelve `Err` y la ventana sigue como estaba.
+
+**Windows (WebView2).** WebView2 registra su propio destino en sus ventanas hijas. Con
+`ICoreWebView2Controller4::SetAllowExternalDrop(false)` deja de hacerlo y la suelta sube a la
+ventana anfitriona, que la recibe como `WM_DROPFILES` tras `DragAcceptFiles`: sin implementar
+`IDropTarget` a mano. El punto llega en píxeles físicos del área cliente y se divide por la
+escala de rasterización del webview. Un runtime sin `ICoreWebView2Controller4` (anterior a
+1.0.992) da `Err`.
+
+Compilado en las dos VMs, donde `accept_drops` devuelve `Ok`; la suelta real se prueba a mano.

@@ -6,6 +6,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- `ui.accept_drops` y el evento `"drop"` llegan a **Linux y Windows**: los archivos soltados
+  sobre la ventana entregan su ruta también allí.
 - **`audio.queued_ms(h)`**: lo que el programa ha escrito y aún no ha sonado. Con ello la muestra
   que suena es «escritas − queued», también después de un `flush` o de un hueco; `played_ms` es
   el reloj del dispositivo y en macOS e iOS cuenta además el silencio de relleno.

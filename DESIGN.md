@@ -20992,7 +20992,8 @@ sonido, y viaja por el primitivo `__audio_open` (`duck:on` / `duck:off`), como `
 runtime habla con `AVAudioSession` por el runtime de Objective-C: guarda las opciones de la
 sesión, añade `MixWithOthers | DuckOthers` y reactiva; con `false` restaura las guardadas. No se
 desactiva la sesión para devolver el volumen porque eso fallaría (o cortaría el sonido) con la
-salida del programa en marcha. En Android es el foco `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`, que
+salida del programa en marcha; medido en un iPhone 12 con Spotify sonando, la música baja con
+`true` y recupera su volumen con `false`. En Android es el foco `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`, que
 pide el shell por la petición genérica `audio_duck`. En el escritorio no hay un equivalente del
 sistema y es `Ok` sin efecto, para que el mismo programa corra en todas partes.
 

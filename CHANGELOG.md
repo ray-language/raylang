@@ -15,6 +15,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   try_join` tiene texto, y el de `spawn_isolated` dice que los canales cruzan dominios.
 - Aceptar sobre un listener de otro dominio da el mismo error en la VM y en nativo: `invalid
   handle` (raycrawl #369).
+- `ray bundle --android` / `--ios` comprueba antes de compilar que los targets de Rust están
+  instalados y dice cómo añadirlos, en vez de dejar salir el error de cargo (rayfocus #378).
 - Documentación: un ejemplo de iterador propio en la referencia y en `llms.txt` (raysolve #362),
   el coste de una llamada FFI y cuándo declarar `blocking` (rayserial #396), y qué hace
   `notify.schedule` con el permiso sin decidir o una hora pasada (rayfocus #376).

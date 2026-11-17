@@ -21067,6 +21067,9 @@ pequeños:
   dentro de un módulo. `ray doc` las presentaba peladas; ahora busca el módulo `std/*` que las
   exporta y lo dice.
 
+- **#378.** `ray bundle` pregunta a `rustup` qué targets hay antes de compilar. Sin `rustup` a
+  quien preguntar no corta: cargo dirá lo que falte, como antes.
+
 Fuera de esta ronda, con su motivo: **#407** (un módulo suelto que define una función con
 nombre de builtin) pide que el checker resuelva los nombres como lo hace el loader al
 namespacear, en seis sitios; tiene rodeo trivial. **#377**: el backend headless concede las

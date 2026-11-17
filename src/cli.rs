@@ -2522,6 +2522,14 @@ fn cmd_bundle(args: &[String]) {
                 })
         });
         eprintln!("[bundle] Android shared libraries — abi: {abi} (a cold build compiles ring/mimalloc per target; needs the NDK and the Android targets: {})", crate::toolchain::target_hint("android"));
+        let mut android_targets: Vec<&str> = Vec::new();
+        if build_arm {
+            android_targets.push("aarch64-linux-android");
+        }
+        if build_x86 {
+            android_targets.push("x86_64-linux-android");
+        }
+        crate::toolchain::require_targets(&android_targets, "android");
         let arm_so = work.join("arm64.so");
         let x86_so = work.join("x86_64.so");
         if build_arm {
@@ -2676,6 +2684,14 @@ fn cmd_bundle(args: &[String]) {
         let build_dev = ios_target != "sim";
         let build_sim = ios_target != "device";
         eprintln!("[bundle] iOS static libraries — target: {ios_target} (a cold build compiles ring/mimalloc per target; needs the iOS targets: {})", crate::toolchain::target_hint("ios"));
+        let mut ios_targets: Vec<&str> = Vec::new();
+        if build_dev {
+            ios_targets.push("aarch64-apple-ios");
+        }
+        if build_sim {
+            ios_targets.push("aarch64-apple-ios-sim");
+        }
+        crate::toolchain::require_targets(&ios_targets, "ios");
         let dev_a = work.join("dev.a");
         let sim_a = work.join("sim.a");
         if build_dev {

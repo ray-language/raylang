@@ -2170,9 +2170,11 @@ impl Parser {
             Err(self.error_here(format!(
                 "expected {}, but '{}' is a type name and cannot be used as an identifier (rename it)", what, ty
             )))
-        } else if let Some(word) = self.reserved_word() {
+        } else if let Some(word) = self.reserved_word().filter(|_| self.pos > 0 && self.tokens[self.pos - 1].line == tok.line) {
             // ray-daw #433: `fn import(…)` o `let match = …` decían «expected the function name»
-            // con un nombre justo ahí: es una palabra reservada, y el mensaje lo dice.
+            // con un nombre justo ahí: es una palabra reservada, y el mensaje lo dice. Solo en
+            // la MISMA línea que lo anterior: tras un `foo.` colgando, el `let` de la línea
+            // siguiente no es un nombre mal elegido, es que el nombre falta.
             Err(self.error_here(format!(
                 "expected {}, but '{}' is a reserved word and cannot be used as an identifier (rename it)", what, word
             )))
@@ -2352,6 +2354,9 @@ mod tests {
             assert!(e.msg.contains(&format!("'{word}' is a reserved word and cannot be used as an identifier (rename it)")), "{}", e.msg);
             assert!(e.msg.contains(what), "{}", e.msg);
         }
+        // El nombre FALTA (la palabra reservada abre la línea siguiente): no se culpa a esa palabra.
+        let e = crate::parser::parse(crate::lexer::lex("fn main() {\n    let x = foo.\n    let y = 1;\n}").unwrap()).expect_err("debe fallar");
+        assert!(!e.msg.contains("reserved word"), "{}", e.msg);
     }
     use super::*;
 

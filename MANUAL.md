@@ -1570,13 +1570,18 @@ fn run() -> Result<int, string> {
     while (true) {
         let e = ui.next_event()?;
         match (alarm.event_response(e)) {
-            Option.Some(r) => print(r.id + ": " + r.action),   // "stop", "snooze", "timeout" o "missed"
+            Option.Some(r) => print(r.id + ": " + r.action),   // "stop", "snooze", "timeout", "missed" o tu `action`
             Option.None => {},
         }
     }
     Result.Ok(0)
 }
 ```
+
+Una alarma puede llevar además **un botón propio**: `a.action = "taken"` y `a.action_label =
+"Ya la tomé"` lo añaden, y su respuesta llega como `r.action == "taken"`, distinta de «detener».
+En Android es el primer botón; en iOS ocupa el sitio de posponer. Con `a.action_opens = true`
+el botón además abre la app.
 
 - **Android**: funciona con el shell de `ray bundle --android`. La respuesta de una alarma que
   sonó con la app cerrada espera en la cola y llega en el siguiente arranque. El shell declara
@@ -1628,7 +1633,9 @@ chunk del alimentador y la cola entre tu programa y el dispositivo: `write` apar
 del programa ½, el anillo del backend ¼ y los buffers del dispositivo ¼). A tasas bajas mandan los
 suelos de ~2 KiB por etapa (22050 Hz mono con 30 ms ≈ 120–140 ms en cola). Y para sincronizar visuales con lo que SUENA, `audio.played_ms(h)`
 devuelve la posición real de reproducción según el backend — siempre algo por detrás de lo
-escrito, que es lo que hace falta para pintar el compás exacto.
+escrito, que es lo que hace falta para pintar el compás exacto. `audio.queued_ms(h)` dice
+cuánto de lo escrito aún no ha sonado: la muestra que suena es «escritas − queued», también
+después de un `flush` o de un hueco.
 
 Backends: AudioQueue en macOS, ALSA en Linux (cargada en runtime: sin `libasound` el `open` da
 un `Err` claro) y AAudio en Android (≤50 ms de latencia pide el modo LOW_LATENCY). Con `RAY_AUDIO_SINK=null` en el entorno, un sumidero de tiempo real "reproduce"

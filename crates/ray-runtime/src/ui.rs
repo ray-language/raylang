@@ -4428,9 +4428,34 @@ mod mac {
         }
     }
 
+    /// ¿Trae archivos el arrastre `info`? Mira solo los TIPOS del portapapeles del arrastre:
+    /// `draggingUpdated:` llega con cada movimiento del ratón, y leer todas las rutas ahí
+    /// hacía tartamudear un arrastre de miles de archivos.
+    unsafe fn carries_files(info: Id) -> bool {
+        // SAFETY: mensajes estándar de NSDraggingInfo/NSPasteboard/NSArray en el hilo principal.
+        unsafe {
+            let get: MsgId = std::mem::transmute(msg_send());
+            let contains: unsafe extern "C" fn(Id, Sel, Id) -> u8 = std::mem::transmute(msg_send());
+            let plain: unsafe extern "C" fn(Id, Sel) = std::mem::transmute(msg_send());
+            let pasteboard = get(info, sel(b"draggingPasteboard\0"));
+            if pasteboard.is_null() {
+                return false;
+            }
+            let types = get(pasteboard, sel(b"types\0"));
+            if types.is_null() {
+                return false;
+            }
+            let file_url = nsstring("public.file-url");
+            let found = contains(types, sel(b"containsObject:\0"), file_url) != 0;
+            plain(file_url, sel(b"release\0"));
+            found
+        }
+    }
+
     /// ¿Intercepta esta vista la suelta `info`? Solo si lo pidió y el arrastre trae archivos.
     unsafe fn takes_drop(this: Id, info: Id) -> bool {
-        drop_views().lock().unwrap().contains(&(this as usize)) && !unsafe { dragged_paths(info) }.is_empty()
+        let asked = drop_views().lock().unwrap().contains(&(this as usize));
+        asked && unsafe { carries_files(info) }
     }
 
     extern "C" fn web_dragging(this: Id, cmd: Sel, info: Id) -> usize {
@@ -4456,6 +4481,9 @@ mod mac {
                 return call(&sup, cmd, info);
             }
             let paths = dragged_paths(info);
+            if paths.is_empty() {
+                return false; // el arrastre anunciaba archivos y no trae ninguno legible
+            }
             let location: MsgPoint = std::mem::transmute(msg_send());
             let convert: unsafe extern "C" fn(Id, Sel, CGPoint, Id) -> CGPoint = std::mem::transmute(msg_send());
             let flipped: unsafe extern "C" fn(Id, Sel) -> u8 = std::mem::transmute(msg_send());
@@ -5849,6 +5877,9 @@ mod mac {
                 if webview.is_null() {
                     return Err("ui: could not create the webview".to_string());
                 }
+                // Un webview recién creado no acepta sueltas: su dirección puede ser la de uno
+                // de una ventana ya cerrada que sí las aceptaba.
+                accept_drops(webview as usize, false);
                 if devtools {
                     let responds: MsgBoolSel = std::mem::transmute(msg_send());
                     if responds(webview, sel(b"respondsToSelector:\0"), sel(b"setInspectable:\0")) != 0 {
@@ -7080,6 +7111,8 @@ mod gtk {
         check_new: Option<FnItemNewLabel>,
         check_set_active: Option<unsafe extern "C" fn(Widget, i32)>,
         set_sensitive: Option<unsafe extern "C" fn(Widget, i32)>,
+        /// ray-daw #434: `gtk_menu_item_set_label`, para reetiquetar un item vivo.
+        set_label: Option<unsafe extern "C" fn(Widget, *const std::ffi::c_char)>,
         image_item_new: Option<FnItemNewLabel>,
         image_new_from_file: Option<unsafe extern "C" fn(*const std::ffi::c_char) -> Widget>,
         image_item_set_image: Option<FnWidgetPair>,
@@ -7123,6 +7156,7 @@ mod gtk {
                     check_new: opt(c"gtk_check_menu_item_new_with_label").map(|p| std::mem::transmute::<*mut c_void, FnItemNewLabel>(p)),
                     check_set_active: opt(c"gtk_check_menu_item_set_active").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
                     set_sensitive: opt(c"gtk_widget_set_sensitive").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
+                    set_label: opt(c"gtk_menu_item_set_label").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *const std::ffi::c_char)>(p)),
                     image_item_new: opt(c"gtk_image_menu_item_new_with_label").map(|p| std::mem::transmute::<*mut c_void, FnItemNewLabel>(p)),
                     image_new_from_file: opt(c"gtk_image_new_from_file").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*const std::ffi::c_char) -> Widget>(p)),
                     image_item_set_image: opt(c"gtk_image_menu_item_set_image").map(|p| std::mem::transmute::<*mut c_void, FnWidgetPair>(p)),
@@ -7137,8 +7171,8 @@ mod gtk {
         })
     }
 
-    /// ray-daw #434: el texto de un item por tag — se cambia en los specs y se reconstruye cada
-    /// menú que lo lleva (como `rename_menu`), con lo que el estado y los atajos se conservan.
+    /// ray-daw #434: el texto de un item por tag — se cambia en los specs (ventanas futuras) y
+    /// en los items vivos, sin rehacer el menú: estado y atajos se conservan.
     pub(super) fn set_menu_title(tag: &str, title: &str) -> Result<(), String> {
         let mut touched: Vec<(String, Vec<super::MenuItemSpec>)> = Vec::new();
         for (menu, items) in menu_specs().lock().unwrap().iter_mut() {
@@ -7154,10 +7188,30 @@ mod gtk {
         if touched.is_empty() {
             return Err(format!("ui: no menu item with tag '{tag}'"));
         }
-        for (menu, items) in touched {
-            replace_menu(&menu, &items)?;
+        // Con `gtk_menu_item_set_label` se reetiqueta el widget vivo (conserva estado, icono
+        // y atajo, y no cierra un menú abierto); sin él, se reconstruyen los menús afectados.
+        let Some(set_label) = item_api().set_label else {
+            for (menu, items) in touched {
+                replace_menu(&menu, &items)?;
+            }
+            return Ok(());
+        };
+        let live = items_by_tag().lock().unwrap().get(tag).cloned().unwrap_or_default();
+        if live.is_empty() {
+            return Ok(());
         }
-        Ok(())
+        let title_c = std::ffi::CString::new(title.replace('\0', "")).unwrap();
+        on_main_sync(move || {
+            // SAFETY: widgets del loop; los de ventanas cerradas se saltan por su bandera.
+            unsafe {
+                for (w, alive) in live {
+                    if alive.load(Ordering::SeqCst) {
+                        set_label(w as Widget, title_c.as_ptr());
+                    }
+                }
+            }
+            Ok(())
+        })
     }
 
     /// M236: estado por tag — specs (ventanas futuras) + widgets vivos (en el hilo del loop).
@@ -8228,6 +8282,7 @@ mod gtk {
         get_data: unsafe extern "C" fn(Widget, *mut c_void, *mut c_void, u32),
         finish: unsafe extern "C" fn(*mut c_void, i32, i32, u32),
         get_uris: unsafe extern "C" fn(*mut c_void) -> *mut *mut std::ffi::c_char,
+        get_target: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
         filename_from_uri: unsafe extern "C" fn(*const std::ffi::c_char, *mut *mut std::ffi::c_char, *mut *mut c_void) -> *mut std::ffi::c_char,
         strfreev: unsafe extern "C" fn(*mut *mut std::ffi::c_char),
         free: unsafe extern "C" fn(*mut c_void),
@@ -8265,6 +8320,7 @@ mod gtk {
                     get_data: std::mem::transmute::<*mut c_void, _>(get(c"gtk_drag_get_data")?),
                     finish: std::mem::transmute::<*mut c_void, _>(get(c"gtk_drag_finish")?),
                     get_uris: std::mem::transmute::<*mut c_void, _>(get(c"gtk_selection_data_get_uris")?),
+                    get_target: std::mem::transmute::<*mut c_void, _>(get(c"gtk_selection_data_get_target")?),
                     filename_from_uri: std::mem::transmute::<*mut c_void, _>(get(c"g_filename_from_uri")?),
                     strfreev: std::mem::transmute::<*mut c_void, _>(get(c"g_strfreev")?),
                     free: std::mem::transmute::<*mut c_void, _>(get(c"g_free")?),
@@ -8322,6 +8378,12 @@ mod gtk {
     extern "C" fn on_drag_data(widget: Widget, context: *mut c_void, _x: i32, _y: i32, data: *mut c_void, _info: u32, time: u32, user: *mut c_void) {
         let id = user as usize as i64;
         let Some(api) = drop_api() else { return };
+        // Solo la respuesta a NUESTRA petición (text/uri-list) cierra la suelta: WebKit pide
+        // otros formatos al pasar por encima y una de esas respuestas puede llegar después.
+        // SAFETY: `data` es el GtkSelectionData de esta señal.
+        if unsafe { (api.get_target)(data) != (api.atom_intern)(c"text/uri-list".as_ptr(), 0) } {
+            return;
+        }
         let Some((x, y)) = drop_states().lock().unwrap().get_mut(&id).and_then(|s| s.awaiting.take()) else {
             return; // datos que pidió WebKit al pasar por encima: no es nuestra suelta
         };
@@ -10164,27 +10226,54 @@ mod win {
         M.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
     }
 
-    /// ray-daw #434: el texto de un item por tag — se cambia en los specs y se reconstruye cada
-    /// menú que lo lleva (como `rename_menu`), con lo que el estado y los atajos se conservan.
+    /// ray-daw #434: el texto de un item por tag — se cambia en los specs (ventanas futuras) y
+    /// en los items vivos, sin rehacer el menú: estado y atajos se conservan.
     pub(super) fn set_menu_title(tag: &str, title: &str) -> Result<(), String> {
-        let mut touched: Vec<(String, Vec<super::MenuItemSpec>)> = Vec::new();
-        for (menu, items) in menu_specs().lock().unwrap().iter_mut() {
-            let mut found = false;
+        // El texto vivo lleva el atajo detrás de un tabulador, como al construir el menú.
+        let mut shortcut: Option<String> = None;
+        for (_, items) in menu_specs().lock().unwrap().iter_mut() {
             for it in items.iter_mut().filter(|it| it.tag == tag) {
                 it.label = title.to_string();
-                found = true;
-            }
-            if found {
-                touched.push((menu.clone(), items.clone()));
+                shortcut.get_or_insert_with(|| it.shortcut.clone());
             }
         }
-        if touched.is_empty() {
+        let live = items_by_tag().lock().unwrap().get(tag).cloned().unwrap_or_default();
+        let Some(shortcut) = shortcut else {
             return Err(format!("ui: no menu item with tag '{tag}'"));
+        };
+        if live.is_empty() {
+            return Ok(());
         }
-        for (menu, items) in touched {
-            replace_menu(&menu, &items)?;
-        }
-        Ok(())
+        let label = match accel_for(&shortcut, 0) {
+            Some((text, _)) => format!("{title}\t{text}"),
+            None => title.to_string(),
+        };
+        on_main_sync(move || {
+            let text = wide(&label);
+            // SAFETY: handles de ventanas propias; IsWindow descarta las ya destruidas. Solo se
+            // cambia la cadena del item (MIIM_STRING): estado, icono y acelerador se conservan.
+            unsafe {
+                for (hwnd, id) in live {
+                    let hwnd = HWND(hwnd as *mut _);
+                    if !IsWindow(Some(hwnd)).as_bool() {
+                        continue;
+                    }
+                    let menu = GetMenu(hwnd);
+                    if menu.is_invalid() {
+                        continue;
+                    }
+                    let info = MENUITEMINFOW {
+                        cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+                        fMask: MIIM_STRING,
+                        dwTypeData: windows::core::PWSTR(text.as_ptr() as *mut u16),
+                        ..Default::default()
+                    };
+                    let _ = SetMenuItemInfoW(menu, id as u32, false, &info);
+                    let _ = DrawMenuBar(hwnd);
+                }
+            }
+            Ok(())
+        })
     }
 
     /// M236: estado por tag — en los specs (ventanas futuras) y en las barras vivas.

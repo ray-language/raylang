@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **La inferencia llega a dos sitios más** (raysolve #358): una variante sin datos dentro de un
+  struct genérico, en una función genérica (`Seg { lo: Bound.Incl(v), hi: Bound.Unbounded }`),
+  y un `[]` u `Option.None` dentro de un arreglo, que toman el tipo de sus hermanos
+  (`[[1, 2], []]`). Antes pedían un `let` anotado.
+
 - `ray test tests/x.ray` en un paquete-librería (sin `src/main.ray`) encuentra los módulos de
   `src/`, como ya hacía `ray test` a secas (raysolve #361).
 - `kv.save()` crea la carpeta del archivo si falta, y un fallo dice qué ruta no se pudo

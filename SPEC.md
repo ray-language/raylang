@@ -476,7 +476,12 @@ for E2` (si no, error de tipos). Análogo para `Option<T>` en función que devue
 - **Inferencia local**: `let x = e;` toma el tipo de `e`. **Bidireccional**: un tipo esperado
   (anotación, tipo de retorno, parámetro) fija los indeterminados (`[]`, `None`, `Map.new()`,
   `Channel.new()`, construcción de enum genérico) y la **coerción de literal entero a `u*`**
-  (también en asignación y elementos de arreglo).
+  (también en asignación y elementos de arreglo). El tipo esperado de un campo de struct o del
+  payload de una variante también lo es cuando menciona un parámetro de tipo del ámbito
+  (dentro de `fn c<V>`, `Seg { lo: Bound.Incl(v), hi: Bound.Unbounded }` fija `Bound<V>`). En un
+  literal de arreglo sin tipo esperado, el tipo es el del primer elemento que se determina
+  solo, y los indeterminados lo toman (`[[1, 2], []]` es `[[int]]`); si ninguno se determina,
+  se exige anotación.
 - **Genéricos**: la instanciación se **infiere de los argumentos** por unificación (las
   variables de la firma llamada son incógnitas; las del llamador, rígidas). Dos usos
   incompatibles de `T` en una llamada son error; un parámetro no determinado exige anotación.

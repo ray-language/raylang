@@ -1665,7 +1665,7 @@ impl Checker {
             match matches.as_slice() {
                 [] => return Err(self.err(line, col, format!("missing field '{}' in the literal of '{}'{}", dname, name, self.constructor_hint(name)))),
                 [(_, value)] => {
-                    let vt = self.check_value_against(value, dty, &sigma)?;
+                    let vt = self.check_ctor_value_against(value, dty, &sigma)?;
                     unify(dty, &vt, &mut sigma).map_err(|reason| self.err(value.line, value.col, format!(
                         "field '{}' of '{}': {}", dname, name, reason
                     )))?;
@@ -1740,7 +1740,7 @@ impl Checker {
         let expected_owned = expected.map(|e| self.resolve_type(e));
         let mut sigma = seed_sigma_from_expected(expected_owned.as_ref(), enum_name, &tparams);
         for (arg, pty) in args.iter().zip(&payload) {
-            let at = self.check_value_against(arg, pty, &sigma)?;
+            let at = self.check_ctor_value_against(arg, pty, &sigma)?;
             unify(pty, &at, &mut sigma).map_err(|reason| self.err(arg.line, arg.col, format!(
                 "'{}.{}': {}", enum_name, variant, reason
             )))?;
@@ -1755,6 +1755,20 @@ impl Checker {
     /// Verifica el valor de un campo/payload propagándole como **tipo esperado** el
     /// tipo declarado ya sustituido con lo inferido hasta ahora (`σ`) —pero solo si
     /// ese tipo es concreto (sin `Var`); si todavía tiene incógnitas, no aporta—.
+    /// Como [`Self::check_value_against`], para el campo de un literal de struct o el payload de
+    /// una variante (raysolve #358). Ahí las incógnitas son solo los parámetros del tipo que se
+    /// construye (renombrados si chocan con el ámbito): un parámetro de tipo RÍGIDO del ámbito
+    /// (`V` dentro de `fn c<V>`) no es una incógnita, y el tipo esperado que lo menciona sí sirve.
+    /// Sin esto, `Seg { lo: Bound.Incl(v), hi: Bound.Unbounded }` dentro de una función genérica
+    /// comprobaba `Bound.Unbounded` sin contexto y no podía inferir su parámetro.
+    pub(super) fn check_ctor_value_against(&mut self, value: &Expr, declared: &Type, sigma: &HashMap<String, Type>) -> Result<Type, TypeError> {
+        let exp = subst(declared, sigma);
+        if type_has_var(&exp) && !type_has_var_outside(&exp, &self.type_params) {
+            return self.check_expr_expected(value, &exp);
+        }
+        self.check_value_against(value, declared, sigma)
+    }
+
     pub(super) fn check_value_against(&mut self, value: &Expr, declared: &Type, sigma: &HashMap<String, Type>) -> Result<Type, TypeError> {
         let exp = subst(declared, sigma);
         if type_has_var(&exp) {
@@ -2799,9 +2813,38 @@ impl Checker {
                     return Err(self.err(expr.line, expr.col,
                         "cannot infer the type of [] here; annotate it (e.g. let xs: [int] = [];)".into()));
                 }
-                let first = self.check_expr(&elems[0])?;
-                for e in &elems[1..] {
-                    let t = self.check_expr(e)?;
+                // raysolve #358: un elemento que solo no se puede tipar por falta de contexto (un
+                // `[]`, un `Option.None`) toma el tipo de sus hermanos: `[[1, 2], []]` es `[[int]]`.
+                // El tipo sale del primer elemento que se tipa solo, esté donde esté.
+                let needs_context = |e: &TypeError| {
+                    e.msg.starts_with("cannot infer the type of [] here") || e.msg.starts_with("could not infer the type parameter")
+                };
+                let mut first: Option<(usize, Type)> = None;
+                let mut pending: Option<TypeError> = None;
+                for (i, e) in elems.iter().enumerate() {
+                    match self.check_expr(e) {
+                        Ok(t) => {
+                            first = Some((i, t));
+                            break;
+                        }
+                        Err(err) if needs_context(&err) => {
+                            pending.get_or_insert(err);
+                        }
+                        Err(err) => return Err(err),
+                    }
+                }
+                let Some((at, first)) = first else {
+                    return Err(pending.expect("a non-empty array without a typed element has an error"));
+                };
+                for (i, e) in elems.iter().enumerate() {
+                    if i == at {
+                        continue;
+                    }
+                    let t = match if i < at { Err(None) } else { self.check_expr(e).map_err(Some) } {
+                        Ok(t) => t,
+                        Err(Some(err)) if !needs_context(&err) => return Err(err),
+                        Err(_) => self.check_expr_expected(e, &first)?,
+                    };
                     if t != first {
                         return Err(self.err(e.line, e.col, format!(
                             "the array elements must be of the same type: {} and {}", first, t

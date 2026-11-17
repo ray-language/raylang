@@ -4194,9 +4194,15 @@ impl Transpiler {
             }
             ExprKind::While { .. } => Type::Unit,
             ExprKind::ArrayLit(elems) => {
-                let elem = match elems.first() {
-                    Some(e) => self.type_of(e)?,
+                // raysolve #358: como el checker, el tipo sale del primer elemento que se tipa solo
+                // (`[[], [1]]`: el `[]` toma el de su hermano).
+                let first = match elems.first() {
+                    Some(e) => self.type_of(e),
                     None => return Err("empty array literal without an annotation".into()),
+                };
+                let elem = match first {
+                    Ok(t) => t,
+                    Err(e) => elems[1..].iter().find_map(|x| self.type_of(x).ok()).ok_or(e)?,
                 };
                 Type::Array(Box::new(elem))
             }

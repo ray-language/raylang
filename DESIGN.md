@@ -21075,3 +21075,23 @@ nombre de builtin) pide que el checker resuelva los nombres como lo hace el load
 namespacear, en seis sitios; tiene rodeo trivial. **#377**: el backend headless concede las
 alarmas en cualquier plataforma a propósito, para poder probar la lógica en el escritorio, y
 `RAY_UI_ALARM_PERMISSION` ya lo fuerza. **#358** y **#357** son trabajo del checker y de la SPEC.
+
+## 458. La inferencia baja a variantes sin datos y arreglos vacíos (raysolve #358, nov 2026)
+
+Dos casos que obligaban a un `let` anotado sin motivo.
+
+**Variante sin datos en un contexto genérico.** Al comprobar el campo de un literal de struct (o
+el payload de una variante), el tipo declarado ya sustituido solo se pasaba como tipo esperado
+si no contenía ninguna variable. Dentro de `fn c<V>`, el campo `hi: Bound<V>` contiene `V`, que
+es un parámetro RÍGIDO del ámbito, no una incógnita, y aun así se descartaba: `Bound.Unbounded`
+se comprobaba sin contexto. Ahora cuentan como incógnitas solo las variables que no son del
+ámbito (`check_ctor_value_against`). Se limita a los constructores, donde los parámetros del
+tipo construido se renombran si chocan con el ámbito; en los argumentos de una llamada los
+nombres de la firma llamada pueden coincidir con los del llamador y la regla no sería segura.
+
+**`[]` anidado.** Un literal de arreglo sin tipo esperado tomaba el tipo del primer elemento y
+fallaba si ese era un `[]`. Ahora el tipo sale del primer elemento que se determina solo, y los
+que fallan solo por falta de contexto se comprueban contra él. El transpilador nativo tiene su
+propia inferencia y sigue la misma regla (emite el literal contra el tipo de sus hermanos).
+
+Sigue fuera: los argumentos de tipo explícitos (`none::<V>()`), que son sintaxis nueva.

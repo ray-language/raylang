@@ -84,3 +84,33 @@ fn ray_doc_names_the_module_of_a_function_that_is_not_a_global() {
     let (out, _e, _c) = ray(&d, &["doc", "len"]);
     assert!(out.starts_with("len(c) -> int\n") && !out.contains("Not a global"), "{out}");
 }
+
+/// raysolve #358: el contexto baja a lo que no se puede tipar solo. Una variante sin datos
+/// dentro de un struct genérico, en una función genérica, toma su parámetro del campo; y un
+/// `[]` o un `Option.None` dentro de un array toman el tipo de sus hermanos, vayan donde vayan.
+#[test]
+fn context_reaches_unit_variants_and_empty_arrays() {
+    let d = tmp("infer");
+    std::fs::write(
+        d.join("prog.ray"),
+        "enum Bound<V> { Incl(V), Unbounded, }\nstruct Seg<V> { lo: Bound<V>, hi: Bound<V>, }\nfn c<V>(v: V) -> Seg<V> { Seg { lo: Bound.Incl(v), hi: Bound.Unbounded } }\nfn open<V>(s: Seg<V>) -> bool { match (s.hi) { Bound.Unbounded => true, Bound.Incl(_) => false, } }\nfn main() -> int {\n    print(open(c(3)));\n    let xs = [[1, 2, 3], [3], []];\n    let ys = [[], [1]];\n    let zs = [Option.None, Option.Some(\"a\")];\n    print(xs);\n    print(ys);\n    print(zs);\n    0\n}\n",
+    )
+    .unwrap();
+    let want = "true\n[[1, 2, 3], [3], []]\n[[], [1]]\n[Option.None, Option.Some(a)]\n";
+    for args in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let (out, err, code) = ray(&d, args);
+        assert_eq!(code, 0, "{args:?}: {err}");
+        assert_eq!(out, want, "{args:?}");
+    }
+    if has_rustc() {
+        let bin = d.join("prog_bin");
+        let (_o, err, code) = ray(&d, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(code, 0, "build --native: {err}");
+        assert_eq!(String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout), want);
+    }
+    // Sin ningún elemento que se tipe solo, el error sigue pidiendo la anotación.
+    std::fs::write(d.join("bad.ray"), "fn main() -> int { let a = [[], []]; 0 }\n").unwrap();
+    let (_o, err, code) = ray(&d, &["check", "bad.ray"]);
+    assert_eq!(code, 65);
+    assert!(err.contains("cannot infer the type of [] here"), "{err}");
+}

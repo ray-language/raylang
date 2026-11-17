@@ -1814,6 +1814,13 @@ impl Transpiler {
             // `borrow()` de un elemento vive hasta el final de la sentencia; un elemento posterior que
             // haga `borrow_mut` del mismo objeto panicaría).
             ExprKind::ArrayLit(elems) => {
+                // raysolve #358: si algún elemento no se tipa solo (un `[]`, un `Option.None`), el
+                // literal se emite contra el tipo que le dan sus hermanos.
+                if elems.iter().any(|el| matches!(&el.kind, ExprKind::ArrayLit(_) | ExprKind::EnumLit { .. }) && self.type_of(el).is_err())
+                    && let Ok(whole @ Type::Array(_)) = self.type_of(e)
+                {
+                    return self.emit_typed(out, e, &whole);
+                }
                 // M396 (rayplay #164): solo se izan los elementos que pueden tomar prestado; un literal
                 // puro (`0`, `1.5`, `"a"`, `-3`) va en línea — 3000 `let` en un bloque tumbaban a rustc.
                 let hoist = needs_hoist(elems);

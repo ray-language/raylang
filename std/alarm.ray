@@ -35,6 +35,10 @@ from std/ui import UiEvent;
 /// `stop_label` and `snooze_label` are the texts of the buttons (empty = "Stop" / "Snooze") —
 /// since iOS 26.1 the system shows its own stop button and ignores `stop_label` (Android shows
 /// it), so on iOS a `"stop"` answer may only mean "silence it", not what your label said;
+/// `action` adds a button of your own: `action_label` is its text and `action` what
+/// `Response.action` says when the user presses it (`"taken"`) — on Android it is the first
+/// button of the alarm, above "Stop" and "Snooze"; on iOS it takes the place of "Snooze" (the
+/// system allows one button besides its own stop);
 /// `data` comes back in the response; `max_minutes` silences an unanswered alarm (0 = the
 /// shell's cap, 60 minutes) and reports it as a `"timeout"` response.
 pub struct Alarm {
@@ -46,6 +50,8 @@ pub struct Alarm {
     snooze_label: string,
     data: string,
     max_minutes: int,
+    action: string,
+    action_label: string,
 }
 
 /// When an alarm rings. `At(unix_seconds)` (once), `Daily(hour, minute)` (local time, every
@@ -56,7 +62,7 @@ pub enum Trigger {
     Weekly([int], int, int),
 }
 
-/// The user's answer to an alarm: `action` is `"stop"`, `"snooze"`, `"timeout"` (nobody
+/// The user's answer to an alarm: `action` is the alarm's own `action` (its button), `"stop"`, `"snooze"`, `"timeout"` (nobody
 /// answered in `max_minutes`, or another alarm took over while it rang) or `"missed"` (its time
 /// passed while the phone was off: it did not ring), and `"open"` on a system that offers it;
 /// `data` is the alarm's `data`.
@@ -76,7 +82,9 @@ pub fn message(title: string) -> Alarm {
         stop_label: "",
         snooze_label: "",
         data: "",
-        max_minutes: 0
+        max_minutes: 0,
+        action: "",
+        action_label: ""
     }
 }
 
@@ -145,6 +153,10 @@ pub fn schedule(a: Alarm, when: Trigger) -> Result<string, string> {
             + to_string(a.max_minutes)
             + sep()
             + a.snooze_label
+            + sep()
+            + a.action
+            + sep()
+            + a.action_label
     )
 }
 

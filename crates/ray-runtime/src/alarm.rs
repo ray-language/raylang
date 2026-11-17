@@ -31,6 +31,10 @@ pub struct Alarm {
     pub data: String,
     /// Minutos máximos sonando sin respuesta (0 = el tope del shell, 60); después, `timeout`.
     pub max_minutes: i64,
+    /// pepa #435: un botón propio. `action` es lo que llega en la respuesta (vacío = sin
+    /// botón) y `action_label` su texto.
+    pub action: String,
+    pub action_label: String,
 }
 
 /// Cuándo suena. Los días de `Weekly` son ISO: 1 = lunes … 7 = domingo.
@@ -114,7 +118,8 @@ pub fn trigger_text(t: &Trigger) -> String {
     }
 }
 
-/// `trigger ␟ id ␟ title ␟ sound ␟ snooze_minutes ␟ stop_label ␟ data ␟ max_minutes [␟ snooze_label]`.
+/// `trigger ␟ id ␟ title ␟ sound ␟ snooze_minutes ␟ stop_label ␟ data ␟ max_minutes
+/// [␟ snooze_label [␟ action ␟ action_label]]`.
 /// Valida y rellena el id si falta.
 pub fn parse_alarm(arg: &str) -> Result<(Trigger, Alarm), String> {
     let f: Vec<&str> = arg.split(SEP).collect();
@@ -131,6 +136,8 @@ pub fn parse_alarm(arg: &str) -> Result<(Trigger, Alarm), String> {
         data: f[6].to_string(),
         max_minutes: f[7].trim().parse().unwrap_or(0),
         snooze_label: f.get(8).map(|s| s.to_string()).unwrap_or_default(),
+        action: f.get(9).map(|s| s.trim().to_string()).unwrap_or_default(),
+        action_label: f.get(10).map(|s| s.to_string()).unwrap_or_default(),
     };
     if a.title.trim().is_empty() {
         return Err("alarm: an alarm needs a title".to_string());
@@ -151,8 +158,22 @@ pub fn parse_alarm(arg: &str) -> Result<(Trigger, Alarm), String> {
     if !(0..=60).contains(&a.max_minutes) {
         return Err("alarm: max_minutes must be between 0 (the default cap, 60) and 60".to_string());
     }
+    // pepa #435: el botón propio responde con su `action`, que no puede confundirse con las
+    // respuestas del sistema ni romper el evento `id\taction\tdata`.
+    if !a.action.is_empty() {
+        if matches!(a.action.as_str(), "stop" | "snooze" | "timeout" | "missed" | "open") {
+            return Err(format!("alarm: action '{}' is a response of the system (pick another name, e.g. 'taken')", a.action));
+        }
+        if a.action.contains(['\t', '\n']) {
+            return Err("alarm: action cannot contain tabs or newlines".to_string());
+        }
+        if a.action_label.trim().is_empty() {
+            return Err("alarm: an action needs its action_label (the text of the button)".to_string());
+        }
+    }
     // El separador de campos no puede viajar dentro de uno (desplazaría los demás).
-    if arg.matches(SEP).count() > 8 || f.len() > 9 {
+    // (8 campos, 9 con `snooze_label` u 11 con el botón propio: cualquier otra cuenta lo delata).
+    if !matches!(f.len(), 8 | 9 | 11) {
         return Err("alarm: a field contains the unit separator U+001F".to_string());
     }
     Ok((trigger, a))
@@ -170,6 +191,8 @@ pub fn alarm_text(trigger: &Trigger, a: &Alarm) -> String {
         a.data.clone(),
         a.max_minutes.to_string(),
         a.snooze_label.clone(),
+        a.action.clone(),
+        a.action_label.clone(),
     ]
     .join(&SEP.to_string())
 }
@@ -386,6 +409,11 @@ mod tests {
         assert_eq!(piped.id, "pepa:plan:2026-11-11|d|m1|20:00#ab");
         assert!(bad(&["daily:8:0", "x", "T", "a/b.ogg", "0", "", "", "0"]).contains("not a path"));
         assert!(bad(&["daily:8:0", "x", "T", "", "500", "", "", "0"]).contains("snooze_minutes"));
+        // pepa #435: el botón propio.
+        let (_, a) = parse_alarm(&["daily:8:0", "x", "T", "", "0", "", "", "0", "", "taken", "Ya la tomé"].join(&SEP.to_string())).unwrap();
+        assert_eq!((a.action.as_str(), a.action_label.as_str()), ("taken", "Ya la tomé"));
+        assert!(bad(&["daily:8:0", "x", "T", "", "0", "", "", "0", "", "snooze", "Luego"]).contains("response of the system"));
+        assert!(bad(&["daily:8:0", "x", "T", "", "0", "", "", "0", "", "taken", ""]).contains("action_label"));
         assert!(bad(&["daily:8:0", "x", "T", "", "0", "", "", "90"]).contains("max_minutes"));
         assert!(bad(&["daily:8:0", "x"]).contains("malformed"));
         // Un campo con el separador dentro desplazaría los demás: se rechaza.

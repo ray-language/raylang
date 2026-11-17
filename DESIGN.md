@@ -20863,3 +20863,23 @@ No hay builtin nuevo: viaja por `__audio_open(h, 0, 0, "queued")`, como `devices
 ya dejaba puesta la bandera que el contador miraba, así que marcaba 0 con 516 cortes. Se
 sustituye por `underruns` = fundidos − 1 (el último es el final del flujo), que es lo que la
 documentación ya decía que había que mirar. Cuenta también la pausa tras un `flush`.
+
+## 452. `std/alarm`: un botón propio (pepa #435, nov 2026)
+
+Desde iOS 26.1 AlarmKit ignora `stopButton`: el sistema escribe «Detener» y `stop_label` no se
+ve. En una app de medicación eso convierte «silenciar» en «ya la tomé». Lo que el sistema sí deja
+es UN botón secundario con comportamiento `.custom`, que hasta ahora era siempre posponer.
+
+**Decisión**: dos campos en `alarm.Alarm`, `action` y `action_label`. Con `action` puesto, la
+alarma lleva un botón con ese texto y la respuesta llega como `Response.action == action`. El
+nombre no puede ser una respuesta del sistema (`stop`, `snooze`, `timeout`, `missed`, `open`) y
+exige su texto. Viajan como los campos 10 y 11 del registro (`… ␟ snooze_label ␟ action ␟
+action_label`); un registro vale con 8, 9 u 11 campos, y cualquier otra cuenta delata un
+separador dentro de un campo.
+
+- **iOS**: el botón propio ocupa el secundario (`RayAlarmActionIntent`) y posponer no aparece;
+  `answered` traduce `custom` al nombre que guardó el registro.
+- **Android**: la pantalla es nuestra: el botón propio va primero, sobre «Stop» y «Snooze», y
+  también en la notificación (`ACTION_CUSTOM`).
+
+Los campos nuevos rompen un literal `Alarm { … }` escrito a mano; `alarm.message` los rellena.

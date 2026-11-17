@@ -106,6 +106,83 @@ true
     let _ = std::fs::remove_dir_all(&d);
 }
 
+/// ray-daw #440: `RAY_AUDIO_DEVICES` declara los dispositivos de prueba — se listan, y con el
+/// sumidero y la fuente de pruebas un id que no está es `Err`.
+#[test]
+fn declared_test_devices_are_listed_and_checked() {
+    let d = workdir("declared");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import std/audio;
+fn main() -> int {
+    for dev in audio.devices() { print("${dev.id} ${dev.default_output} ${dev.transport}"); }
+    print(audio.open_device("nope", 48000, 2, "s16le", 0));
+    print(audio.open_input_device("nope", 48000, 1, "s16le", 0));
+    let o = audio.open_device("b", 48000, 2, "s16le", 0);
+    print(o.is_ok());
+    let _ = close(o.unwrap());
+    let i = audio.open_input_device("a", 48000, 1, "s16le", 0);
+    print(i.is_ok());
+    let _ = close(i.unwrap());
+    0
+}
+"#,
+    )
+    .unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["run", "prog.ray"])
+        .env("RAY_AUDIO_SINK", "null")
+        .env("RAY_AUDIO_SOURCE", "null")
+        .env("RAY_AUDIO_DEVICES", "a, b")
+        .current_dir(&d)
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&o.stderr), "");
+    assert_eq!(
+        String::from_utf8_lossy(&o.stdout),
+        "a true virtual
+b false virtual
+Result.Err(audio: no output device with id 'nope' (was it disconnected?); list them with audio.devices())
+Result.Err(audio: no input device with id 'nope' (was it disconnected?); list them with audio.devices())
+true
+true
+"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// ray-daw #441: `watch` da un handle y `next_change` aparca; al cerrarlo desde otra fibra la
+/// espera termina con `Err` en vez de quedarse colgada.
+#[test]
+fn watching_the_devices_parks_until_closed() {
+    let d = workdir("watch");
+    std::fs::write(
+        d.join("prog.ray"),
+        r#"import std/audio;
+import std/time;
+fn main() -> int {
+    let w = audio.watch().unwrap();
+    spawn(fn() { time.sleep(300); close(w); });
+    let t0 = time.monotonic();
+    print(audio.next_change(w).is_err());
+    print(time.monotonic() - t0 >= 250);
+    0
+}
+"#,
+    )
+    .unwrap();
+    let o = Command::new(env!("CARGO_BIN_EXE_ray")).args(["run", "prog.ray"]).env("RAY_AUDIO_DEVICES", "a").current_dir(&d).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&o.stderr), "");
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "true\ntrue\n");
+    // En nativo el cierre desde otra fibra tiene que despertar igual al lector aparcado.
+    let bin = d.join("prog_native");
+    let b = Command::new(env!("CARGO_BIN_EXE_ray")).args(["build", "--native", "prog.ray", "-o", bin.to_str().unwrap()]).current_dir(&d).output().unwrap();
+    assert!(b.status.success(), "build --native: {}", String::from_utf8_lossy(&b.stderr));
+    let o = Command::new(&bin).env("RAY_AUDIO_DEVICES", "a").current_dir(&d).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&o.stdout), "true\ntrue\n");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
 /// Con el sumidero y la fuente de pruebas no hay dispositivos: el id se acepta y se ignora, de
 /// modo que un programa que elige dispositivo se puede probar en CI.
 #[test]

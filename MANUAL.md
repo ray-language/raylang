@@ -1698,6 +1698,13 @@ Bluetooth necesita una latencia mayor que una por cable — por debajo de unos 8
 y con este campo el programa puede elegirla. En iOS la lista sale vacía: el sistema decide por
 dónde suena.
 
+Para reaccionar cuando se enchufa o se desenchufa algo, `audio.watch()` da un handle y
+`audio.next_change(h)` aparca la fibra hasta que la lista cambia; entonces se vuelve a llamar a
+`audio.devices()`. Si desaparece el dispositivo de una salida abierta con `open_device`, lo que
+quedaba por sonar se descarta y `write` sigue devolviendo sin colgarse: el programa se entera
+por `next_change` y abre otra. En los tests, `RAY_AUDIO_DEVICES=a,b` declara los dispositivos
+que lista `devices()`, y abrir otro id con el sumidero de pruebas es `Err`.
+
 ### MIDI (`std/midi`)
 
 Un teclado, un controlador o un sintetizador conectados al equipo son puertos MIDI: `inputs()` y

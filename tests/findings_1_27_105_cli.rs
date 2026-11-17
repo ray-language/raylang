@@ -114,3 +114,126 @@ fn context_reaches_unit_variants_and_empty_arrays() {
     assert_eq!(code, 65);
     assert!(err.contains("cannot infer the type of [] here"), "{err}");
 }
+
+/// raysolve #357: `while let` (con `continue`, `break` y etiqueta) y supertraits (transitivos,
+/// con un método por defecto que llama al supertrait), en los tres motores; `ray fmt` los deja
+/// como se escribieron.
+#[test]
+fn while_let_and_supertraits_work_on_the_three_engines() {
+    let d = tmp("while_let");
+    let src = r#"trait Version: Ord + Show {
+    fn bump(self) -> int;
+    fn label(self) -> string {
+        self.show() + "+"
+    }
+}
+
+trait Named: Version {
+    fn name(self) -> string;
+}
+
+struct Semver {
+    major: int,
+}
+
+impl Ord for Semver {
+    fn less(self, other: Semver) -> bool {
+        self.major < other.major
+    }
+}
+
+impl Show for Semver {
+    fn show(self) -> string {
+        "v${self.major}"
+    }
+}
+
+impl Version for Semver {
+    fn bump(self) -> int {
+        self.major + 1
+    }
+}
+
+impl Named for Semver {
+    fn name(self) -> string {
+        "semver"
+    }
+}
+
+fn newest<N: Named>(a: N, b: N) -> string {
+    let top = if (a.less(b)) { b } else { a };
+    "${top.name()} ${top.label()} ${top.bump()}"
+}
+
+fn pop(xs: [int]) -> Option<int> {
+    if (xs.len() == 0) { Option.None } else { Option.Some(remove_at(xs, xs.len() - 1)) }
+}
+
+fn main() -> int {
+    print(newest(Semver { major: 1 }, Semver { major: 4 }));
+    let it = [1, 2, 3].iter();
+    while let Option.Some(x) = it.next() {
+        print(x);
+    }
+    var stack = [10, 20, 30, 40];
+    var sum = 0;
+    while let Option.Some(v) = pop(stack) {
+        if (v == 30) {
+            continue;
+        }
+        if (v == 10) {
+            break;
+        }
+        sum = sum + v;
+    }
+    print(sum);
+    var rows = [1, 2];
+    outer: while let Option.Some(r) = pop(rows) {
+        var cols = [7, 8];
+        while let Option.Some(c) = pop(cols) {
+            if (c == 7) {
+                continue outer;
+            }
+            print("${r}:${c}");
+        }
+    }
+    0
+}
+"#;
+    std::fs::write(d.join("prog.ray"), src).unwrap();
+    let want = "semver v4+ 5\n1\n2\n3\n60\n2:8\n1:8\n";
+    for args in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let (out, err, code) = ray(&d, args);
+        assert_eq!(code, 0, "{args:?}: {err}");
+        assert_eq!(out, want, "{args:?}");
+    }
+    if has_rustc() {
+        let bin = d.join("prog_bin");
+        let (_o, err, code) = ray(&d, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(code, 0, "build --native: {err}");
+        assert_eq!(String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout), want);
+    }
+    let (out, err, code) = ray(&d, &["fmt", "prog.ray"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, src, "ray fmt keeps `while let` and the supertraits as written");
+}
+
+/// raysolve #357: los errores de los supertraits y de lo que aún no se soporta.
+#[test]
+fn supertrait_and_generic_trait_errors_say_what_is_wrong() {
+    let d = tmp("supertrait_errors");
+    let check = |name: &str, src: &str| {
+        std::fs::write(d.join(name), src).unwrap();
+        let (_o, err, code) = ray(&d, &["check", name]);
+        assert_eq!(code, 65, "{name}: {err}");
+        err
+    };
+    let err = check("missing.ray", "trait A: Show { fn a(self) -> int; }\nstruct S { n: int, }\nimpl A for S { fn a(self) -> int { 1 } }\nfn main() -> int { 0 }\n");
+    assert!(err.contains("the impl of 'A' for S requires an impl of its supertrait 'Show'"), "{err}");
+    let err = check("unknown.ray", "trait A: Nope { fn a(self) -> int; }\nfn main() -> int { 0 }\n");
+    assert!(err.contains("the supertrait 'Nope' of 'A' is not a declared trait"), "{err}");
+    let err = check("bound.ray", "trait Source<V> { fn get(self) -> V; }\nfn f<V, S: Source<V>>(s: S) -> int { 0 }\nfn main() -> int { 0 }\n");
+    assert!(err.contains("a bound cannot take type arguments yet ('S: Source<…>')"), "{err}");
+    let err = check("dyn.ray", "trait Source<V> { fn get(self) -> V; }\nfn f(s: dyn Source<int>) -> int { 0 }\nfn main() -> int { 0 }\n");
+    assert!(err.contains("'dyn Source<…>' is not supported yet"), "{err}");
+}

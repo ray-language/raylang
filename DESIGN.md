@@ -21095,3 +21095,26 @@ que fallan solo por falta de contexto se comprueban contra él. El transpilador 
 propia inferencia y sigue la misma regla (emite el literal contra el tipo de sus hermanos).
 
 Sigue fuera: los argumentos de tipo explícitos (`none::<V>()`), que son sintaxis nueva.
+
+## 459. `while let` y supertraits (raysolve #357, nov 2026)
+
+**`while let`** es azúcar del parser, como `if let`: `while (true)` con un `match` de dos brazos
+cuyo `_` hace `break`. Los tres nodos sintéticos (el `true`, el `match`, el `break`) van en la
+posición del `let`, que ningún otro nodo ocupa; así no chocan con las tablas indexadas por
+`(línea, col)` (§431) y el formateador reconoce la forma por esa posición —no por la forma sola,
+para no reescribir un `while (true) { if let … else { break; } }` que el usuario escribió así—.
+El checker y los tres motores no saben que existe.
+
+**Supertraits** se resuelven ampliando bounds. `trait Version: Ord + Show` guarda sus
+supertraits en el `TraitDef`; antes de bajar los métodos de los impls a funciones, cada lista
+de bounds del programa se amplía con el cierre transitivo (`V: Version` pasa a ser `V: Version
++ Ord + Show`). A partir de ahí la comprobación de bounds, los diccionarios y la resolución de
+métodos ven bounds ordinarios, sin cambios en la VM ni en el transpilador. Lo único nuevo es
+exigir, en cada `impl`, que el tipo implemente también los supertraits.
+
+Límites, a propósito: un `dyn Version` no arrastra los supertraits (habría que normalizar el
+conjunto de traits del tipo en todos los sitios, también en el transpilador nativo, que maneja
+los `dyn` por su cuenta); se escribe `dyn Version + Show`. Y un trait con parámetros de tipo
+sigue sin poder usarse como bound ni tras `dyn`: los bounds son pares `(parámetro, trait)` y
+darles argumentos de tipo cambia los diccionarios y la sustitución de firmas. Queda como
+trabajo propio; el parser ya lo dice con un mensaje que nombra el caso.

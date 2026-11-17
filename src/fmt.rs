@@ -970,7 +970,11 @@ fn fmt_enum(cur: &mut Cur, it: &EnumDef) -> String {
 
 fn fmt_trait(cur: &mut Cur, it: &TraitDef) -> String {
     let pref = if it.is_pub { "pub " } else { "" };
-    let gens = fmt_generics(&it.type_params, &[]);
+    let mut gens = fmt_generics(&it.type_params, &[]);
+    if !it.supertraits.is_empty() {
+        gens.push_str(": ");
+        gens.push_str(&it.supertraits.join(" + "));
+    }
     if it.methods.is_empty() {
         return format!("{}trait {}{} {{ }}", pref, it.name, gens);
     }
@@ -2173,6 +2177,26 @@ fn fmt_expr_indented_inner(cur: &mut Cur, e: &Expr, base: usize) -> String {
                 cur.i = save;
             }
             fmt_if_expr(cur, cond, then_branch, else_branch.as_deref(), base, false)
+        }
+        // raysolve #357: un `while let` del usuario (el parser lo deja como `while (true)` con un
+        // `match` de dos brazos, todo en la posición del `let`) se reemite como lo escribió.
+        ExprKind::While { cond, body, label }
+            if matches!(cond.kind, ExprKind::Bool(true))
+                && cur.if_lets.contains(&(cond.line, cond.col))
+                && body.tail.is_none()
+                && matches!(body.statements.as_slice(), [Stmt { kind: StmtKind::Expr(Expr { kind: ExprKind::Match { arms, .. }, line, col }), .. }]
+                    if (*line, *col) == (cond.line, cond.col) && arms.len() == 2) =>
+        {
+            let [Stmt { kind: StmtKind::Expr(Expr { kind: ExprKind::Match { scrutinee, arms }, .. }), .. }] = body.statements.as_slice() else {
+                unreachable!("the guard matched this shape")
+            };
+            let scrut = fmt_cond(cur, scrutinee, "while let  = ", cur.wrap);
+            let mut s = format!("{}while let {} = {} ", label_prefix(label), fmt_pattern(cur, &arms[0].pattern), scrut);
+            match &arms[0].body.kind {
+                ExprKind::Block(b) => s.push_str(&fmt_block(cur, b, base)),
+                _ => s.push_str(&fmt_expr(cur, &arms[0].body, 0)),
+            }
+            s
         }
         ExprKind::While { cond, body, label } => {
             let c = fmt_cond(cur, cond, "while (", cur.wrap);

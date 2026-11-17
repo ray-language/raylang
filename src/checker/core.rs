@@ -271,6 +271,7 @@ impl Checker {
         // métodos manglados ya están en `program.functions`) y de verificar cuerpos (que
         // pueden llamar métodos de trait vía la tabla `methods`).
         self.register_traits_impls(program)?;
+        self.check_supertraits(program)?;
 
         // M9.4: validar los bounds de los parámetros de tipo de struct/enum (ya conocidos los
         // traits). Cada bound debe acotar un parámetro real con un trait existente.
@@ -542,6 +543,39 @@ impl Checker {
             Some(key) => self.impl_traits.contains(&(key, trait_name.to_string())),
             None => false,
         }
+    }
+
+    /// raysolve #357: cada supertrait debe existir, y quien implementa un trait con supertraits
+    /// debe implementarlos también (para un impl genérico, con sus propios bounds en vista).
+    pub(super) fn check_supertraits(&mut self, program: &Program) -> Result<(), TypeError> {
+        for t in &program.traits {
+            for sup in &t.supertraits {
+                if !self.traits.contains_key(sup) {
+                    return Err(self.err(t.line, t.col, format!("the supertrait '{}' of '{}' is not a declared trait", sup, t.name)));
+                }
+                if sup == &t.name {
+                    return Err(self.err(t.line, t.col, format!("trait '{}' cannot be its own supertrait", t.name)));
+                }
+            }
+        }
+        for imp in &program.impls {
+            let Some(def) = program.traits.iter().find(|t| t.name == imp.trait_name) else { continue };
+            if def.supertraits.is_empty() {
+                continue;
+            }
+            self.type_params = imp.type_params.iter().cloned().collect();
+            let saved = std::mem::replace(&mut self.current_fn_bounds, imp.bounds.clone());
+            let target = self.resolve_type(&imp.target);
+            let missing = def.supertraits.iter().find(|sup| !self.satisfies_bound(&target, sup)).cloned();
+            self.current_fn_bounds = saved;
+            self.type_params.clear();
+            if let Some(sup) = missing {
+                return Err(self.err(imp.line, imp.col, format!(
+                    "the impl of '{}' for {} requires an impl of its supertrait '{}'", imp.trait_name, target, sup
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Registra los traits y valida los impls (M9.1). Construye `self.traits` (firmas),

@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`while let`** (raysolve #357): `while let Option.Some(x) = it.next() { … }` repite mientras
+  la expresión case con el patrón. Admite `break`, `continue` y etiqueta, y `ray fmt` lo conserva.
+- **Supertraits** (raysolve #357): `trait Version: Ord + Show { … }`. Implementar `Version`
+  exige implementar `Ord` y `Show`, y un bound `V: Version` deja llamar los métodos de los tres.
+- Un trait con parámetros de tipo usado como bound (`S: Source<V>`) o tras `dyn` sigue sin
+  estar soportado, pero el error ya lo dice en vez de «expected '>'».
+
 - **La inferencia llega a dos sitios más** (raysolve #358): una variante sin datos dentro de un
   struct genérico, en una función genérica (`Seg { lo: Bound.Incl(v), hi: Bound.Unbounded }`),
   y un `[]` u `Option.None` dentro de un arreglo, que toman el tipo de sus hermanos

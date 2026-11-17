@@ -565,13 +565,28 @@ impl Parser {
         let (name, _, _) = self.expect_ident("the trait name")?;
         // M28.2: parámetros de tipo del trait, `trait From<S>`. Sin `<`, vacío (trait de M9).
         let (type_params, _) = self.type_params_with_bounds()?;
+        // raysolve #357: supertraits, `trait Version: Ord + Show { … }` (calificados también).
+        let mut supertraits = Vec::new();
+        if self.eat(&TokenKind::Colon) {
+            loop {
+                let (mut tr, _, _) = self.expect_ident("a supertrait name after ':'")?;
+                if self.eat(&TokenKind::Dot) {
+                    let (t, _, _) = self.expect_ident("the trait name after 'M.'")?;
+                    tr = format!("{}.{}", tr, t);
+                }
+                supertraits.push(tr);
+                if !self.eat(&TokenKind::Plus) {
+                    break;
+                }
+            }
+        }
         self.expect(&TokenKind::LBrace, "'{' after the trait name")?;
         let mut methods = Vec::new();
         while !self.check(&TokenKind::RBrace) && !self.is_at_end() {
             methods.push(self.method_sig()?);
         }
         self.expect(&TokenKind::RBrace, "'}' to close the trait")?;
-        Ok(TraitDef { is_pub: false, name, type_params, methods, line: kw.line, col: kw.col })
+        Ok(TraitDef { is_pub: false, name, type_params, supertraits, methods, line: kw.line, col: kw.col })
     }
 
     /// method_sig = 'fn' IDENT '(' [ method_params ] ')' [ '->' type ] ( ';' | block )  (M9)
@@ -725,6 +740,14 @@ impl Parser {
                             let (t, _, _) = self.expect_ident("the trait name after 'M.'")?;
                             tr = format!("{}.{}", tr, t);
                         }
+                        // raysolve #357: un trait genérico (`trait Source<V>`) se puede declarar e
+                        // implementar, pero aún no acotar con él: el error lo dice, en vez de
+                        // «expected '>'».
+                        if self.check(&TokenKind::Lt) {
+                            return Err(self.error_here(format!(
+                                "a bound cannot take type arguments yet ('{name}: {tr}<…>'): bound by a trait without type parameters, or pass the functions it needs as arguments"
+                            )));
+                        }
                         bounds.push((name.clone(), tr));
                         if !self.eat(&TokenKind::Plus) {
                             break;
@@ -798,6 +821,11 @@ impl Parser {
                 if self.eat(&TokenKind::Dot) {
                     let (t, _, _) = self.expect_ident("the trait name after 'M.'")?;
                     name = format!("{}.{}", name, t);
+                }
+                if self.check(&TokenKind::Lt) {
+                    return Err(self.error_here(format!(
+                        "'dyn {name}<…>' is not supported yet: a trait object takes a trait without type parameters"
+                    )));
                 }
                 self.type_name_sites.push((line, col, name.clone())); // M288: hover/def del trait
                 traits.push(name);
@@ -1797,6 +1825,58 @@ impl Parser {
     /// whileExpr = 'while' '(' expression ')' block
     fn while_expr(&mut self) -> Result<Expr, ParseError> {
         let kw = self.expect(&TokenKind::While, "'while'")?;
+        // raysolve #357: `while let <patrón> = <expr> { … }`. Azúcar puro, como `if let`:
+        // `while (true) { match (<expr>) { <patrón> => { … }, _ => { break; } } }`. Los nodos
+        // sintéticos (el `true`, el `match` y el `break`) van en la posición del `let`, que ningún
+        // otro nodo ocupa; esa posición entra en `if_let_sites` y `ray fmt` lo reemite tal cual.
+        if self.check(&TokenKind::Let) {
+            let let_tok = self.advance().clone();
+            let (line, col) = (let_tok.line, let_tok.col);
+            let pattern = self.pattern()?;
+            self.expect(&TokenKind::Eq, "'=' in 'while let <pattern> = <expr>'")?;
+            let saved = self.no_struct_lit;
+            self.no_struct_lit = true;
+            let scrut = self.expression();
+            self.no_struct_lit = saved;
+            let scrut = scrut?;
+            let user_body = self.block()?;
+            let (body_line, body_col, body_end) = (user_body.line, user_body.col, user_body.end_line);
+            let arm_then = MatchArm {
+                pattern,
+                guard: None,
+                body: Expr { line: body_line, col: body_col, kind: ExprKind::Block(user_body) },
+                line,
+                col,
+            };
+            let stop = Block {
+                statements: vec![Stmt { kind: StmtKind::Break { label: None }, line, col }],
+                tail: None,
+                line,
+                col,
+                end_line: line,
+            };
+            let arm_else = MatchArm {
+                pattern: Pattern { kind: PatternKind::Wildcard, line, col },
+                guard: None,
+                body: Expr { line, col, kind: ExprKind::Block(stop) },
+                line,
+                col,
+            };
+            let matched = Expr { kind: ExprKind::Match { scrutinee: Box::new(scrut), arms: vec![arm_then, arm_else] }, line, col };
+            self.if_let_sites.insert((line, col));
+            let body = Block {
+                statements: vec![Stmt { kind: StmtKind::Expr(matched), line, col }],
+                tail: None,
+                line: body_line,
+                col: body_col,
+                end_line: body_end,
+            };
+            return Ok(Expr {
+                kind: ExprKind::While { cond: Box::new(Expr { kind: ExprKind::Bool(true), line, col }), body, label: None },
+                line: kw.line,
+                col: kw.col,
+            });
+        }
         self.expect(&TokenKind::LParen, "'(' after 'while'")?;
         let cond = self.expression()?;
         self.expect(&TokenKind::RParen, "')' after the condition")?;

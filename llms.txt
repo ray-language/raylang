@@ -10,7 +10,8 @@ messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (
 
 - `match`, `if` and `while` take their scrutinee/condition IN PARENTHESES:
   `match (x) { ... }`, `if (cond) { ... }`, `while (cond) { ... }`.
-  (Only `if let` takes none: `if let Option.Some(v) = expr { ... }`.)
+  (Only `if let` and `while let` take none: `if let Option.Some(v) = expr { ... }`,
+  `while let Option.Some(v) = it.next() { ... }` — loops while the pattern matches.)
 - Mutability is `var`, not `mut`: `let x = 1;` (immutable) / `var y = 1;` (mutable).
   `let mut` is a syntax error.
 - Enum variants are always QUALIFIED: `Option.Some(3)`, `Option.None`, `Result.Ok(v)`,
@@ -105,6 +106,9 @@ enum Shape { Circle(float), Rect(float, float), }
 let s = Shape.Circle(2.0);                       // construction is qualified
 
 trait Greeter { fn greet(self) -> string; }
+// Supertraits: `trait Version: Ord + Show { … }` — an impl of Version needs impls of Ord and
+// Show, and `V: Version` lets you call the methods of all three. A trait with type parameters
+// (`trait Source<V>`) cannot be a bound or go after `dyn` yet.
 impl Greeter for Point {
     fn greet(self) -> string { "point at ${self.x}" }
 }

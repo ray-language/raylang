@@ -198,7 +198,8 @@ cota     = IDENT [ '.' IDENT ] ;   (* `Trait`, o `modulo.Trait` como en `impl mo
 struct   = 'struct' IDENT [ genericos ] '{' { IDENT ':' tipo ',' } '}' ;
 enum     = 'enum' IDENT [ genericos ] '{' variante { ',' variante } [ ',' ] '}' ;
 variante = IDENT [ '(' tipo { ',' tipo } ')' ] ;
-trait    = 'trait' IDENT [ '<' IDENT { ',' IDENT } '>' ] '{' { firma_metodo } '}' ;
+trait    = 'trait' IDENT [ '<' IDENT { ',' IDENT } '>' ] [ ':' nombre_trait { '+' nombre_trait } ]
+           '{' { firma_metodo } '}' ;
 firma_metodo = 'fn' IDENT '(' 'self' { ',' param } ')' [ '->' tipo ] ( ';' | bloque ) ;
 impl     = 'impl' [ genericos ] nombre_trait [ '<' tipo … '>' ] 'for' tipo '{' { metodo } '}' ;
 const    = 'const' IDENT ':' tipo '=' const_valor ';' ;
@@ -217,6 +218,12 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
 - Un método (de trait o de impl) puede tener **parámetros de tipo propios** (M40.2c):
   `fn map<U>(self, f: fn(T) -> U) -> Iter<U>`. Se suman a los del impl al resolver la llamada;
   la inferencia los fija por los argumentos. Habilita p. ej. los adaptadores de `Iterator` (§10).
+- **Supertraits** (raysolve #357): `trait Version: Ord + Show { … }`. Quien implementa
+  `Version` debe implementar también `Ord` y `Show` (si no, error en el `impl`), y un bound
+  `V: Version` equivale a `V: Version + Ord + Show` (cierre transitivo): sobre un `V` se pueden
+  llamar los métodos de los tres, y un método por defecto del trait puede llamar los de sus
+  supertraits sobre `self`. Un trait object no los arrastra: `dyn Version` solo declara los
+  métodos de `Version`; para los demás se escribe `dyn Version + Show`.
 - Los **traits con parámetros de tipo** (`trait From<S>`, `trait Iterator<T>`) existen con
   semántica limitada: `From<S> { fn convert(origen: S) -> Self; }` alimenta la conversión de `?`
   (§6.7), e `Iterator<T> { fn next(self) -> Option<T>; }` habilita `for x in it` (§5) por despacho
@@ -397,6 +404,10 @@ Literales (§1), identificadores, `(expr)` (agrupación), tuplas `(a, b, …)`, 
 - **`if let patrón = expr bloque [else (bloque | if …)]`** (M40.1b) es azúcar de **`match (expr) {
   patrón => bloque, _ => else }`** (sin `else`, el brazo `_` es unit). El patrón usa la misma
   gramática que el match (variantes calificadas). El escrutinio va sin paréntesis, hasta el `{`.
+- **`while let patrón = expr bloque`** (raysolve #357) es azúcar de **`while (true) { match
+  (expr) { patrón => bloque, _ => { break; } } }`**: repite mientras `expr` case con el patrón.
+  `break`/`continue` del cuerpo se refieren a ese bucle, y admite etiqueta (`fila: while let …`).
+  El escrutinio va sin paréntesis, como en `if let`.
 - **`match (expr) { patrón [if guarda] => (expr | bloque | for …), … }`** es expresión (un `for`
   como brazo baja a un bloque `{ for … }` de valor `unit`, como la asignación de M344); brazos convergentes
   (misma regla de divergencia; todos divergentes → unit). Un brazo cuyo valor no determina sus

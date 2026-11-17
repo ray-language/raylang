@@ -21036,7 +21036,8 @@ entregas. El anillo seguía lleno, así que la traza no contaba ningún underrun
 por búfer, casi dos ciclos) ya sonaba limpio, y con 5 y 10 ms el flujo va por el AudioUnit de
 baja latencia, que no tiene cola. Ahora un búfer nunca es menor que un ciclo de E/S del
 dispositivo (leído de la HAL): tres ciclos encolados. Coste: con hints de 20 a 40 la latencia
-real sube unos 15 ms; por debajo de 20 sigue el camino de baja latencia. Se descartó mandar
+real sube unos 15 ms; por debajo de 20 sigue el camino de baja latencia. Escuchado por el
+usuario en los parlantes integrados con el tono del hallazgo: limpio con 20, 40, 80 y 120. Se descartó mandar
 esos hints por el AudioUnit porque baja el búfer del dispositivo para todo el proceso. La traza
 dice ahora el tamaño de los búferes y el mínimo de audio que quedó en la cola al pedir más (el
 reloj de la cola incluye la latencia del dispositivo, así que es una pista relativa, no un

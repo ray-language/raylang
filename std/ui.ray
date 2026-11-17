@@ -22,7 +22,8 @@ from std/json import Json;
 /// is the text and `window` the sender), "close_requested" (M257: the user tried to close
 /// `window` while `intercept_close(h, true)` is on — the window stays open until you `close(h)`)
 /// or "quit_requested" (M257: the user pressed ⌘Q / Quit while `intercept_quit(true)` is on —
-/// `window` is 0; the app keeps running until `main` returns) or "open" (M370: the system asked
+/// `window` is 0; the app keeps running until `main` returns) or "drop" (files were dropped on `window` while
+/// `accept_drops(h, true)` is on — read them with `drop_paths(e)` and `drop_point(e)`) or "open" (M370: the system asked
 /// the app to open something — a file or folder dropped on its Dock icon, "Open with",
 /// `open -a App path` — `tag` is the path, one event per item, also when the app is already
 /// running; `window` is 0. On macOS it needs a `ray bundle` with `[app] opens`; a bare binary
@@ -427,6 +428,14 @@ pub fn rename_menu(old: string, new: string) -> Result<int, string> {
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
+/// Changes the TEXT of a menu item already declared, by its tag, keeping its state, shortcut and
+/// place ("Undo" → "Undo Move clip"): no need to rebuild the menu. Err if no item has that tag
+/// or `title` is empty.
+pub fn set_menu_title(tag: string, title: string) -> Result<int, string> {
+    let r = __ui_window(0, "set_menu_title", tag + "\n" + title);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
 /// The Edit menu, rebuilt with your items (M255, ray-sublime): on macOS it REPLACES the
 /// contents of the standard Edit menu, in place; on Linux and Windows — where no Edit menu is
 /// installed by default (the webview handles the clipboard keys itself) — it creates one at the
@@ -744,6 +753,40 @@ pub fn set_edited(h: int, edited: bool) -> Result<int, string> {
 pub fn intercept_close(h: int, on: bool) -> Result<int, string> {
     let r = __ui_window(h, "intercept_close", if (on) { "1" } else { "0" });
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// Makes window `h` take the FILES dropped on it (dragged from Finder, …): each drop emits a
+/// `"drop"` event (`window` = h) instead of reaching the page, which would get the files
+/// without their paths. Read it with `drop_paths(e)` and `drop_point(e)`. `false` gives the
+/// drops back to the page. macOS only for now: `Err` elsewhere, and for a closed window.
+pub fn accept_drops(h: int, on: bool) -> Result<int, string> {
+    let r = __ui_window(h, "accept_drops", if (on) { "1" } else { "0" });
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// The paths of the files of a `"drop"` event, in the order the system gave them.
+pub fn drop_paths(e: UiEvent) -> [string] {
+    let lines = e.tag.split("\n");
+    var paths: [string] = [];
+    var i = 1;
+    while (i < lines.len()) {
+        if (lines[i].len() > 0) {
+            paths.push(lines[i]);
+        }
+        i = i + 1;
+    }
+    paths
+}
+
+/// Where a `"drop"` event landed, in page coordinates (CSS pixels from the top-left corner of
+/// the window's content): what `document.elementFromPoint(x, y)` takes.
+pub fn drop_point(e: UiEvent) -> (int, int) {
+    let lines = e.tag.split("\n");
+    let xy = if (lines.len() > 0) { lines[0].split(",") } else { [] };
+    if (xy.len() != 2) {
+        return (0, 0);
+    }
+    (parse_int(xy[0]).unwrap_or(0), parse_int(xy[1]).unwrap_or(0))
 }
 
 /// Makes this process the app's single instance (M370b). `Ok(true)`: no other instance was

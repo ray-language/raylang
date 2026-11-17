@@ -1949,7 +1949,7 @@ pub fn ui_window_value(h: i64, op: &str, arg: &str) -> Result<String, String> {
 
 #[cfg(all(feature = "ui", any(unix, windows), not(target_arch = "wasm32")))]
 fn ui_window_op(h: i64, op: &str, arg: &str) -> Result<(), String> {
-    if matches!(op, "intercept_quit" | "single_instance" | "notify" | "badge" | "request_attention" | "media_now_playing" | "media_clear" | "media_controls" | "rename_menu") {
+    if matches!(op, "intercept_quit" | "single_instance" | "notify" | "badge" | "request_attention" | "media_now_playing" | "media_clear" | "media_controls" | "rename_menu" | "set_menu_title") {
         return ray_runtime::ui::window_op(0, op, arg);
     }
     // M441 (rayreq #312): `set_appearance(0, mode)` = toda la app.

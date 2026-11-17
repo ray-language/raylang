@@ -4755,3 +4755,16 @@ Fases:
 
 **Impacto**: todo aditivo. **Riesgo**: los backends de las fases 3 y 4 no se pueden grabar ni
 tocar de verdad en este equipo; se escribirían contra la fuente de pruebas.
+
+## 126. Sueltas de archivos en Linux y Windows (ray-sublime #436) — PENDIENTE
+
+`ui.accept_drops` y el evento `drop` existen en macOS (DESIGN §450). Falta:
+
+- **Linux**: WebKitGTK gestiona su propio arrastre; hay que conectar `drag-data-received` en el
+  webview con `text/uri-list` antes del manejador por defecto y cortar la propagación.
+- **Windows**: WebView2 recibe las sueltas en sus ventanas hijas; hace falta
+  `AllowExternalDrop = false` en el controlador y un `IDropTarget` propio en la ventana
+  (`RegisterDragDrop`), leyendo `CF_HDROP`.
+
+**Impacto**: aditivo; hoy `accept_drops` devuelve `Err` allí. **Riesgo**: bajo; se prueba en las
+VMs con una suelta real, que no se puede automatizar.

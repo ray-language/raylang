@@ -436,6 +436,11 @@ documentada:
   (ruta NUL-terminada y datos vivos durante la sesión; un fallo descarta la sesión sin tocar el
   archivo). Los enteros de tipo/id son `MAKEINTRESOURCE` (el puntero ES el número, por contrato
   de la API). El resto (subsistema PE, PNG, VERSIONINFO) es Rust seguro sobre bytes.
+- **`crates/ray-runtime/src/ui.rs`, sueltas de archivos** (macOS) — `RayWebView`, una subclase de
+  WKWebView creada en caliente que sobrescribe `draggingEntered:`, `draggingUpdated:` y
+  `performDragOperation:`; lo que no intercepta lo delega con `objc_msgSendSuper` (casteado por
+  sitio a la firma exacta, como `objc_msgSend`). Lee `NSURL` del pasteboard del arrastre, que
+  AppKit entrega vivo durante la llamada, en el hilo principal.
 - **`crates/ray-runtime/src/ui.rs`** — la ventana + webview de `std/ui` (M146), **sin crates**
   (la misma decisión que audio: `wry` exigiría toolchains GTK/WebKit en *build*): el self-pipe de
   la cola de eventos (`pipe`/`read`/`write`/`fcntl` variádico) y, en macOS, **Objective-C a

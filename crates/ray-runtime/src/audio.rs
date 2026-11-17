@@ -1805,6 +1805,17 @@ mod coreaudio {
             rate
         }
 
+        /// El búfer de E/S del dispositivo, en segundos: cada cuánto pide audio (0 = no se sabe).
+        pub fn io_cycle_seconds(device: u32) -> f64 {
+            let mut frames = 0u32;
+            let rate = device_rate(device);
+            if get(device, BUFFER_FRAME_SIZE, SCOPE_GLOBAL, &mut frames) && frames > 0 && rate > 0.0 {
+                frames as f64 / rate
+            } else {
+                0.0
+            }
+        }
+
         /// Los dispositivos con el búfer de E/S bajado por un flujo de baja latencia: el tamaño
         /// que tenían antes y cuántos flujos nuestros lo mantienen bajado.
         fn lowered() -> &'static std::sync::Mutex<std::collections::HashMap<u32, (u32, usize)>> {
@@ -2408,10 +2419,11 @@ mod coreaudio {
                 std::thread::sleep(std::time::Duration::from_millis(5));
                 if std::env::var_os("RAY_AUDIO_TRACE").is_some() {
                     eprintln!(
-                        "[audio] coreaudio low latency: device buffer {} frames, ring cap {} B, gaps {} (1 = only the tail, after the last write)",
+                        "[audio] coreaudio low latency: device buffer {} frames, ring cap {} B, underruns {} (times the stream ran out of data before the end)",
                         self.device_frames,
                         self.shared.cap,
-                        self.shared.gaps.load(Ordering::Relaxed)
+                        // El último hueco es la cola, tras el último write: no es un corte.
+                        self.shared.gaps.load(Ordering::Relaxed).saturating_sub(1)
                     );
                 }
                 // SAFETY: parar y desinicializar esperan al callback en curso; después nadie
@@ -2539,6 +2551,10 @@ mod coreaudio {
         /// M378: transiciones dato → silencio (huecos). Un flujo limpio tiene exactamente uno:
         /// la cola final. Cada hueco a mitad de flujo es un underrun audible.
         gaps: std::sync::atomic::AtomicUsize,
+        /// ray-daw #449: el margen más justo visto al pedir la cola un búfer — frames encolados
+        /// y aún sin sonar según su reloj (que va por detrás: incluye la latencia del
+        /// dispositivo). Es la pista de un corte DENTRO de la cola, que el anillo no ve.
+        min_margin: std::sync::atomic::AtomicI64,
         /// M400 (rayplay #171/#173): cortes de `flush` (la traza los cuenta aparte de `fade_outs`,
         /// que solo cuenta las colas fundidas por el callback al quedarse sin datos).
         flushes: std::sync::atomic::AtomicUsize,
@@ -2637,6 +2653,7 @@ mod coreaudio {
                 fade_outs: std::sync::atomic::AtomicUsize::new(0),
                 flush_fades: std::sync::atomic::AtomicUsize::new(0),
                 gaps: std::sync::atomic::AtomicUsize::new(0),
+            min_margin: std::sync::atomic::AtomicI64::new(i64::MAX),
                 flushes: std::sync::atomic::AtomicUsize::new(0),
                 fade_in_skip: std::sync::atomic::AtomicUsize::new(0),
                 timeline: Mutex::new(Timeline::default()),
@@ -2690,6 +2707,15 @@ mod coreaudio {
         // SAFETY: `user` es el Arc<Shared> filtrado en open (vive hasta Dispose); `buf` es de la cola.
         let shared = unsafe { &*(user as *const Shared) };
         unsafe {
+            // ray-daw #449: ¿cuánto quedaba por sonar dentro de la cola al pedir este búfer?
+            let mut ts: AudioTimeStamp = std::mem::zeroed();
+            if AudioQueueGetCurrentTime(q, std::ptr::null(), &mut ts, std::ptr::null_mut()) == 0
+                && ts.flags & TS_SAMPLE_TIME_VALID != 0
+                && ts.sample_time > 0.0
+            {
+                let margin = shared.timeline.lock().unwrap().total - ts.sample_time as i64;
+                shared.min_margin.fetch_min(margin, std::sync::atomic::Ordering::Relaxed);
+            }
             let cap = (*buf).audio_data_bytes_capacity as usize;
             let out = std::slice::from_raw_parts_mut((*buf).audio_data, cap);
             (*buf).audio_data_byte_size = fill(shared, out) as u32;
@@ -2856,11 +2882,32 @@ mod coreaudio {
         let (min_buf_ms, min_ring_ms): (usize, usize) = if cfg!(target_os = "ios") { (60, 100) } else { (5, 0) };
         let ramp_ms = (latency_ms as usize / 8).clamp(2, 10);
         let buf_ms_floor = latency_ms as usize / 12;
+        // ray-daw #449: un búfer de la cola nunca es menor que un ciclo de E/S del dispositivo.
+        // La cola solo tiene tres búferes en rotación y el dispositivo le saca un ciclo entero
+        // de golpe (512 frames = 10,7 ms en los parlantes de un MacBook): con búferes de 5 ms
+        // (los de un hint de 20 o 40) lo encolado no llegaba a ciclo y medio, la cola se quedaba
+        // sin audio entre dos entregas y el tono crepitaba, con el anillo lleno y la traza sin
+        // un solo underrun. Desde 80 ms (búferes de 6,7 ms, dos ciclos encolados) ya sonaba bien.
+        #[cfg(target_os = "macos")]
+        let io_cycle_bytes = {
+            let seconds = hal::output_device(device).map(hal::io_cycle_seconds).unwrap_or(0.0);
+            (bytes_per_sec as f64 * seconds).ceil() as usize
+        };
+        #[cfg(not(target_os = "macos"))]
+        let io_cycle_bytes = 0usize;
         let buf_size = ((bytes_per_sec * buf_ms_floor / 1000)
             .max(bytes_per_sec * min_buf_ms / 1000)
+            .max(io_cycle_bytes)
             .max(256)
-            / frame_bytes
+            .div_ceil(frame_bytes)
             * frame_bytes) as u32;
+        if std::env::var_os("RAY_AUDIO_TRACE").is_some() && io_cycle_bytes > 0 {
+            eprintln!(
+                "[audio] coreaudio: queue buffers of {} frames (device I/O cycle {} frames at this rate)",
+                buf_size as usize / frame_bytes,
+                io_cycle_bytes / frame_bytes
+            );
+        }
         let ring_floor = bytes_per_sec * ramp_ms / 1000 + 3 * buf_size as usize;
         let cap = (bytes_per_sec * latency_ms as usize / 4000)
             .max(bytes_per_sec * min_ring_ms / 1000)
@@ -2881,6 +2928,7 @@ mod coreaudio {
             fade_outs: std::sync::atomic::AtomicUsize::new(0),
                 flush_fades: std::sync::atomic::AtomicUsize::new(0),
             gaps: std::sync::atomic::AtomicUsize::new(0),
+            min_margin: std::sync::atomic::AtomicI64::new(i64::MAX),
             flushes: std::sync::atomic::AtomicUsize::new(0),
             fade_in_skip: std::sync::atomic::AtomicUsize::new(0),
             timeline: Mutex::new(Timeline::default()),
@@ -3160,7 +3208,7 @@ mod coreaudio {
             live_queues().lock().unwrap_or_else(|e| e.into_inner()).retain(|&q| q != self.q as usize);
             if std::env::var_os("RAY_AUDIO_TRACE").is_some() {
                 eprintln!(
-                    "[audio] coreaudio: ring cap {} B, keepalive silence {} B (priming + tail included), fade-outs {}, flushes {}, underruns {} (times the stream ran out of data before the end)",
+                    "[audio] coreaudio: ring cap {} B, keepalive silence {} B (priming + tail included), fade-outs {}, flushes {}, underruns {} (times the stream ran out of data before the end), least audio left in the queue when it asked for more: {} frames (the device's own latency included)",
                     self.shared.cap,
                     self.shared.silence_bytes.load(std::sync::atomic::Ordering::Relaxed),
                     self.shared.fade_outs.load(std::sync::atomic::Ordering::Relaxed),
@@ -3169,7 +3217,11 @@ mod coreaudio {
                         .fade_outs
                         .load(std::sync::atomic::Ordering::Relaxed)
                         .saturating_sub(self.shared.flush_fades.load(std::sync::atomic::Ordering::Relaxed))
-                        .saturating_sub(1)
+                        .saturating_sub(1),
+                    match self.shared.min_margin.load(std::sync::atomic::Ordering::Relaxed) {
+                        i64::MAX => 0,
+                        m => m,
+                    }
                 );
             }
             unsafe {

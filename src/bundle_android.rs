@@ -1491,13 +1491,18 @@ public final class RayNotify {
         android.media.RingtoneManager rm = new android.media.RingtoneManager(c);
         rm.setType(soundType(kind));
         StringBuilder out = new StringBuilder();
-        android.database.Cursor cursor = rm.getCursor(); // lo gestiona el RingtoneManager
-        while (cursor.moveToNext()) {
-            String title = cursor.getString(android.media.RingtoneManager.TITLE_COLUMN_INDEX);
-            android.net.Uri uri = rm.getRingtoneUri(cursor.getPosition());
-            if (uri == null) { continue; }
-            out.append(kind).append(':').append(uri).append('\t')
-                .append(title == null ? "" : title.replace('\t', ' ').replace('\n', ' ')).append('\n');
+        // Con un Context (no una Activity) el RingtoneManager no gestiona su cursor: se cierra aquí.
+        android.database.Cursor cursor = rm.getCursor();
+        try {
+            while (cursor.moveToNext()) {
+                String title = cursor.getString(android.media.RingtoneManager.TITLE_COLUMN_INDEX);
+                android.net.Uri uri = rm.getRingtoneUri(cursor.getPosition());
+                if (uri == null) { continue; }
+                out.append(kind).append(':').append(uri).append('\t')
+                    .append(title == null ? "" : title.replace('\t', ' ').replace('\n', ' ')).append('\n');
+            }
+        } finally {
+            cursor.close();
         }
         return out.toString();
     }

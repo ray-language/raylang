@@ -21003,3 +21003,17 @@ Se entregan como API solo de Android (`ui.system_sounds`, `ui.play_system_sound`
 catálogo falso en las otras plataformas. El id es `<kind>:<uri>` para que el sonido salga por el
 volumen de su clase (un tono de alarma, por el volumen de alarma). `__ui_desktop` pasa a devolver
 un texto en `r[1]` (el listado); las acciones que ya existían siguen mirando solo `r[0]`.
+
+**Revisión previa a 1.27.104.** Corregido antes del tag: un patrón de `exports` tapaba a una
+subruta exacta (ahora las exactas van primero y los patrones del más específico al más general,
+como resuelve Node); la máscara de interés de epoll sobrevivía al fd cerrado y la heredaba el
+siguiente archivo con ese número; el cursor de `RingtoneManager` no se cerraba; el aviso al
+cerrar un pipe era global en vez de dirigido (M401); y la lectura ociosa de un pipe en Windows
+sondeaba mil veces por segundo (ahora la espera crece de 1 a 16 ms). Queda anotado y sin
+resolver: (1) el despertar por cierre depende de que el fd cerrado se rechace al re-armar, así
+que si otro handle reutiliza ese número antes de que el reactor atienda el aviso, el lector
+viejo sigue aparcado — despertar por handle en el propio `close` lo quitaría en todas las
+plataformas; (2) la espera de `RAY_AUDIO_TRACE` al salir va por `atexit`, que en Windows no
+corre con `ExitProcess`, y sus 30 ms de margen no cubren un cierre sin `drain` con mucha cola;
+(3) `duck_others` en iOS está medido con `audio_session = "playback_mix"`; con una sesión que
+no mezcla no hay nada que bajar y `false` reactiva una sesión que interrumpe a las demás.

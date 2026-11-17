@@ -1673,7 +1673,7 @@ fn web_packages_of_dependencies_are_mounted_with_an_import_map() {
     std::fs::write(ds.join("ray.toml"), "[package]\nname = \"ds\"\nversion = \"0.1.0\"\n\n[web]\npackage = \"web\"\n").unwrap();
     std::fs::write(
         ds.join("web/package.json"),
-        r#"{"name": "@ds/elements", "exports": {".": {"types": "./ds.d.ts", "default": "./index.js"}, "./button": "./components/button/button.js", "./icons/*": "./icons/*", "./x/*": "./x/*.js"}}"#,
+        r#"{"name": "@ds/elements", "exports": {".": {"types": "./ds.d.ts", "default": "./index.js"}, "./button": "./components/button/button.js", "./icons/*": "./icons/*", "./x/*": "./x/*.js", "./x/es": "./index.js"}}"#,
     )
     .unwrap();
     std::fs::write(ds.join("web/index.js"), "export const x = 1;\n").unwrap();
@@ -1694,8 +1694,9 @@ fn web_packages_of_dependencies_are_mounted_with_an_import_map() {
     )
     .unwrap();
     // Las claves de `exports` se recorren en orden de clave (Map); `./x/*` → `./x/*.js` da una entrada
-    // por archivo que encaja (pepa #421), subcarpetas incluidas.
-    const MAP: &str = r#"{"imports":{"@ds/elements":"/node_modules/@ds/elements/index.js","@ds/elements/button":"/node_modules/@ds/elements/components/button/button.js","@ds/elements/icons/":"/node_modules/@ds/elements/icons/","@ds/elements/x/es":"/node_modules/@ds/elements/x/es.js","@ds/elements/x/sub/en":"/node_modules/@ds/elements/x/sub/en.js","@ds/elements/":"/node_modules/@ds/elements/"}}"#;
+    // por archivo que encaja (pepa #421), subcarpetas incluidas; la subruta exacta `./x/es` gana
+    // al patrón, como en Node.
+    const MAP: &str = r#"{"imports":{"@ds/elements":"/node_modules/@ds/elements/index.js","@ds/elements/button":"/node_modules/@ds/elements/components/button/button.js","@ds/elements/icons/":"/node_modules/@ds/elements/icons/","@ds/elements/x/es":"/node_modules/@ds/elements/index.js","@ds/elements/x/sub/en":"/node_modules/@ds/elements/x/sub/en.js","@ds/elements/":"/node_modules/@ds/elements/"}}"#;
     let want = format!("{MAP}\nok 1\nassets/index.html\nnode_modules/@ds/elements/components/button/button.js\nnode_modules/@ds/elements/index.js\nnode_modules/@ds/elements/package.json\nnode_modules/@ds/elements/x/es.d.ts\nnode_modules/@ds/elements/x/es.js\nnode_modules/@ds/elements/x/sub/en.js\n");
     for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
         let out = Command::new(env!("CARGO_BIN_EXE_ray"))

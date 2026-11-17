@@ -1396,6 +1396,9 @@ fn web_package_name(key: string) -> Option<string> {
 // espacio embed: un patrón `"./x/*": "./y/*.js"` se expande con los archivos que encajan (#421).
 fn package_imports(name: string, base: string, pj: Json, files: [string]) -> [(string, string)] {
     var out: [(string, string)] = [];
+    // Los patrones van DESPUÉS de las subrutas exactas y del más específico al más general: la
+    // primera entrada de una clave gana, y Node resuelve en ese orden.
+    var patterns: [(string, string)] = [];
     match (json.member(pj, "exports")) {
         Option.Some(Json.JObject(obj)) => {
             let ks: [string] = obj.keys();
@@ -1416,7 +1419,7 @@ fn package_imports(name: string, base: string, pj: Json, files: [string]) -> [(s
                             } else if (!k.contains("*")) {
                                 out.push((name + k.substring(1, k.len()), package_url(base, t)));
                             } else {
-                                out = out + pattern_imports(name, base, k, t, files);
+                                patterns.push((k, t));
                             }
                         },
                         Option.None => { },
@@ -1445,6 +1448,18 @@ fn package_imports(name: string, base: string, pj: Json, files: [string]) -> [(s
                 Option.None => { },
             }
         },
+    }
+    while (patterns.len() > 0) {
+        var best = 0;
+        var i = 1;
+        while (i < patterns.len()) {
+            if (patterns[i].0.len() > patterns[best].0.len()) {
+                best = i;
+            }
+            i = i + 1;
+        }
+        out = out + pattern_imports(name, base, patterns[best].0, patterns[best].1, files);
+        remove_at(patterns, best);
     }
     out.push((name + "/", base + "/"));
     out

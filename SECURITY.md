@@ -493,6 +493,14 @@ documentada:
   de ambos es un `Arc` filtrado que se recupera tras `AudioOutputUnitStop` + `Uninitialize` (ya
   sin callbacks). `AudioObjectSetPropertyData` cambia el tamaño del búfer de E/S del dispositivo
   para este proceso.
+- **`crates/ray-runtime/src/audio.rs`, sesión y vigilancia** (1.27.104; pepa #346, ray-daw
+  #441/#442) — `duck_others` en iOS manda cuatro mensajes a `AVAudioSession` por `objc_msgSend`
+  (`sharedInstance`, `category`, `categoryOptions`, `setCategory:withOptions:error:`,
+  `setActive:error:`), cada uno con la firma de su cabecera y tras comprobar que la clase existe;
+  no se guarda ningún puntero entre llamadas. La vigilancia de dispositivos pregunta si el lector
+  sigue vivo con `getpeername` (macOS/iOS, búfer propio de 128 octetos) o `poll` con plazo 0
+  (Linux/Android). La espera de la traza se registra con `atexit` de la libc: un `extern "C" fn`
+  sin estado que solo duerme y lee un contador atómico.
 - **`crates/ray-runtime/src/audio.rs`, dispositivos** (M468) — `audio.devices()`: en macOS, la HAL
   de CoreAudio (`AudioObjectGetPropertyData` sobre búferes propios del tamaño que la propia API
   dice, alineados a 8; los `CFString` devueltos se sueltan); en Linux, `snd_device_name_hint` (las

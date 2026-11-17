@@ -6,6 +6,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.103 — 2026-11-17
+
 - `ui.accept_drops` y el evento `"drop"` llegan a **Linux y Windows**: los archivos soltados
   sobre la ventana entregan su ruta también allí.
 - **`audio.queued_ms(h)`**: lo que el programa ha escrito y aún no ha sonado. Con ello la muestra

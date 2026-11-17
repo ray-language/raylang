@@ -326,15 +326,22 @@ pub struct Ctl {
     /// entregados al backend, los que un `flush` descartó de ahí y los que ya sonaron (sin el
     /// silencio de relleno del backend, que `played_frames` sí cuenta en CoreAudio).
     frame_bytes: i64,
-    fed_frames: AtomicI64,
+    /// En OCTETOS: una lectura del pipe no siempre cae en frontera de frame (s24le), y
+    /// truncar cada una perdía un frame por lectura.
+    fed_bytes: AtomicI64,
     dropped_frames: AtomicI64,
     sounded_frames: AtomicI64,
 }
 
 impl Ctl {
+    /// Frames del programa entregados al backend que ni han sonado ni se descartaron.
+    fn in_backend(&self) -> i64 {
+        (self.fed_bytes.load(Ordering::SeqCst) / self.frame_bytes - self.dropped_frames.load(Ordering::SeqCst) - self.sounded_frames.load(Ordering::SeqCst)).max(0)
+    }
+
     /// Tras entregar `n` octetos al backend (o en una espera): refresca lo sonado.
     fn account(&self, sink: &mut dyn Sink, n: usize) {
-        self.fed_frames.fetch_add(n as i64 / self.frame_bytes, Ordering::SeqCst);
+        self.fed_bytes.fetch_add(n as i64, Ordering::SeqCst);
         let sounded = sink.program_frames().unwrap_or_else(|| self.played_frames.load(Ordering::SeqCst)).max(0);
         self.sounded_frames.store(sounded, Ordering::SeqCst);
     }
@@ -342,7 +349,7 @@ impl Ctl {
     /// Tras un `flush` del backend: lo descartado deja de contar como encolado.
     fn account_flush(&self, sink: &mut dyn Sink) {
         self.account(sink, 0);
-        let outstanding = (self.fed_frames.load(Ordering::SeqCst) - self.dropped_frames.load(Ordering::SeqCst) - self.sounded_frames.load(Ordering::SeqCst)).max(0);
+        let outstanding = self.in_backend();
         let dropped = sink.flushed_frames().map_or(outstanding, |n| n.min(outstanding));
         self.dropped_frames.fetch_add(dropped, Ordering::SeqCst);
     }
@@ -467,7 +474,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
             sample_rate,
             discard: std::sync::atomic::AtomicBool::new(false),
             frame_bytes: frame_bytes as i64,
-            fed_frames: AtomicI64::new(0),
+            fed_bytes: AtomicI64::new(0),
             dropped_frames: AtomicI64::new(0),
             sounded_frames: AtomicI64::new(0),
         });
@@ -547,7 +554,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
             sample_rate,
             discard: std::sync::atomic::AtomicBool::new(false),
             frame_bytes: frame_bytes as i64,
-            fed_frames: AtomicI64::new(0),
+            fed_bytes: AtomicI64::new(0),
             dropped_frames: AtomicI64::new(0),
             sounded_frames: AtomicI64::new(0),
         });
@@ -666,7 +673,7 @@ pub fn queued_ms(key: i64) -> Result<i64, String> {
     // restar de lo en vuelo, así que este orden puede contar un chunk dos veces un instante,
     // pero nunca perderlo.
     let waiting = (pipe_pending(ctl.pipe_r) + ctl.in_flight.load(Ordering::SeqCst)) / ctl.frame_bytes;
-    let in_backend = (ctl.fed_frames.load(Ordering::SeqCst) - ctl.dropped_frames.load(Ordering::SeqCst) - ctl.sounded_frames.load(Ordering::SeqCst)).max(0);
+    let in_backend = ctl.in_backend();
     Ok((waiting + in_backend) * 1000 / ctl.sample_rate)
 }
 
@@ -2276,6 +2283,8 @@ mod coreaudio {
         /// silencio de keepalive insertados (anillo seco) y salidas fundidas (anillo casi seco).
         silence_bytes: std::sync::atomic::AtomicUsize,
         fade_outs: std::sync::atomic::AtomicUsize,
+        /// De esas, las que fundieron la cola que dejó un `flush` (no son un underrun).
+        flush_fades: std::sync::atomic::AtomicUsize,
         /// M378: transiciones dato → silencio (huecos). Un flujo limpio tiene exactamente uno:
         /// la cola final. Cada hueco a mitad de flujo es un underrun audible.
         gaps: std::sync::atomic::AtomicUsize,
@@ -2375,6 +2384,7 @@ mod coreaudio {
                 after_gap: std::sync::atomic::AtomicBool::new(false),
                 silence_bytes: std::sync::atomic::AtomicUsize::new(0),
                 fade_outs: std::sync::atomic::AtomicUsize::new(0),
+                flush_fades: std::sync::atomic::AtomicUsize::new(0),
                 gaps: std::sync::atomic::AtomicUsize::new(0),
                 flushes: std::sync::atomic::AtomicUsize::new(0),
                 fade_in_skip: std::sync::atomic::AtomicUsize::new(0),
@@ -2463,12 +2473,14 @@ mod coreaudio {
             }
             drop(ring);
             let frames = take / fb;
+            let mut flush_tail = false;
             if shared.after_gap.swap(false, Relaxed) {
                 // M400: tras un `flush`, los primeros `skip` octetos son la cola ya fundida; la
                 // rampa de entrada empieza donde empieza lo nuevo. Si esta vuelta no pasa de la
                 // cola, la entrada queda pendiente para la siguiente.
                 let skip = shared.fade_in_skip.swap(0, Relaxed);
                 if skip >= take {
+                    flush_tail = true;
                     shared.after_gap.store(true, Relaxed);
                     shared.fade_in_skip.store(skip - take, Relaxed);
                 } else {
@@ -2478,6 +2490,9 @@ mod coreaudio {
             }
             if fading_out {
                 shared.fade_outs.fetch_add(1, Relaxed);
+                if flush_tail {
+                    shared.flush_fades.fetch_add(1, Relaxed);
+                }
                 let n = shared.ramp_frames.min(frames);
                 ramp(out, shared.fmt, fb, frames - n, n, false);
                 shared.after_gap.store(true, Relaxed);
@@ -2613,6 +2628,7 @@ mod coreaudio {
             after_gap: std::sync::atomic::AtomicBool::new(true), // la primera salida arranca suave
             silence_bytes: std::sync::atomic::AtomicUsize::new(0),
             fade_outs: std::sync::atomic::AtomicUsize::new(0),
+                flush_fades: std::sync::atomic::AtomicUsize::new(0),
             gaps: std::sync::atomic::AtomicUsize::new(0),
             flushes: std::sync::atomic::AtomicUsize::new(0),
             fade_in_skip: std::sync::atomic::AtomicUsize::new(0),
@@ -2898,7 +2914,11 @@ mod coreaudio {
                     self.shared.silence_bytes.load(std::sync::atomic::Ordering::Relaxed),
                     self.shared.fade_outs.load(std::sync::atomic::Ordering::Relaxed),
                     self.shared.flushes.load(std::sync::atomic::Ordering::Relaxed),
-                    self.shared.fade_outs.load(std::sync::atomic::Ordering::Relaxed).saturating_sub(1)
+                    self.shared
+                        .fade_outs
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        .saturating_sub(self.shared.flush_fades.load(std::sync::atomic::Ordering::Relaxed))
+                        .saturating_sub(1)
                 );
             }
             unsafe {
@@ -3439,13 +3459,24 @@ mod alsa {
                     self.written_frames += n;
                 }
             }
-            // M158: posición real = escritos − delay, desde el MISMO hilo que posee el pcm.
+            self.program_frames();
+        }
+
+        /// M158: posición real = escritos − delay, desde el MISMO hilo que posee el pcm. Se
+        /// refresca también en las esperas del alimentador (ray-daw #429): si solo se midiera
+        /// al escribir, `queued_ms` no bajaría nunca tras el último `write`. Tras un `flush`
+        /// (drop + prepare) el delay es 0 y lo descartado cuenta como salido del backend.
+        fn program_frames(&mut self) -> Option<i64> {
             let mut in_device: i64 = 0;
             // SAFETY: pcm válido; delay escribe un i64 (snd_pcm_sframes_t).
-            if unsafe { (self.delay)(self.pcm, &mut in_device) } == 0 {
-                let played_now = (self.written_frames - in_device).max(0);
-                self.played.store(played_now, super::Ordering::SeqCst);
-            }
+            let played_now = if unsafe { (self.delay)(self.pcm, &mut in_device) } == 0 {
+                (self.written_frames - in_device).max(0)
+            } else {
+                // Sin delay que leer (XRUN: el búfer se vació): no queda nada por sonar.
+                self.written_frames
+            };
+            self.played.store(played_now, super::Ordering::SeqCst);
+            Some(played_now)
         }
 
         /// M398: `snd_pcm_drop` vacía el búfer del dispositivo; `prepare` lo deja listo para seguir.
@@ -3811,12 +3842,19 @@ mod aaudio {
                 }
                 off += n as usize * self.frame_bytes;
             }
-            // M158: la posición real — frames que el DISPOSITIVO ya consumió.
+            self.program_frames();
+        }
+
+        /// M158: la posición real — frames que el DISPOSITIVO ya consumió. Se refresca también
+        /// en las esperas del alimentador (ray-daw #429), no solo al escribir.
+        fn program_frames(&mut self) -> Option<i64> {
             // SAFETY: stream válido hasta close.
             let played_now = unsafe { (self.frames_read)(self.stream) };
-            if played_now >= 0 {
-                self.played.store(played_now, super::Ordering::SeqCst);
+            if played_now < 0 {
+                return None;
             }
+            self.played.store(played_now, super::Ordering::SeqCst);
+            Some(played_now)
         }
 
         /// M398: AAudio solo vacía en pausa: pause → flush → start.
@@ -4488,9 +4526,22 @@ mod wasapi {
                 off += bytes;
                 self.written_frames += n as i64;
             }
-            // Posición real = escritos − lo que aún espera en el búfer del motor.
+            self.program_frames();
+        }
+
+        /// Posición real = escritos − lo que aún espera en el búfer del motor. Se refresca
+        /// también en las esperas del alimentador (ray-daw #429), no solo al escribir.
+        fn program_frames(&mut self) -> Option<i64> {
+            com_init();
             let played_now = (self.written_frames - self.padding() as i64).max(0);
             self.played.store(played_now, Ordering::SeqCst);
+            Some(played_now)
+        }
+
+        /// Este backend no vacía el búfer del motor en un `flush`: lo ya entregado termina de
+        /// sonar, así que sigue contando como encolado.
+        fn flushed_frames(&mut self) -> Option<i64> {
+            Some(0)
         }
         fn finish(&mut self) {
             // Drena: espera a que el motor consuma lo entregado (acotado a ~2 s por si acaso).

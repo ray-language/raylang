@@ -4428,9 +4428,34 @@ mod mac {
         }
     }
 
+    /// ¿Trae archivos el arrastre `info`? Mira solo los TIPOS del portapapeles del arrastre:
+    /// `draggingUpdated:` llega con cada movimiento del ratón, y leer todas las rutas ahí
+    /// hacía tartamudear un arrastre de miles de archivos.
+    unsafe fn carries_files(info: Id) -> bool {
+        // SAFETY: mensajes estándar de NSDraggingInfo/NSPasteboard/NSArray en el hilo principal.
+        unsafe {
+            let get: MsgId = std::mem::transmute(msg_send());
+            let contains: unsafe extern "C" fn(Id, Sel, Id) -> u8 = std::mem::transmute(msg_send());
+            let plain: unsafe extern "C" fn(Id, Sel) = std::mem::transmute(msg_send());
+            let pasteboard = get(info, sel(b"draggingPasteboard\0"));
+            if pasteboard.is_null() {
+                return false;
+            }
+            let types = get(pasteboard, sel(b"types\0"));
+            if types.is_null() {
+                return false;
+            }
+            let file_url = nsstring("public.file-url");
+            let found = contains(types, sel(b"containsObject:\0"), file_url) != 0;
+            plain(file_url, sel(b"release\0"));
+            found
+        }
+    }
+
     /// ¿Intercepta esta vista la suelta `info`? Solo si lo pidió y el arrastre trae archivos.
     unsafe fn takes_drop(this: Id, info: Id) -> bool {
-        drop_views().lock().unwrap().contains(&(this as usize)) && !unsafe { dragged_paths(info) }.is_empty()
+        let asked = drop_views().lock().unwrap().contains(&(this as usize));
+        asked && unsafe { carries_files(info) }
     }
 
     extern "C" fn web_dragging(this: Id, cmd: Sel, info: Id) -> usize {
@@ -4456,6 +4481,9 @@ mod mac {
                 return call(&sup, cmd, info);
             }
             let paths = dragged_paths(info);
+            if paths.is_empty() {
+                return false; // el arrastre anunciaba archivos y no trae ninguno legible
+            }
             let location: MsgPoint = std::mem::transmute(msg_send());
             let convert: unsafe extern "C" fn(Id, Sel, CGPoint, Id) -> CGPoint = std::mem::transmute(msg_send());
             let flipped: unsafe extern "C" fn(Id, Sel) -> u8 = std::mem::transmute(msg_send());
@@ -5849,6 +5877,9 @@ mod mac {
                 if webview.is_null() {
                     return Err("ui: could not create the webview".to_string());
                 }
+                // Un webview recién creado no acepta sueltas: su dirección puede ser la de uno
+                // de una ventana ya cerrada que sí las aceptaba.
+                accept_drops(webview as usize, false);
                 if devtools {
                     let responds: MsgBoolSel = std::mem::transmute(msg_send());
                     if responds(webview, sel(b"respondsToSelector:\0"), sel(b"setInspectable:\0")) != 0 {
@@ -8228,6 +8259,7 @@ mod gtk {
         get_data: unsafe extern "C" fn(Widget, *mut c_void, *mut c_void, u32),
         finish: unsafe extern "C" fn(*mut c_void, i32, i32, u32),
         get_uris: unsafe extern "C" fn(*mut c_void) -> *mut *mut std::ffi::c_char,
+        get_target: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
         filename_from_uri: unsafe extern "C" fn(*const std::ffi::c_char, *mut *mut std::ffi::c_char, *mut *mut c_void) -> *mut std::ffi::c_char,
         strfreev: unsafe extern "C" fn(*mut *mut std::ffi::c_char),
         free: unsafe extern "C" fn(*mut c_void),
@@ -8265,6 +8297,7 @@ mod gtk {
                     get_data: std::mem::transmute::<*mut c_void, _>(get(c"gtk_drag_get_data")?),
                     finish: std::mem::transmute::<*mut c_void, _>(get(c"gtk_drag_finish")?),
                     get_uris: std::mem::transmute::<*mut c_void, _>(get(c"gtk_selection_data_get_uris")?),
+                    get_target: std::mem::transmute::<*mut c_void, _>(get(c"gtk_selection_data_get_target")?),
                     filename_from_uri: std::mem::transmute::<*mut c_void, _>(get(c"g_filename_from_uri")?),
                     strfreev: std::mem::transmute::<*mut c_void, _>(get(c"g_strfreev")?),
                     free: std::mem::transmute::<*mut c_void, _>(get(c"g_free")?),
@@ -8322,6 +8355,12 @@ mod gtk {
     extern "C" fn on_drag_data(widget: Widget, context: *mut c_void, _x: i32, _y: i32, data: *mut c_void, _info: u32, time: u32, user: *mut c_void) {
         let id = user as usize as i64;
         let Some(api) = drop_api() else { return };
+        // Solo la respuesta a NUESTRA petición (text/uri-list) cierra la suelta: WebKit pide
+        // otros formatos al pasar por encima y una de esas respuestas puede llegar después.
+        // SAFETY: `data` es el GtkSelectionData de esta señal.
+        if unsafe { (api.get_target)(data) != (api.atom_intern)(c"text/uri-list".as_ptr(), 0) } {
+            return;
+        }
         let Some((x, y)) = drop_states().lock().unwrap().get_mut(&id).and_then(|s| s.awaiting.take()) else {
             return; // datos que pidió WebKit al pasar por encima: no es nuestra suelta
         };

@@ -2579,6 +2579,12 @@ pub fn pipe_has_pending(_h: i64) -> Option<bool> {
     None
 }
 
+/// ¿Sigue `h` en el registro de handles? Una fibra aparcada sin fd en un handle que otra fibra
+/// cerró no tiene quién la despierte: el scheduler lo pregunta para devolverla a su error.
+pub fn handle_is_open(h: i64) -> bool {
+    registry().lock().unwrap().open.get(&h).is_some()
+}
+
 /// Cierra el handle (lo quita del registro; el `Drop` del archivo/socket libera el recurso) (M11.8).
 pub fn close_handle(h: i64) {
     registry().lock().unwrap().open.remove(&h);

@@ -912,7 +912,11 @@ impl<'a> Vm<'a> {
                 && p.handle >= 0
                 && ((p.handle == crate::builtins::UI_EVENTS_PSEUDO_HANDLE && crate::builtins::ui_has_event())
                     || crate::builtins::watch_has_pending(p.handle) == Some(true)
-                    || crate::builtins::pipe_has_pending(p.handle) == Some(true));
+                    || crate::builtins::pipe_has_pending(p.handle) == Some(true)
+                    // ray-daw #441: otra fibra cerró el handle (Windows: un pipe sin fd). Sin
+                    // esto la lectura aparcada no despertaba nunca; ahora reintenta y recibe
+                    // `invalid handle`.
+                    || (cfg!(windows) && p.handle != crate::builtins::UI_EVENTS_PSEUDO_HANDLE && !crate::builtins::handle_is_open(p.handle)));
             if ready {
                 woken.push(shared.io_parked.remove(i));
             } else {

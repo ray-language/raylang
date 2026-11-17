@@ -20964,3 +20964,14 @@ llegando no se notaba (el lector despertaba solo); una vigilancia ociosa no desp
 Ahora el clon se suelta antes de aparcar y se vuelve a pedir al despertar, y `__ray_close` cierra
 el pipe y después hace `poke`: el fd muerto vuelve como error al re-armar y el lector recibe
 `invalid handle`, como en la VM.
+
+**El mismo cierre, en Linux y Windows.** El CI de esa PR se colgó: lo anterior solo se había
+probado en macOS. kqueue devuelve un fd cerrado como evento de error, y por eso allí bastaba el
+`poke`; epoll lo RECHAZA al re-armar (`EBADF`) y no da evento. El reactor nativo ignoraba ese
+rechazo y el poller de la VM también, así que el lector seguía aparcado. Ahora un fd rechazado
+cuenta como listo en los dos (la fibra reintenta y recibe `invalid handle`). En Windows un pipe
+no pasa por el poller: la VM despierta la lectura aparcada cuando su handle ya no está en el
+registro, y el nativo —que leía bloqueando con un clon del extremo, lo que impedía el cierre—
+sondea `PeekNamedPipe` cada 1 ms sin retener el clon mientras no hay datos. La variante sin
+fibras (hilo por tarea) suelta el clon entre intentos por la misma razón. Coste: hasta 1 ms más
+de latencia al leer la salida de un hijo en un binario nativo de Windows.

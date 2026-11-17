@@ -21035,10 +21035,14 @@ eran de 5 ms: lo encolado no llegaba a ciclo y medio y la cola se quedaba sin au
 entregas. El anillo seguía lleno, así que la traza no contaba ningún underrun. Con 80 ms (6,7 ms
 por búfer, casi dos ciclos) ya sonaba limpio, y con 5 y 10 ms el flujo va por el AudioUnit de
 baja latencia, que no tiene cola. Ahora un búfer nunca es menor que un ciclo de E/S del
-dispositivo (leído de la HAL): tres ciclos encolados. Coste: con hints de 20 a 40 la latencia
-real sube unos 15 ms; por debajo de 20 sigue el camino de baja latencia. Escuchado por el
+dispositivo (leído de la HAL): tres ciclos encolados. Coste: con hints de 20 a 40 lo encolado
+sube unos 35 ms, porque el anillo (rampa + 3 búferes) crece con ellos — el suelo real pasa de
+~50 a ~85 ms; por debajo de 20 sigue el camino de baja latencia. Escuchado por el
 usuario en los parlantes integrados con el tono del hallazgo: limpio con 20, 40, 80 y 120. Se descartó mandar
 esos hints por el AudioUnit porque baja el búfer del dispositivo para todo el proceso. La traza
-dice ahora el tamaño de los búferes y el mínimo de audio que quedó en la cola al pedir más (el
-reloj de la cola incluye la latencia del dispositivo, así que es una pista relativa, no un
-contador de cortes).
+dice ahora el tamaño de los búferes. Se probó a medir el corte dentro de la cola (lo encolado
+menos el reloj de la cola al pedir un búfer) y se quitó: ese reloj incluye la latencia del
+dispositivo y el número no separaba un flujo limpio de uno que crepita. El tamaño del ciclo se
+lee al abrir; si un flujo nuestro de baja latencia lo tiene bajado, vale el tamaño al que
+volverá. Queda sin cubrir una cola sin dispositivo fijado que sigue a un cambio del dispositivo
+por defecto hacia uno de ciclo mayor.

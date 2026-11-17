@@ -109,8 +109,10 @@ fn main() -> int {
     let _ = midi.send(out, b"\x90\x40\x64");
     let _ = midi.send(out, b"\x90\x43\x64");
     let _ = midi.send(out, b"\x80\x3c\x00");
+    // Y un solo envío con dos mensajes: un paquete con los dos, siempre.
+    let _ = midi.send(out, b"\x90\x30\x10\x80\x30\x00");
     var i = 0;
-    while (i < 4) {
+    while (i < 6) {
         print(midi.read(inp).unwrap().data);
         i = i + 1;
     }
@@ -118,7 +120,7 @@ fn main() -> int {
     0
 }
 "#;
-    let want = "903c64\n904064\n904364\n803c00\n";
+    let want = "903c64\n904064\n904364\n803c00\n903010\n803000\n";
     let d = workdir("burst", src);
     let o = Command::new(env!("CARGO_BIN_EXE_ray")).args(["run", "prog.ray"]).current_dir(&d).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&o.stdout), want, "vm: {}", String::from_utf8_lossy(&o.stderr));

@@ -1809,7 +1809,13 @@ mod coreaudio {
         pub fn io_cycle_seconds(device: u32) -> f64 {
             let mut frames = 0u32;
             let rate = device_rate(device);
-            if get(device, BUFFER_FRAME_SIZE, SCOPE_GLOBAL, &mut frames) && frames > 0 && rate > 0.0 {
+            get(device, BUFFER_FRAME_SIZE, SCOPE_GLOBAL, &mut frames);
+            // Si un flujo nuestro de baja latencia lo tiene bajado, vale el tamaño al que
+            // volverá cuando ese flujo cierre: la cola puede seguir abierta entonces.
+            if let Some(&(before, _)) = lowered().lock().unwrap_or_else(|e| e.into_inner()).get(&device) {
+                frames = frames.max(before);
+            }
+            if frames > 0 && rate > 0.0 {
                 frames as f64 / rate
             } else {
                 0.0
@@ -2419,11 +2425,10 @@ mod coreaudio {
                 std::thread::sleep(std::time::Duration::from_millis(5));
                 if std::env::var_os("RAY_AUDIO_TRACE").is_some() {
                     eprintln!(
-                        "[audio] coreaudio low latency: device buffer {} frames, ring cap {} B, underruns {} (times the stream ran out of data before the end)",
+                        "[audio] coreaudio low latency: device buffer {} frames, ring cap {} B, underruns {} (times the callback found no data; a pause before closing, as in drain, counts as one)",
                         self.device_frames,
                         self.shared.cap,
-                        // El último hueco es la cola, tras el último write: no es un corte.
-                        self.shared.gaps.load(Ordering::Relaxed).saturating_sub(1)
+                        self.shared.gaps.load(Ordering::Relaxed)
                     );
                 }
                 // SAFETY: parar y desinicializar esperan al callback en curso; después nadie
@@ -2551,10 +2556,6 @@ mod coreaudio {
         /// M378: transiciones dato → silencio (huecos). Un flujo limpio tiene exactamente uno:
         /// la cola final. Cada hueco a mitad de flujo es un underrun audible.
         gaps: std::sync::atomic::AtomicUsize,
-        /// ray-daw #449: el margen más justo visto al pedir la cola un búfer — frames encolados
-        /// y aún sin sonar según su reloj (que va por detrás: incluye la latencia del
-        /// dispositivo). Es la pista de un corte DENTRO de la cola, que el anillo no ve.
-        min_margin: std::sync::atomic::AtomicI64,
         /// M400 (rayplay #171/#173): cortes de `flush` (la traza los cuenta aparte de `fade_outs`,
         /// que solo cuenta las colas fundidas por el callback al quedarse sin datos).
         flushes: std::sync::atomic::AtomicUsize,
@@ -2653,7 +2654,6 @@ mod coreaudio {
                 fade_outs: std::sync::atomic::AtomicUsize::new(0),
                 flush_fades: std::sync::atomic::AtomicUsize::new(0),
                 gaps: std::sync::atomic::AtomicUsize::new(0),
-            min_margin: std::sync::atomic::AtomicI64::new(i64::MAX),
                 flushes: std::sync::atomic::AtomicUsize::new(0),
                 fade_in_skip: std::sync::atomic::AtomicUsize::new(0),
                 timeline: Mutex::new(Timeline::default()),
@@ -2707,15 +2707,6 @@ mod coreaudio {
         // SAFETY: `user` es el Arc<Shared> filtrado en open (vive hasta Dispose); `buf` es de la cola.
         let shared = unsafe { &*(user as *const Shared) };
         unsafe {
-            // ray-daw #449: ¿cuánto quedaba por sonar dentro de la cola al pedir este búfer?
-            let mut ts: AudioTimeStamp = std::mem::zeroed();
-            if AudioQueueGetCurrentTime(q, std::ptr::null(), &mut ts, std::ptr::null_mut()) == 0
-                && ts.flags & TS_SAMPLE_TIME_VALID != 0
-                && ts.sample_time > 0.0
-            {
-                let margin = shared.timeline.lock().unwrap().total - ts.sample_time as i64;
-                shared.min_margin.fetch_min(margin, std::sync::atomic::Ordering::Relaxed);
-            }
             let cap = (*buf).audio_data_bytes_capacity as usize;
             let out = std::slice::from_raw_parts_mut((*buf).audio_data, cap);
             (*buf).audio_data_byte_size = fill(shared, out) as u32;
@@ -2928,7 +2919,6 @@ mod coreaudio {
             fade_outs: std::sync::atomic::AtomicUsize::new(0),
                 flush_fades: std::sync::atomic::AtomicUsize::new(0),
             gaps: std::sync::atomic::AtomicUsize::new(0),
-            min_margin: std::sync::atomic::AtomicI64::new(i64::MAX),
             flushes: std::sync::atomic::AtomicUsize::new(0),
             fade_in_skip: std::sync::atomic::AtomicUsize::new(0),
             timeline: Mutex::new(Timeline::default()),
@@ -3208,7 +3198,7 @@ mod coreaudio {
             live_queues().lock().unwrap_or_else(|e| e.into_inner()).retain(|&q| q != self.q as usize);
             if std::env::var_os("RAY_AUDIO_TRACE").is_some() {
                 eprintln!(
-                    "[audio] coreaudio: ring cap {} B, keepalive silence {} B (priming + tail included), fade-outs {}, flushes {}, underruns {} (times the stream ran out of data before the end), least audio left in the queue when it asked for more: {} frames (the device's own latency included)",
+                    "[audio] coreaudio: ring cap {} B, keepalive silence {} B (priming + tail included), fade-outs {}, flushes {}, underruns {} (times the stream ran out of data before the end)",
                     self.shared.cap,
                     self.shared.silence_bytes.load(std::sync::atomic::Ordering::Relaxed),
                     self.shared.fade_outs.load(std::sync::atomic::Ordering::Relaxed),
@@ -3217,11 +3207,7 @@ mod coreaudio {
                         .fade_outs
                         .load(std::sync::atomic::Ordering::Relaxed)
                         .saturating_sub(self.shared.flush_fades.load(std::sync::atomic::Ordering::Relaxed))
-                        .saturating_sub(1),
-                    match self.shared.min_margin.load(std::sync::atomic::Ordering::Relaxed) {
-                        i64::MAX => 0,
-                        m => m,
-                    }
+                        .saturating_sub(1)
                 );
             }
             unsafe {

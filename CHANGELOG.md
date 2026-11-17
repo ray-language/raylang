@@ -6,13 +6,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.105 — 2026-11-17
+
 - **`std/midi`: varios `send` seguidos llegan todos, uno por lectura** (ray-daw #446). En macOS
   un acorde o un Note Off y un Note On del mismo instante llegaban juntos como un solo mensaje
   y la lectura siguiente no volvía nunca.
 - **`std/audio` ya no crepita con hints de 20 a 40 ms en macOS** (ray-daw #449). Los búferes de
-  la cola nunca son menores que un ciclo del dispositivo; con esos hints la latencia real sube
-  unos 15 ms. `RAY_AUDIO_TRACE=1` dice el tamaño de los búferes y cuánto audio llegó a quedar
-  en la cola, y la línea de baja latencia cuenta `underruns` como la del camino normal.
+  la cola nunca son menores que un ciclo del dispositivo; con esos hints lo encolado sube unos
+  35 ms (el suelo real pasa de ~50 a ~85 ms; por debajo de 20 ms sigue el camino de baja
+  latencia). `RAY_AUDIO_TRACE=1` dice el tamaño de los búferes, y la línea de baja latencia
+  dice `underruns` como la del camino normal.
 
 ## 1.27.104 — 2026-11-17
 

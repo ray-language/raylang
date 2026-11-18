@@ -6,6 +6,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.107 — 2026-11-18
+
 - **std/audio: desenchufar el dispositivo de una salida** (ray-daw #450, macOS). Al desconectar
   los audífonos con una salida de baja latencia abierta, el audio seguía saliendo entrecortado y
   a un tercio de la velocidad, y `write` devolvía `Ok` como si nada. Ahora el runtime vigila el
@@ -13,6 +15,10 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   (también cuando el usuario lo cambia), y una abierta con `open_device` termina con
   `Err("audio: the output device was disconnected")` en `write`, `played_ms` y compañía. Antes
   esa salida descartaba el audio en silencio, con un aviso en stderr.
+- **Documentación** (rayserial #393, raycdc #405): la referencia y `llms.txt` nombran las
+  funciones variádicas que `extern` no puede llamar (`ioctl`, `fcntl`, `open` con `O_CREAT`) y
+  cómo fallan en Apple arm64; el manual explica los rangos de versión (`^0.13` no admite 0.15) y
+  qué pasa cuando dos requisitos del mismo paquete no coinciden.
 
 ## 1.27.106 — 2026-11-17
 

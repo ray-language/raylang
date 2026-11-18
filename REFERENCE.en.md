@@ -665,8 +665,11 @@ is called anyway fails on the VM with `library 'x' not found (tried libx.dylib, 
 `blocking` adds ~4 µs natively (a thread hop) and ~0.5 µs on the VM: declare it only for what can
 really wait (a `read` on a device, a `poll` with a timeout), never for a `poll(…, 0)` or a getter.
 
-Out of contract: **variadic** functions (`printf` — UB on arm64), structs by value, callbacks (noted
-for an FFI v2). Not available in the wasm playground.
+Out of contract: **variadic** functions, structs by value, callbacks (noted for an FFI v2).
+Variadic is not only `printf`: `ioctl`, `fcntl` and `open` with `O_CREAT` are too (rayserial
+#393). On Apple arm64 the variadic argument travels on the stack and `extern` passes it in a
+register, so the call fails or, worse, returns 0 having done nothing (`fcntl(fd, F_SETFL,
+O_NONBLOCK)`): wrap them in a fixed-arity C function. Not available in the wasm playground.
 
 **Output buffers.** A `bytes` is passed as a pointer to ITS buffer, without a copy: what C writes
 there the program sees, and so does every alias of the value (`let b2 = b;` shares the buffer). It is
@@ -828,4 +831,4 @@ orientations) **replaces** it; the rest are added.
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:20f2130d816b -->
+<!-- sync: sha256:0051426f7852 -->

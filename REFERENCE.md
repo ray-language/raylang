@@ -663,8 +663,11 @@ del símbolo).
 que de verdad puede esperar (un `read` de un dispositivo, un `poll` con plazo), nunca para un
 `poll(…, 0)` o un getter.
 
-Fuera de contrato: funciones **variádicas** (`printf` — UB en arm64), structs por valor, callbacks
-(anotados para un FFI v2). No disponible en el playground wasm.
+Fuera de contrato: funciones **variádicas**, structs por valor, callbacks (anotados para un FFI
+v2). Variádicas no son solo `printf`: también `ioctl`, `fcntl` y `open` con `O_CREAT` (rayserial
+#393). En Apple arm64 el argumento variádico viaja por la pila y `extern` lo pasa en registro,
+así que la llamada falla o, peor, devuelve 0 sin hacer nada (`fcntl(fd, F_SETFL, O_NONBLOCK)`):
+envuélvelas en una función C de aridad fija. No disponible en el playground wasm.
 
 **Búferes de salida.** Un `bytes` pasa como puntero a SU búfer, sin copia: lo que C escriba ahí lo
 ve el programa, y también cada alias del valor (`let b2 = b;` comparte el búfer). Es la forma de

@@ -230,7 +230,10 @@ them qualified: `regex.Regex` in a signature, `json.Json.JObject(m)` in a patter
 `dir/mod.ray` file makes `dir/` an importable capsule (`import dir;`) whose internals
 are private. Inside a module, calls to its own functions and UFCS both resolve
 module-locally. Dependencies live in `ray.toml` `[dependencies]`, ALWAYS as a quoted string:
-`net = "^0.15"` (a version from the index; `ray add net` writes it), `oidc = "path:../oidc"` (a
+`net = "^0.15"` (a version from the index; `ray add net` writes it; `^` keeps the leftmost
+non-zero component: `^1.2` = 1.2.0 up to 2.0.0, but `^0.15` = 0.15.x only; `~1.2.3` = 1.2.x,
+`1.2.0` exact, `*` any; ONE version per package is installed, the newest requested, with a
+warning when it falls outside another package's range), `oidc = "path:../oidc"` (a
 local directory, relative to the project root) or `geo = "git+https://host/geo@v1.0"` (the
 package is the ROOT of that repo — there is no subdirectory syntax; a package that lives inside a
 bigger repo is published as its own repo with `ray registry mirror`). No inline tables
@@ -658,7 +661,9 @@ C may write into it: `ffi.buffer(n)` (`import std/ffi;`) gives n zero bytes for 
 optional one first with `ffi.library_available("z") -> bool`. Cost of one call (measured, arm64):
 ~0.5 µs on the VM, ~1 ns natively; `blocking` adds ~4 µs natively (a thread hop) and ~0.5 µs on
 the VM, so declare `blocking` only what can really wait (a `read` on a device, a `poll` with a
-timeout) — never a `poll(…, 0)` or a getter. Full rules: §13 of raylang://reference.md.
+timeout) — never a `poll(…, 0)` or a getter. VARIADIC C functions cannot be called: not only
+`printf` but `ioctl`, `fcntl` and `open` with O_CREAT — on Apple arm64 they fail or silently do
+nothing; wrap them in a fixed-arity C function. Full rules: §13 of raylang://reference.md.
 
 ## Mistakes you will make, and the exact errors
 

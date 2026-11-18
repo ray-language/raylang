@@ -230,7 +230,10 @@ them qualified: `regex.Regex` in a signature, `json.Json.JObject(m)` in a patter
 `dir/mod.ray` file makes `dir/` an importable capsule (`import dir;`) whose internals
 are private. Inside a module, calls to its own functions and UFCS both resolve
 module-locally. Dependencies live in `ray.toml` `[dependencies]`, ALWAYS as a quoted string:
-`net = "^0.15"` (a version from the index; `ray add net` writes it), `oidc = "path:../oidc"` (a
+`net = "^0.15"` (a version from the index; `ray add net` writes it; `^` keeps the leftmost
+non-zero component: `^1.2` = 1.2.0 up to 2.0.0, but `^0.15` = 0.15.x only; `~1.2.3` = 1.2.x,
+`1.2.0` exact, `*` any; ONE version per package is installed, the newest requested, with a
+warning when it falls outside another package's range), `oidc = "path:../oidc"` (a
 local directory, relative to the project root) or `geo = "git+https://host/geo@v1.0"` (the
 package is the ROOT of that repo — there is no subdirectory syntax; a package that lives inside a
 bigger repo is published as its own repo with `ray registry mirror`). No inline tables
@@ -521,7 +524,10 @@ choosing the device: audio.devices() lists Device { id, name, input_channels, ou
 default_input, default_output, sample_rate, transport } and audio.open_device(id, rate,
 channels, format, latency_ms) / audio.open_input_device(id, …) open one (empty list on iOS;
 audio.watch() + audio.next_change(h) park until a device is plugged/unplugged or the default
-changes — then call devices() again; tests: RAY_AUDIO_DEVICES=a,b makes devices() list those and
+changes — then call devices() again; if an open output's device is unplugged (macOS only; on
+other systems rely on next_change): an output opened without choosing a device moves to the new
+default by itself (positions keep counting), one from open_device ends and write returns
+Err("audio: the output device was disconnected"); tests: RAY_AUDIO_DEVICES=a,b makes devices() list those and
 any other id `Err` under RAY_AUDIO_SINK/SOURCE, which otherwise accept any id;
 a Bluetooth output always gets 80 ms at least); low latency: a hint of 3-19 ms in
 open_latency/open_format/open_device/open_input (macOS: straight to the device with 32-128
@@ -656,7 +662,9 @@ C may write into it: `ffi.buffer(n)` (`import std/ffi;`) gives n zero bytes for 
 optional one first with `ffi.library_available("z") -> bool`. Cost of one call (measured, arm64):
 ~0.5 µs on the VM, ~1 ns natively; `blocking` adds ~4 µs natively (a thread hop) and ~0.5 µs on
 the VM, so declare `blocking` only what can really wait (a `read` on a device, a `poll` with a
-timeout) — never a `poll(…, 0)` or a getter. Full rules: §13 of raylang://reference.md.
+timeout) — never a `poll(…, 0)` or a getter. VARIADIC C functions cannot be called: not only
+`printf` but `ioctl`, `fcntl` and `open` with O_CREAT — on Apple arm64 they fail or silently do
+nothing; wrap them in a fixed-arity C function. Full rules: §13 of raylang://reference.md.
 
 ## Mistakes you will make, and the exact errors
 

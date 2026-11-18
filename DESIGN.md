@@ -21133,3 +21133,52 @@ limpia su directorio de trabajo; `kv.open` recupera su documentación, que habí
 un helper privado; y raydoc y el doc del MCP muestran los supertraits. Queda anotado: los
 errores «falta contexto» se reconocen por el texto del mensaje en dos sitios; un `kind` en
 `TypeError` los haría robustos a un cambio de redacción.
+
+## 460. El dispositivo de una salida se va (ray-daw #450, nov 2026)
+
+Con una salida de baja latencia abierta (AudioUnit HAL, hint < 20 ms) en los audífonos, al
+desenchufarlos el audio seguía «sonando» entrecortado y a un tercio de la velocidad: el
+AudioUnit queda atado al `AudioDeviceID` con el que se abrió, y la HAL seguía pidiéndole 512
+frames cada ~33 ms a un dispositivo que ya no existía. `write` devolvía `Ok`, `played_ms`
+avanzaba despacio y la traza no decía nada. La única defensa que había —dar la salida por
+perdida si el dispositivo deja de pedir audio 2 s con el anillo lleno— no saltaba, porque el
+dispositivo no dejaba de pedir.
+
+**Decisión**: preguntar por el dispositivo en vez de deducirlo del ritmo. El alimentador mira
+cada 50 ms (`follow_device` → `Sink::device_state`), y los sumideros de CoreAudio miran también
+cada 100 ms mientras esperan sitio en el anillo:
+
+- **Salida sin dispositivo elegido** (`open`, `open_latency`, `open_format`): si el por defecto
+  del sistema ya es otro, el alimentador desmonta el sumidero y abre uno nuevo con los mismos
+  parámetros (`Moved`). Se reabre entero, no se reapunta el AudioUnit, porque el dispositivo
+  nuevo puede pedir otro camino: unos AirPods suben el hint a 80 ms y van por AudioQueue. Lo que
+  estaba encolado en el viejo se pierde (`Ctl::rebase` lo cuenta como descartado) y `played_ms` /
+  `queued_ms` siguen desde donde iban. Cubre también el cambio manual del por defecto.
+- **Salida con dispositivo elegido** (`open_device`): termina (`Gone`). El alimentador cierra el
+  pipe, así que `write` falla, y deja el motivo en `lost_outputs`; `write` (en `std/audio`) y
+  `played_ms`, `queued_ms`, `flush`, `drain` responden `audio: the output device was
+  disconnected`. Antes descartaba en silencio con un aviso en stderr: un programa no podía
+  distinguirlo de una reproducción normal.
+
+El sumidero nuevo se abre ANTES de desmontar el viejo. Si no abre y el dispositivo viejo sigue
+vivo (el usuario cambió el por defecto a uno con menos canales que el flujo), la salida se
+queda donde estaba y reintenta cada 2 s. Si no abre y el viejo ya no sirve (no queda ningún
+dispositivo), la salida no termina: un sumidero de ritmo real descarta lo escrito hasta que
+aparezca un dispositivo (se mira cada 250 ms). Al mudarse a un dispositivo que sube el hint
+(Bluetooth, 80 ms) la cola del socket se redimensiona con él. La AudioQueue sin dispositivo elegido no se toca: sigue sola al por defecto (queda
+con los búferes y el hint calculados para el dispositivo anterior; reabrirla costaría un hueco
+audible donde hoy no lo hay). `RAY_AUDIO_TEST_UNPLUG_MS=n` desenchufa el sumidero de pruebas a
+los `n` ms, y así el camino entero —reabrir, las cuentas, el `Err`— se prueba en CI sin
+hardware. Fuera de macOS ningún sumidero responde todavía otra cosa que `Present`: ALSA, WASAPI
+y AAudio siguen como estaban, y la documentación lo dice.
+
+De la revisión previa a la release salieron, además de lo anterior: el motivo de una salida
+perdida se consulta antes que el control (el alimentador cierra el pipe antes de retirarlo, y
+`write` podía ver el error crudo del pipe); `drain` y `flush` en curso devuelven el motivo en
+vez de un `Ok` o un timeout; `played_ms` lee base y posición bajo un cerrojo (al reabrir, la
+posición podía dar un salto atrás durante una lectura); el `finish` de la AudioQueue deja de
+esperar si el anillo no baja en 2 s (cerrar una salida cuyo dispositivo se acababa de ir
+colgaba el hilo para siempre); y el reloj del anillo lleno solo se lee al entrar a esperar, no
+por cada octeto. Queda anotado: `std/audio` reconoce el motivo por el prefijo del mensaje
+(`audio: the output device`), porque `write` es el opcode genérico de sockets; llevarlo al
+propio `write` pide un opcode de audio en los tres motores.

@@ -461,9 +461,50 @@ pub struct Ctl {
     fed_bytes: AtomicI64,
     dropped_frames: AtomicI64,
     sounded_frames: AtomicI64,
+    /// ray-daw #450: lo que ya llevaban sonado (frames del programa) y reproducido (posición
+    /// del backend) los sumideros anteriores de esta salida, cuando el alimentador la reabre
+    /// en otro dispositivo: el sumidero nuevo vuelve a contar desde cero.
+    sounded_base: AtomicI64,
+    played_base: AtomicI64,
+    /// `played_base` y `played_frames` cambian juntos al reabrir: quien los suma los lee con
+    /// este cerrojo, para no ver uno nuevo y otro viejo (la posición daría un salto atrás).
+    position: Mutex<()>,
 }
 
 impl Ctl {
+    fn new(pipe_r: i64, played_frames: Arc<AtomicI64>, sample_rate: i64, frame_bytes: i64) -> Ctl {
+        Ctl {
+            in_flight: AtomicI64::new(0),
+            pipe_r,
+            played_frames,
+            sample_rate,
+            discard: std::sync::atomic::AtomicBool::new(false),
+            frame_bytes,
+            fed_bytes: AtomicI64::new(0),
+            dropped_frames: AtomicI64::new(0),
+            sounded_frames: AtomicI64::new(0),
+            sounded_base: AtomicI64::new(0),
+            played_base: AtomicI64::new(0),
+            position: Mutex::new(()),
+        }
+    }
+
+    /// Frames reproducidos por el backend en toda la vida de la salida.
+    fn played_total(&self) -> i64 {
+        let _together = self.position.lock().unwrap_or_else(|e| e.into_inner());
+        self.played_base.load(Ordering::SeqCst) + self.played_frames.load(Ordering::SeqCst).max(0)
+    }
+
+    /// ray-daw #450: el sumidero se va a sustituir por otro. Lo que tenía sin sonar ya no
+    /// sonará (cuenta como descartado) y las posiciones siguen desde donde iban.
+    fn rebase(&self) {
+        let outstanding = self.in_backend();
+        self.dropped_frames.fetch_add(outstanding, Ordering::SeqCst);
+        self.sounded_base.store(self.sounded_frames.load(Ordering::SeqCst), Ordering::SeqCst);
+        let _together = self.position.lock().unwrap_or_else(|e| e.into_inner());
+        self.played_base.fetch_add(self.played_frames.swap(-1, Ordering::SeqCst).max(0), Ordering::SeqCst);
+    }
+
     /// Frames del programa entregados al backend que ni han sonado ni se descartaron.
     fn in_backend(&self) -> i64 {
         (self.fed_bytes.load(Ordering::SeqCst) / self.frame_bytes - self.dropped_frames.load(Ordering::SeqCst) - self.sounded_frames.load(Ordering::SeqCst)).max(0)
@@ -473,7 +514,7 @@ impl Ctl {
     fn account(&self, sink: &mut dyn Sink, n: usize) {
         self.fed_bytes.fetch_add(n as i64, Ordering::SeqCst);
         let sounded = sink.program_frames().unwrap_or_else(|| self.played_frames.load(Ordering::SeqCst)).max(0);
-        self.sounded_frames.store(sounded, Ordering::SeqCst);
+        self.sounded_frames.store(self.sounded_base.load(Ordering::SeqCst) + sounded, Ordering::SeqCst);
     }
 
     /// Tras un `flush` del backend: lo descartado deja de contar como encolado.
@@ -537,6 +578,135 @@ fn ctls() -> &'static Mutex<HashMap<i64, Arc<Ctl>>> {
     CTLS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// ray-daw #450: las salidas que se quedaron sin dispositivo, con el motivo. El alimentador
+/// termina (y con él el pipe: `write` da error), y `write`, `played_ms` y compañía dicen por
+/// qué. La entrada se retira cuando otra salida estrena la misma clave.
+fn lost_outputs() -> &'static Mutex<HashMap<i64, String>> {
+    static LOST: OnceLock<Mutex<HashMap<i64, String>>> = OnceLock::new();
+    LOST.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_ctl(key: i64, ctl: &Arc<Ctl>) {
+    lost_outputs().lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+    ctls().lock().unwrap().insert(key, ctl.clone());
+}
+
+/// Por qué terminó la salida `key`, si fue por quedarse sin dispositivo.
+fn lost_reason(key: i64) -> Option<String> {
+    lost_outputs().lock().unwrap_or_else(|e| e.into_inner()).get(&key).cloned()
+}
+
+/// El control de la salida `key`, o por qué no lo hay. El motivo de una salida perdida va
+/// primero: su alimentador puede no haber retirado aún el control.
+fn ctl_of(key: i64) -> Result<Arc<Ctl>, String> {
+    if let Some(why) = lost_reason(key) {
+        return Err(why);
+    }
+    ctls().lock().unwrap().get(&key).cloned().ok_or_else(|| "audio: not an open audio output".to_string())
+}
+
+/// Lo que el alimentador necesita para seguir al dispositivo de su salida (ray-daw #450).
+struct Follower {
+    sample_rate: i64,
+    channels: i64,
+    fmt: Format,
+    /// El hint que pidió el programa (antes de subirlo por el transporte del dispositivo).
+    requested_latency_ms: i64,
+    /// El hint con el que está abierto el sumidero actual.
+    latency_ms: i64,
+    /// No hay dispositivo donde sonar: un sumidero de ritmo real descarta lo escrito hasta que
+    /// aparezca uno.
+    orphan: bool,
+    /// Un intento de reabrir falló: hasta cuándo no se repite.
+    retry_at: std::time::Instant,
+}
+
+/// Cada cuánto mira el alimentador si el dispositivo de la salida sigue ahí.
+const DEVICE_CHECK_EVERY: std::time::Duration = std::time::Duration::from_millis(50);
+
+/// El motivo que ven `write`, `played_ms` y compañía en una salida que perdió su dispositivo.
+/// `std/audio` reconoce el motivo por el prefijo `audio: the output device`.
+const DEVICE_DISCONNECTED: &str = "audio: the output device was disconnected";
+
+/// ray-daw #450: mira qué fue del dispositivo de la salida y devuelve `false` si la salida
+/// termina (el motivo queda anotado para `write` y `played_ms`).
+///
+/// - Eligió dispositivo y ya no está: termina.
+/// - Iba con el por defecto y el por defecto es otro: se abre un sumidero nuevo con los mismos
+///   parámetros y, SOLO si abre, se desmonta el viejo (lo que tenía encolado se pierde; las
+///   posiciones siguen). Si no abre y el dispositivo viejo sigue vivo (el nuevo no admite los
+///   canales del flujo, por ejemplo), la salida se queda donde estaba.
+/// - Iba con el por defecto y no hay dónde sonar: no termina. Un sumidero de ritmo real
+///   descarta lo escrito hasta que aparezca un dispositivo.
+fn follow_device(sink: &mut Box<dyn Sink>, ctl: &Ctl, key: i64, follower: &mut Follower) -> bool {
+    let trace = std::env::var_os("RAY_AUDIO_TRACE").is_some();
+    let now = std::time::Instant::now();
+    let usable = if follower.orphan {
+        false
+    } else {
+        match sink.device_state() {
+            DeviceState::Present => return true,
+            DeviceState::Gone => {
+                sink.abandon();
+                if trace {
+                    eprintln!("[audio] the output device was disconnected: the output ends");
+                }
+                lost_outputs().lock().unwrap_or_else(|e| e.into_inner()).insert(key, DEVICE_DISCONNECTED.to_string());
+                return false;
+            }
+            DeviceState::Moved { usable } => usable,
+        }
+    };
+    if (usable || follower.orphan) && now < follower.retry_at {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    let latency_ms = coreaudio::raise_for_transport("", follower.requested_latency_ms);
+    #[cfg(not(target_os = "macos"))]
+    let latency_ms = follower.requested_latency_ms;
+    let replace = |sink: &mut Box<dyn Sink>, new: Box<dyn Sink>| {
+        sink.abandon();
+        sink.finish();
+        ctl.rebase();
+        *sink = new;
+    };
+    match make_sink(follower.sample_rate, follower.channels, latency_ms, follower.fmt, ctl.played_frames.clone(), "") {
+        Ok(new) => {
+            replace(sink, new);
+            follower.orphan = false;
+            follower.latency_ms = latency_ms;
+            if trace {
+                eprintln!("[audio] the default output device changed: the stream moved to it (what was queued on the old one is dropped)");
+            }
+        }
+        Err(e) if usable => {
+            follower.retry_at = now + std::time::Duration::from_secs(2);
+            if trace {
+                eprintln!("[audio] the default output device changed but the stream stays on its device ({})", e.trim_start_matches("audio: "));
+            }
+        }
+        Err(e) => {
+            follower.retry_at = now + std::time::Duration::from_millis(250);
+            if !follower.orphan {
+                follower.orphan = true;
+                let frame_bytes = follower.channels as usize * follower.fmt.sample_bytes();
+                let silent = NullSink {
+                    bytes_per_sec: follower.sample_rate * frame_bytes as i64,
+                    frame_bytes,
+                    consumed_frames: 0,
+                    played: ctl.played_frames.clone(),
+                    unplug: None,
+                };
+                replace(sink, Box::new(silent));
+                if trace {
+                    eprintln!("[audio] the output device is gone and there is no other ({}): the stream is silent until one appears", e.trim_start_matches("audio: "));
+                }
+            }
+        }
+    }
+    true
+}
+
 /// M298 (findings 1.27.11 #22): el alimentador retira SU entrada del mapa al terminar — solo si
 /// sigue siendo la suya. El SO reutiliza el fd/handle del extremo de escritura en cuanto se
 /// cierra, así que una salida abierta justo después heredaba la misma clave y el alimentador
@@ -573,6 +743,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
         return Err(format!("audio: unsupported latency {latency_ms} ms (3–1000, or 0 = default)"));
     }
     let latency_ms = if latency_ms == 0 { 200 } else { latency_ms };
+    let requested_latency_ms = latency_ms;
     #[cfg(unix)]
     let null_sink = std::env::var("RAY_AUDIO_SINK").as_deref() == Ok("null");
     // M469 (ray-daw #431): una salida Bluetooth crepita con menos de ~80 ms encolados (el
@@ -583,6 +754,15 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
     let played_frames = Arc::new(AtomicI64::new(-1));
     // El backend se abre ANTES del pipe: un dispositivo ausente falla en `open`, no a mitad.
     let sink = make_sink(sample_rate, channels, latency_ms, fmt, played_frames.clone(), device)?;
+    let mut follower = Follower {
+        sample_rate,
+        channels,
+        fmt,
+        requested_latency_ms,
+        latency_ms,
+        orphan: false,
+        retry_at: std::time::Instant::now(),
+    };
 
     // El chunk del alimentador es ~latencia/4: reactivo sin syscalls de más (alineado a frame).
     let frame_bytes = (channels as usize) * fmt.sample_bytes();
@@ -643,18 +823,8 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
             fcntl_raw(fd_w, F_SETFL, fl | O_NONBLOCK);
         }
         let key = fd_w as i64;
-        let ctl = Arc::new(Ctl {
-            in_flight: AtomicI64::new(0),
-            pipe_r: fd_r as i64,
-            played_frames,
-            sample_rate,
-            discard: std::sync::atomic::AtomicBool::new(false),
-            frame_bytes: frame_bytes as i64,
-            fed_bytes: AtomicI64::new(0),
-            dropped_frames: AtomicI64::new(0),
-            sounded_frames: AtomicI64::new(0),
-        });
-        ctls().lock().unwrap().insert(key, ctl.clone());
+        let ctl = Arc::new(Ctl::new(fd_r as i64, played_frames, sample_rate, frame_bytes as i64));
+        register_ctl(key, &ctl);
         // El alimentador: lee el pipe (bloqueante) y empuja al backend; EOF (close del handle) →
         // drena el backend y termina.
         let ctl_thread = ctl.clone();
@@ -673,7 +843,28 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
             }
             let mut sink = sink;
             let mut buf = vec![0u8; chunk];
+            let mut next_check = std::time::Instant::now() + DEVICE_CHECK_EVERY;
             loop {
+                // ray-daw #450: ¿sigue ahí el dispositivo?
+                if std::time::Instant::now() >= next_check {
+                    let latency_before = follower.latency_ms;
+                    if !follow_device(&mut sink, &ctl_thread, key, &mut follower) {
+                        break;
+                    }
+                    // El dispositivo nuevo pide otra latencia (unos auriculares Bluetooth suben
+                    // el hint a 80 ms): la cola del socket se redimensiona con ella, o el total
+                    // encolado se quedaría corto. En BSD manda el búfer de recepción del par.
+                    if follower.latency_ms != latency_before {
+                        let budget = if follower.latency_ms < LOW_LATENCY_BELOW_MS {
+                            (bytes_per_sec * follower.latency_ms / 2000).max(chunk as i64 * 2) as i32
+                        } else {
+                            queue_budget_bytes(bytes_per_sec, follower.latency_ms, chunk)
+                        };
+                        // SAFETY: fd_r es nuestro hasta el close del final; el valor es un i32.
+                        unsafe { setsockopt(fd_r, SOL_SOCKET, SO_RCVBUF, &budget as *const i32 as *const core::ffi::c_void, 4) };
+                    }
+                    next_check = std::time::Instant::now() + DEVICE_CHECK_EVERY;
+                }
                 // M398 (rayplay #166): `flush` — vacía el pipe sin tocarlo y descarta lo del backend.
                 if ctl_thread.discard.load(Ordering::SeqCst) {
                     while pipe_pending(fd_r as i64) > 0 {
@@ -725,24 +916,22 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
         let mut reader = std::fs::File::from(OwnedHandle::from(r));
         let writer = std::fs::File::from(OwnedHandle::from(w));
         let key = writer.as_raw_handle() as i64;
-        let ctl = Arc::new(Ctl {
-            in_flight: AtomicI64::new(0),
-            pipe_r: reader.as_raw_handle() as i64,
-            played_frames,
-            sample_rate,
-            discard: std::sync::atomic::AtomicBool::new(false),
-            frame_bytes: frame_bytes as i64,
-            fed_bytes: AtomicI64::new(0),
-            dropped_frames: AtomicI64::new(0),
-            sounded_frames: AtomicI64::new(0),
-        });
-        ctls().lock().unwrap().insert(key, ctl.clone());
+        let ctl = Arc::new(Ctl::new(reader.as_raw_handle() as i64, played_frames, sample_rate, frame_bytes as i64));
+        register_ctl(key, &ctl);
         let ctl_thread = ctl.clone();
         let reader_handle = reader.as_raw_handle() as i64;
         std::thread::spawn(move || {
             let mut sink = sink;
             let mut buf = vec![0u8; chunk];
+            let mut next_check = std::time::Instant::now() + DEVICE_CHECK_EVERY;
             loop {
+                // ray-daw #450: ¿sigue ahí el dispositivo?
+                if std::time::Instant::now() >= next_check {
+                    if !follow_device(&mut sink, &ctl_thread, key, &mut follower) {
+                        break;
+                    }
+                    next_check = std::time::Instant::now() + DEVICE_CHECK_EVERY;
+                }
                 // M398 (rayplay #166): `flush` — vacía el pipe sin tocarlo y descarta lo del backend.
                 if ctl_thread.discard.load(Ordering::SeqCst) {
                     while let Ok(n) = peek_pipe(reader_handle) {
@@ -799,13 +988,13 @@ pub fn quiesce() {
 }
 
 pub fn drain(key: i64) -> Result<(), String> {
-    let ctl = match ctls().lock().unwrap().get(&key) {
-        Some(c) => c.clone(),
-        None => return Err("audio: not an open audio output".to_string()),
-    };
+    let ctl = ctl_of(key)?;
     loop {
         let queued = pipe_pending(ctl.pipe_r);
         let flying = ctl.in_flight.load(Ordering::SeqCst);
+        if let Some(why) = lost_reason(key) {
+            return Err(why); // el alimentador terminó: lo que quedaba ya no va a sonar
+        }
         if queued == 0 && flying == 0 {
             break;
         }
@@ -822,13 +1011,13 @@ pub fn drain(key: i64) -> Result<(), String> {
 /// (unos pocos ms) termina de sonar. Bloquea el hilo hasta que el alimentador lo confirma
 /// (como mucho ~un chunk, acotado a 1 s).
 pub fn flush(key: i64) -> Result<(), String> {
-    let ctl = match ctls().lock().unwrap().get(&key) {
-        Some(c) => c.clone(),
-        None => return Err("audio: not an open audio output".to_string()),
-    };
+    let ctl = ctl_of(key)?;
     ctl.discard.store(true, Ordering::SeqCst);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
     while ctl.discard.load(Ordering::SeqCst) {
+        if let Some(why) = lost_reason(key) {
+            return Err(why);
+        }
         if std::time::Instant::now() > deadline {
             return Err("audio: flush timed out (the output is not being consumed)".to_string());
         }
@@ -843,12 +1032,7 @@ pub fn flush(key: i64) -> Result<(), String> {
 /// suena ahora es `escritas − queued`, haya habido cortes o huecos. Granularidad: un búfer del
 /// dispositivo.
 pub fn queued_ms(key: i64) -> Result<i64, String> {
-    let ctl = ctls()
-        .lock()
-        .unwrap()
-        .get(&key)
-        .cloned()
-        .ok_or_else(|| "audio: not an open audio output".to_string())?;
+    let ctl = ctl_of(key)?;
     // Lo en vuelo se lee ANTES que lo entregado: el alimentador suma a lo entregado antes de
     // restar de lo en vuelo, así que este orden puede contar un chunk dos veces un instante,
     // pero nunca perderlo.
@@ -862,17 +1046,8 @@ pub fn queued_ms(key: i64) -> Result<i64, String> {
 /// (AudioQueueGetCurrentTime / snd_pcm_delay / AAudioStream_getFramesRead), refrescado por el
 /// alimentador tras cada chunk (~latencia/4 de granularidad). 0 = aún no sonó nada.
 pub fn played_ms(key: i64) -> Result<i64, String> {
-    let ctl = ctls()
-        .lock()
-        .unwrap()
-        .get(&key)
-        .cloned()
-        .ok_or_else(|| "audio: not an open audio output".to_string())?;
-    let frames = ctl.played_frames.load(Ordering::SeqCst);
-    if frames <= 0 {
-        return Ok(0);
-    }
-    Ok(frames * 1000 / ctl.sample_rate)
+    let ctl = ctl_of(key)?;
+    Ok(ctl.played_total() * 1000 / ctl.sample_rate)
 }
 
 #[cfg(unix)]
@@ -1416,6 +1591,33 @@ trait Sink: Send {
     fn flushed_frames(&mut self) -> Option<i64> {
         None
     }
+    /// ray-daw #450: qué fue del dispositivo de la salida. Solo pregunta.
+    fn device_state(&mut self) -> DeviceState {
+        DeviceState::Present
+    }
+    /// La salida deja este sumidero sin esperar a que suene lo pendiente: lo descarta, para que
+    /// el `finish` que sigue no espere a un dispositivo que quizá ya no pide audio.
+    fn abandon(&mut self) {}
+}
+
+/// ray-daw #450: el dispositivo de una salida, visto por su sumidero.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum DeviceState {
+    /// Sigue ahí.
+    Present,
+    /// La salida iba con el dispositivo por defecto y ahora el por defecto es otro (o no hay
+    /// ninguno). `usable`: el dispositivo en el que está sigue sirviendo.
+    Moved { usable: bool },
+    /// La salida eligió un dispositivo y ya no está: termina.
+    Gone,
+}
+
+impl DeviceState {
+    /// ¿Se quedó la salida sin un dispositivo que le pida audio?
+    #[allow(dead_code)] // solo lo consultan los sumideros de CoreAudio
+    fn unusable(self) -> bool {
+        matches!(self, DeviceState::Gone | DeviceState::Moved { usable: false })
+    }
 }
 
 fn make_sink(
@@ -1433,6 +1635,7 @@ fn make_sink(
             frame_bytes: channels as usize * fmt.sample_bytes(),
             consumed_frames: 0,
             played,
+            unplug: test_unplug(device),
         }));
     }
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -1499,6 +1702,12 @@ impl Sink for Convert {
     fn flushed_frames(&mut self) -> Option<i64> {
         self.inner.flushed_frames()
     }
+    fn device_state(&mut self) -> DeviceState {
+        self.inner.device_state()
+    }
+    fn abandon(&mut self) {
+        self.inner.abandon()
+    }
 }
 
 /// El sumidero nulo: consume a ritmo de TIEMPO REAL (duerme lo que duraría el audio). Da la
@@ -1508,6 +1717,21 @@ struct NullSink {
     frame_bytes: usize,
     consumed_frames: i64,
     played: Arc<AtomicI64>,
+    /// Cuándo «se desenchufa» este sumidero de pruebas y qué responde entonces.
+    unplug: Option<(std::time::Instant, DeviceState)>,
+}
+
+/// ray-daw #450: `RAY_AUDIO_TEST_UNPLUG_MS=n` desenchufa el dispositivo del PRIMER sumidero de
+/// pruebas a los `n` ms de abrirlo: con dispositivo elegido la salida termina; sin él, se
+/// reabre (y el sumidero nuevo ya no se desenchufa). Para probar el camino sin hardware.
+fn test_unplug(device: &str) -> Option<(std::time::Instant, DeviceState)> {
+    static FIRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    let ms: u64 = std::env::var("RAY_AUDIO_TEST_UNPLUG_MS").ok()?.parse().ok()?;
+    if FIRED.swap(true, Ordering::SeqCst) {
+        return None;
+    }
+    let state = if device.is_empty() { DeviceState::Moved { usable: false } } else { DeviceState::Gone };
+    Some((std::time::Instant::now() + std::time::Duration::from_millis(ms), state))
 }
 
 impl Sink for NullSink {
@@ -1519,6 +1743,12 @@ impl Sink for NullSink {
         self.played.store(self.consumed_frames, Ordering::SeqCst);
     }
     fn finish(&mut self) {}
+    fn device_state(&mut self) -> DeviceState {
+        match self.unplug {
+            Some((at, state)) if std::time::Instant::now() >= at => state,
+            _ => DeviceState::Present,
+        }
+    }
 }
 
 // ── macOS e iOS: AudioQueue (AudioToolbox.framework, enlazado — siempre presente) ─────
@@ -1799,6 +2029,30 @@ mod coreaudio {
             transport(device)
         }
 
+        /// ray-daw #450: ¿sigue el dispositivo en el sistema? Uno desenchufado deja de existir
+        /// como objeto (la consulta falla) o responde que no está vivo.
+        pub fn is_alive(device: u32) -> bool {
+            const IS_ALIVE: u32 = fourcc(b"livn"); // kAudioDevicePropertyDeviceIsAlive
+            let mut alive = 0u32;
+            get(device, IS_ALIVE, SCOPE_GLOBAL, &mut alive) && alive != 0
+        }
+
+        /// ray-daw #450: qué fue del dispositivo `device` de una salida. `pinned` = el programa
+        /// lo eligió; si no, la salida va con el por defecto y se muda cuando este cambia.
+        pub fn device_state(device: u32, pinned: bool) -> super::super::DeviceState {
+            use super::super::DeviceState;
+            let alive = is_alive(device);
+            if pinned {
+                return if alive { DeviceState::Present } else { DeviceState::Gone };
+            }
+            match output_device("") {
+                Some(now) if now != device && is_alive(now) => DeviceState::Moved { usable: alive },
+                _ if alive => DeviceState::Present,
+                // Se fue y el sistema aún no tiene otro por defecto.
+                _ => DeviceState::Moved { usable: false },
+            }
+        }
+
         pub fn device_rate(device: u32) -> f64 {
             let mut rate = 0f64;
             get(device, NOMINAL_SAMPLE_RATE, SCOPE_GLOBAL, &mut rate);
@@ -2011,8 +2265,10 @@ mod coreaudio {
         }
 
         /// Si el dispositivo deja de pedir audio este tiempo con el anillo lleno, se da por
-        /// perdido (desenchufado): lo escrito se descarta en vez de dejar colgado al programa.
+        /// perdido aunque siga en el sistema: colgar ahí dejaría colgado al programa.
         const DEVICE_LOST_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+        /// Cada cuánto se mira, durante esa espera, si el dispositivo se fue (ray-daw #450).
+        const DEVICE_LOOK_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
 
         /// Ejecuta los pasos en orden y para en el primero que falla (nombre y OSStatus).
         fn run_steps(steps: &[(&'static str, &dyn Fn() -> i32)]) -> Result<(), (&'static str, i32)> {
@@ -2070,10 +2326,12 @@ mod coreaudio {
             /// Octetos por muestra cuando el programa es mono y la unidad recibe estéreo (cada
             /// muestra se duplica); 0 si el formato pasa tal cual.
             upmix_sample_bytes: usize,
-            /// El dispositivo dejó de pedir audio: lo que se escriba se descarta.
+            /// El dispositivo dejó de pedir audio o se fue: lo que se escriba se descarta.
             lost: bool,
             /// Frames que el último `flush` quitó del anillo.
             flushed: i64,
+            /// ray-daw #450: el programa eligió el dispositivo (no se muda al por defecto).
+            pinned: bool,
         }
         // SAFETY: el AudioUnit se crea en el hilo que abre y después solo lo toca el alimentador.
         unsafe impl Send for LowLatencySink {}
@@ -2182,7 +2440,7 @@ mod coreaudio {
                 hal::release_buffer_frames(device_id);
                 return Err(format!("audio: could not open the low-latency output ({name}, OSStatus {st})"));
             }
-            Ok(Box::new(LowLatencySink { unit, user, shared, played, device_frames, device_id, upmix_sample_bytes: if upmix { sb } else { 0 }, lost: false, flushed: 0 }))
+            Ok(Box::new(LowLatencySink { unit, user, shared, played, device_frames, device_id, upmix_sample_bytes: if upmix { sb } else { 0 }, lost: false, flushed: 0, pinned: !device.is_empty() }))
         }
 
         // ── La entrada de baja latencia ───────────────────────────────────────────────────
@@ -2379,13 +2637,21 @@ mod coreaudio {
                     // Contrapresión: anillo lleno → espera a que el callback haga sitio. Si el
                     // callback no vuelve (el dispositivo se desenchufó), la salida se da por
                     // perdida: colgar aquí dejaría colgados `write`, `drain` y `close`.
+                    let full_since = std::time::Instant::now();
                     while ring.len() >= self.shared.cap {
-                        let (guard, wait) = self.shared.space.wait_timeout(ring, DEVICE_LOST_AFTER).unwrap_or_else(|e| e.into_inner());
+                        let (guard, wait) = self.shared.space.wait_timeout(ring, DEVICE_LOOK_EVERY).unwrap_or_else(|e| e.into_inner());
                         ring = guard;
                         if wait.timed_out() && ring.len() >= self.shared.cap {
-                            ring.clear();
+                            // ray-daw #450: ¿se fue el dispositivo? El alimentador decide qué
+                            // hacer (reabrir o terminar) al volver de aquí.
+                            drop(ring);
+                            let gone = self.device_state().unusable();
+                            if !gone && full_since.elapsed() < DEVICE_LOST_AFTER {
+                                ring = self.shared.ring.lock().unwrap_or_else(|e| e.into_inner());
+                                continue;
+                            }
                             self.lost = true;
-                            eprintln!("[audio] the low-latency output device stopped asking for audio (was it disconnected?): the rest of the stream is discarded");
+                            self.shared.ring.lock().unwrap_or_else(|e| e.into_inner()).clear();
                             return;
                         }
                     }
@@ -2413,6 +2679,23 @@ mod coreaudio {
 
             fn flushed_frames(&mut self) -> Option<i64> {
                 Some(std::mem::take(&mut self.flushed))
+            }
+
+            /// ray-daw #450: un dispositivo desenchufado puede seguir pidiendo audio un rato,
+            /// a trompicones (se oía entrecortado y a un tercio de la velocidad), así que no
+            /// basta con esperar a que deje de pedir: se pregunta por él.
+            fn device_state(&mut self) -> super::super::DeviceState {
+                use super::super::DeviceState;
+                if self.lost {
+                    // Dejó de pedir audio sin irse del sistema: se trata como si se hubiera ido.
+                    return if self.pinned { DeviceState::Gone } else { DeviceState::Moved { usable: false } };
+                }
+                hal::device_state(self.device_id, self.pinned)
+            }
+
+            fn abandon(&mut self) {
+                self.lost = true;
+                self.shared.ring.lock().unwrap_or_else(|e| e.into_inner()).clear();
             }
 
             fn finish(&mut self) {
@@ -2694,8 +2977,12 @@ mod coreaudio {
         /// M468: la cola va a un dispositivo elegido (no sigue al de por defecto): si lo
         /// desenchufan, el callback deja de llegar y nadie haría sitio en el anillo.
         pinned: bool,
-        /// El dispositivo elegido dejó de pedir audio: lo que se escriba se descarta.
+        /// El dispositivo elegido dejó de pedir audio o se fue: lo que se escriba se descarta.
         lost: bool,
+        /// ray-daw #450: el `AudioDeviceID` del dispositivo elegido, para preguntar por él
+        /// (en iOS no se elige dispositivo).
+        #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+        device_id: Option<u32>,
     }
     // SAFETY: AudioQueueRef se usa solo desde el hilo alimentador tras la creación; el callback
     // corre en el hilo interno de AudioToolbox y solo toca `shared` (sincronizado).
@@ -2960,7 +3247,11 @@ mod coreaudio {
             }
         }
         live_queues().lock().unwrap_or_else(|e| e.into_inner()).push(q as usize);
-        Ok(Box::new(CoreAudioSink { q, shared, played, pinned: !device.is_empty(), lost: false }))
+        #[cfg(target_os = "macos")]
+        let device_id = if device.is_empty() { None } else { hal::output_device(device) };
+        #[cfg(not(target_os = "macos"))]
+        let device_id = None;
+        Ok(Box::new(CoreAudioSink { q, shared, played, pinned: !device.is_empty(), lost: false, device_id }))
     }
 
     /// M463: lo que el callback de entrada necesita — a dónde escribir y si ya debe parar.
@@ -3130,6 +3421,8 @@ mod coreaudio {
                 return;
             }
             let mut ring = self.shared.ring.lock().unwrap();
+            // Desde cuándo está lleno el anillo (solo se mira el reloj al entrar a esperar).
+            let mut full_since: Option<std::time::Instant> = None;
             for &b in data {
                 // Contrapresión: anillo lleno → espera a que el callback haga sitio. Con un
                 // dispositivo elegido que deja de pedir audio (desenchufado) la salida se da por
@@ -3139,15 +3432,25 @@ mod coreaudio {
                         ring = self.shared.space.wait(ring).unwrap();
                         continue;
                     }
-                    let (guard, wait) = self.shared.space.wait_timeout(ring, std::time::Duration::from_secs(2)).unwrap();
+                    let (guard, wait) = self.shared.space.wait_timeout(ring, std::time::Duration::from_millis(100)).unwrap();
                     ring = guard;
                     if wait.timed_out() && ring.len() >= self.shared.cap {
-                        ring.clear();
+                        // ray-daw #450: ¿se fue el dispositivo? (Y si sigue pero lleva 2 s sin
+                        // pedir audio, también se da por perdido.) El alimentador termina la
+                        // salida al volver de aquí.
+                        drop(ring);
+                        let gone = self.device_state().unusable();
+                        let since = *full_since.get_or_insert_with(std::time::Instant::now);
+                        if !gone && since.elapsed() < std::time::Duration::from_secs(2) {
+                            ring = self.shared.ring.lock().unwrap();
+                            continue;
+                        }
                         self.lost = true;
-                        eprintln!("[audio] the output device stopped asking for audio (was it disconnected?): the rest of the stream is discarded");
+                        self.shared.ring.lock().unwrap().clear();
                         return;
                     }
                 }
+                full_since = None;
                 ring.push_back(b);
             }
             drop(ring);
@@ -3187,11 +3490,35 @@ mod coreaudio {
             flush_ring(&self.shared);
         }
 
+        /// ray-daw #450: la cola sin dispositivo elegido sigue sola al por defecto; la que
+        /// eligió uno se queda sin nadie que le pida audio cuando lo desenchufan.
+        fn device_state(&mut self) -> super::DeviceState {
+            #[cfg(target_os = "macos")]
+            let gone = self.lost || self.device_id.is_some_and(|id| !hal::is_alive(id));
+            #[cfg(not(target_os = "macos"))]
+            let gone = self.lost;
+            if gone { super::DeviceState::Gone } else { super::DeviceState::Present }
+        }
+
+        fn abandon(&mut self) {
+            self.lost = true;
+            self.shared.ring.lock().unwrap().clear();
+        }
+
         fn finish(&mut self) {
             // Espera a que el anillo se vacíe y para la cola (Stop no-inmediato drena sus buffers).
+            // Si el anillo deja de bajar 2 s, nadie pide audio (el dispositivo se fue, ray-daw
+            // #450): esperar más colgaría este hilo para siempre.
+            let mut left = usize::MAX;
+            let mut moved_at = std::time::Instant::now();
             loop {
-                if self.shared.ring.lock().unwrap().is_empty() {
+                let now = self.shared.ring.lock().unwrap().len();
+                if now == 0 || (now >= left && moved_at.elapsed() >= std::time::Duration::from_secs(2)) {
                     break;
+                }
+                if now < left {
+                    left = now;
+                    moved_at = std::time::Instant::now();
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }

@@ -1141,7 +1141,13 @@ util = "path:../util"                           # local (no se bloquea; para des
 ```
 
 `ray build`/`run`/`test` resuelven y cachean las dependencias en `.ray-deps/` (con dependencias
-**transitivas** y resolución "gana la mayor compatible"). El lockfile `ray.lock` fija cada dependencia con
+**transitivas** y resolución "gana la mayor compatible"). Los rangos: `1.2.0` es esa versión
+exacta; `^1.2` admite desde 1.2.0 hasta antes de 2.0.0; `~1.2.3` admite 1.2.x desde 1.2.3; `*`,
+cualquiera. El `^` conserva el primer componente distinto de cero, así que en las versiones
+`0.x` es más estrecho: `^0.13` admite 0.13.x y **no** 0.15. De cada paquete se instala una sola
+versión. Si dos requisitos piden rangos distintos del mismo paquete (tu proyecto `net = "^0.15"`
+y una dependencia `net = "^0.13"`), gana la mayor pedida y `ray` avisa de que queda fuera del
+rango del otro, que puede no compilar o no funcionar con ella. El lockfile `ray.lock` fija cada dependencia con
 su **hash SHA-256** — un contenido alterado se detecta como error de supply-chain.
 
 **Qué proyecto es**: el del `ray.toml` más cercano **subiendo desde el directorio actual**. Si el
@@ -1719,9 +1725,13 @@ dónde suena.
 
 Para reaccionar cuando se enchufa o se desenchufa algo, `audio.watch()` da un handle y
 `audio.next_change(h)` aparca la fibra hasta que la lista cambia; entonces se vuelve a llamar a
-`audio.devices()`. Si desaparece el dispositivo de una salida abierta con `open_device`, lo que
-quedaba por sonar se descarta y `write` sigue devolviendo sin colgarse: el programa se entera
-por `next_change` y abre otra. En los tests, `RAY_AUDIO_DEVICES=a,b` declara los dispositivos
+`audio.devices()`. Si desaparece el dispositivo de una salida, en macOS depende de cómo se
+abrió. Una abierta sin elegir dispositivo se muda sola al nuevo por defecto (lo que estaba
+encolado en el viejo se pierde y la posición sigue su cuenta): el programa no tiene que hacer
+nada, y si por un momento no hay ningún dispositivo la salida calla hasta que aparezca uno. Una
+abierta con `open_device` termina: `write` da `Err("audio: the output device was disconnected")`
+y el programa abre otra. En los demás sistemas la salida no avisa: allí hay que enterarse por
+`next_change`. En los tests, `RAY_AUDIO_DEVICES=a,b` declara los dispositivos
 que lista `devices()`, y abrir otro id con el sumidero de pruebas es `Err`.
 
 ### MIDI (`std/midi`)

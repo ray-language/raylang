@@ -21160,10 +21160,25 @@ cada 100 ms mientras esperan sitio en el anillo:
   disconnected`. Antes descartaba en silencio con un aviso en stderr: un programa no podía
   distinguirlo de una reproducción normal.
 
-Un dispositivo que se va antes de que el sistema elija otro por defecto no es `Gone` hasta
-pasado 1 s. La AudioQueue sin dispositivo elegido no se toca: sigue sola al por defecto (queda
+El sumidero nuevo se abre ANTES de desmontar el viejo. Si no abre y el dispositivo viejo sigue
+vivo (el usuario cambió el por defecto a uno con menos canales que el flujo), la salida se
+queda donde estaba y reintenta cada 2 s. Si no abre y el viejo ya no sirve (no queda ningún
+dispositivo), la salida no termina: un sumidero de ritmo real descarta lo escrito hasta que
+aparezca un dispositivo (se mira cada 250 ms). Al mudarse a un dispositivo que sube el hint
+(Bluetooth, 80 ms) la cola del socket se redimensiona con él. La AudioQueue sin dispositivo elegido no se toca: sigue sola al por defecto (queda
 con los búferes y el hint calculados para el dispositivo anterior; reabrirla costaría un hueco
 audible donde hoy no lo hay). `RAY_AUDIO_TEST_UNPLUG_MS=n` desenchufa el sumidero de pruebas a
 los `n` ms, y así el camino entero —reabrir, las cuentas, el `Err`— se prueba en CI sin
 hardware. Fuera de macOS ningún sumidero responde todavía otra cosa que `Present`: ALSA, WASAPI
-y AAudio siguen como estaban.
+y AAudio siguen como estaban, y la documentación lo dice.
+
+De la revisión previa a la release salieron, además de lo anterior: el motivo de una salida
+perdida se consulta antes que el control (el alimentador cierra el pipe antes de retirarlo, y
+`write` podía ver el error crudo del pipe); `drain` y `flush` en curso devuelven el motivo en
+vez de un `Ok` o un timeout; `played_ms` lee base y posición bajo un cerrojo (al reabrir, la
+posición podía dar un salto atrás durante una lectura); el `finish` de la AudioQueue deja de
+esperar si el anillo no baja en 2 s (cerrar una salida cuyo dispositivo se acababa de ir
+colgaba el hilo para siempre); y el reloj del anillo lleno solo se lee al entrar a esperar, no
+por cada octeto. Queda anotado: `std/audio` reconoce el motivo por el prefijo del mensaje
+(`audio: the output device`), porque `write` es el opcode genérico de sockets; llevarlo al
+propio `write` pide un opcode de audio en los tres motores.

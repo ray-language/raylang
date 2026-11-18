@@ -145,7 +145,7 @@ pub fn queued_ms(h: int) -> Result<int, string> {
 /// `open_format` said otherwise) to the output. Writes ALL of `samples`, parking the fiber
 /// while the device buffer is full — backpressure IS the pacing: write your audio as fast as
 /// you produce it and the device sets the tempo. `Err` if the output was closed, or if it was
-/// opened with `open_device` and that device was disconnected.
+/// opened with `open_device` and that device was disconnected (reported on macOS only).
 pub fn write(h: int, samples: bytes) -> Result<int, string> {
     let r = __audio_write(h, samples);
     if (r[0] == "ok") {
@@ -154,7 +154,7 @@ pub fn write(h: int, samples: bytes) -> Result<int, string> {
         // Si la salida terminó porque su dispositivo se fue, el pipe solo dice «roto»: el
         // motivo lo guarda el runtime y lo cuenta `__audio_played`.
         let why = __audio_played(h);
-        if (why[0] != "ok" && why[1].contains("disconnected")) {
+        if (why[0] != "ok" && why[1].starts_with("audio: the output device")) {
             Result.Err(why[1])
         } else {
             Result.Err(r[1])
@@ -229,7 +229,9 @@ pub fn devices() -> [Device] {
 /// output is open, the output ends: `write` (and `played_ms`, `queued_ms`, `flush`, `drain`)
 /// return `Err("audio: the output device was disconnected")`; open another (`watch` /
 /// `next_change` also tell you when the devices change). An output opened WITHOUT choosing a
-/// device does not end: it moves to the new default device by itself. Under `RAY_AUDIO_SINK=null` any id is
+/// device does not end: it moves to the new default device by itself (and is silent while
+/// there is none). Both behaviours are macOS only for now: on the other systems a lost device
+/// is not reported, so use `watch` / `next_change` there. Under `RAY_AUDIO_SINK=null` any id is
 /// accepted, unless `RAY_AUDIO_DEVICES=a,b` declares the test devices: then an id that is not
 /// listed is `Err`.
 pub fn open_device(

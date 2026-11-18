@@ -198,3 +198,94 @@ fn the_test_sink_and_source_accept_any_device() {
     assert_eq!(String::from_utf8_lossy(&o.stdout), "true\ntrue\n");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+const UNPLUG_PROG: &str = r#"import std/audio;
+
+fn block() -> bytes {
+    var z: [int] = [];
+    for i in 0..9600 { z.push(0); }
+    bytes_of(z)
+}
+
+fn main() -> int {
+    let silence = block();
+    // Con dispositivo elegido: la salida termina y `write` dice por qué.
+    let pinned = audio.open_device("headphones", 48000, 2, "s16le", 40).unwrap();
+    var why = "";
+    var writes = 0;
+    while (why == "" && writes < 60) {
+        match (audio.write(pinned, silence)) {
+            Result.Ok(_) => { writes = writes + 1; },
+            Result.Err(e) => { why = e; },
+        }
+    }
+    print("pinned: ${why}");
+    print("pinned wrote before: ${writes > 0}");
+    match (audio.played_ms(pinned)) {
+        Result.Ok(_) => print("bad: played_ms still answers"),
+        Result.Err(e) => print("played_ms: ${e}"),
+    }
+    let _ = close(pinned);
+    0
+}
+"#;
+
+const FOLLOW_PROG: &str = r#"import std/audio;
+
+fn main() -> int {
+    var z: [int] = [];
+    for i in 0..9600 { z.push(0); }
+    let silence = bytes_of(z);
+    // Sin dispositivo elegido: la salida se muda sola y las posiciones siguen.
+    let o = audio.open_format(48000, 2, "s16le", 40).unwrap();
+    var ok = true;
+    var forward = true;
+    var last = 0;
+    for i in 0..20 {
+        if (audio.write(o, silence).is_err()) { ok = false; }
+        let at = audio.played_ms(o).unwrap_or(0 - 1);
+        if (at < last) { forward = false; }
+        last = at;
+    }
+    let _ = audio.drain(o);
+    let played = audio.played_ms(o).unwrap_or(0 - 1);
+    print("every write ok: ${ok}");
+    print("position never went back: ${forward}");
+    print("played most of it: ${played >= 700 && played <= 1000}");
+    print("nothing left queued: ${audio.queued_ms(o).unwrap_or(999) == 0}");
+    let _ = close(o);
+    0
+}
+"#;
+
+/// ray-daw #450: desenchufar el dispositivo de una salida. Con el sumidero de pruebas,
+/// `RAY_AUDIO_TEST_UNPLUG_MS` lo simula: la salida que eligió dispositivo termina y `write` y
+/// `played_ms` dicen por qué; la que va con el por defecto se reabre sola, sin que `write` falle
+/// ni la posición retroceda.
+#[test]
+fn an_unplugged_output_ends_with_a_reason_or_moves_to_the_default() {
+    let d = workdir("unplug");
+    std::fs::write(d.join("pinned.ray"), UNPLUG_PROG).unwrap();
+    std::fs::write(d.join("follow.ray"), FOLLOW_PROG).unwrap();
+    let pinned = "pinned: audio: the output device was disconnected\npinned wrote before: true\nplayed_ms: audio: the output device was disconnected\n";
+    let follow = "every write ok: true\nposition never went back: true\nplayed most of it: true\nnothing left queued: true\n";
+    let run = |cmd: &mut Command| {
+        let o = cmd.env("RAY_AUDIO_SINK", "null").env("RAY_AUDIO_TEST_UNPLUG_MS", "300").current_dir(&d).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&o.stderr), "");
+        String::from_utf8_lossy(&o.stdout).into_owned()
+    };
+    for engine in [&["run"][..], &["run", "--interp"][..]] {
+        assert_eq!(run(Command::new(env!("CARGO_BIN_EXE_ray")).args(engine).arg("pinned.ray")), pinned, "{engine:?}");
+        assert_eq!(run(Command::new(env!("CARGO_BIN_EXE_ray")).args(engine).arg("follow.ray")), follow, "{engine:?}");
+    }
+    #[cfg(unix)]
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        for (name, want) in [("pinned", pinned), ("follow", follow)] {
+            let bin = d.join(format!("{name}_bin"));
+            let b = Command::new(env!("CARGO_BIN_EXE_ray")).args(["build", "--native", &format!("{name}.ray"), "-o", bin.to_str().unwrap()]).current_dir(&d).output().unwrap();
+            assert!(b.status.success(), "build --native: {}", String::from_utf8_lossy(&b.stderr));
+            assert_eq!(run(&mut Command::new(&bin)), want, "native {name}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&d);
+}

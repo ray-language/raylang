@@ -521,7 +521,9 @@ choosing the device: audio.devices() lists Device { id, name, input_channels, ou
 default_input, default_output, sample_rate, transport } and audio.open_device(id, rate,
 channels, format, latency_ms) / audio.open_input_device(id, …) open one (empty list on iOS;
 audio.watch() + audio.next_change(h) park until a device is plugged/unplugged or the default
-changes — then call devices() again; tests: RAY_AUDIO_DEVICES=a,b makes devices() list those and
+changes — then call devices() again; if an open output's device is unplugged: an output opened
+without choosing a device moves to the new default by itself (positions keep counting), one
+from open_device ends and write returns Err("audio: the output device was disconnected"); tests: RAY_AUDIO_DEVICES=a,b makes devices() list those and
 any other id `Err` under RAY_AUDIO_SINK/SOURCE, which otherwise accept any id;
 a Bluetooth output always gets 80 ms at least); low latency: a hint of 3-19 ms in
 open_latency/open_format/open_device/open_input (macOS: straight to the device with 32-128

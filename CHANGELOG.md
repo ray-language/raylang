@@ -6,6 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **std/audio: desenchufar el dispositivo de una salida** (ray-daw #450, macOS). Al desconectar
+  los audífonos con una salida de baja latencia abierta, el audio seguía saliendo entrecortado y
+  a un tercio de la velocidad, y `write` devolvía `Ok` como si nada. Ahora el runtime vigila el
+  dispositivo: una salida abierta sin elegir dispositivo se muda sola al nuevo por defecto
+  (también cuando el usuario lo cambia), y una abierta con `open_device` termina con
+  `Err("audio: the output device was disconnected")` en `write`, `played_ms` y compañía. Antes
+  esa salida descartaba el audio en silencio, con un aviso en stderr.
+
 ## 1.27.106 — 2026-11-17
 
 - **`while let`** (raysolve #357): `while let Option.Some(x) = it.next() { … }` repite mientras

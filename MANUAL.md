@@ -1719,9 +1719,11 @@ dónde suena.
 
 Para reaccionar cuando se enchufa o se desenchufa algo, `audio.watch()` da un handle y
 `audio.next_change(h)` aparca la fibra hasta que la lista cambia; entonces se vuelve a llamar a
-`audio.devices()`. Si desaparece el dispositivo de una salida abierta con `open_device`, lo que
-quedaba por sonar se descarta y `write` sigue devolviendo sin colgarse: el programa se entera
-por `next_change` y abre otra. En los tests, `RAY_AUDIO_DEVICES=a,b` declara los dispositivos
+`audio.devices()`. Si desaparece el dispositivo de una salida, depende de cómo se abrió. Una
+abierta sin elegir dispositivo se muda sola al nuevo por defecto (lo que estaba encolado en el
+viejo se pierde y la posición sigue su cuenta): el programa no tiene que hacer nada. Una abierta
+con `open_device` termina: `write` da `Err("audio: the output device was disconnected")` y el
+programa abre otra. En los tests, `RAY_AUDIO_DEVICES=a,b` declara los dispositivos
 que lista `devices()`, y abrir otro id con el sumidero de pruebas es `Err`.
 
 ### MIDI (`std/midi`)

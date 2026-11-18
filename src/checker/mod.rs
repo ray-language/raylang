@@ -394,11 +394,15 @@ fn expand_supertrait_bounds(program: &mut Program) {
     if direct.is_empty() {
         return;
     }
+    // Un supertrait que no existe NO se copia a los bounds: su error es el del trait que lo
+    // nombra (`check_supertraits`), no un «bound con un trait no declarado» en un impl ajeno.
+    let known: HashSet<String> =
+        program.traits.iter().map(|t| t.name.clone()).chain(crate::prelude::traits().into_iter().map(|t| t.name)).collect();
     let expand = |bounds: &mut Vec<(String, String)>| {
         let mut i = 0;
         while i < bounds.len() {
             let (tp, tr) = bounds[i].clone();
-            for sup in direct.get(&tr).into_iter().flatten() {
+            for sup in direct.get(&tr).into_iter().flatten().filter(|s| known.contains(*s)) {
                 if !bounds.iter().any(|(p, t)| *p == tp && t == sup) {
                     bounds.push((tp.clone(), sup.clone())); // se visita después: cierre transitivo
                 }

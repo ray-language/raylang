@@ -2185,7 +2185,7 @@ fn fmt_expr_indented_inner(cur: &mut Cur, e: &Expr, base: usize) -> String {
                 && cur.if_lets.contains(&(cond.line, cond.col))
                 && body.tail.is_none()
                 && matches!(body.statements.as_slice(), [Stmt { kind: StmtKind::Expr(Expr { kind: ExprKind::Match { arms, .. }, line, col }), .. }]
-                    if (*line, *col) == (cond.line, cond.col) && arms.len() == 2) =>
+                    if (*line, *col) == (cond.line, cond.col) && (arms.len() == 1 || arms.len() == 2)) =>
         {
             let [Stmt { kind: StmtKind::Expr(Expr { kind: ExprKind::Match { scrutinee, arms }, .. }), .. }] = body.statements.as_slice() else {
                 unreachable!("the guard matched this shape")

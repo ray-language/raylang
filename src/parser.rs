@@ -1862,7 +1862,18 @@ impl Parser {
                 line,
                 col,
             };
-            let matched = Expr { kind: ExprKind::Match { scrutinee: Box::new(scrut), arms: vec![arm_then, arm_else] }, line, col };
+            // Un patrón que casa siempre (`while let (a, b) = par()`) no lleva el brazo `_`: sería
+            // inalcanzable y el checker lo rechazaría señalando un brazo que nadie escribió. El
+            // bucle sale entonces solo por un `break` del cuerpo.
+            fn always_matches(p: &Pattern) -> bool {
+                match &p.kind {
+                    PatternKind::Wildcard | PatternKind::Binding(_) => true,
+                    PatternKind::Tuple(ps) => ps.iter().all(always_matches),
+                    _ => false,
+                }
+            }
+            let arms = if always_matches(&arm_then.pattern) { vec![arm_then] } else { vec![arm_then, arm_else] };
+            let matched = Expr { kind: ExprKind::Match { scrutinee: Box::new(scrut), arms }, line, col };
             self.if_let_sites.insert((line, col));
             let body = Block {
                 statements: vec![Stmt { kind: StmtKind::Expr(matched), line, col }],

@@ -232,8 +232,40 @@ fn supertrait_and_generic_trait_errors_say_what_is_wrong() {
     assert!(err.contains("the impl of 'A' for S requires an impl of its supertrait 'Show'"), "{err}");
     let err = check("unknown.ray", "trait A: Nope { fn a(self) -> int; }\nfn main() -> int { 0 }\n");
     assert!(err.contains("the supertrait 'Nope' of 'A' is not a declared trait"), "{err}");
+    // Un supertrait que no existe se señala en el trait, no como un bound ajeno en un impl.
+    let err = check("unknown_generic.ray", "trait G: Nope { fn g(self) -> int; }\nstruct W<T> { v: T, }\nimpl<T: G> G for W<T> { fn g(self) -> int { 1 } }\nfn main() -> int { 0 }\n");
+    assert!(err.contains("the supertrait 'Nope' of 'G' is not a declared trait"), "{err}");
     let err = check("bound.ray", "trait Source<V> { fn get(self) -> V; }\nfn f<V, S: Source<V>>(s: S) -> int { 0 }\nfn main() -> int { 0 }\n");
     assert!(err.contains("a bound cannot take type arguments yet ('S: Source<…>')"), "{err}");
     let err = check("dyn.ray", "trait Source<V> { fn get(self) -> V; }\nfn f(s: dyn Source<int>) -> int { 0 }\nfn main() -> int { 0 }\n");
     assert!(err.contains("'dyn Source<…>' is not supported yet"), "{err}");
+}
+
+/// De la revisión previa a 1.27.106: reintentar la comprobación de un elemento de arreglo tras
+/// un error de inferencia dentro de un bloque no deja un ámbito abierto (los nombres de una
+/// función se veían desde la siguiente), y un `while let` cuyo patrón casa siempre es un bucle
+/// que sale por `break`.
+#[test]
+fn retried_array_elements_do_not_leak_scopes_and_irrefutable_while_let_loops() {
+    let d = tmp("scope_leak");
+    std::fs::write(
+        d.join("prog.ray"),
+        "fn total(xs: [int]) -> int { xs.len() }\nfn f(total: bool) -> int {\n    let rows = [if (total) { [] } else { [] }, [1]];\n    rows.len()\n}\nfn g() -> int { total([1, 2, 3]) }\nfn pair(i: int) -> (int, int) { (i, i * 2) }\nfn main() -> int {\n    print(f(true) + g());\n    var i = 0;\n    while let (a, b) = pair(i) {\n        if (a == 3) {\n            print(b);\n            break;\n        }\n        i = i + 1;\n    }\n    0\n}\n",
+    )
+    .unwrap();
+    for args in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let (out, err, code) = ray(&d, args);
+        assert_eq!(code, 0, "{args:?}: {err}");
+        assert_eq!(out, "5\n6\n", "{args:?}");
+    }
+    if has_rustc() {
+        let bin = d.join("prog_bin");
+        let (_o, err, code) = ray(&d, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(code, 0, "build --native: {err}");
+        assert_eq!(String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout), "5\n6\n");
+    }
+    std::fs::write(d.join("leak.ray"), "fn main() -> int {\n    let c = true;\n    {\n        let y = 1;\n        let xs = [if (c) { [] } else { [] }, [1]];\n        print(xs.len() + y);\n    }\n    print(y);\n    0\n}\n").unwrap();
+    let (_o, err, code) = ray(&d, &["check", "leak.ray"]);
+    assert_eq!(code, 65, "{err}");
+    assert!(err.contains("'y'"), "{err}");
 }

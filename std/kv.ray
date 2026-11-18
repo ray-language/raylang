@@ -36,19 +36,6 @@ pub struct Store {
 
 /// Opens the store at `path`. A missing file yields an empty store; an existing file
 /// that cannot be read or decoded is an error (never silently discards data).
-// La posición de la última `/` (o `\\`) de `path`; -1 si no tiene carpeta.
-fn last_slash(path: string) -> int {
-    var at = -1;
-    var i = 0;
-    for c in path.chars() {
-        if (c == '/' || c == '\\') {
-            at = i;
-        }
-        i = i + 1;
-    }
-    at
-}
-
 pub fn open(path: string) -> Result<Store, string> {
     if (fs.exists(path)) {
         let b = fs.read_file_bytes(path)?;
@@ -57,6 +44,17 @@ pub fn open(path: string) -> Result<Store, string> {
     } else {
         Result.Ok(empty(path))
     }
+}
+
+// Dónde acaba la carpeta de `path`: la posición de su última `/` (y de `\\` solo en Windows,
+// donde también separa; en POSIX es un carácter más del nombre). -1 si no tiene carpeta.
+fn last_slash(path: string) -> int {
+    let slash = path.last_index_of("/").unwrap_or(-1);
+    if (platform() != "windows") {
+        return slash;
+    }
+    let back = path.last_index_of("\\").unwrap_or(-1);
+    if (back > slash) { back } else { slash }
 }
 
 /// A fresh, empty in-memory store bound to `path` WITHOUT reading the file — for

@@ -21118,3 +21118,18 @@ los `dyn` por su cuenta); se escribe `dyn Version + Show`. Y un trait con parám
 sigue sin poder usarse como bound ni tras `dyn`: los bounds son pares `(parámetro, trait)` y
 darles argumentos de tipo cambia los diccionarios y la sustitución de firmas. Queda como
 trabajo propio; el parser ya lo dice con un mensaje que nombra el caso.
+
+**Revisión previa a 1.27.106.** El reintento de un elemento de arreglo (§458) destapó una fuga
+que ya existía: `check_block` no cerraba su ámbito si el bloque fallaba. Mientras un error
+abortaba la comprobación no importaba; al reintentar tras un error de inferencia dentro de un
+bloque (`[if (c) { [] } else { [] }, [1]]`), el ámbito quedaba abierto y los nombres de una
+función se veían desde la siguiente — un programa válido se rechazaba y uno inválido llegaba a
+un ICE del compilador. Ahora el ámbito se cierra siempre (el aplazamiento de brazos de `match`
+tenía la misma fuga latente). Además: un `while let` con patrón irrefutable no lleva el brazo
+`_` (el checker lo rechazaba como inalcanzable, señalando un brazo que nadie escribió); un
+supertrait inexistente no se copia a los bounds, para que el error sea el del trait; el
+chequeo de targets de `ray bundle` no corre con `--dev` (esa librería se descarga hecha) y
+limpia su directorio de trabajo; `kv.open` recupera su documentación, que había quedado sobre
+un helper privado; y raydoc y el doc del MCP muestran los supertraits. Queda anotado: los
+errores «falta contexto» se reconocen por el texto del mensaje en dos sitios; un `kind` en
+`TypeError` los haría robustos a un cambio de redacción.

@@ -3086,16 +3086,21 @@ impl Checker {
     }
 
     pub(super) fn check_block(&mut self, block: &Block) -> Result<Type, TypeError> {
+        // El ámbito se cierra también si el bloque falla: quien reintenta tras un error de
+        // inferencia (un brazo de `match`, un elemento de arreglo) seguiría con un ámbito de
+        // más abierto, y los nombres de esta función se verían desde la siguiente.
         self.push_scope();
-        for stmt in &block.statements {
-            self.check_stmt(stmt)?;
-        }
-        let ty = match &block.tail {
-            Some(e) => self.check_expr(e)?,
-            None => Type::Unit,
-        };
+        let result = (|| {
+            for stmt in &block.statements {
+                self.check_stmt(stmt)?;
+            }
+            match &block.tail {
+                Some(e) => self.check_expr(e),
+                None => Ok(Type::Unit),
+            }
+        })();
         self.pop_scope();
-        Ok(ty)
+        result
     }
 
     pub(super) fn check_binary(

@@ -610,9 +610,10 @@ pub fn missing_targets(wanted: &[&str]) -> Vec<String> {
 
 /// Corta `ray bundle` ANTES de compilar si falta algún target de `kind`: sin esto el fallo era el
 /// de cargo (`E0463: can't find crate for std`), que no dice cómo arreglarlo.
-pub fn require_targets(wanted: &[&str], kind: &str) {
+pub fn require_targets(wanted: &[&str], kind: &str, work: &Path) {
     let missing = missing_targets(wanted);
     if !missing.is_empty() {
+        let _ = fs::remove_dir_all(work); // el directorio de trabajo del bundle no se queda huérfano
         eprintln!(
             "the Rust target{} {} {} not installed: run {} and try again",
             if missing.len() == 1 { "" } else { "s" },

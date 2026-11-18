@@ -50,6 +50,12 @@ Reservadas (no pueden usarse como identificadores):
 > **Bucles etiquetados**: `outer: for row in grid { for x in row { if (x == 0) { break outer; } } }`
 > — `break outer` / `continue outer` desde cualquier bucle interior de la misma función (`outer: while` igual).
 
+> **`while let patrón = expr { … }`** repite mientras `expr` case con el patrón (`while let
+> Option.Some(x) = it.next() { … }`), sin paréntesis, como `if let`; admite `break`, `continue`
+> y etiqueta. **Supertraits**: `trait Version: Ord + Show { … }` — el `impl` de `Version` exige
+> los de `Ord` y `Show`, y un bound `V: Version` incluye los tres; `dyn Version` no los
+> arrastra (se escribe `dyn Version + Show`).
+
 ## 2. Símbolos y operadores
 
 ### Tabla de precedencia (de menor a mayor; SPEC §6.1)

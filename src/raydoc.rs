@@ -256,7 +256,8 @@ fn sig_enum(e: &EnumDef) -> String {
 }
 
 fn sig_trait(t: &TraitDef) -> String {
-    format!("trait {}{}", t.name, generics(&t.type_params, &[]))
+    let supers = if t.supertraits.is_empty() { String::new() } else { format!(": {}", t.supertraits.join(" + ")) };
+    format!("trait {}{}{supers}", t.name, generics(&t.type_params, &[]))
 }
 
 #[cfg(test)]

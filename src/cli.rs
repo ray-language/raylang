@@ -2529,7 +2529,11 @@ fn cmd_bundle(args: &[String]) {
         if build_x86 {
             android_targets.push("x86_64-linux-android");
         }
-        crate::toolchain::require_targets(&android_targets, "android");
+        // Solo si la librería se COMPILA: un bundle `--dev` la descarga ya hecha (o usa
+        // RAY_DEV_LIB) y no necesita el target de Rust.
+        if !dev {
+            crate::toolchain::require_targets(&android_targets, "android", &work);
+        }
         let arm_so = work.join("arm64.so");
         let x86_so = work.join("x86_64.so");
         if build_arm {
@@ -2691,7 +2695,9 @@ fn cmd_bundle(args: &[String]) {
         if build_sim {
             ios_targets.push("aarch64-apple-ios-sim");
         }
-        crate::toolchain::require_targets(&ios_targets, "ios");
+        if !dev {
+            crate::toolchain::require_targets(&ios_targets, "ios", &work);
+        }
         let dev_a = work.join("dev.a");
         let sim_a = work.join("sim.a");
         if build_dev {

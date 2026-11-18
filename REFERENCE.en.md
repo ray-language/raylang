@@ -50,6 +50,12 @@ Reserved (cannot be used as identifiers):
 > **Labeled loops**: `outer: for row in grid { for x in row { if (x == 0) { break outer; } } }`
 > — `break outer` / `continue outer` from any inner loop of the same function (`outer: while` too).
 
+> **`while let pattern = expr { … }`** loops while `expr` matches the pattern (`while let
+> Option.Some(x) = it.next() { … }`), without parentheses, like `if let`; it takes `break`,
+> `continue` and a label. **Supertraits**: `trait Version: Ord + Show { … }` — the `impl` of
+> `Version` requires those of `Ord` and `Show`, and a bound `V: Version` includes all three;
+> `dyn Version` does not carry them (write `dyn Version + Show`).
+
 ## 2. Symbols and operators
 
 ### Precedence table (lowest to highest; SPEC §6.1)
@@ -822,4 +828,4 @@ orientations) **replaces** it; the rest are added.
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:fbda66af143b -->
+<!-- sync: sha256:a052c938f6f7 -->

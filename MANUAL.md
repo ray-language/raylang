@@ -880,7 +880,12 @@ Más allá de lo básico:
 - **Trait objects** (`dyn`): despacho dinámico para colecciones heterogéneas —
   `let figuras: [dyn Area] = […];` — incluso multi-trait (`dyn Area + Show`) y *upcasting* a un
   subconjunto.
-- **Traits genéricos**: `trait From<S>` (§7), `trait Iterator<T>` (§8).
+- **Supertraits**: `trait Version: Ord + Show { … }`. Quien implementa `Version` tiene que
+  implementar también `Ord` y `Show`, y sobre un `V: Version` puedes llamar los métodos de los
+  tres (también desde un método por defecto del propio trait). Un trait object no los trae:
+  si los necesitas, escribe `dyn Version + Show`.
+- **Traits genéricos**: `trait From<S>` (§7), `trait Iterator<T>` (§8). Un trait tuyo con
+  parámetros de tipo aún no puede usarse como bound (`S: Source<V>`) ni tras `dyn`.
 
 Traits derivables con `@derive` (struct/enum no genéricos):
 
@@ -993,6 +998,14 @@ Y azúcar `if let` para un solo caso:
 
 ```rust
 if let Option.Some(v) = buscar(k) { print(v); }
+```
+
+Y `while let` para repetir mientras case: el bucle termina cuando la expresión deja de
+encajar con el patrón. Admite `break`, `continue` y etiqueta, como cualquier `while`.
+
+```rust
+let it = [1, 2, 3].iter();
+while let Option.Some(x) = it.next() { print(x); }
 ```
 
 Aprovecha la exhaustividad: si añades una variante al enum, el compilador señala cada `match` que falta

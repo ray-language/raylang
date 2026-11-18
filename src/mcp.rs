@@ -511,7 +511,7 @@ fn std_trait_method_doc(symbol: &str) -> Option<String> {
             let lines: Vec<&str> = src.lines().collect();
             let trait_at = lines.iter().position(|l| {
                 let l = l.trim_start();
-                l.starts_with(&format!("pub trait {} ", t.name)) || l.starts_with(&format!("pub trait {}<", t.name)) || l.starts_with(&format!("pub trait {}{{", t.name))
+                l.starts_with(&format!("pub trait {} ", t.name)) || l.starts_with(&format!("pub trait {}<", t.name)) || l.starts_with(&format!("pub trait {}{{", t.name)) || l.starts_with(&format!("pub trait {}:", t.name))
             }).unwrap_or(0);
             let head = format!("fn {method}(");
             let mut doc_lines: Vec<&str> = Vec::new();
@@ -667,7 +667,8 @@ fn trait_signature(t: &crate::ast::TraitDef) -> String {
             format!("fn {}({}){ret};", m.name, params.join(", "))
         })
         .collect();
-    format!("trait {}{tparams} {{ {} }}", t.name, methods.join(" "))
+    let supers = if t.supertraits.is_empty() { String::new() } else { format!(": {}", t.supertraits.join(" + ")) };
+    format!("trait {}{tparams}{supers} {{ {} }}", t.name, methods.join(" "))
 }
 
 /// `struct Nombre<T> { campo: tipo, … }` — la forma que se escribe al construirlo (M202).

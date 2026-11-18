@@ -2188,7 +2188,7 @@ fn fmt_expr_indented_inner(cur: &mut Cur, e: &Expr, base: usize) -> String {
                     if (*line, *col) == (cond.line, cond.col) && (arms.len() == 1 || arms.len() == 2)) =>
         {
             let [Stmt { kind: StmtKind::Expr(Expr { kind: ExprKind::Match { scrutinee, arms }, .. }), .. }] = body.statements.as_slice() else {
-                unreachable!("the guard matched this shape")
+                crate::ice!("the guard matched this shape")
             };
             let scrut = fmt_cond(cur, scrutinee, "while let  = ", cur.wrap);
             let mut s = format!("{}while let {} = {} ", label_prefix(label), fmt_pattern(cur, &arms[0].pattern), scrut);

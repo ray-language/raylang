@@ -2868,7 +2868,7 @@ impl Checker {
                     }
                 }
                 let Some((at, first)) = first else {
-                    return Err(pending.expect("a non-empty array without a typed element has an error"));
+                    return Err(pending.unwrap_or_else(|| crate::ice!("a non-empty array without a typed element has an error")));
                 };
                 for (i, e) in elems.iter().enumerate() {
                     if i == at {

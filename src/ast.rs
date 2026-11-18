@@ -413,6 +413,9 @@ pub struct TraitDef {
     /// Parámetros de tipo del trait (M28.2): los `S` de `trait From<S>`. Vacío = trait
     /// ordinario (M9). Habilitan el patrón de conversión de `From<S>` que consume `?`.
     pub type_params: Vec<String>,
+    /// Supertraits (raysolve #357): `trait Version: Ord + Show`. Quien implementa el trait debe
+    /// implementar también estos, y un bound `V: Version` los incluye.
+    pub supertraits: Vec<String>,
     pub methods: Vec<MethodSig>,
     pub line: usize,
     pub col: usize,

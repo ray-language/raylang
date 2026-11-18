@@ -391,10 +391,36 @@ fn alias_target(text: &str) -> Option<String> {
     (!target.is_empty()).then(|| target.to_string())
 }
 
+/// El módulo `std/*` que exporta la función `symbol` (el primero, por orden de nombre).
+fn std_owner(symbol: &str) -> Option<&'static str> {
+    let needle = format!("pub fn {symbol}(");
+    let mut names = crate::stdlib::names();
+    names.sort_unstable();
+    names.into_iter().find(|name| {
+        crate::stdlib::embedded(name).is_some_and(|src| src.lines().any(|l| l.starts_with(&needle)))
+    })
+}
+
 fn doc_text_raw(symbol: &str, path: Option<&str>) -> String {
     let sig = crate::builtins::signature(symbol)
         .map(|(params, ret)| format!("{}({}) -> {}", symbol, params.join(", "), ret));
     let doc = crate::builtins::doc(symbol);
+    // ray-sublime #411: la tabla de builtins también describe funciones que solo existen dentro
+    // de un módulo (`sleep` es `time.sleep`, `floor` es `math.floor`). Presentarlas peladas
+    // hacía creer que se podían llamar sin importar nada: se dice de qué módulo son.
+    if (sig.is_some() || doc.is_some())
+        && !crate::builtins::is_builtin(symbol)
+        && prelude_doc_text(symbol).is_none()
+        && let Some(module) = std_owner(symbol)
+    {
+        let stem = module.rsplit('/').next().unwrap_or(module);
+        let head = match &sig {
+            Some(s) => format!("{stem}.{s}"),
+            None => format!("{stem}.{symbol}"),
+        };
+        let body = doc.map(|d| format!("\n{d}")).unwrap_or_default();
+        return format!("{head}{body}\nNot a global: `import {module};` and call it as `{stem}.{symbol}(…)`.");
+    }
     match (sig, doc) {
         (Some(s), Some(d)) => format!("{s}\n{d}"),
         (Some(s), None) => s,
@@ -485,7 +511,7 @@ fn std_trait_method_doc(symbol: &str) -> Option<String> {
             let lines: Vec<&str> = src.lines().collect();
             let trait_at = lines.iter().position(|l| {
                 let l = l.trim_start();
-                l.starts_with(&format!("pub trait {} ", t.name)) || l.starts_with(&format!("pub trait {}<", t.name)) || l.starts_with(&format!("pub trait {}{{", t.name))
+                l.starts_with(&format!("pub trait {} ", t.name)) || l.starts_with(&format!("pub trait {}<", t.name)) || l.starts_with(&format!("pub trait {}{{", t.name)) || l.starts_with(&format!("pub trait {}:", t.name))
             }).unwrap_or(0);
             let head = format!("fn {method}(");
             let mut doc_lines: Vec<&str> = Vec::new();
@@ -641,7 +667,8 @@ fn trait_signature(t: &crate::ast::TraitDef) -> String {
             format!("fn {}({}){ret};", m.name, params.join(", "))
         })
         .collect();
-    format!("trait {}{tparams} {{ {} }}", t.name, methods.join(" "))
+    let supers = if t.supertraits.is_empty() { String::new() } else { format!(": {}", t.supertraits.join(" + ")) };
+    format!("trait {}{tparams}{supers} {{ {} }}", t.name, methods.join(" "))
 }
 
 /// `struct Nombre<T> { campo: tipo, … }` — la forma que se escribe al construirlo (M202).

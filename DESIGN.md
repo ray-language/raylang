@@ -21046,3 +21046,90 @@ dispositivo y el número no separaba un flujo limpio de uno que crepita. El tama
 lee al abrir; si un flujo nuestro de baja latencia lo tiene bajado, vale el tamaño al que
 volverá. Queda sin cubrir una cola sin dispositivo fijado que sigue a un cambio del dispositivo
 por defecto hacia uno de ciclo mayor.
+
+## 457. Re-medición de la campaña 1.27.95 y ronda de pequeños (nov 2026)
+
+El índice de hallazgos seguía mostrando abiertos los de la campaña 1.27.95, pero las rondas
+§431–§440 ya habían corregido la mayoría y las apps no habían vuelto a medir. Antes de elegir
+trabajo se re-midieron los 48 de raylang contra el binario de 1.27.104: 26 corregidos, 2
+parciales, 19 abiertos y uno que necesita un APK. De los abiertos, esta ronda cierra los
+pequeños:
+
+- **#361.** Con una suite explícita, las raíces del loader eran solo `tests/`. En el modo
+  implícito la raíz `src/` la aportaba la primera suite, que en un paquete-librería es un módulo
+  de `src/`; con una explícita nadie la aportaba. Ahora se añade `src/` del proyecto.
+- **#369.** El nativo decía «is not a listener» para un handle que no está en el registro. La
+  VM distingue «no existe» (`invalid handle`) de «es de otra clase»; el nativo ahora también.
+- **#375.** `kv.save` crea la carpeta (como `fs.mkdir`, con sus padres) y nombra la ruta en el
+  error. Se prefirió a fallar en `open`: abrir un almacén cuyo archivo aún no existe es el caso
+  normal del primer arranque.
+- **#411.** La tabla de documentación de builtins describe también funciones que solo existen
+  dentro de un módulo. `ray doc` las presentaba peladas; ahora busca el módulo `std/*` que las
+  exporta y lo dice.
+
+- **#378.** `ray bundle` pregunta a `rustup` qué targets hay antes de compilar. Sin `rustup` a
+  quien preguntar no corta: cargo dirá lo que falte, como antes.
+
+Fuera de esta ronda, con su motivo: **#407** (un módulo suelto que define una función con
+nombre de builtin) pide que el checker resuelva los nombres como lo hace el loader al
+namespacear, en seis sitios; tiene rodeo trivial. **#377**: el backend headless concede las
+alarmas en cualquier plataforma a propósito, para poder probar la lógica en el escritorio, y
+`RAY_UI_ALARM_PERMISSION` ya lo fuerza. **#358** y **#357** son trabajo del checker y de la SPEC.
+
+## 458. La inferencia baja a variantes sin datos y arreglos vacíos (raysolve #358, nov 2026)
+
+Dos casos que obligaban a un `let` anotado sin motivo.
+
+**Variante sin datos en un contexto genérico.** Al comprobar el campo de un literal de struct (o
+el payload de una variante), el tipo declarado ya sustituido solo se pasaba como tipo esperado
+si no contenía ninguna variable. Dentro de `fn c<V>`, el campo `hi: Bound<V>` contiene `V`, que
+es un parámetro RÍGIDO del ámbito, no una incógnita, y aun así se descartaba: `Bound.Unbounded`
+se comprobaba sin contexto. Ahora cuentan como incógnitas solo las variables que no son del
+ámbito (`check_ctor_value_against`). Se limita a los constructores, donde los parámetros del
+tipo construido se renombran si chocan con el ámbito; en los argumentos de una llamada los
+nombres de la firma llamada pueden coincidir con los del llamador y la regla no sería segura.
+
+**`[]` anidado.** Un literal de arreglo sin tipo esperado tomaba el tipo del primer elemento y
+fallaba si ese era un `[]`. Ahora el tipo sale del primer elemento que se determina solo, y los
+que fallan solo por falta de contexto se comprueban contra él. El transpilador nativo tiene su
+propia inferencia y sigue la misma regla (emite el literal contra el tipo de sus hermanos).
+
+Sigue fuera: los argumentos de tipo explícitos (`none::<V>()`), que son sintaxis nueva.
+
+## 459. `while let` y supertraits (raysolve #357, nov 2026)
+
+**`while let`** es azúcar del parser, como `if let`: `while (true)` con un `match` de dos brazos
+cuyo `_` hace `break`. Los tres nodos sintéticos (el `true`, el `match`, el `break`) van en la
+posición del `let`, que ningún otro nodo ocupa; así no chocan con las tablas indexadas por
+`(línea, col)` (§431) y el formateador reconoce la forma por esa posición —no por la forma sola,
+para no reescribir un `while (true) { if let … else { break; } }` que el usuario escribió así—.
+El checker y los tres motores no saben que existe.
+
+**Supertraits** se resuelven ampliando bounds. `trait Version: Ord + Show` guarda sus
+supertraits en el `TraitDef`; antes de bajar los métodos de los impls a funciones, cada lista
+de bounds del programa se amplía con el cierre transitivo (`V: Version` pasa a ser `V: Version
++ Ord + Show`). A partir de ahí la comprobación de bounds, los diccionarios y la resolución de
+métodos ven bounds ordinarios, sin cambios en la VM ni en el transpilador. Lo único nuevo es
+exigir, en cada `impl`, que el tipo implemente también los supertraits.
+
+Límites, a propósito: un `dyn Version` no arrastra los supertraits (habría que normalizar el
+conjunto de traits del tipo en todos los sitios, también en el transpilador nativo, que maneja
+los `dyn` por su cuenta); se escribe `dyn Version + Show`. Y un trait con parámetros de tipo
+sigue sin poder usarse como bound ni tras `dyn`: los bounds son pares `(parámetro, trait)` y
+darles argumentos de tipo cambia los diccionarios y la sustitución de firmas. Queda como
+trabajo propio; el parser ya lo dice con un mensaje que nombra el caso.
+
+**Revisión previa a 1.27.106.** El reintento de un elemento de arreglo (§458) destapó una fuga
+que ya existía: `check_block` no cerraba su ámbito si el bloque fallaba. Mientras un error
+abortaba la comprobación no importaba; al reintentar tras un error de inferencia dentro de un
+bloque (`[if (c) { [] } else { [] }, [1]]`), el ámbito quedaba abierto y los nombres de una
+función se veían desde la siguiente — un programa válido se rechazaba y uno inválido llegaba a
+un ICE del compilador. Ahora el ámbito se cierra siempre (el aplazamiento de brazos de `match`
+tenía la misma fuga latente). Además: un `while let` con patrón irrefutable no lleva el brazo
+`_` (el checker lo rechazaba como inalcanzable, señalando un brazo que nadie escribió); un
+supertrait inexistente no se copia a los bounds, para que el error sea el del trait; el
+chequeo de targets de `ray bundle` no corre con `--dev` (esa librería se descarga hecha) y
+limpia su directorio de trabajo; `kv.open` recupera su documentación, que había quedado sobre
+un helper privado; y raydoc y el doc del MCP muestran los supertraits. Queda anotado: los
+errores «falta contexto» se reconocen por el texto del mensaje en dos sitios; un `kind` en
+`TypeError` los haría robustos a un cambio de redacción.

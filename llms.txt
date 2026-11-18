@@ -10,7 +10,8 @@ messages you will see when you slip. Full docs: SPEC.md (normative), MANUAL.md (
 
 - `match`, `if` and `while` take their scrutinee/condition IN PARENTHESES:
   `match (x) { ... }`, `if (cond) { ... }`, `while (cond) { ... }`.
-  (Only `if let` takes none: `if let Option.Some(v) = expr { ... }`.)
+  (Only `if let` and `while let` take none: `if let Option.Some(v) = expr { ... }`,
+  `while let Option.Some(v) = it.next() { ... }` — loops while the pattern matches.)
 - Mutability is `var`, not `mut`: `let x = 1;` (immutable) / `var y = 1;` (mutable).
   `let mut` is a syntax error.
 - Enum variants are always QUALIFIED: `Option.Some(3)`, `Option.None`, `Result.Ok(v)`,
@@ -105,6 +106,9 @@ enum Shape { Circle(float), Rect(float, float), }
 let s = Shape.Circle(2.0);                       // construction is qualified
 
 trait Greeter { fn greet(self) -> string; }
+// Supertraits: `trait Version: Ord + Show { … }` — an impl of Version needs impls of Ord and
+// Show, and `V: Version` lets you call the methods of all three. A trait with type parameters
+// (`trait Source<V>`) cannot be a bound or go after `dyn` yet.
 impl Greeter for Point {
     fn greet(self) -> string { "point at ${self.x}" }
 }
@@ -123,6 +127,23 @@ struct User { id: int, name: string, }
 
 @test
 fn addition_works() { assert_eq(2 + 2, 4); }     // run with: ray test file.ray
+```
+
+An iterator of your own: a struct plus `impl Iterator<T>` with only `next` — it inherits `map`,
+`filter`, `take`, `collect`… and `for` walks it (the impl may carry bounds: `impl<V: Ord>
+Iterator<V> for Above<V>`). Bind it with `let` first: a struct literal cannot sit in a `for` head.
+
+```
+struct Countdown { n: int, }
+impl Iterator<int> for Countdown {
+    fn next(self) -> Option<int> {
+        if (self.n == 0) { return Option.None; }
+        self.n = self.n - 1;
+        Option.Some(self.n + 1)
+    }
+}
+let it = Countdown { n: 3 };
+for v in it { print(v); }          // 3 2 1
 ```
 
 ## Errors as values
@@ -632,7 +653,10 @@ C may write into it: `ffi.buffer(n)` (`import std/ffi;`) gives n zero bytes for 
 `ffi.errno()` right after the call. The VM dlopens the library at run time; a native build links
 `-l<name>` at BUILD time (dev files needed). A library named differently per OS:
 `extern "z" windows "zlib1" { … }` (words `windows macos linux android ios freebsd`); check an
-optional one first with `ffi.library_available("z") -> bool`. Full rules: §13 of raylang://reference.md.
+optional one first with `ffi.library_available("z") -> bool`. Cost of one call (measured, arm64):
+~0.5 µs on the VM, ~1 ns natively; `blocking` adds ~4 µs natively (a thread hop) and ~0.5 µs on
+the VM, so declare `blocking` only what can really wait (a `read` on a device, a `poll` with a
+timeout) — never a `poll(…, 0)` or a getter. Full rules: §13 of raylang://reference.md.
 
 ## Mistakes you will make, and the exact errors
 

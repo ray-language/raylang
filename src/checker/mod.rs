@@ -384,9 +384,60 @@ pub(super) struct PreludeOrigin {
     pub(super) unwrap_or_impl: bool,
 }
 
+/// raysolve #357: supertraits. `trait Version: Ord + Show` hace que `V: Version` signifique
+/// `V: Version + Ord + Show` (cierre transitivo): cada lista de bounds del programa se amplía, y
+/// de ahí en adelante todo —la comprobación de bounds, los diccionarios, la resolución de
+/// métodos sobre un `V`— ve bounds ordinarios. Idempotente.
+fn expand_supertrait_bounds(program: &mut Program) {
+    let direct: HashMap<String, Vec<String>> =
+        program.traits.iter().filter(|t| !t.supertraits.is_empty()).map(|t| (t.name.clone(), t.supertraits.clone())).collect();
+    if direct.is_empty() {
+        return;
+    }
+    // Un supertrait que no existe NO se copia a los bounds: su error es el del trait que lo
+    // nombra (`check_supertraits`), no un «bound con un trait no declarado» en un impl ajeno.
+    let known: HashSet<String> =
+        program.traits.iter().map(|t| t.name.clone()).chain(crate::prelude::traits().into_iter().map(|t| t.name)).collect();
+    let expand = |bounds: &mut Vec<(String, String)>| {
+        let mut i = 0;
+        while i < bounds.len() {
+            let (tp, tr) = bounds[i].clone();
+            for sup in direct.get(&tr).into_iter().flatten().filter(|s| known.contains(*s)) {
+                if !bounds.iter().any(|(p, t)| *p == tp && t == sup) {
+                    bounds.push((tp.clone(), sup.clone())); // se visita después: cierre transitivo
+                }
+            }
+            i += 1;
+        }
+    };
+    for f in &mut program.functions {
+        expand(&mut f.bounds);
+    }
+    for s in &mut program.structs {
+        expand(&mut s.bounds);
+    }
+    for e in &mut program.enums {
+        expand(&mut e.bounds);
+    }
+    for t in &mut program.traits {
+        for m in &mut t.methods {
+            expand(&mut m.bounds);
+        }
+    }
+    for imp in &mut program.impls {
+        expand(&mut imp.bounds);
+        for m in &mut imp.methods {
+            expand(&mut m.bounds);
+        }
+    }
+}
+
 fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
     // M345 (rayauth R16): plegar las expresiones constantes de los `const` antes de todo lo demás.
     fold_consts(program)?;
+    // raysolve #357: un bound sobre un trait con supertraits los incluye. Va antes de bajar los
+    // métodos de los impls a funciones, que copian estos bounds.
+    expand_supertrait_bounds(program);
     // Paso 0: inyectar el prelude (Option/Result) si no está ya. Sus enums se
     // anteponen, así forman parte del AST que también ven el intérprete y la VM.
     if !program.enums.iter().any(|e| e.name == "Option" || e.name == "Result") {

@@ -6,6 +6,37 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.106 — 2026-11-17
+
+- **`while let`** (raysolve #357): `while let Option.Some(x) = it.next() { … }` repite mientras
+  la expresión case con el patrón. Admite `break`, `continue` y etiqueta, y `ray fmt` lo conserva.
+- **Supertraits** (raysolve #357): `trait Version: Ord + Show { … }`. Implementar `Version`
+  exige implementar `Ord` y `Show`, y un bound `V: Version` deja llamar los métodos de los tres.
+- Un `while let` cuyo patrón casa siempre (`while let (a, b) = par() { … }`) es un bucle que
+  sale por `break`.
+- Un trait con parámetros de tipo usado como bound (`S: Source<V>`) o tras `dyn` sigue sin
+  estar soportado, pero el error ya lo dice en vez de «expected '>'».
+
+- **La inferencia llega a dos sitios más** (raysolve #358): una variante sin datos dentro de un
+  struct genérico, en una función genérica (`Seg { lo: Bound.Incl(v), hi: Bound.Unbounded }`),
+  y un `[]` u `Option.None` dentro de un arreglo, que toman el tipo de sus hermanos
+  (`[[1, 2], []]`). Antes pedían un `let` anotado.
+
+- `ray test tests/x.ray` en un paquete-librería (sin `src/main.ray`) encuentra los módulos de
+  `src/`, como ya hacía `ray test` a secas (raysolve #361).
+- `kv.save()` crea la carpeta del archivo si falta, y un fallo dice qué ruta no se pudo
+  escribir (rayfocus #375).
+- `ray doc sleep` (y `floor`, `now`…) dice de qué módulo es la función y cómo importarla, en vez
+  de presentarla como un global que el compilador no conoce (ray-sublime #411). `ray doc
+  try_join` tiene texto, y el de `spawn_isolated` dice que los canales cruzan dominios.
+- Aceptar sobre un listener de otro dominio da el mismo error en la VM y en nativo: `invalid
+  handle` (raycrawl #369).
+- `ray bundle --android` / `--ios` comprueba antes de compilar que los targets de Rust están
+  instalados y dice cómo añadirlos, en vez de dejar salir el error de cargo (rayfocus #378).
+- Documentación: un ejemplo de iterador propio en la referencia y en `llms.txt` (raysolve #362),
+  el coste de una llamada FFI y cuándo declarar `blocking` (rayserial #396), y qué hace
+  `notify.schedule` con el permiso sin decidir o una hora pasada (rayfocus #376).
+
 ## 1.27.105 — 2026-11-17
 
 - **`std/midi`: varios `send` seguidos llegan todos, uno por lectura** (ray-daw #446). En macOS

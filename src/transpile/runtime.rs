@@ -1514,7 +1514,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    let to = __ray_rd_to(h);\n",
                 "    let dl = if to > 0 { Some(std::time::Instant::now() + std::time::Duration::from_millis(to as u64)) } else { None };\n",
                 "    loop {\n",
-                "        let (l, fd) = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => (l.try_clone().map(|c| { let _ = c.set_nonblocking(true); c }).map_err(|e| Rc::<str>::from(e.to_string()))?, __ray_fd(l)), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } };\n",
+                "        let (l, fd) = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => (l.try_clone().map(|c| { let _ = c.set_nonblocking(true); c }).map_err(|e| Rc::<str>::from(e.to_string()))?, __ray_fd(l)), Some(_) => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))), None => return Err(Rc::<str>::from(format!(\"invalid handle: {}\", h))) } };\n",
                 "        match l.accept() {\n",
                 "            Ok((s, _)) => { let _ = s.set_nonblocking(true); let _ = s.set_nodelay(true); return Ok(__ray_reg_insert(__RayHandle::Tcp(std::sync::Arc::new(s)))); }\n",
                 "            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => { drop(l); let ms = match dl { None => 0, Some(d) => { let rem = d.saturating_duration_since(std::time::Instant::now()).as_millis() as i64; if rem <= 0 { return Err(Rc::<str>::from(\"read timeout\")); } rem } }; if ray_runtime::fibers::wait_readable_timeout(fd, ms) { return Err(Rc::<str>::from(\"read timeout\")); } }\n",
@@ -1557,7 +1557,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "fn __ray_tcp_listen(host: &str, port: i64) -> Result<i64, Rc<str>> {\n",
                 "    match std::net::TcpListener::bind((host, port as u16)) { Ok(l) => Ok(__ray_reg_insert(__RayHandle::Listener(l))), Err(e) => Err(Rc::<str>::from(e.to_string())) } }\n",
                 "fn __ray_tcp_accept(h: i64) -> Result<i64, Rc<str>> {\n",
-                "    let l = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => l.try_clone().map_err(|e| Rc::<str>::from(e.to_string())), _ => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))) } }?;\n",
+                "    let l = { let reg = __ray_reg().lock().unwrap(); match reg.open.get(&h) { Some(__RayHandle::Listener(l)) => l.try_clone().map_err(|e| Rc::<str>::from(e.to_string())), Some(_) => return Err(Rc::<str>::from(format!(\"handle {} is not a listener\", h))), None => return Err(Rc::<str>::from(format!(\"invalid handle: {}\", h))) } }?;\n",
                 "    let to = __RAY_LST_TO.with(|m| m.borrow().get(&h).copied().unwrap_or(0));\n",
                 // El flag no-bloqueante es de la open file description (el clon lo comparte con
                 // el listener del registro): se repone al salir del bucle con plazo.

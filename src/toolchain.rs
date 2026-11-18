@@ -599,6 +599,32 @@ pub fn installed_targets() -> Option<Vec<String>> {
     Some(String::from_utf8_lossy(&out.stdout).lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect())
 }
 
+/// rayfocus #378: los targets de `wanted` que la toolchain en uso NO tiene instalados. Vacío si
+/// están todos — o si no hay `rustup` a quien preguntar (entonces cargo dirá lo que falte).
+pub fn missing_targets(wanted: &[&str]) -> Vec<String> {
+    match installed_targets() {
+        Some(installed) => wanted.iter().filter(|t| !installed.iter().any(|i| i == *t)).map(|t| t.to_string()).collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Corta `ray bundle` ANTES de compilar si falta algún target de `kind`: sin esto el fallo era el
+/// de cargo (`E0463: can't find crate for std`), que no dice cómo arreglarlo.
+pub fn require_targets(wanted: &[&str], kind: &str, work: &Path) {
+    let missing = missing_targets(wanted);
+    if !missing.is_empty() {
+        let _ = fs::remove_dir_all(work); // el directorio de trabajo del bundle no se queda huérfano
+        eprintln!(
+            "the Rust target{} {} {} not installed: run {} and try again",
+            if missing.len() == 1 { "" } else { "s" },
+            missing.join(", "),
+            if missing.len() == 1 { "is" } else { "are" },
+            target_hint(kind)
+        );
+        process::exit(69);
+    }
+}
+
 /// La orden que instala los targets que faltan para `kind` (`ios`/`android`), para las pistas de
 /// `ray bundle`: la vía `ray` funciona con cualquiera de las toolchains (la privada incluida).
 pub fn target_hint(kind: &str) -> String {

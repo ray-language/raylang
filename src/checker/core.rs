@@ -271,6 +271,7 @@ impl Checker {
         // métodos manglados ya están en `program.functions`) y de verificar cuerpos (que
         // pueden llamar métodos de trait vía la tabla `methods`).
         self.register_traits_impls(program)?;
+        self.check_supertraits(program)?;
 
         // M9.4: validar los bounds de los parámetros de tipo de struct/enum (ya conocidos los
         // traits). Cada bound debe acotar un parámetro real con un trait existente.
@@ -542,6 +543,39 @@ impl Checker {
             Some(key) => self.impl_traits.contains(&(key, trait_name.to_string())),
             None => false,
         }
+    }
+
+    /// raysolve #357: cada supertrait debe existir, y quien implementa un trait con supertraits
+    /// debe implementarlos también (para un impl genérico, con sus propios bounds en vista).
+    pub(super) fn check_supertraits(&mut self, program: &Program) -> Result<(), TypeError> {
+        for t in &program.traits {
+            for sup in &t.supertraits {
+                if !self.traits.contains_key(sup) {
+                    return Err(self.err(t.line, t.col, format!("the supertrait '{}' of '{}' is not a declared trait", sup, t.name)));
+                }
+                if sup == &t.name {
+                    return Err(self.err(t.line, t.col, format!("trait '{}' cannot be its own supertrait", t.name)));
+                }
+            }
+        }
+        for imp in &program.impls {
+            let Some(def) = program.traits.iter().find(|t| t.name == imp.trait_name) else { continue };
+            if def.supertraits.is_empty() {
+                continue;
+            }
+            self.type_params = imp.type_params.iter().cloned().collect();
+            let saved = std::mem::replace(&mut self.current_fn_bounds, imp.bounds.clone());
+            let target = self.resolve_type(&imp.target);
+            let missing = def.supertraits.iter().find(|sup| !self.satisfies_bound(&target, sup)).cloned();
+            self.current_fn_bounds = saved;
+            self.type_params.clear();
+            if let Some(sup) = missing {
+                return Err(self.err(imp.line, imp.col, format!(
+                    "the impl of '{}' for {} requires an impl of its supertrait '{}'", imp.trait_name, target, sup
+                )));
+            }
+        }
+        Ok(())
     }
 
     /// Registra los traits y valida los impls (M9.1). Construye `self.traits` (firmas),
@@ -1665,7 +1699,7 @@ impl Checker {
             match matches.as_slice() {
                 [] => return Err(self.err(line, col, format!("missing field '{}' in the literal of '{}'{}", dname, name, self.constructor_hint(name)))),
                 [(_, value)] => {
-                    let vt = self.check_value_against(value, dty, &sigma)?;
+                    let vt = self.check_ctor_value_against(value, dty, &sigma)?;
                     unify(dty, &vt, &mut sigma).map_err(|reason| self.err(value.line, value.col, format!(
                         "field '{}' of '{}': {}", dname, name, reason
                     )))?;
@@ -1740,7 +1774,7 @@ impl Checker {
         let expected_owned = expected.map(|e| self.resolve_type(e));
         let mut sigma = seed_sigma_from_expected(expected_owned.as_ref(), enum_name, &tparams);
         for (arg, pty) in args.iter().zip(&payload) {
-            let at = self.check_value_against(arg, pty, &sigma)?;
+            let at = self.check_ctor_value_against(arg, pty, &sigma)?;
             unify(pty, &at, &mut sigma).map_err(|reason| self.err(arg.line, arg.col, format!(
                 "'{}.{}': {}", enum_name, variant, reason
             )))?;
@@ -1755,6 +1789,20 @@ impl Checker {
     /// Verifica el valor de un campo/payload propagándole como **tipo esperado** el
     /// tipo declarado ya sustituido con lo inferido hasta ahora (`σ`) —pero solo si
     /// ese tipo es concreto (sin `Var`); si todavía tiene incógnitas, no aporta—.
+    /// Como [`Self::check_value_against`], para el campo de un literal de struct o el payload de
+    /// una variante (raysolve #358). Ahí las incógnitas son solo los parámetros del tipo que se
+    /// construye (renombrados si chocan con el ámbito): un parámetro de tipo RÍGIDO del ámbito
+    /// (`V` dentro de `fn c<V>`) no es una incógnita, y el tipo esperado que lo menciona sí sirve.
+    /// Sin esto, `Seg { lo: Bound.Incl(v), hi: Bound.Unbounded }` dentro de una función genérica
+    /// comprobaba `Bound.Unbounded` sin contexto y no podía inferir su parámetro.
+    pub(super) fn check_ctor_value_against(&mut self, value: &Expr, declared: &Type, sigma: &HashMap<String, Type>) -> Result<Type, TypeError> {
+        let exp = subst(declared, sigma);
+        if type_has_var(&exp) && !type_has_var_outside(&exp, &self.type_params) {
+            return self.check_expr_expected(value, &exp);
+        }
+        self.check_value_against(value, declared, sigma)
+    }
+
     pub(super) fn check_value_against(&mut self, value: &Expr, declared: &Type, sigma: &HashMap<String, Type>) -> Result<Type, TypeError> {
         let exp = subst(declared, sigma);
         if type_has_var(&exp) {
@@ -2799,9 +2847,38 @@ impl Checker {
                     return Err(self.err(expr.line, expr.col,
                         "cannot infer the type of [] here; annotate it (e.g. let xs: [int] = [];)".into()));
                 }
-                let first = self.check_expr(&elems[0])?;
-                for e in &elems[1..] {
-                    let t = self.check_expr(e)?;
+                // raysolve #358: un elemento que solo no se puede tipar por falta de contexto (un
+                // `[]`, un `Option.None`) toma el tipo de sus hermanos: `[[1, 2], []]` es `[[int]]`.
+                // El tipo sale del primer elemento que se tipa solo, esté donde esté.
+                let needs_context = |e: &TypeError| {
+                    e.msg.starts_with("cannot infer the type of [] here") || e.msg.starts_with("could not infer the type parameter")
+                };
+                let mut first: Option<(usize, Type)> = None;
+                let mut pending: Option<TypeError> = None;
+                for (i, e) in elems.iter().enumerate() {
+                    match self.check_expr(e) {
+                        Ok(t) => {
+                            first = Some((i, t));
+                            break;
+                        }
+                        Err(err) if needs_context(&err) => {
+                            pending.get_or_insert(err);
+                        }
+                        Err(err) => return Err(err),
+                    }
+                }
+                let Some((at, first)) = first else {
+                    return Err(pending.unwrap_or_else(|| crate::ice!("a non-empty array without a typed element has an error")));
+                };
+                for (i, e) in elems.iter().enumerate() {
+                    if i == at {
+                        continue;
+                    }
+                    let t = match if i < at { Err(None) } else { self.check_expr(e).map_err(Some) } {
+                        Ok(t) => t,
+                        Err(Some(err)) if !needs_context(&err) => return Err(err),
+                        Err(_) => self.check_expr_expected(e, &first)?,
+                    };
                     if t != first {
                         return Err(self.err(e.line, e.col, format!(
                             "the array elements must be of the same type: {} and {}", first, t
@@ -3009,16 +3086,21 @@ impl Checker {
     }
 
     pub(super) fn check_block(&mut self, block: &Block) -> Result<Type, TypeError> {
+        // El ámbito se cierra también si el bloque falla: quien reintenta tras un error de
+        // inferencia (un brazo de `match`, un elemento de arreglo) seguiría con un ámbito de
+        // más abierto, y los nombres de esta función se verían desde la siguiente.
         self.push_scope();
-        for stmt in &block.statements {
-            self.check_stmt(stmt)?;
-        }
-        let ty = match &block.tail {
-            Some(e) => self.check_expr(e)?,
-            None => Type::Unit,
-        };
+        let result = (|| {
+            for stmt in &block.statements {
+                self.check_stmt(stmt)?;
+            }
+            match &block.tail {
+                Some(e) => self.check_expr(e),
+                None => Ok(Type::Unit),
+            }
+        })();
         self.pop_scope();
-        Ok(ty)
+        result
     }
 
     pub(super) fn check_binary(

@@ -1624,6 +1624,9 @@ impl<'a> TypeRewriter<'a> {
             // firmas; M40.2c: cada método puede tener los suyos (`fn map<U>`). No se reescriben como
             // tipos de módulo.
             self.tparams.push(t.type_params.iter().cloned().collect());
+            for sup in &mut t.supertraits {
+                self.rewrite_name(sup); // #357: un supertrait se namespaca como el trait de un bound
+            }
             for m in &mut t.methods {
                 self.tparams.push(m.type_params.iter().cloned().collect());
                 self.rewrite_method(m);

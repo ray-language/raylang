@@ -91,6 +91,19 @@ pub(super) fn type_has_var(t: &Type) -> bool {
     }
 }
 
+/// ¿`t` menciona algún `Var` que NO sea un parámetro de tipo del ámbito (`scope`)? Los del ámbito
+/// son rígidos — tipos opacos, no incógnitas de la inferencia.
+pub(super) fn type_has_var_outside(t: &Type, scope: &HashSet<String>) -> bool {
+    match t {
+        Type::Var(n) => !scope.contains(n),
+        Type::Array(e) | Type::Channel(e) | Type::Task(e) => type_has_var_outside(e, scope),
+        Type::Map(k, v) => type_has_var_outside(k, scope) || type_has_var_outside(v, scope),
+        Type::Fn(ps, r) => ps.iter().any(|p| type_has_var_outside(p, scope)) || type_has_var_outside(r, scope),
+        Type::Struct(_, args) | Type::Enum(_, args) | Type::Tuple(args) => args.iter().any(|a| type_has_var_outside(a, scope)),
+        _ => false,
+    }
+}
+
 /// Siembra `σ` a partir del tipo esperado (M6.2): si se espera `Nombre<a, b, ...>` con
 /// la aridad correcta, liga cada parámetro de tipo con su argumento esperado. Así
 /// `Caja.Vacia` con tipo esperado `Caja<int>` fija `T = int`.

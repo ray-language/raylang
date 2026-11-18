@@ -2522,6 +2522,18 @@ fn cmd_bundle(args: &[String]) {
                 })
         });
         eprintln!("[bundle] Android shared libraries — abi: {abi} (a cold build compiles ring/mimalloc per target; needs the NDK and the Android targets: {})", crate::toolchain::target_hint("android"));
+        let mut android_targets: Vec<&str> = Vec::new();
+        if build_arm {
+            android_targets.push("aarch64-linux-android");
+        }
+        if build_x86 {
+            android_targets.push("x86_64-linux-android");
+        }
+        // Solo si la librería se COMPILA: un bundle `--dev` la descarga ya hecha (o usa
+        // RAY_DEV_LIB) y no necesita el target de Rust.
+        if !dev {
+            crate::toolchain::require_targets(&android_targets, "android", &work);
+        }
         let arm_so = work.join("arm64.so");
         let x86_so = work.join("x86_64.so");
         if build_arm {
@@ -2676,6 +2688,16 @@ fn cmd_bundle(args: &[String]) {
         let build_dev = ios_target != "sim";
         let build_sim = ios_target != "device";
         eprintln!("[bundle] iOS static libraries — target: {ios_target} (a cold build compiles ring/mimalloc per target; needs the iOS targets: {})", crate::toolchain::target_hint("ios"));
+        let mut ios_targets: Vec<&str> = Vec::new();
+        if build_dev {
+            ios_targets.push("aarch64-apple-ios");
+        }
+        if build_sim {
+            ios_targets.push("aarch64-apple-ios-sim");
+        }
+        if !dev {
+            crate::toolchain::require_targets(&ios_targets, "ios", &work);
+        }
         let dev_a = work.join("dev.a");
         let sim_a = work.join("sim.a");
         if build_dev {
@@ -5285,6 +5307,7 @@ fn split_test_args(args: &[String]) -> (Vec<String>, Option<String>) {
 fn test_suites_and_roots(explicit: &[String]) -> (Vec<PathBuf>, crate::loader::DepRoots) {
     let mut suites: Vec<PathBuf> = Vec::new();
     let mut library_root: Option<PathBuf> = None;
+    let mut explicit_library = false;
     if explicit.is_empty() {
         // M360 (rayauth R36): un paquete-librería no tiene entrada — sus suites son todos sus
         // módulos (cada `@test` donde esté) más `tests/*.ray`, con la raíz del proyecto como raíz
@@ -5311,9 +5334,23 @@ fn test_suites_and_roots(explicit: &[String]) -> (Vec<PathBuf>, crate::loader::D
         for f in explicit {
             suites.push(PathBuf::from(resolve_entry(Some(f), false)));
         }
+        // raysolve #361: una suite explícita de un paquete-librería (sin `src/main.ray`) resuelve
+        // `import m;` contra el proyecto, igual que `ray test` a secas. Sin esto las raíces eran
+        // solo `tests/` y el módulo de `src/` no aparecía.
+        if let Some(m) = load_manifest()
+            && is_library_package(&m)
+        {
+            library_root = Some(m.root.clone());
+            explicit_library = true;
+        }
     }
     let mut roots = dependency_roots();
     if let Some(root) = library_root {
+        // Los módulos de una librería viven en `src/` por convención: en el modo implícito esa
+        // raíz la aporta la primera suite (un módulo de `src/`); con una suite explícita, no.
+        if explicit_library && root.join("src").is_dir() {
+            roots.push_dir(root.join("src"));
+        }
         roots.push_dir(root);
     }
     // Solo las entradas-ANCLA aportan raíz: la del proyecto (modo implícito) o cada explícita —

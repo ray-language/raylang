@@ -2287,6 +2287,9 @@ fn take_flag_num(args: &[String], flag: &str, description: &str) -> (Option<u64>
 const BUNDLE_USAGE: &str = "usage: ray bundle [file] [--name N] [--icon icon.png] [--id com.x.y] [-o dir] [--without list] \
 [--ios [--ios-target device|sim|both]] [--android [--android-abi arm64|x86_64|all]] [--build N] [--dev] [--devtools] \
 [--allow-stubs] [--sign IDENTITY] [--notary PROFILE] [--entitlements plist]\n\
+  --icon / [app] icon: a square PNG, 1024 x 1024 recommended (every size is scaled from it); for the macOS .app it \
+can also be a hand-made .icns or .iconset (one PNG per size), and [app.macos] icon gives macOS its own while the \
+other systems keep the PNG.\n\
   --sign: macOS codesign with hardened runtime + timestamp (Developer ID identity), Windows signtool (subject or .pfx, \
 password in RAY_SIGN_PFX_PASSWORD); --sign none (or \"\") disables signing even when [app] sign is set — on Windows an \
 Apple identity in [app] sign is ignored with a warning; --notary: notarytool keychain profile → submit --wait + stapler (macOS). \
@@ -2428,9 +2431,17 @@ fn cmd_bundle(args: &[String]) {
         .unwrap_or_else(|| {
             Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("app").to_string()
         });
+    let icon_from_flag = icon_arg.is_some();
     let icon: Option<String> = icon_arg.or_else(|| {
         manifest.as_ref().and_then(|m| m.app_icon.as_ref().map(|i| m.root.join(i).to_string_lossy().into_owned()))
     });
+    // ray-daw #452: el `.app` de macOS prefiere `[app.macos] icon` (un `.icns` / `.iconset` propios);
+    // un `--icon` explícito sigue mandando sobre el manifiesto.
+    let icon_macos: Option<String> = if icon_from_flag {
+        None
+    } else {
+        manifest.as_ref().and_then(|m| m.app_icon_macos.as_ref().map(|i| m.root.join(i).to_string_lossy().into_owned()))
+    };
     let id_arg = id_arg.or_else(|| manifest.as_ref().and_then(|m| m.app_id.clone()));
     let version = manifest.as_ref().map(|m| m.version.clone()).unwrap_or_else(|| "0.1.0".to_string());
     // El identifier por defecto sale del nombre (minúsculas, [a-z0-9-]): estable y único-ish.
@@ -2904,7 +2915,7 @@ fn cmd_bundle(args: &[String]) {
         let signing = signing_config(manifest.as_ref(), sign_arg, notary_arg, entitlements_arg);
         let opens: Vec<String> = manifest.as_ref().map(|m| m.app_opens.clone()).unwrap_or_default();
         warn_unknown_open_types(&opens);
-        bundle_macos(&out_dir, &name, &version, &bundle_id, icon.as_deref(), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &extra, &opens, &tmp_bin, &signing);
+        bundle_macos(&out_dir, &name, &version, &bundle_id, icon_macos.as_deref().or(icon.as_deref()), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &extra, &opens, &tmp_bin, &signing);
     } else if cfg!(unix) {
         let opens: Vec<String> = manifest.as_ref().map(|m| m.app_opens.clone()).unwrap_or_default();
         warn_unknown_open_types(&opens);
@@ -3716,10 +3727,22 @@ fn make_android_mipmaps(icon: &Path, work: &Path) -> Option<Vec<(&'static str, P
 }
 
 /// Un `.icns` desde un PNG, vía las herramientas del sistema: `sips -z` genera el iconset (los
-/// NOMBRES son exactos — iconutil los exige) e `iconutil` lo compila.
+/// NOMBRES son exactos — iconutil los exige) e `iconutil` lo compila. ray-daw #452: un `.icns`
+/// ya hecho se copia tal cual y un `.iconset` (una carpeta con un PNG por tamaño) se compila sin
+/// reescalar nada — así el icono puede llevar una versión simplificada en 16 y 32 px.
 fn make_icns(icon: &Path, out_icns: &Path) -> Result<(), String> {
+    let ext = icon.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+    if ext == "iconset" {
+        if !icon.is_dir() {
+            return Err(format!("iconset not found: {}", icon.display()));
+        }
+        return run_iconutil(icon, out_icns);
+    }
     if !icon.is_file() {
         return Err(format!("icon not found: {}", icon.display()));
+    }
+    if ext == "icns" {
+        return fs::copy(icon, out_icns).map(|_| ()).map_err(|e| format!("could not copy {}: {e}", icon.display()));
     }
     let set = std::env::temp_dir().join(format!("ray_iconset_{}.iconset", process::id()));
     let _ = fs::remove_dir_all(&set);
@@ -3748,14 +3771,20 @@ fn make_icns(icon: &Path, out_icns: &Path) -> Result<(), String> {
             return Err(format!("sips failed on {file}"));
         }
     }
+    let r = run_iconutil(&set, out_icns);
+    let _ = fs::remove_dir_all(&set);
+    r
+}
+
+/// Compila un `.iconset` a `.icns` con `iconutil` (macOS).
+fn run_iconutil(set: &Path, out_icns: &Path) -> Result<(), String> {
     let st = process::Command::new("iconutil")
         .args(["-c", "icns"])
-        .arg(&set)
+        .arg(set)
         .arg("-o")
         .arg(out_icns)
         .output()
         .map_err(|e| format!("iconutil: {e}"))?;
-    let _ = fs::remove_dir_all(&set);
     if !st.status.success() {
         return Err(format!("iconutil failed: {}", String::from_utf8_lossy(&st.stderr).trim()));
     }

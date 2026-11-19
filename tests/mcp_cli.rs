@@ -175,6 +175,10 @@ fn path_mode_resolves_a_real_project_with_deps() {
     // check por archivo: los imports del proyecto y el paquete resuelven.
     let check = mcp.call(2, "ray_check", &format!(r#"{{"path":"{main_path}"}}"#));
     assert!(check.contains("compiles"), "check en proyecto: {check}");
+    // raycdc #407: un MÓDULO sin `main` se verifica como módulo (antes: «missing entry function»).
+    let util_path = base.join("src/util.ray");
+    let module = mcp.call(20, "ray_check", &format!(r#"{{"path":"{}"}}"#, util_path.to_str().unwrap()));
+    assert!(module.contains("compiles (module without main)"), "check de un módulo: {module}");
     // run por DIRECTORIO: resuelve la entrada por defecto.
     let run = mcp.call(3, "ray_run", &format!(r#"{{"path":"{dir_path}"}}"#));
     assert!(run.contains("HOLA, MCP"), "run del proyecto: {run}");

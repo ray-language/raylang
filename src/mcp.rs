@@ -320,7 +320,9 @@ fn call_tool(name: &str, args: &Json) -> Result<String, String> {
     let path = args.get("path").and_then(|c| c.as_str());
     match name {
         "ray_check" => match path {
-            Some(p) => run_self_at(&["build"], p, None),
+            // raycdc #407: una ruta puede ser un MÓDULO sin `main`; `ray check` lo verifica como
+            // módulo (M270), `ray build` exigía la entrada. El snippet sigue siendo un programa.
+            Some(p) => run_self_at(&["check"], p, None),
             None => run_self(&["build"], code()?, None),
         },
         "ray_run" => {

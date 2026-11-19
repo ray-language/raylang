@@ -659,8 +659,8 @@ del símbolo).
 | `Option<ptr>` | ✗ | puntero: NULL → `None` |
 
 **Coste de una llamada** (medido en arm64, rayserial #396): ~0,5 µs en la VM y ~1 ns en nativo.
-`blocking` añade ~4 µs en nativo (un salto de hilo) y ~0,5 µs en la VM: decláralo solo para lo
-que de verdad puede esperar (un `read` de un dispositivo, un `poll` con plazo), nunca para un
+`blocking` añade entre 4 y 8 µs en nativo (un salto de hilo) y nada en la VM, donde es inerte:
+decláralo solo para lo que de verdad puede esperar (un `read` de un dispositivo, un `poll` con plazo), nunca para un
 `poll(…, 0)` o un getter.
 
 Fuera de contrato: funciones **variádicas**, structs por valor, callbacks (anotados para un FFI

@@ -660,8 +660,8 @@ C may write into it: `ffi.buffer(n)` (`import std/ffi;`) gives n zero bytes for 
 `-l<name>` at BUILD time (dev files needed). A library named differently per OS:
 `extern "z" windows "zlib1" { … }` (words `windows macos linux android ios freebsd`); check an
 optional one first with `ffi.library_available("z") -> bool`. Cost of one call (measured, arm64):
-~0.5 µs on the VM, ~1 ns natively; `blocking` adds ~4 µs natively (a thread hop) and ~0.5 µs on
-the VM, so declare `blocking` only what can really wait (a `read` on a device, a `poll` with a
+~0.5 µs on the VM, ~1 ns natively; `blocking` adds 4–8 µs natively (a thread hop) and nothing on
+the VM (it is inert there), so declare `blocking` only what can really wait (a `read` on a device, a `poll` with a
 timeout) — never a `poll(…, 0)` or a getter. VARIADIC C functions cannot be called: not only
 `printf` but `ioctl`, `fcntl` and `open` with O_CREAT — on Apple arm64 they fail or silently do
 nothing; wrap them in a fixed-arity C function. Full rules: §13 of raylang://reference.md.

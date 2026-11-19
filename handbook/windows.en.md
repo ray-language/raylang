@@ -263,7 +263,29 @@ pub fn context(w: int, has_file: bool) -> Result<int, string> {
 }
 ```
 
-`ui.replace_menu(title, items)` rebuilds a whole menu, for example a list of recent documents.
+`ui.replace_menu(title, items)` rebuilds a whole menu, and `ui.submenu(title, items)` is an item
+that opens a submenu. Together they make the "Open Recent" of any document app, and `std/ui`
+keeps the list: `ui.note_recent(path)` every time you open or save, `ui.recent_documents()` to
+read it and `ui.clear_recent()` to empty it.
+
+```ray
+fn file_menu() -> Result<int, string> {
+    var recent: [ui.MenuItem] = [];
+    for path in ui.recent_documents()? {
+        recent.push(ui.item("recent:" + path, path, ""));
+    }
+    recent.push(ui.separator());
+    recent.push(ui.item("recent:clear", "Clear Menu", ""));
+    ui.replace_menu("File", [
+        ui.item("open", "Open…", "cmd+o"),
+        ui.submenu("Open Recent", recent),
+    ])
+}
+```
+
+On macOS that list is the system's: it also shows in the Dock menu and in Recent Items, and
+picking a document there arrives as an `"open"` event. On Linux and Windows `std/ui` keeps the
+last ten and tells the system so they show up among its recents.
 
 ## 6. Dialogs
 
@@ -458,4 +480,4 @@ subsystem out of a binary that opens no windows.
 
 The notes leave the device: a [**server-rendered site**](ssr.en.md).
 
-<!-- sync: sha256:71b4216121a9 -->
+<!-- sync: sha256:4bd4c1b06f9c -->

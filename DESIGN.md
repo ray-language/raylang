@@ -21234,3 +21234,39 @@ mano; se aceptó porque `Ok` con un rechazo dentro era la trampa que describía 
 
 Queda fuera de esta ronda #453 (documentos recientes y submenús en `std/ui`), que toca los tres
 backends de escritorio.
+
+## 462. Submenús y documentos recientes en `std/ui` (ray-daw #453, nov 2026)
+
+**Submenús.** El borde de builtins lleva los items de un menú como `[string]` plano, y así
+sigue: cada item gana dos campos al final, su profundidad y si abre un submenú, y `decode_items`
+rehace el árbol (`nest_items`). Una lista sin esos campos —la de un binario anterior— es un menú
+plano, como antes. La alternativa era un builtin nuevo con una estructura anidada, es decir,
+tocar los tres motores para algo que cabe en la codificación que ya hay.
+
+En raylang el árbol sí es un árbol: `MenuItem` gana `children` y `opens_submenu`. Añadir campos
+a una struct pública rompe a quien la construya con un literal; ya pasó con `icon`, `enabled` y
+`checked` (M236), y el diagnóstico de campo ausente manda a `ui.item`. Se prefirió eso a una
+segunda struct (`Menu`) porque así un submenú va donde va cualquier item, en todas las funciones
+que ya reciben `[MenuItem]`.
+
+Los tres backends construían sus items en una sola función cada uno (`make_item`,
+`append_items`), así que la recursión vive ahí y la barra, `replace_menu`, el menú de aplicación
+y el menú contextual la heredan. Lo que no era recursivo eran las limpiezas: macOS purgaba del
+registro por tag solo los items de primer nivel del menú reemplazado (ahora `collect_items`
+baja por los submenús; si no, quedaban punteros a items liberados), Windows reservaba un id de
+comando por item de primer nivel, y `set_menu_item` / `set_menu_title` buscaban el tag solo en
+el primer nivel de los specs. Un submenú no lleva tag salvo que se quiera activar o desactivar
+entero.
+
+**Documentos recientes.** macOS tiene una lista por app que se puede leer
+(`NSDocumentController`), y usarla es lo que hace que el Dock, «Ítems recientes» y Finder la
+muestren; ahí la lista del sistema es la verdad, también en cuántos guarda. Linux y Windows no
+tienen una lista por app legible: `GtkRecentManager` es global y `SHAddToRecentDocs` solo
+escribe. Para que `recent_documents()` signifique lo mismo en todas partes, en esos dos sistemas
+el runtime guarda su lista (diez rutas, en el directorio de estado del usuario bajo `[app] id`)
+y además avisa al sistema, de cortesía. No se añadió un builtin: las tres operaciones viajan por
+`__ui_window(0, "recent_*", …)`, como las de `std/notify`.
+
+Dos diferencias que quedan a la vista y están documentadas: macOS descarta de la lista los
+archivos que ya no existen y la lista propia no, y `ray run` no comparte recientes con la app
+empaquetada (son procesos con identidad distinta).

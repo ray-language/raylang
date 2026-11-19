@@ -875,6 +875,39 @@ pub fn single_instance() -> Result<bool, string> {
     }
 }
 
+/// Tells the system that the app opened the document at `path`, so it shows up among the app's
+/// recent documents: on macOS the Dock menu of the app, Apple menu > Recent Items and Finder (a
+/// click there arrives as an `"open"` event); on Windows the app's Jump List and Recent; on Linux
+/// the "Recent" list of file choosers. Call it on every open and save. A relative path is taken
+/// from the working directory.
+// ray-daw #453: la lista de recientes había que llevarla a mano, y el Dock no se enteraba.
+pub fn note_recent(path: string) -> Result<int, string> {
+    let r = __ui_window(0, "recent_note", __app_info()[0] + "\n" + path);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
+/// The app's recent documents, most recent first — what to list under "Open Recent" (see
+/// `submenu`) or on a start screen. macOS returns the system's list (it decides how many it
+/// keeps, and drops files that no longer exist); Linux and Windows return the list this module
+/// keeps for the app (the last 10 paths given to `note_recent`, existing or not), stored under
+/// `[app] id` in the user's state directory. `ray run` and a bundled app do not share it.
+pub fn recent_documents() -> Result<[string], string> {
+    let r = __ui_window(0, "recent_list", __app_info()[0]);
+    if (r[0] != "ok") {
+        return Result.Err(r[1]);
+    }
+    if (r.len() < 2 || r[1] == "") {
+        return Result.Ok([]);
+    }
+    Result.Ok(r[1].split("\n"))
+}
+
+/// Empties the app's recent documents (the "Clear Menu" item of an "Open Recent" submenu).
+pub fn clear_recent() -> Result<int, string> {
+    let r = __ui_window(0, "recent_clear", __app_info()[0]);
+    if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
+}
+
 /// What the system asked the app to open when it was LAUNCHED (M374) — the folder or files
 /// dropped on the Dock icon, "Open with", `open -a App path` — deterministically and before any
 /// window. Starts the application (as the first window or menu would), waits until it has

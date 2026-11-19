@@ -2776,6 +2776,114 @@ fn app_op(op: &str, arg: &str) -> Result<(), String> {
 ///   terminar (macOS; Linux y Windows no tienen salida de app aparte de cerrar ventanas).
 ///
 /// Headless: `Ok` + traza `RAY_UI_TRACE`. `Err` con ventana desconocida/cerrada u op desconocida.
+/// ray-daw #453: documentos recientes de la app (`ui.note_recent` / `recent_documents` /
+/// `clear_recent`). `arg` es `"<id de la app>\n<ruta>"` (la ruta solo en `recent_note`); la
+/// respuesta de `recent_list` son las rutas, una por línea, la más reciente primero.
+///
+/// macOS: la lista ES la del sistema (`NSDocumentController`: el menú del Dock, «Ítems
+/// recientes» y Finder la muestran, y el sistema decide cuántos guarda). Linux y Windows no
+/// tienen una lista por app que se pueda leer de vuelta: el runtime guarda la suya
+/// ([`recent_store`], hasta [`RECENT_MAX`]) y además AVISA al sistema (`GtkRecentManager`,
+/// `SHAddToRecentDocs`) para que el documento salga en sus recientes. Headless: en memoria.
+pub fn recent_op(op: &str, arg: &str) -> Result<String, String> {
+    let (id, path) = arg.split_once('\n').unwrap_or((arg, ""));
+    let path = if op == "recent_note" {
+        if path.is_empty() {
+            return Err("ui: note_recent needs a path".to_string());
+        }
+        std::path::absolute(path).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.to_string())
+    } else {
+        String::new()
+    };
+    if !matches!(op, "recent_note" | "recent_list" | "recent_clear") {
+        return Err(format!("ui: unknown op '{op}'"));
+    }
+    if headless() {
+        static LIST: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let mut list = LIST.lock().unwrap();
+        if ui_trace() {
+            eprintln!("{}", format!("[ui] {} {path}", op.replace('_', " ")).trim_end());
+        }
+        return Ok(match op {
+            "recent_note" => {
+                recent_push(&mut list, path);
+                String::new()
+            }
+            "recent_clear" => {
+                list.clear();
+                String::new()
+            }
+            _ => list.join("\n"),
+        });
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = id;
+        ensure_app()?;
+        mac::recent_op(op, &path)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let store = recent_store(id);
+        let mut list: Vec<String> = std::fs::read_to_string(&store).map(|t| t.lines().filter(|l| !l.is_empty()).map(str::to_string).collect()).unwrap_or_default();
+        match op {
+            "recent_list" => return Ok(list.join("\n")),
+            "recent_clear" => list.clear(),
+            _ => {
+                recent_push(&mut list, path.clone());
+                // El aviso al sistema es de cortesía: si falla, la lista propia ya lo tiene.
+                #[cfg(target_os = "linux")]
+                gtk::recent_note(&path);
+                #[cfg(windows)]
+                win::recent_note(&path);
+            }
+        }
+        if let Some(dir) = store.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        std::fs::write(&store, list.join("\n")).map_err(|e| format!("ui: could not save the recent documents ({}): {e}", store.display()))?;
+        Ok(String::new())
+    }
+}
+
+/// Cuántos documentos recientes guarda la lista propia (Linux, Windows y headless).
+const RECENT_MAX: usize = 10;
+
+/// `path` pasa a ser el más reciente (sin repetirse) y la lista se recorta a [`RECENT_MAX`].
+fn recent_push(list: &mut Vec<String>, path: String) {
+    list.retain(|p| *p != path);
+    list.insert(0, path);
+    list.truncate(RECENT_MAX);
+}
+
+/// Dónde vive la lista propia: `%LOCALAPPDATA%\<id>\recent-documents.txt` en Windows y
+/// `$XDG_STATE_HOME/<id>/recent-documents` (o `~/.local/state/…`) en los demás. Sin id (un
+/// programa sin `[app] id`), el nombre del ejecutable.
+#[cfg(not(target_os = "macos"))]
+fn recent_store(id: &str) -> std::path::PathBuf {
+    let name: String = if id.is_empty() {
+        std::env::current_exe().ok().and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned())).unwrap_or_else(|| "ray".to_string())
+    } else {
+        id.to_string()
+    };
+    // El id viene de `ray.toml`: nunca debe poder salirse del directorio de la app.
+    let name: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).collect();
+    #[cfg(windows)]
+    {
+        let base = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        base.join(name).join("recent-documents.txt")
+    }
+    #[cfg(not(windows))]
+    {
+        let base = std::env::var_os("XDG_STATE_HOME")
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state")))
+            .unwrap_or_else(std::env::temp_dir);
+        base.join(name).join("recent-documents")
+    }
+}
+
 pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
     let on = arg == "1" || arg == "true";
     if op == "single_instance" {
@@ -3416,6 +3524,59 @@ pub fn chord_label(ch: &Chord, primary: &str) -> String {
         ChordKey::PageDown => "PgDn".into(),
     });
     parts.join("+")
+}
+
+#[cfg(test)]
+mod menu_tree_tests {
+    use super::*;
+
+    fn line(tag: &str, title: &str, depth: usize, sub: bool) -> String {
+        format!("{tag}\t{title}\t\t\t1\t0\t{depth}\t{}", if sub { "1" } else { "0" })
+    }
+
+    /// ray-daw #453: la lista plana con profundidades vuelve a ser un árbol.
+    #[test]
+    fn a_flat_list_with_depths_becomes_a_tree() {
+        let items = decode_items(&[
+            line("new", "New", 0, false),
+            line("", "Open Recent", 0, true),
+            line("a", "a.rayp", 1, false),
+            line("", "Older", 1, true),
+            line("z", "z.rayp", 2, false),
+            line("", "-", 1, false),
+            line("clear", "Clear Menu", 1, false),
+            line("save", "Save", 0, false),
+        ])
+        .unwrap();
+        assert_eq!(MenuItemSpec::tree(&items), "new Open Recent[a Older[z] - clear] save");
+        assert_eq!(MenuItemSpec::tags(&items), ["new", "a", "z", "clear", "save"]);
+        // El formato anterior (seis campos, sin profundidad) sigue valiendo: todo al nivel 0.
+        let old = decode_items(&["x\tX\t\t\t1\t0".to_string(), "\t-".to_string()]).unwrap();
+        assert_eq!(MenuItemSpec::tree(&old), "x -");
+    }
+
+    #[test]
+    fn a_malformed_nesting_is_an_error() {
+        // Un item más profundo que su vecino sin una cabecera de submenú que lo abra.
+        assert!(decode_items(&[line("a", "A", 0, false), line("b", "B", 1, false)]).is_err());
+        assert!(decode_items(&[line("b", "B", 1, false)]).is_err());
+        assert!(decode_items(&[line("", "", 0, true)]).is_err());
+        // Un submenú vacío es válido, y no necesita tag.
+        assert_eq!(MenuItemSpec::tree(&decode_items(&[line("", "Open Recent", 0, true)]).unwrap()), "Open Recent[]");
+    }
+
+    #[test]
+    fn the_recent_list_keeps_the_latest_first_without_repeats() {
+        let mut list = Vec::new();
+        for p in ["a", "b", "a", "c"] {
+            recent_push(&mut list, p.to_string());
+        }
+        assert_eq!(list, ["c", "a", "b"]);
+        for i in 0..20 {
+            recent_push(&mut list, format!("f{i}"));
+        }
+        assert_eq!((list.len(), list[0].as_str()), (RECENT_MAX, "f19"));
+    }
 }
 
 #[cfg(test)]
@@ -5503,6 +5664,55 @@ mod mac {
         })
     }
 
+    /// ray-daw #453: los documentos recientes del sistema, por `NSDocumentController` (hilo
+    /// principal). `recent_list` devuelve las rutas de `recentDocumentURLs`, una por línea.
+    pub(super) fn recent_op(op: &str, path: &str) -> Result<String, String> {
+        let (op, path) = (op.to_string(), path.to_string());
+        on_main_sync(move || {
+            // SAFETY: mensajes documentados de AppKit/Foundation, en el hilo principal.
+            unsafe {
+                let get: MsgId = std::mem::transmute(msg_send());
+                let with: MsgIdId = std::mem::transmute(msg_send());
+                let set: MsgVoidId = std::mem::transmute(msg_send());
+                let count: MsgI64 = std::mem::transmute(msg_send());
+                let at: MsgIdI64 = std::mem::transmute(msg_send());
+                let utf8: MsgCStr = std::mem::transmute(msg_send());
+                let controller = get(cls(b"NSDocumentController\0"), sel(b"sharedDocumentController\0"));
+                if controller.is_null() {
+                    return Err("ui: no document controller for this process".to_string());
+                }
+                match op.as_str() {
+                    "recent_note" => {
+                        let url = with(cls(b"NSURL\0"), sel(b"fileURLWithPath:\0"), nsstring(&path));
+                        set(controller, sel(b"noteNewRecentDocumentURL:\0"), url);
+                        Ok(String::new())
+                    }
+                    "recent_clear" => {
+                        set(controller, sel(b"clearRecentDocuments:\0"), std::ptr::null_mut());
+                        Ok(String::new())
+                    }
+                    _ => {
+                        let urls = get(controller, sel(b"recentDocumentURLs\0"));
+                        let mut paths = Vec::new();
+                        if !urls.is_null() {
+                            for i in 0..count(urls, sel(b"count\0")) {
+                                let p = get(at(urls, sel(b"objectAtIndex:\0"), i), sel(b"path\0"));
+                                if p.is_null() {
+                                    continue;
+                                }
+                                let c = utf8(p, sel(b"UTF8String\0"));
+                                if !c.is_null() {
+                                    paths.push(std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned());
+                                }
+                            }
+                        }
+                        Ok(paths.join("\n"))
+                    }
+                }
+            }
+        })
+    }
+
     /// ray-daw #453: los items de `menu` y los de sus submenús, como punteros — lo que hay que
     /// purgar del registro por tag antes de vaciar o soltar el menú.
     unsafe fn collect_items(menu: Id, out: &mut Vec<usize>) {
@@ -7577,6 +7787,45 @@ mod gtk {
             }
         }
         made
+    }
+
+    /// ray-daw #453: avisa a `GtkRecentManager` de un documento abierto (sale en «Recientes» de
+    /// los selectores de archivo y del escritorio). De cortesía: sin GTK cargado, sin la app
+    /// arrancada o sin los símbolos, no hace nada.
+    pub(super) fn recent_note(path: &str) {
+        if api().is_err() || super::ensure_app().is_err() {
+            return;
+        }
+        let Ok(path_c) = std::ffi::CString::new(path) else { return };
+        on_main(move || {
+            // SAFETY: símbolos de GTK 3 y GLib con sus firmas documentadas, en el hilo de GTK;
+            // `g_filename_to_uri` devuelve una cadena propia que se libera con `g_free`.
+            unsafe {
+                let gtk = dlopen(c"libgtk-3.so.0".as_ptr(), RTLD_NOW | RTLD_GLOBAL);
+                let glib = dlopen(c"libglib-2.0.so.0".as_ptr(), RTLD_NOW | RTLD_GLOBAL);
+                if gtk.is_null() || glib.is_null() {
+                    return;
+                }
+                let (get_default, add_item, to_uri, free) = (
+                    dlsym(gtk, c"gtk_recent_manager_get_default".as_ptr()),
+                    dlsym(gtk, c"gtk_recent_manager_add_item".as_ptr()),
+                    dlsym(glib, c"g_filename_to_uri".as_ptr()),
+                    dlsym(glib, c"g_free".as_ptr()),
+                );
+                if get_default.is_null() || add_item.is_null() || to_uri.is_null() || free.is_null() {
+                    return;
+                }
+                let get_default: unsafe extern "C" fn() -> *mut c_void = std::mem::transmute(get_default);
+                let add_item: unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char) -> i32 = std::mem::transmute(add_item);
+                let to_uri: unsafe extern "C" fn(*const std::ffi::c_char, *const std::ffi::c_char, *mut c_void) -> *mut std::ffi::c_char = std::mem::transmute(to_uri);
+                let free: unsafe extern "C" fn(*mut c_void) = std::mem::transmute(free);
+                let uri = to_uri(path_c.as_ptr(), std::ptr::null(), std::ptr::null_mut());
+                if !uri.is_null() {
+                    add_item(get_default(), uri);
+                    free(uri as *mut c_void);
+                }
+            }
+        });
     }
 
     /// M259: el contexto del `deactivate` de un menú contextual — el menú y sus items, para
@@ -10615,6 +10864,14 @@ mod win {
                 *next_id = next_id.wrapping_add(1);
             }
         }
+    }
+
+    /// ray-daw #453: avisa al shell de un documento abierto (`SHAddToRecentDocs`: la Jump List de
+    /// la app y «Recientes»). De cortesía; el shell ignora lo que no puede asociar.
+    pub(super) fn recent_note(path: &str) {
+        let w = wide(path);
+        // SAFETY: SHARD_PATHW con un puntero a una ruta UTF-16 terminada en NUL, viva en la llamada.
+        unsafe { windows::Win32::UI::Shell::SHAddToRecentDocs(windows::Win32::UI::Shell::SHARD_PATHW.0 as u32, Some(w.as_ptr() as *const core::ffi::c_void)) };
     }
 
     /// M259: ids de comando de los menús CONTEXTUALES (rango propio, cíclico: un popup vive lo

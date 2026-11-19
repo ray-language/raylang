@@ -264,8 +264,29 @@ pub fn context(w: int, has_file: bool) -> Result<int, string> {
 }
 ```
 
-`ui.replace_menu(título, elementos)` rehace un menú entero, por ejemplo una lista de documentos
-recientes.
+`ui.replace_menu(título, elementos)` rehace un menú entero, y `ui.submenu(título, elementos)` es un
+elemento que abre un submenú. Con los dos se hace el «Abrir reciente» de cualquier app de
+documentos, y `std/ui` lleva la lista: `ui.note_recent(ruta)` cada vez que abres o guardas,
+`ui.recent_documents()` para leerla y `ui.clear_recent()` para vaciarla.
+
+```ray
+fn file_menu() -> Result<int, string> {
+    var recent: [ui.MenuItem] = [];
+    for path in ui.recent_documents()? {
+        recent.push(ui.item("recent:" + path, path, ""));
+    }
+    recent.push(ui.separator());
+    recent.push(ui.item("recent:clear", "Vaciar menú", ""));
+    ui.replace_menu("Archivo", [
+        ui.item("open", "Abrir…", "cmd+o"),
+        ui.submenu("Abrir reciente", recent),
+    ])
+}
+```
+
+En macOS esa lista es la del sistema: sale también en el menú del Dock y en «Ítems recientes», y
+elegir un documento ahí llega como un evento `"open"`. En Linux y Windows `std/ui` guarda los diez
+últimos y avisa al sistema para que aparezcan en sus recientes.
 
 ## 6. Diálogos
 

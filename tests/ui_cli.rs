@@ -1117,6 +1117,54 @@ fn titlebar_color_changes_on_an_open_window_on_all_three_engines() {
 }
 
 // ---------------------------------------------------------------------------
+// ray-daw #453 — documentos recientes: `note_recent` los pone al frente sin repetir,
+// `recent_documents` los devuelve del más reciente al más antiguo y `clear_recent` vacía. En
+// headless la lista vive en memoria; VM, intérprete y nativo dan lo mismo.
+// ---------------------------------------------------------------------------
+#[test]
+fn recent_documents_are_noted_listed_and_cleared_on_all_three_engines() {
+    let base = tmp("recents_453");
+    std::fs::write(
+        base.join("prog.ray"),
+        r##"import std/ui;
+fn names() -> string {
+    var out: [string] = [];
+    for p in ui.recent_documents().unwrap() {
+        let parts = p.replace("\\", "/").split("/");
+        out.push(parts[parts.len() - 1]);
+    }
+    "[" + out.join(" ") + "]"
+}
+fn main() {
+    print(names());
+    print(ui.note_recent("/proj/a.rayp").is_ok());
+    print(ui.note_recent("/proj/b.rayp").is_ok());
+    print(ui.note_recent("/proj/a.rayp").is_ok());
+    print(names());
+    print(ui.note_recent(""));
+    print(ui.clear_recent().is_ok());
+    print(names());
+}
+"##,
+    )
+    .unwrap();
+    const WANT: &str = "[]\ntrue\ntrue\ntrue\n[a.rayp b.rayp]\nResult.Err(ui: note_recent needs a path)\ntrue\n[]\n";
+    for engine in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(engine).current_dir(&base).env("RAY_UI_BACKEND", "headless").env("RAY_UI_TRACE", "1").output().unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{engine:?}\n{err}");
+        assert!(err.contains("[ui] recent note ") && err.contains("[ui] recent clear\n"), "{engine:?}\n{err}");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray")).args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]).current_dir(&base).output().expect("build nativo");
+        assert!(st.status.success(), "build --native: {}", String::from_utf8_lossy(&st.stderr));
+        let out = Command::new(&bin).current_dir(&base).env("RAY_UI_BACKEND", "headless").output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "native: {}", String::from_utf8_lossy(&out.stderr));
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ray-daw #453 — `ui.submenu`: un item que abre un submenú, anidable, en `menu` y
 // `replace_menu`; sus items existen para `set_menu_item` y el submenú puede ir vacío. Headless
 // deja la forma del menú en la traza; VM, intérprete y nativo.

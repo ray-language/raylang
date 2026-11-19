@@ -99,6 +99,9 @@ pub struct Manifest {
     /// siguen mandando si se dan. `icon` es relativo a la raíz del proyecto.
     pub app_name: Option<String>,
     pub app_icon: Option<String>,
+    /// ray-daw #452: `[app.macos] icon` — un `.icns` o un `.iconset` hechos a mano para el `.app`
+    /// (cada tamaño por separado: la versión simplificada de 16 y 32 px); gana a `icon` en macOS.
+    pub app_icon_macos: Option<String>,
     pub app_id: Option<String>,
     /// M247 (IDEAS §89): `[app] public_key` — la clave pública Ed25519 (hex) con la que la app
     /// verifica el manifiesto de actualización (`std/update`); `ray bundle`/`build --native` la
@@ -289,6 +292,7 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut app_copyright = None;
     let mut app_name = None;
     let mut app_icon = None;
+    let mut app_icon_macos = None;
     let mut app_id = None;
     let mut app_public_key = None;
     let mut app_sign = None;
@@ -491,6 +495,7 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
             // M440 (rayreq #309): firma por plataforma.
             "app.macos" => match key {
                 "sign" => app_macos_sign = Some(as_string()?),
+                "icon" => app_icon_macos = Some(as_string()?),
                 "notary" => app_macos_notary = Some(as_string()?),
                 "entitlements" => app_macos_entitlements = Some(as_string()?),
                 _ => {} // otras claves de [app.macos] se ignoran por ahora (extensibilidad)
@@ -570,6 +575,7 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         app_copyright,
         app_name,
         app_icon,
+        app_icon_macos,
         app_id,
         app_plist,
         app_opens,
@@ -864,6 +870,10 @@ mod tests {
         assert_eq!(m.app_windows_sign.as_deref(), Some("CN=Rayala"));
         let bare = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n").unwrap();
         assert!(bare.app_macos_sign.is_none() && bare.app_windows_sign.is_none());
+        // ray-daw #452: el icono propio de macOS convive con el PNG común.
+        let icons = parse_src("[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[app]\nicon = \"brand/icon.png\"\n\n[app.macos]\nicon = \"brand/Icon.iconset\"\n").unwrap();
+        assert_eq!((icons.app_icon.as_deref(), icons.app_icon_macos.as_deref()), (Some("brand/icon.png"), Some("brand/Icon.iconset")));
+        assert!(bare.app_icon_macos.is_none());
     }
 
     /// M447 (pepa #334/#336/#331): las claves nuevas de `[ios]` y `[android]`, con su validación.

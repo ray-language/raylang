@@ -21182,3 +21182,55 @@ colgaba el hilo para siempre); y el reloj del anillo lleno solo se lee al entrar
 por cada octeto. Queda anotado: `std/audio` reconoce el motivo por el prefijo del mensaje
 (`audio: the output device`), porque `write` es el opcode genérico de sockets; llevarlo al
 propio `write` pide un opcode de audio en los tres motores.
+
+## 461. Ronda sobre la re-medición de 1.27.107 (nov 2026)
+
+Siete hallazgos de las apps que re-midieron con 1.27.107, cada uno con una decisión propia.
+
+**ALPN en el servidor (raygrpc #384).** `tls_accept` construía la `ServerConfig` de rustls sin
+`alpn_protocols`, así que ningún cliente que exija ALPN —grpcurl, los de `net`— podía hablar gRPC
+por TLS con un servidor raylang. Se añaden dos primitivos en vez de un parámetro opcional (los
+builtins tienen aridad fija): `__tls_accept_alpn(h, cert, key, protocols)` con la lista separada
+por comas, y `__tls_alpn(h)`, que conduce el handshake pendiente igual que `tls_peer_cert` (el
+bucle se extrajo a `tls_finish_handshake`). La elección es la de rustls: gana la preferencia del
+servidor; un cliente sin ALPN conecta sin protocolo; sin protocolo en común el handshake falla.
+`tls_accept` queda como `tls_accept_alpn` con la lista vacía, también en el nativo.
+
+**Procesos en móvil (rayfocus #373).** En iOS y Android `process` va excluido siempre, y cada
+primitivo `__proc_*` sin emisor convertía en stub a la función que lo tocaba; como los métodos de
+`impl` no se podan, bastaba importar `std/process` (o `std/update`, que lo importa) para que un
+bundle —que es un build release— se negara. La alternativa de importaciones condicionales por
+plataforma es una feature de lenguaje; lo que se hizo es más pequeño: con `process` excluido los
+primitivos emiten su respuesta de error (`["err", …]`) en vez de no emitirse. El programa compila
+sin stubs y la llamada devuelve `Err` en ejecución, que es lo que el código ya sabe manejar. Vale
+también para `--without process` en escritorio: la política sigue cumpliéndose (no se lanza
+nada), solo que se ve en ejecución y no al compilar.
+
+**La identidad en el bundle móvil (#374).** `configure_native_app_info` solo se llamaba en la
+rama de escritorio de `ray bundle`; las ramas de iOS y Android salían antes. Se llama una vez,
+antes de bifurcar.
+
+**Errores con tipo en `std/notify` (#376).** Cambiar `Result<_, string>` por un enum rompería a
+todo llamador. `error_kind(e)` clasifica el texto: la superficie no cambia y el programa deja de
+depender de la redacción. La correspondencia la fija un test que provoca los errores reales en vez
+de copiar sus textos. El caso «permiso sin decidir» no era un fallo: la petición se retiene hasta
+la respuesta del usuario; lo que estaba mal era la documentación, que decía que se descartaba.
+
+**Módulo suelto (raycdc #407).** Un módulo puede definir `fn send` (regla M196) porque importado
+va como `wire::send` y tapa al builtin dentro de su módulo. Chequeado suelto, la entrada no se
+namespaca y la llamada ligaba al builtin. Namespacar toda la entrada sin `main` cambiaría los
+nombres que ven el LSP y los mensajes; se namespacan solo las funciones que chocan con un builtin
+(`entry_shadow_name`), que son justo las que antes daban un veredicto distinto.
+
+**Icono de macOS (ray-daw #452).** `make_icns` reescalaba un PNG a los diez tamaños. Ahora un
+`.icns` se copia y un `.iconset` se compila tal cual; `[app.macos] icon` existe porque los demás
+sistemas necesitan el PNG.
+
+**`run_command` de `db/mongo` (#451).** Era el envío crudo que usan las operaciones del módulo,
+expuesto tal cual: sin `$db` y sin mirar `ok`. Las operaciones internas pasan a `raw_command`
+(SASL necesita leer la respuesta también cuando falla) y la función pública hace lo que hacen
+`find` e `insert`. Convertir `ok: 0` en `Err` cambia lo que ve quien inspeccionaba la respuesta a
+mano; se aceptó porque `Ok` con un rechazo dentro era la trampa que describía el hallazgo.
+
+Queda fuera de esta ronda #453 (documentos recientes y submenús en `std/ui`), que toca los tres
+backends de escritorio.

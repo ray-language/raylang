@@ -9,6 +9,9 @@
 
 use super::*;
 
+/// rayfocus #373: lo que responden los primitivos de procesos cuando el subsistema está excluido.
+const PROCESS_EXCLUDED: &str = "process: not available in this build (the process subsystem is excluded; it always is on iOS and Android)";
+
 impl Transpiler {
     /// Nombres de las variables en ámbito cuyo tipo es `Channel`/`Task` (los valores compartibles entre
     /// hilos). Se clonan antes de un `spawn` para que el closure `move` no consuma el original. Dedup:
@@ -3134,12 +3137,29 @@ impl Transpiler {
             }
             "tls_accept" if name.starts_with("__") && !self.exclude.contains("tls") => {
                 self.needs_rt_tls = true;
-                out.push_str("__ray_tls_accept(");
+                out.push_str("__ray_tls_accept_alpn(");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(", &");
                 self.emit_expr(out, eff[1])?;
                 out.push_str(", &");
                 self.emit_expr(out, eff[2])?;
+                out.push_str(", \"\")");
+            }
+            // raygrpc #384: tls_accept anunciando ALPN, y el protocolo negociado.
+            "tls_accept_alpn" if name.starts_with("__") && !self.exclude.contains("tls") => {
+                self.needs_rt_tls = true;
+                out.push_str("__ray_tls_accept_alpn(");
+                self.emit_expr(out, eff[0])?;
+                for e in &eff[1..4] {
+                    out.push_str(", &");
+                    self.emit_expr(out, e)?;
+                }
+                out.push(')');
+            }
+            "tls_alpn" if name.starts_with("__") && !self.exclude.contains("tls") => {
+                self.needs_rt_tls = true;
+                out.push_str("__ray_tls_alpn(");
+                self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
             // rayreq #250: sin verificar el certificado (mismo helper, otra config).
@@ -3799,6 +3819,23 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // rayfocus #373: con `process` excluido (siempre en iOS y Android; `--without process`
+            // en escritorio) los primitivos de procesos responden `Err` en tiempo de ejecución en vez
+            // de dejar como stub que panica a toda función que los toca: un programa que comparte
+            // código entre escritorio y móvil puede importar `std/process` o `std/update` sin
+            // `--allow-stubs`. Los argumentos no se evalúan (son campos del `Cmd`, sin efectos).
+            "run" | "proc_spawn" | "proc_spawn_detached" | "proc_spawn_pty" | "proc_read" | "proc_try_wait" if name.starts_with("__") => {
+                write!(
+                    out,
+                    "Rc::new(std::cell::RefCell::new(vec![Rc::<[u8]>::from(&b\"err\"[..]), Rc::<[u8]>::from(&b\"{PROCESS_EXCLUDED}\"[..])]))"
+                )
+                .unwrap();
+            }
+            "proc_write" | "proc_resize" if name.starts_with("__") => {
+                write!(out, "Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(\"{PROCESS_EXCLUDED}\")]))").unwrap();
+            }
+            "proc_kill" | "proc_hangup" if name.starts_with("__") => out.push_str("()"),
+            "proc_pid" if name.starts_with("__") => out.push_str("0i64"),
             _ => {
                 // Función de usuario, o llamada a un valor-función (closure) en ámbito: `name(args)`.
                 let is_closure = matches!(self.lookup(name), Some(Type::Fn(_, _)));

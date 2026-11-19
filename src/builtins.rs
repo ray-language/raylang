@@ -3296,6 +3296,64 @@ pub fn take_pending_tls_host(wh: i64) -> Option<String> {
     pending_tls_hosts().lock().unwrap().remove(&wh)
 }
 
+/// Conduce el handshake TLS pendiente de `tc` (acotado a 10 s). En la VM el socket es no
+/// bloqueante → WouldBlock espera readiness con el poller; en el intérprete bloquea.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+fn tls_finish_handshake(tc: &mut TlsConn) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while tc.conn.is_handshaking() {
+        match tc.conn.complete_io(&mut tc.sock) {
+            Ok(_) => {}
+            Err(ref e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::Interrupted =>
+            {
+                if std::time::Instant::now() >= deadline {
+                    return Err("TLS handshake timeout".to_string());
+                }
+                // La espera de readiness es por fd + poller: unix (poll(2)) y Windows
+                // (M174: WSAPoll sobre el SOCKET). Mismo presupuesto de 10 s. Otras
+                // plataformas: un sleep corto.
+                #[cfg(any(unix, windows))]
+                {
+                    #[cfg(unix)]
+                    let fd = {
+                        use std::os::fd::AsRawFd;
+                        tc.sock.as_raw_fd()
+                    };
+                    #[cfg(windows)]
+                    let fd = {
+                        use std::os::windows::io::AsRawSocket;
+                        i32::try_from(tc.sock.as_raw_socket()).unwrap_or(-1)
+                    };
+                    let (rd, wr): (&[i32], &[i32]) =
+                        if tc.conn.wants_write() { (&[], &[fd]) } else { (&[fd], &[]) };
+                    let _ = crate::poll::wait(rd, wr, 1000);
+                }
+                #[cfg(not(any(unix, windows)))]
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            Err(e) => return Err(tls_io_err(&e, true)),
+        }
+    }
+    Ok(())
+}
+
+/// raygrpc #384: el protocolo ALPN negociado (`net.tls_alpn`); `""` si no se negoció ninguno.
+/// Conduce el handshake pendiente como `tls_peer_cert`.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn tls_alpn(h: i64) -> Result<String, String> {
+    let mut reg = registry().lock().unwrap();
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Tls(tc)) => {
+            tls_finish_handshake(tc)?;
+            Ok(tc.conn.alpn_protocol().map(|p| String::from_utf8_lossy(p).into_owned()).unwrap_or_default())
+        }
+        Some(_) => Err(format!("handle {} is not a TLS connection", h)),
+        None => Err(format!("invalid handle: {}", h)),
+    }
+}
+
 /// M124: el resumen del certificado del PEER de una conexión TLS — "expira en N días" es EL check
 /// que todo operador quiere (raywatch, IDEAS §70.1). `tls_connect` deja el handshake para la
 /// primera I/O, así que aquí se CONDUCE si sigue pendiente (acotado a 10 s): en la VM el socket es
@@ -3310,45 +3368,10 @@ pub fn tls_peer_cert(h: i64) -> Result<ray_runtime::x509::CertSummary, String> {
 /// programa. Conduce el handshake pendiente como `tls_peer_cert`. Nunca devuelve una cadena vacía.
 #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
 pub fn tls_peer_chain(h: i64) -> Result<Vec<Vec<u8>>, String> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let mut reg = registry().lock().unwrap();
     match reg.open.get_mut(&h) {
         Some(OpenHandle::Tls(tc)) => {
-            while tc.conn.is_handshaking() {
-                match tc.conn.complete_io(&mut tc.sock) {
-                    Ok(_) => {}
-                    Err(ref e)
-                        if e.kind() == std::io::ErrorKind::WouldBlock
-                            || e.kind() == std::io::ErrorKind::Interrupted =>
-                    {
-                        if std::time::Instant::now() >= deadline {
-                            return Err("TLS handshake timeout".to_string());
-                        }
-                        // La espera de readiness es por fd + poller: unix (poll(2)) y Windows
-                        // (M174: WSAPoll sobre el SOCKET). Mismo presupuesto de 10 s. Otras
-                        // plataformas: un sleep corto.
-                        #[cfg(any(unix, windows))]
-                        {
-                            #[cfg(unix)]
-                            let fd = {
-                                use std::os::fd::AsRawFd;
-                                tc.sock.as_raw_fd()
-                            };
-                            #[cfg(windows)]
-                            let fd = {
-                                use std::os::windows::io::AsRawSocket;
-                                i32::try_from(tc.sock.as_raw_socket()).unwrap_or(-1)
-                            };
-                            let (rd, wr): (&[i32], &[i32]) =
-                                if tc.conn.wants_write() { (&[], &[fd]) } else { (&[fd], &[]) };
-                            let _ = crate::poll::wait(rd, wr, 1000);
-                        }
-                        #[cfg(not(any(unix, windows)))]
-                        std::thread::sleep(std::time::Duration::from_millis(20));
-                    }
-                    Err(e) => return Err(tls_io_err(&e, true)),
-                }
-            }
+            tls_finish_handshake(tc)?;
             tc.conn
                 .peer_certificates()
                 .map(|c| c.iter().map(|d| d.to_vec()).collect::<Vec<_>>())
@@ -3427,7 +3450,7 @@ pub fn tls_connect_h2(_host: &str, _port: i64) -> Result<i64, String> { Err(NET_
 /// Construye una configuración de servidor TLS a partir de los PEM de la cadena de certificados y la
 /// clave privada (M19.4b). Cada servidor puede tener su propio certificado, así que NO se cachea.
 #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
-fn tls_server_config(cert_pem: &str, key_pem: &str) -> Result<std::sync::Arc<rustls::ServerConfig>, String> {
+fn tls_server_config(cert_pem: &str, key_pem: &str, alpn: Vec<Vec<u8>>) -> Result<std::sync::Arc<rustls::ServerConfig>, String> {
     use rustls::pki_types::pem::PemObject;
     let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
         rustls::pki_types::CertificateDer::pem_slice_iter(cert_pem.as_bytes())
@@ -3438,10 +3461,11 @@ fn tls_server_config(cert_pem: &str, key_pem: &str) -> Result<std::sync::Arc<rus
     }
     let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
         .map_err(|e| ray_runtime::tls::pem_path_hint("key", key_pem).unwrap_or_else(|| format!("invalid private key: {e}")))?;
-    let cfg = rustls::ServerConfig::builder()
+    let mut cfg = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .map_err(|e| e.to_string())?;
+    cfg.alpn_protocols = alpn;
     Ok(std::sync::Arc::new(cfg))
 }
 
@@ -3450,7 +3474,14 @@ fn tls_server_config(cert_pem: &str, key_pem: &str) -> Result<std::sync::Arc<rus
 /// registro y lo reinserta envuelto). El handshake ocurre en la primera I/O. Builtin `__tls_accept`.
 #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
 pub fn tls_accept(h: i64, cert_pem: &str, key_pem: &str) -> Result<i64, String> {
-    let config = tls_server_config(cert_pem, key_pem)?;
+    tls_accept_alpn(h, cert_pem, key_pem, "")
+}
+
+/// raygrpc #384: como `tls_accept`, anunciando los protocolos ALPN de `protocols` (separados por
+/// comas, en orden de preferencia del servidor; vacío = sin ALPN). Builtin `__tls_accept_alpn`.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn tls_accept_alpn(h: i64, cert_pem: &str, key_pem: &str, protocols: &str) -> Result<i64, String> {
+    let config = tls_server_config(cert_pem, key_pem, ray_runtime::tls::parse_alpn(protocols)?)?;
     let server = rustls::ServerConnection::new(config).map_err(|e| e.to_string())?;
     let mut reg = registry().lock().unwrap();
     let sock = match reg.open.remove(&h) {
@@ -3463,6 +3494,10 @@ pub fn tls_accept(h: i64, cert_pem: &str, key_pem: &str) -> Result<i64, String> 
 }
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
 pub fn tls_accept(_h: i64, _cert_pem: &str, _key_pem: &str) -> Result<i64, String> { Err(NET_TLS_UNAVAILABLE.to_string()) }
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn tls_accept_alpn(_h: i64, _cert_pem: &str, _key_pem: &str, _protocols: &str) -> Result<i64, String> { Err(NET_TLS_UNAVAILABLE.to_string()) }
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn tls_alpn(_h: i64) -> Result<String, String> { Err(NET_TLS_UNAVAILABLE.to_string()) }
 
 /// Envuelve un socket TCP plano YA CONECTADO (handle `h`) en una sesión TLS de **cliente** —
 /// el simétrico de `tls_accept`, para STARTTLS (Postgres sslRequest, MySQL caching_sha2
@@ -6429,6 +6464,22 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::Int { return Err((Some(0), format!("__tls_accept expects an int (the handle), not {}", a[0]))); }
         if a[1] != Type::String { return Err((Some(1), format!("__tls_accept expects a string (the PEM certificate), not {}", a[1]))); }
         if a[2] != Type::String { return Err((Some(2), format!("__tls_accept expects a string (the PEM key), not {}", a[2]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // raygrpc #384: __tls_accept_alpn(h, cert, key, protocols) -> [string]: como __tls_accept,
+    // anunciando los protocolos ALPN (separados por comas). std/net → tls_accept_alpn.
+    Builtin { name: "__tls_accept_alpn", opcode: OpCode::TlsAcceptAlpn, check: |a| {
+        arity(a, 4, "__tls_accept_alpn", " (handle, cert, key, protocols)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__tls_accept_alpn expects an int (the handle), not {}", a[0]))); }
+        if a[1] != Type::String { return Err((Some(1), format!("__tls_accept_alpn expects a string (the PEM certificate), not {}", a[1]))); }
+        if a[2] != Type::String { return Err((Some(2), format!("__tls_accept_alpn expects a string (the PEM key), not {}", a[2]))); }
+        if a[3] != Type::String { return Err((Some(3), format!("__tls_accept_alpn expects a string (the protocols), not {}", a[3]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // raygrpc #384: __tls_alpn(h) -> [string]: ["ok", protocolo] ("" = ninguno) o ["err", msg].
+    Builtin { name: "__tls_alpn", opcode: OpCode::TlsAlpn, check: |a| {
+        arity(a, 1, "__tls_alpn", " (handle)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__tls_alpn expects an int (the handle), not {}", a[0]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // rayreq #250: __tls_upgrade_insecure(h, host) -> [string]: como __tls_upgrade sin verificar el

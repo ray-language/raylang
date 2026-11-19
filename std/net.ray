@@ -209,6 +209,45 @@ pub fn tls_accept(handle: int, cert: string, key: string) -> Result<int, string>
     }
 }
 
+/// Like `tls_accept`, also advertising ALPN: `protocols` are the application protocols the
+/// server speaks, in its order of preference (`["h2"]` for gRPC, `["h2", "http/1.1"]` for a web
+/// server that speaks both). The server picks its first protocol that the client also offers; a
+/// client that offers none still connects, and one that offers only others fails the handshake.
+/// `tls_alpn(h)` tells which one was chosen. `tls_accept` advertises none, which gRPC clients
+/// reject. A name is 1 to 255 bytes and has no comma.
+// raygrpc #384: sin ALPN no había gRPC por TLS con un servidor raylang.
+pub fn tls_accept_alpn(
+    handle: int,
+    cert: string,
+    key: string,
+    protocols: [string]
+) -> Result<int, string> {
+    for p in protocols {
+        if (p.len() == 0 || p.contains(",")) {
+            return Result.Err(
+                "invalid ALPN protocol name '" + p + "': it must not be empty or contain a comma"
+            );
+        }
+    }
+    let r = __tls_accept_alpn(handle, cert, key, protocols.join(","));
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("invalid handle"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// The ALPN protocol negotiated on a TLS connection (`"h2"`, `"http/1.1"`…), or `""` when none
+/// was (the peer offered or advertised none). Works on both sides. Drives the pending handshake
+/// if needed (bounded to 10 s). `Err` on a non-TLS handle or a failed handshake.
+pub fn tls_alpn(h: int) -> Result<string, string> {
+    let r = __tls_alpn(h);
+    if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
+}
+
 // STARTTLS de cliente (diferido TLS): envuelve un socket TCP plano YA conectado en una sesión TLS,
 // verificando el certificado del servidor contra `host`. Reusa el MISMO handle (el simétrico de
 // tls_accept). Habilita los protocolos que negocian en claro y luego suben a TLS (Postgres

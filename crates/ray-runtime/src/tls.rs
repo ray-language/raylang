@@ -83,6 +83,17 @@ mod imp {
             crate::x509::cert_summary(&der)
         }
 
+        /// raygrpc #384: el protocolo ALPN negociado (`net.tls_alpn`); `""` si no se negoció
+        /// ninguno. Conduce el handshake pendiente como `peer_cert_summary`.
+        pub fn alpn(&mut self) -> Result<String, String> {
+            self.finish_handshake()?;
+            let p = match self {
+                TlsStream::Client(s) => s.conn.alpn_protocol(),
+                TlsStream::Server(s) => s.conn.alpn_protocol(),
+            };
+            Ok(p.map(|p| String::from_utf8_lossy(p).into_owned()).unwrap_or_default())
+        }
+
         /// raycert #379: la cadena que presentó el peer, en DER y con la hoja primero
         /// (`net.tls_peer_chain`). Conduce el handshake pendiente como `peer_cert_summary`.
         pub fn peer_chain_der(&mut self) -> Result<Vec<Vec<u8>>, String> {
@@ -341,7 +352,7 @@ mod imp {
 
     /// Config de servidor a partir de los PEM de la cadena de certificados y la clave privada. No se cachea
     /// (cada servidor puede tener su propio certificado). Espeja `tls_server_config` de la VM.
-    fn server_config(cert_pem: &str, key_pem: &str) -> Result<Arc<rustls::ServerConfig>, String> {
+    fn server_config(cert_pem: &str, key_pem: &str, alpn: Vec<Vec<u8>>) -> Result<Arc<rustls::ServerConfig>, String> {
         use rustls::pki_types::pem::PemObject;
         let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
             rustls::pki_types::CertificateDer::pem_slice_iter(cert_pem.as_bytes())
@@ -352,10 +363,11 @@ mod imp {
         }
         let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(key_pem.as_bytes())
             .map_err(|e| crate::tls::pem_path_hint("key", key_pem).unwrap_or_else(|| format!("invalid private key: {e}")))?;
-        let cfg = rustls::ServerConfig::builder()
+        let mut cfg = rustls::ServerConfig::builder()
             .with_no_client_auth()
             .with_single_cert(certs, key)
             .map_err(|e| e.to_string())?;
+        cfg.alpn_protocols = alpn;
         Ok(Arc::new(cfg))
     }
 
@@ -473,14 +485,20 @@ mod imp {
 
     /// Envuelve un `TcpStream` ya aceptado en una sesión TLS de servidor con el certificado/clave PEM.
     pub fn accept(sock: TcpStream, cert_pem: &str, key_pem: &str) -> Result<TlsStream, String> {
-        let cfg = server_config(cert_pem, key_pem)?;
+        accept_alpn(sock, cert_pem, key_pem, "")
+    }
+
+    /// raygrpc #384: como [`accept`], anunciando los protocolos ALPN de `protocols` (separados
+    /// por comas, en orden de preferencia del servidor; vacío = sin ALPN).
+    pub fn accept_alpn(sock: TcpStream, cert_pem: &str, key_pem: &str, protocols: &str) -> Result<TlsStream, String> {
+        let cfg = server_config(cert_pem, key_pem, super::parse_alpn(protocols)?)?;
         let conn = rustls::ServerConnection::new(cfg).map_err(|e| e.to_string())?;
         Ok(TlsStream::Server(rustls::StreamOwned::new(conn, sock)))
     }
 }
 
 #[cfg(feature = "tls")]
-pub use imp::{accept, connect, connect_h2, insecure_client_config, upgrade, upgrade_insecure, TlsStream};
+pub use imp::{accept, accept_alpn, connect, connect_h2, insecure_client_config, upgrade, upgrade_insecure, TlsStream};
 
 // --- Stubs sin la feature `tls` (el binario compila sin rustls; el consumidor no los alcanza) ---
 #[cfg(not(feature = "tls"))]
@@ -502,6 +520,9 @@ mod stub {
         pub fn peer_chain_der(&mut self) -> Result<Vec<Vec<u8>>, String> {
             match self.0 {}
         }
+        pub fn alpn(&mut self) -> Result<String, String> {
+            match self.0 {}
+        }
         pub fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
             match self.0 {}
         }
@@ -517,10 +538,29 @@ mod stub {
     pub fn accept(_sock: TcpStream, _cert_pem: &str, _key_pem: &str) -> Result<TlsStream, String> {
         Err(UNAVAIL.to_string())
     }
+    pub fn accept_alpn(_sock: TcpStream, _cert_pem: &str, _key_pem: &str, _protocols: &str) -> Result<TlsStream, String> {
+        Err(UNAVAIL.to_string())
+    }
 }
 
 #[cfg(not(feature = "tls"))]
-pub use stub::{accept, connect, connect_h2, upgrade, upgrade_insecure, TlsStream};
+pub use stub::{accept, accept_alpn, connect, connect_h2, upgrade, upgrade_insecure, TlsStream};
+
+/// raygrpc #384: la lista de protocolos ALPN de `tls_accept_alpn` (separados por comas) en la
+/// forma que pide rustls. Un nombre ALPN ocupa de 1 a 255 bytes (RFC 7301 §3.1); vacío = sin ALPN.
+pub fn parse_alpn(protocols: &str) -> Result<Vec<Vec<u8>>, String> {
+    let mut out = Vec::new();
+    if protocols.is_empty() {
+        return Ok(out);
+    }
+    for p in protocols.split(',') {
+        if p.is_empty() || p.len() > 255 {
+            return Err(format!("invalid ALPN protocol name '{p}': it must be 1 to 255 bytes long"));
+        }
+        out.push(p.as_bytes().to_vec());
+    }
+    Ok(out)
+}
 
 /// raysql #301: `tls_accept(h, cert, key)` toma el TEXTO PEM; quien pasa la RUTA del archivo recibía
 /// «the PEM contains no certificate». Si el argumento no empieza por `-----BEGIN`, es una sola línea

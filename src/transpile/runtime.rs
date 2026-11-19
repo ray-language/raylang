@@ -1910,9 +1910,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "            match std::sync::Arc::try_unwrap(s) { Ok(t) => Ok(t), Err(a) => a.try_clone().map_err(|e| e.to_string()) } }\n",
             "        Some(other) => { reg.open.insert(h, other); Err(format!(\"handle {} {}\", h, not_tcp_msg)) }\n",
             "        None => Err(format!(\"invalid handle: {}\", h)) } }\n",
-            "fn __ray_tls_accept(h: i64, cert: &str, key: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "fn __ray_tls_accept_alpn(h: i64, cert: &str, key: &str, protocols: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let sock = match __ray_tls_take_tcp(h, \"is not an accepted TCP socket\") { Ok(s) => s, Err(e) => return __ray_tls_tag_err(e) };\n",
-            "    match ray_runtime::tls::accept(sock, cert, key) {\n",
+            "    match ray_runtime::tls::accept_alpn(sock, cert, key, protocols) {\n",
             "        Ok(s) => { let a = std::sync::Arc::new(std::sync::Mutex::new(s));\n",
             "            __ray_reg().lock().unwrap().open.insert(h, __RayHandle::Tls(a.clone()));\n",
         ));
@@ -1947,6 +1947,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         // DER) vive en ray_runtime::tls::TlsStream::peer_cert_summary — el parseo X.509
         // (ray_runtime::x509) es el MISMO código que usa la VM → resumen byte-idéntico.
         out.push_str(concat!(
+            // raygrpc #384: el protocolo ALPN negociado → ["ok", proto] / ["err", msg].
+            "#[allow(dead_code)] fn __ray_tls_alpn(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+            "    match __ray_tls_get(h) {\n",
+            "        Some(t) => match t.lock().unwrap().alpn() {\n",
+            "            Ok(p) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(p)])),\n",
+            "            Err(e) => __ray_tls_tag_err(e) }\n",
+            "        None => __ray_tls_tag_err(format!(\"handle {} is not a TLS connection\", h)) } }\n",
             "fn __ray_tls_peer_cert(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    match __ray_tls_get(h) {\n",
             "        Some(t) => match t.lock().unwrap().peer_cert_summary() {\n",

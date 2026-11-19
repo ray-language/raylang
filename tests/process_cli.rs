@@ -250,3 +250,34 @@ fn launch_mode_tells_run_test_and_native_apart() {
         assert_eq!(String::from_utf8_lossy(&out.stdout), "native false - 1\n");
     }
 }
+
+/// rayfocus #373: con `process` excluido (siempre en iOS y Android) un programa que importa
+/// `std/process` o `std/update` compila sin stubs, y lanzar algo es un `Err` en ejecución.
+#[test]
+fn an_excluded_process_subsystem_answers_err_instead_of_stubbing() {
+    if std::process::Command::new("rustc").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+        assert!(std::env::var_os("CI").is_none(), "rustc no disponible bajo CI: falso verde");
+        return;
+    }
+    let d = std::env::temp_dir().join(format!("raylang_test_no_process_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let prog = d.join("main.ray");
+    std::fs::write(
+        &prog,
+        "import std/process;\nimport std/update;\nfn main() -> int {\n    print(update.current());\n    print(process.run(\"echo\", [\"hi\"]).is_err());\n    print(update.relaunch().is_err());\n    match (process.cmd(\"echo\", [\"hi\"]).stream()) {\n        Result.Ok(p) => print(\"spawned\"),\n        Result.Err(e) => print(e),\n    }\n    0\n}\n",
+    )
+    .unwrap();
+    let bin = d.join("np");
+    let b = Command::new(BIN)
+        .args(["build", prog.to_str().unwrap(), "--native", "--no-stubs", "--without", "process", "-o", bin.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(b.status.success(), "{}", String::from_utf8_lossy(&b.stderr));
+    let out = Command::new(&bin).output().unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "dev\ntrue\ntrue\nprocess: not available in this build (the process subsystem is excluded; it always is on iOS and Android)\n"
+    );
+    let _ = std::fs::remove_dir_all(&d);
+}

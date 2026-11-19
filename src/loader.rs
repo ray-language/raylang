@@ -439,8 +439,13 @@ fn load_impl(entry: &Path, dep_roots: &DepRoots, entry_source: Option<&str>, pro
         merged.module_bands.push((start, prefix.clone().unwrap_or_default()));
 
         // 6. Renombrar las definiciones de función a su nombre global y fusionar.
+        // raycdc #407: las funciones de un módulo suelto con nombre de builtin (ver
+        // `entry_shadow_name`); el mapa se calcula antes de vaciar `functions`.
+        let shadowed: HashMap<String, String> = m.program.functions.iter()
+            .filter_map(|f| entry_shadow_name(&m, &f.name).map(|g| (f.name.clone(), g)))
+            .collect();
         for mut f in std::mem::take(&mut m.program.functions) {
-            f.name = global_fn(&prefix, &f.name);
+            f.name = shadowed.get(&f.name).cloned().unwrap_or_else(|| global_fn(&prefix, &f.name));
             merged.functions.push(f);
         }
         merged.structs.append(&mut m.program.structs);
@@ -879,6 +884,23 @@ fn module_prefix(m: &Module) -> Option<String> {
     if m.is_entry { None } else { Some(ns_prefix(&m.name)) }
 }
 
+/// raycdc #407: un MÓDULO chequeado como archivo suelto (la entrada no tiene `main`: `ray check
+/// src/wire.ray`, el LSP con un submódulo abierto) puede definir una función con nombre de builtin
+/// (`fn send`, regla M196). En el proyecto esa función va namespacada (`wire::send`) y TAPA al
+/// builtin dentro de su módulo; suelta, se quedaba con el nombre pelado y sus llamadas ligaban al
+/// builtin («send expects 2 arguments»). Aquí se le da el mismo nombre global que tendría
+/// importada, solo a esas funciones: el resto de la entrada sigue sin namespacing.
+fn entry_shadow_name(m: &Module, name: &str) -> Option<String> {
+    if !m.is_entry || name.starts_with("__") || !crate::builtins::is_builtin(name) {
+        return None;
+    }
+    if m.program.functions.iter().any(|f| f.name == "main") {
+        return None;
+    }
+    let leaf = m.name.rsplit('/').next().unwrap_or(&m.name);
+    Some(format!("{}::{}", ns_prefix(leaf), name))
+}
+
 /// Mapa `nombre local → nombre global` de los **tipos** (struct/enum/trait) de un módulo (M11.3c).
 fn build_own_types(program: &Program, prefix: &Option<String>) -> NameMap {
     let mut map = HashMap::new();
@@ -1233,7 +1255,8 @@ impl<'a> Resolver<'a> {
         let prefix = module_prefix(m);
         let mut own = HashMap::new();
         for f in &m.program.functions {
-            own.insert(f.name.clone(), global_fn(&prefix, &f.name));
+            let global = entry_shadow_name(m, &f.name).unwrap_or_else(|| global_fn(&prefix, &f.name));
+            own.insert(f.name.clone(), global);
         }
         for e in &m.program.externs {
             own.insert(e.name.clone(), global_fn(&prefix, &e.name));

@@ -177,6 +177,13 @@ fn handle_stream<S: Read + Write>(s: &mut S) {
             } else {
                 doc(&[elem_double("ok", 0.0), elem_str("errmsg", "operación en la base equivocada")])
             }
+        } else if contains(&msg, b"rawcount") {
+            // raycdc #451: un comando crudo sin `$db` lo rechaza el servidor, como un mongod real.
+            if contains(&msg, b"$db") && contains(&msg, if contains(&msg, b"elsewhere") { &b"admin"[..] } else { &b"test"[..] }) {
+                doc(&[elem_i32("n", 5), elem_double("ok", 1.0)])
+            } else {
+                doc(&[elem_double("ok", 0.0), elem_str("errmsg", "BSON field 'count.$db' is missing but a required field"), elem_i32("code", 40414)])
+            }
         } else if contains(&msg, b"no_existe") {
             // Cualquier operación sobre la colección "no_existe" → error del servidor.
             doc(&[elem_double("ok", 0.0), elem_str("errmsg", "ns not found"), elem_i32("code", 26)])
@@ -432,6 +439,20 @@ fn main() -> int {{
         Result.Err(e) => {{ print(e); }},
     }}
 
+    // raycdc #451: run_command pone el `$db` de la conexión si falta, respeta el que venga y
+    // convierte un `ok: 0` en Err.
+    let count = [bson.field("count", bson.Bson.Str("rawcount"))];
+    match (mongo.run_command(c, count)) {{
+        Result.Ok(r) => print("count: " + bson.dump_doc(r) + " / " + to_string(count.len())),
+        Result.Err(e) => print(e),
+    }}
+    let other = [bson.field("count", bson.Bson.Str("rawcount")), bson.field("comment", bson.Bson.Str("elsewhere")), bson.field("$db", bson.Bson.Str("admin"))];
+    print(mongo.run_command(c, other).is_ok());
+    match (mongo.run_command(c, [bson.field("count", bson.Bson.Str("no_existe"))])) {{
+        Result.Ok(_) => print("no debería"),
+        Result.Err(e) => print(e),
+    }}
+
     mongo.disconnect(c);
     0
 }}
@@ -450,6 +471,9 @@ paginados: 3\n\
 {name: \"ada\"}\n\
 {name: \"grace\"}\n\
 {name: \"lin\"}\n\
+mongo: ns not found\n\
+count: {n: 5, ok: 1} / 1\n\
+true\n\
 mongo: ns not found\n";
 
 #[test]

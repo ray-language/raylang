@@ -106,11 +106,31 @@ fn read_msg(c: Conn) -> Result<[bson.Field], string> {
     Result.Err("unreachable")
 }
 
-/// Sends a raw command document and returns the reply document. The building block of every
-/// operation; exposed for commands the client does not wrap.
-pub fn run_command(c: Conn, doc: [bson.Field]) -> Result<[bson.Field], string> {
+// El comando tal cual: lo que usan las operaciones de este módulo, que ponen su `$db` y miran el
+// `ok` por su cuenta (SASL lee la respuesta también cuando falla).
+fn raw_command(c: Conn, doc: [bson.Field]) -> Result<[bson.Field], string> {
     let _ = send_msg(c, doc)?;
     read_msg(c)
+}
+
+/// Sends a command document the client does not wrap (`count`, `listCollections`, `aggregate`…)
+/// and returns the reply document. The command runs on the connection's database, like `find`
+/// and `insert`: `$db` is added when the document does not carry one (give your own to run it
+/// on another database, e.g. `admin`). A reply with `ok: 0` is an `Err` with the server's
+/// message (`"mongo: …"`), so `Ok` always means the command succeeded.
+// raycdc #451: sin `$db` el servidor rechaza el comando, y ese rechazo volvía como `Ok`.
+pub fn run_command(c: Conn, doc: [bson.Field]) -> Result<[bson.Field], string> {
+    // Una copia: el documento del llamador no se toca.
+    var full: [bson.Field] = [];
+    for f in doc {
+        full.push(f);
+    }
+    if (bson.get(doc, "$db").is_none()) {
+        full.push(bson.field("$db", bson.Bson.Str(c.db)));
+    }
+    let r = raw_command(c, full)?;
+    let _ = check_ok(r)?;
+    Result.Ok(r)
 }
 
 // ── Inspección de respuestas ─────────────────────────────────────────────────
@@ -275,7 +295,7 @@ fn session(
     let c = Conn { handle: handle, buf: b"", req_id: 1, db: database };
 
     // 1. hello: presentación. v1 solo exige ok (sin negociar compresión/versiones).
-    let hr = run_command(
+    let hr = raw_command(
         c,
         [bson.field("hello", bson.Bson.Int(1)), bson.field("$db", bson.Bson.Str(auth_db))]
     )?;
@@ -292,7 +312,7 @@ fn session(
     // 2. saslStart con el client-first de SCRAM (reusa net/scram, como PostgreSQL).
     let sc = scram_first(user, nonce);
     let cf = scram_client_first_message(sc);
-    let r1 = run_command(
+    let r1 = raw_command(
         c,
         [
             bson.field("saslStart", bson.Bson.Int(1)),
@@ -322,7 +342,7 @@ fn session(
             return Result.Err(e);
         },
     };
-    let r2 = run_command(
+    let r2 = raw_command(
         c,
         [
             bson.field("saslContinue", bson.Bson.Int(1)),
@@ -355,7 +375,7 @@ fn session(
     var last = r2;
     var rounds = 0;
     while (!bool_field(last, "done") && rounds < 3) {
-        last = run_command(
+        last = raw_command(
             c,
             [
                 bson.field("saslContinue", bson.Bson.Int(1)),
@@ -375,7 +395,7 @@ fn session(
 
 // ── CRUD (M54.3) ─────────────────────────────────────────────────────────────
 //
-// Cada operación es un comando (bsonspec + MongoDB command reference) sobre `run_command`; la
+// Cada operación es un comando (bsonspec + MongoDB command reference) sobre `raw_command`; la
 // colección va como valor del campo homónimo y `$db` sale de la `Conn`. Los filtros y documentos
 // son `[bson.Field]` — el usuario arma `{$set: {...}}` y compañía explícitamente (fiel al
 // protocolo, sin azúcar que esconda semántica).
@@ -388,7 +408,7 @@ pub fn insert(c: Conn, coll: string, docs: [[bson.Field]]) -> Result<int, string
         arr.push(bson.Bson.Doc(docs[i]));
         i = i + 1;
     }
-    let r = run_command(
+    let r = raw_command(
         c,
         [
             bson.field("insert", bson.Bson.Str(coll)),
@@ -443,7 +463,7 @@ fn append_batch(out: [[bson.Field]], cursor: [bson.Field], key: string) -> Resul
 /// Finds every document matching the filter (`[]` = all). Exhausts the cursor: reads the
 /// `firstBatch` and keeps issuing `getMore` until the server reports cursor id 0.
 pub fn find(c: Conn, coll: string, filter: [bson.Field]) -> Result<[[bson.Field]], string> {
-    let r = run_command(
+    let r = raw_command(
         c,
         [
             bson.field("find", bson.Bson.Str(coll)),
@@ -459,7 +479,7 @@ pub fn find(c: Conn, coll: string, filter: [bson.Field]) -> Result<[[bson.Field]
     // int64 del wire — 0x12, justo lo que codifica nuestro Int.)
     var id = int_field(cursor, "id");
     while (id != 0) {
-        let more = run_command(
+        let more = raw_command(
             c,
             [
                 bson.field("getMore", bson.Bson.Int(id)),
@@ -494,7 +514,7 @@ pub fn update(
             ]
         )
     );
-    let r = run_command(
+    let r = raw_command(
         c,
         [
             bson.field("update", bson.Bson.Str(coll)),
@@ -515,7 +535,7 @@ pub fn delete(c: Conn, coll: string, filter: [bson.Field]) -> Result<int, string
             [bson.field("q", bson.Bson.Doc(filter)), bson.field("limit", bson.Bson.Int(0))]
         )
     );
-    let r = run_command(
+    let r = raw_command(
         c,
         [
             bson.field("delete", bson.Bson.Str(coll)),

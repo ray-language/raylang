@@ -4058,6 +4058,10 @@ impl Checker {
         }
         // σ: parámetro de tipo → tipo concreto inferido.
         let mut sigma: HashMap<String, Type> = HashMap::new();
+        // raysolve #358: un argumento que no puede tiparse solo (`empty()`, `[]`, `Option.None`)
+        // espera a que los DEMÁS fijen los parámetros de tipo — `count(empty(), a)` infiere `V` de
+        // `a` igual que `count(a, empty())`. Se reintenta al final, con todo lo inferido.
+        let mut waiting: Vec<usize> = Vec::new();
         for (i, (arg, param)) in args.iter().zip(params.iter()).enumerate() {
             let at = if i == 0 && let Some(r) = recv {
                 r.clone() // receptor ya tipado: no re-verificar (ver check_named_call_recv)
@@ -4066,8 +4070,22 @@ impl Checker {
                 // el tipo esperado del argumento si ya es concreto — `out.push(Option.None)` con
                 // `out: [Option<string>]` fija `T` por el receptor y `None` lo toma de ahí (como
                 // los payloads de un constructor de enum, `check_value_against`).
-                self.check_value_against(arg, param, &sigma)?
+                match self.check_value_against(arg, param, &sigma) {
+                    Ok(t) => t,
+                    Err(e) if i + 1 < args.len() && is_inference_error(&e) => {
+                        waiting.push(i);
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                }
             };
+            unify(param, &at, &mut sigma).map_err(|reason| self.err(arg.line, arg.col, format!(
+                "argument {} of {}: {}{}{}", i + 1, label, reason, self.shadow_hint(label), array_remove_hint(label, &at)
+            )))?;
+        }
+        for i in waiting {
+            let (arg, param) = (&args[i], &params[i]);
+            let at = self.check_value_against(arg, param, &sigma)?;
             unify(param, &at, &mut sigma).map_err(|reason| self.err(arg.line, arg.col, format!(
                 "argument {} of {}: {}{}{}", i + 1, label, reason, self.shadow_hint(label), array_remove_hint(label, &at)
             )))?;
@@ -4606,3 +4624,9 @@ fn mentions_type(msg: &str, ty: &str) -> bool {
     })
 }
 
+/// ¿El error es de INFERENCIA (al valor le falta un tipo esperado: `empty()`, `[]`,
+/// `Option.None`), y no un error de tipos de verdad? Quien lo recibe puede reintentar con más
+/// contexto.
+pub(super) fn is_inference_error(e: &TypeError) -> bool {
+    e.msg.starts_with("could not infer the type parameter") || e.msg.starts_with("cannot infer the type of [] here")
+}

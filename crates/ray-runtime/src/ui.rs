@@ -2776,6 +2776,114 @@ fn app_op(op: &str, arg: &str) -> Result<(), String> {
 ///   terminar (macOS; Linux y Windows no tienen salida de app aparte de cerrar ventanas).
 ///
 /// Headless: `Ok` + traza `RAY_UI_TRACE`. `Err` con ventana desconocida/cerrada u op desconocida.
+/// ray-daw #453: documentos recientes de la app (`ui.note_recent` / `recent_documents` /
+/// `clear_recent`). `arg` es `"<id de la app>\n<ruta>"` (la ruta solo en `recent_note`); la
+/// respuesta de `recent_list` son las rutas, una por línea, la más reciente primero.
+///
+/// macOS: la lista ES la del sistema (`NSDocumentController`: el menú del Dock, «Ítems
+/// recientes» y Finder la muestran, y el sistema decide cuántos guarda). Linux y Windows no
+/// tienen una lista por app que se pueda leer de vuelta: el runtime guarda la suya
+/// ([`recent_store`], hasta [`RECENT_MAX`]) y además AVISA al sistema (`GtkRecentManager`,
+/// `SHAddToRecentDocs`) para que el documento salga en sus recientes. Headless: en memoria.
+pub fn recent_op(op: &str, arg: &str) -> Result<String, String> {
+    let (id, path) = arg.split_once('\n').unwrap_or((arg, ""));
+    let path = if op == "recent_note" {
+        if path.is_empty() {
+            return Err("ui: note_recent needs a path".to_string());
+        }
+        std::path::absolute(path).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| path.to_string())
+    } else {
+        String::new()
+    };
+    if !matches!(op, "recent_note" | "recent_list" | "recent_clear") {
+        return Err(format!("ui: unknown op '{op}'"));
+    }
+    if headless() {
+        static LIST: Mutex<Vec<String>> = Mutex::new(Vec::new());
+        let mut list = LIST.lock().unwrap();
+        if ui_trace() {
+            eprintln!("{}", format!("[ui] {} {path}", op.replace('_', " ")).trim_end());
+        }
+        return Ok(match op {
+            "recent_note" => {
+                recent_push(&mut list, path);
+                String::new()
+            }
+            "recent_clear" => {
+                list.clear();
+                String::new()
+            }
+            _ => list.join("\n"),
+        });
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = id;
+        ensure_app()?;
+        mac::recent_op(op, &path)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let store = recent_store(id);
+        let mut list: Vec<String> = std::fs::read_to_string(&store).map(|t| t.lines().filter(|l| !l.is_empty()).map(str::to_string).collect()).unwrap_or_default();
+        match op {
+            "recent_list" => return Ok(list.join("\n")),
+            "recent_clear" => list.clear(),
+            _ => {
+                recent_push(&mut list, path.clone());
+                // El aviso al sistema es de cortesía: si falla, la lista propia ya lo tiene.
+                #[cfg(target_os = "linux")]
+                gtk::recent_note(&path);
+                #[cfg(windows)]
+                win::recent_note(&path);
+            }
+        }
+        if let Some(dir) = store.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        std::fs::write(&store, list.join("\n")).map_err(|e| format!("ui: could not save the recent documents ({}): {e}", store.display()))?;
+        Ok(String::new())
+    }
+}
+
+/// Cuántos documentos recientes guarda la lista propia (Linux, Windows y headless).
+const RECENT_MAX: usize = 10;
+
+/// `path` pasa a ser el más reciente (sin repetirse) y la lista se recorta a [`RECENT_MAX`].
+fn recent_push(list: &mut Vec<String>, path: String) {
+    list.retain(|p| *p != path);
+    list.insert(0, path);
+    list.truncate(RECENT_MAX);
+}
+
+/// Dónde vive la lista propia: `%LOCALAPPDATA%\<id>\recent-documents.txt` en Windows y
+/// `$XDG_STATE_HOME/<id>/recent-documents` (o `~/.local/state/…`) en los demás. Sin id (un
+/// programa sin `[app] id`), el nombre del ejecutable.
+#[cfg(not(target_os = "macos"))]
+fn recent_store(id: &str) -> std::path::PathBuf {
+    let name: String = if id.is_empty() {
+        std::env::current_exe().ok().and_then(|p| p.file_stem().map(|s| s.to_string_lossy().into_owned())).unwrap_or_else(|| "ray".to_string())
+    } else {
+        id.to_string()
+    };
+    // El id viene de `ray.toml`: nunca debe poder salirse del directorio de la app.
+    let name: String = name.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).collect();
+    #[cfg(windows)]
+    {
+        let base = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        base.join(name).join("recent-documents.txt")
+    }
+    #[cfg(not(windows))]
+    {
+        let base = std::env::var_os("XDG_STATE_HOME")
+            .filter(|v| !v.is_empty())
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".local/state")))
+            .unwrap_or_else(std::env::temp_dir);
+        base.join(name).join("recent-documents")
+    }
+}
+
 pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
     let on = arg == "1" || arg == "true";
     if op == "single_instance" {
@@ -2985,11 +3093,7 @@ pub fn popup_menu(id: i64, items: &[String]) -> Result<(), String> {
         Some(WinState { closed: true, .. }) => Err("ui: not an open window".to_string()),
         Some(WinState { win: Win::Headless { .. }, .. }) => {
             let mut tags = headless_menu_tags().lock().unwrap();
-            for it in &decoded {
-                if !it.is_separator() {
-                    tags.insert(it.tag.clone());
-                }
-            }
+            tags.extend(MenuItemSpec::tags(&decoded));
             if ui_trace() {
                 eprintln!("[ui] popup {id} items {}", decoded.len());
             }
@@ -3133,11 +3237,60 @@ pub struct MenuItemSpec {
     pub icon: String,
     pub enabled: bool,
     pub checked: bool,
+    /// ray-daw #453: este item abre un SUBMENÚ (`ui.submenu`); no emite evento y su tag puede
+    /// ir vacío. `children` son sus items (puede no tener ninguno: «Open Recent» sin recientes).
+    pub submenu: bool,
+    pub children: Vec<MenuItemSpec>,
 }
 
 impl MenuItemSpec {
     pub fn is_separator(&self) -> bool {
-        self.tag.is_empty() && self.label == "-"
+        self.tag.is_empty() && self.label == "-" && !self.submenu
+    }
+
+    /// Recorre `items` y todo lo que cuelga de sus submenús, en orden (el padre antes).
+    pub fn each(items: &[MenuItemSpec], f: &mut dyn FnMut(&MenuItemSpec)) {
+        for it in items {
+            f(it);
+            Self::each(&it.children, f);
+        }
+    }
+
+    /// Como [`MenuItemSpec::each`], pudiendo cambiar cada item.
+    pub fn each_mut(items: &mut [MenuItemSpec], f: &mut dyn FnMut(&mut MenuItemSpec)) {
+        for it in items {
+            f(it);
+            Self::each_mut(&mut it.children, f);
+        }
+    }
+
+    /// La forma de un menú para la traza headless: `new Open Recent[a b - clear] quit` (tags;
+    /// `-` = separador; un submenú, su título y sus items entre corchetes).
+    pub fn tree(items: &[MenuItemSpec]) -> String {
+        let parts: Vec<String> = items
+            .iter()
+            .map(|it| {
+                if it.is_separator() {
+                    "-".to_string()
+                } else if it.submenu {
+                    format!("{}[{}]", it.label, Self::tree(&it.children))
+                } else {
+                    it.tag.clone()
+                }
+            })
+            .collect();
+        parts.join(" ")
+    }
+
+    /// Los tags de `items` y de sus submenús (sin separadores ni cabeceras sin tag).
+    pub fn tags(items: &[MenuItemSpec]) -> Vec<String> {
+        let mut out = Vec::new();
+        Self::each(items, &mut |it| {
+            if !it.tag.is_empty() {
+                out.push(it.tag.clone());
+            }
+        });
+        out
     }
 
     /// M255: el rol estándar de edición de este item, si su tag es uno de `"role:*"`.
@@ -3374,6 +3527,59 @@ pub fn chord_label(ch: &Chord, primary: &str) -> String {
 }
 
 #[cfg(test)]
+mod menu_tree_tests {
+    use super::*;
+
+    fn line(tag: &str, title: &str, depth: usize, sub: bool) -> String {
+        format!("{tag}\t{title}\t\t\t1\t0\t{depth}\t{}", if sub { "1" } else { "0" })
+    }
+
+    /// ray-daw #453: la lista plana con profundidades vuelve a ser un árbol.
+    #[test]
+    fn a_flat_list_with_depths_becomes_a_tree() {
+        let items = decode_items(&[
+            line("new", "New", 0, false),
+            line("", "Open Recent", 0, true),
+            line("a", "a.rayp", 1, false),
+            line("", "Older", 1, true),
+            line("z", "z.rayp", 2, false),
+            line("", "-", 1, false),
+            line("clear", "Clear Menu", 1, false),
+            line("save", "Save", 0, false),
+        ])
+        .unwrap();
+        assert_eq!(MenuItemSpec::tree(&items), "new Open Recent[a Older[z] - clear] save");
+        assert_eq!(MenuItemSpec::tags(&items), ["new", "a", "z", "clear", "save"]);
+        // El formato anterior (seis campos, sin profundidad) sigue valiendo: todo al nivel 0.
+        let old = decode_items(&["x\tX\t\t\t1\t0".to_string(), "\t-".to_string()]).unwrap();
+        assert_eq!(MenuItemSpec::tree(&old), "x -");
+    }
+
+    #[test]
+    fn a_malformed_nesting_is_an_error() {
+        // Un item más profundo que su vecino sin una cabecera de submenú que lo abra.
+        assert!(decode_items(&[line("a", "A", 0, false), line("b", "B", 1, false)]).is_err());
+        assert!(decode_items(&[line("b", "B", 1, false)]).is_err());
+        assert!(decode_items(&[line("", "", 0, true)]).is_err());
+        // Un submenú vacío es válido, y no necesita tag.
+        assert_eq!(MenuItemSpec::tree(&decode_items(&[line("", "Open Recent", 0, true)]).unwrap()), "Open Recent[]");
+    }
+
+    #[test]
+    fn the_recent_list_keeps_the_latest_first_without_repeats() {
+        let mut list = Vec::new();
+        for p in ["a", "b", "a", "c"] {
+            recent_push(&mut list, p.to_string());
+        }
+        assert_eq!(list, ["c", "a", "b"]);
+        for i in 0..20 {
+            recent_push(&mut list, format!("f{i}"));
+        }
+        assert_eq!((list.len(), list[0].as_str()), (RECENT_MAX, "f19"));
+    }
+}
+
+#[cfg(test)]
 mod edit_role_tests {
     use super::*;
 
@@ -3427,7 +3633,9 @@ mod chord_tests {
 }
 
 fn decode_items(items: &[String]) -> Result<Vec<MenuItemSpec>, String> {
-    let mut out = Vec::with_capacity(items.len());
+    // ray-daw #453: el borde sigue siendo una lista plana; cada item lleva su PROFUNDIDAD y si
+    // abre un submenú, y aquí se rehace el árbol.
+    let mut flat: Vec<(usize, MenuItemSpec)> = Vec::with_capacity(items.len());
     for it in items {
         let mut p = it.split('\t');
         let mut spec = MenuItemSpec {
@@ -3437,7 +3645,11 @@ fn decode_items(items: &[String]) -> Result<Vec<MenuItemSpec>, String> {
             icon: p.next().unwrap_or("").to_string(),
             enabled: p.next().map(|s| s != "0").unwrap_or(true),
             checked: p.next().map(|s| s == "1").unwrap_or(false),
+            submenu: false,
+            children: Vec::new(),
         };
+        let depth: usize = p.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        spec.submenu = p.next() == Some("1");
         // M255: un item con rol estándar toma título y atajo del sistema si vienen vacíos (aquí,
         // en el borde, para que los tres backends y la traza headless vean el mismo item).
         if let Some(role) = spec.edit_role() {
@@ -3448,11 +3660,42 @@ fn decode_items(items: &[String]) -> Result<Vec<MenuItemSpec>, String> {
                 spec.shortcut = role.shortcut().to_string();
             }
         }
-        if !spec.is_separator() && spec.tag.is_empty() {
+        if spec.submenu {
+            if spec.label.is_empty() {
+                return Err("ui: a submenu needs a title".to_string());
+            }
+            // Un submenú no tiene atajo ni marca: se abre, no se elige.
+            spec.shortcut.clear();
+            spec.checked = false;
+        } else if !spec.is_separator() && spec.tag.is_empty() {
             return Err("ui: a menu item needs a non-empty tag".to_string());
         }
         if !spec.shortcut.is_empty() && parse_chord(&spec.shortcut).is_none() {
             return Err(format!("ui: unsupported menu shortcut '{}'", spec.shortcut));
+        }
+        flat.push((depth, spec));
+    }
+    let mut flat = flat.into_iter().peekable();
+    let out = nest_items(&mut flat, 0)?;
+    if flat.peek().is_some() {
+        return Err("ui: a menu item is nested outside any submenu".to_string());
+    }
+    Ok(out)
+}
+
+/// Los items consecutivos de profundidad `depth`, cada cabecera de submenú con los suyos.
+fn nest_items(flat: &mut std::iter::Peekable<std::vec::IntoIter<(usize, MenuItemSpec)>>, depth: usize) -> Result<Vec<MenuItemSpec>, String> {
+    let mut out = Vec::new();
+    while let Some((d, _)) = flat.peek() {
+        if *d < depth {
+            break;
+        }
+        if *d > depth {
+            return Err("ui: a menu item is nested outside any submenu".to_string());
+        }
+        let (_, mut spec) = flat.next().expect("peeked");
+        if spec.submenu {
+            spec.children = nest_items(flat, depth + 1)?;
         }
         out.push(spec);
     }
@@ -3538,13 +3781,12 @@ pub fn replace_menu(title: &str, items: &[String]) -> Result<(), String> {
             return Err(format!("ui: no menu titled '{title}'"));
         }
         let mut tags = headless_menu_tags().lock().unwrap();
-        for it in &decoded {
-            if !it.is_separator() {
-                tags.insert(it.tag.clone());
-            }
-        }
+        tags.extend(MenuItemSpec::tags(&decoded));
         if ui_trace() {
             eprintln!("[ui] replace menu {title} items {}", decoded.len());
+            if decoded.iter().any(|it| it.submenu) {
+                eprintln!("[ui] submenus {title}: {}", MenuItemSpec::tree(&decoded));
+            }
         }
         return Ok(());
     }
@@ -3578,13 +3820,12 @@ pub fn menu_at(position: i64, title: &str, items: &[String]) -> Result<(), Strin
     if headless() {
         headless_menu_titles().lock().unwrap().insert(title.to_string());
         let mut tags = headless_menu_tags().lock().unwrap();
-        for it in &decoded {
-            if !it.is_separator() {
-                tags.insert(it.tag.clone());
-            }
-        }
+        tags.extend(MenuItemSpec::tags(&decoded));
         if ui_trace() {
             eprintln!("[ui] menu {title} at {position} items {}", decoded.len());
+            if decoded.iter().any(|it| it.submenu) {
+                eprintln!("[ui] submenus {title}: {}", MenuItemSpec::tree(&decoded));
+            }
         }
         return Ok(());
     }
@@ -3761,11 +4002,7 @@ pub fn app_menu(name: &str, items: &[String]) -> Result<(), String> {
     let decoded = decode_items(items)?;
     if headless() {
         let mut tags = headless_menu_tags().lock().unwrap();
-        for it in &decoded {
-            if !it.is_separator() {
-                tags.insert(it.tag.clone());
-            }
-        }
+        tags.extend(MenuItemSpec::tags(&decoded));
         return Ok(());
     }
     #[cfg(target_os = "macos")]
@@ -5130,6 +5367,32 @@ mod mac {
             if spec.is_separator() {
                 return class_item(cls(b"NSMenuItem\0"), sel(b"separatorItem\0"));
             }
+            // ray-daw #453: un submenú es un item sin acción con su propio NSMenu; sus items se
+            // hacen con esta misma función (y entran igual en el registro por tag).
+            if spec.submenu {
+                let init_title: MsgIdId = std::mem::transmute(msg_send());
+                let add: MsgVoidId = std::mem::transmute(msg_send());
+                let item = item_init(
+                    alloc(cls(b"NSMenuItem\0"), sel(b"alloc\0")),
+                    sel(b"initWithTitle:action:keyEquivalent:\0"),
+                    nsstring(&spec.label),
+                    std::ptr::null_mut(),
+                    nsstring(""),
+                );
+                let menu = init_title(alloc(cls(b"NSMenu\0"), sel(b"alloc\0")), sel(b"initWithTitle:\0"), nsstring(&spec.label));
+                set_bool(menu, sel(b"setAutoenablesItems:\0"), 0);
+                for child in &spec.children {
+                    add(menu, sel(b"addItem:\0"), make_item(target, child, action));
+                }
+                set_id(item, sel(b"setSubmenu:\0"), menu);
+                if !spec.enabled {
+                    set_bool(item, sel(b"setEnabled:\0"), 0);
+                }
+                if !spec.tag.is_empty() {
+                    items_by_tag().lock().unwrap().entry(spec.tag.clone()).or_default().push(item as usize);
+                }
+                return item;
+            }
             let chord = if spec.shortcut.is_empty() { None } else { super::parse_chord(&spec.shortcut) };
             let (key, mask) = chord.map(|c| chord_equivalent(&c)).unwrap_or_default();
             // M255: un rol estándar va por la responder chain (target nil, selector del sistema:
@@ -5401,6 +5664,75 @@ mod mac {
         })
     }
 
+    /// ray-daw #453: los documentos recientes del sistema, por `NSDocumentController` (hilo
+    /// principal). `recent_list` devuelve las rutas de `recentDocumentURLs`, una por línea.
+    pub(super) fn recent_op(op: &str, path: &str) -> Result<String, String> {
+        let (op, path) = (op.to_string(), path.to_string());
+        on_main_sync(move || {
+            // SAFETY: mensajes documentados de AppKit/Foundation, en el hilo principal.
+            unsafe {
+                let get: MsgId = std::mem::transmute(msg_send());
+                let with: MsgIdId = std::mem::transmute(msg_send());
+                let set: MsgVoidId = std::mem::transmute(msg_send());
+                let count: MsgI64 = std::mem::transmute(msg_send());
+                let at: MsgIdI64 = std::mem::transmute(msg_send());
+                let utf8: MsgCStr = std::mem::transmute(msg_send());
+                let controller = get(cls(b"NSDocumentController\0"), sel(b"sharedDocumentController\0"));
+                if controller.is_null() {
+                    return Err("ui: no document controller for this process".to_string());
+                }
+                match op.as_str() {
+                    "recent_note" => {
+                        let url = with(cls(b"NSURL\0"), sel(b"fileURLWithPath:\0"), nsstring(&path));
+                        set(controller, sel(b"noteNewRecentDocumentURL:\0"), url);
+                        Ok(String::new())
+                    }
+                    "recent_clear" => {
+                        set(controller, sel(b"clearRecentDocuments:\0"), std::ptr::null_mut());
+                        Ok(String::new())
+                    }
+                    _ => {
+                        let urls = get(controller, sel(b"recentDocumentURLs\0"));
+                        let mut paths = Vec::new();
+                        if !urls.is_null() {
+                            for i in 0..count(urls, sel(b"count\0")) {
+                                let p = get(at(urls, sel(b"objectAtIndex:\0"), i), sel(b"path\0"));
+                                if p.is_null() {
+                                    continue;
+                                }
+                                let c = utf8(p, sel(b"UTF8String\0"));
+                                if !c.is_null() {
+                                    paths.push(std::ffi::CStr::from_ptr(c).to_string_lossy().into_owned());
+                                }
+                            }
+                        }
+                        Ok(paths.join("\n"))
+                    }
+                }
+            }
+        })
+    }
+
+    /// ray-daw #453: los items de `menu` y los de sus submenús, como punteros — lo que hay que
+    /// purgar del registro por tag antes de vaciar o soltar el menú.
+    unsafe fn collect_items(menu: Id, out: &mut Vec<usize>) {
+        // SAFETY: mensajes estándar de NSMenu/NSMenuItem en el hilo principal.
+        unsafe {
+            let item_at: MsgIdI64 = std::mem::transmute(msg_send());
+            let submenu_of: MsgId = std::mem::transmute(msg_send());
+            let count: MsgI64 = std::mem::transmute(msg_send());
+            let n = count(menu, sel(b"numberOfItems\0"));
+            for i in 0..n {
+                let item = item_at(menu, sel(b"itemAtIndex:\0"), i);
+                out.push(item as usize);
+                let sub = submenu_of(item, sel(b"submenu\0"));
+                if !sub.is_null() {
+                    collect_items(sub, out);
+                }
+            }
+        }
+    }
+
     pub(super) fn replace_menu(title: &str, items: &[super::MenuItemSpec]) -> Result<(), String> {
         let title = title.to_string();
         let items = items.to_vec();
@@ -5425,8 +5757,9 @@ mod mac {
                 if menu.is_null() {
                     return Err(format!("ui: the menu '{title}' has no submenu"));
                 }
-                let n = count(menu, sel(b"numberOfItems\0"));
-                let old: Vec<usize> = (0..n).map(|i| item_at(menu, sel(b"itemAtIndex:\0"), i) as usize).collect();
+                let _ = &count;
+                let mut old: Vec<usize> = Vec::new();
+                collect_items(menu, &mut old);
                 {
                     let mut reg = items_by_tag().lock().unwrap();
                     for v in reg.values_mut() {
@@ -5466,12 +5799,12 @@ mod mac {
                 let target = menu_target();
                 let menu = init_title(alloc(cls(b"NSMenu\0"), sel(b"alloc\0")), sel(b"initWithTitle:\0"), nsstring(""));
                 set_bool(menu, sel(b"setAutoenablesItems:\0"), 0);
-                let mut made: Vec<usize> = Vec::with_capacity(items.len());
                 for spec in &items {
                     let item = make_item(target, spec, sel(b"rayMenuAction:\0"));
-                    made.push(item as usize);
                     add(menu, sel(b"addItem:\0"), item);
                 }
+                let mut made: Vec<usize> = Vec::new();
+                collect_items(menu, &mut made);
                 let at = mouse(cls(b"NSEvent\0"), sel(b"mouseLocation\0"));
                 popup(menu, sel(b"popUpMenuPositioningItem:atLocation:inView:\0"), std::ptr::null_mut(), at, std::ptr::null_mut());
                 let mut reg = items_by_tag().lock().unwrap();
@@ -7227,10 +7560,12 @@ mod gtk {
         let mut touched: Vec<(String, Vec<super::MenuItemSpec>)> = Vec::new();
         for (menu, items) in menu_specs().lock().unwrap().iter_mut() {
             let mut found = false;
-            for it in items.iter_mut().filter(|it| it.tag == tag) {
-                it.label = title.to_string();
-                found = true;
-            }
+            super::MenuItemSpec::each_mut(items, &mut |it| {
+                if it.tag == tag {
+                    it.label = title.to_string();
+                    found = true;
+                }
+            });
             if found {
                 touched.push((menu.clone(), items.clone()));
             }
@@ -7269,13 +7604,13 @@ mod gtk {
         let tag = tag.to_string();
         let mut known = false;
         for (_, items) in menu_specs().lock().unwrap().iter_mut() {
-            for it in items.iter_mut() {
+            super::MenuItemSpec::each_mut(items, &mut |it| {
                 if it.tag == tag {
                     it.enabled = enabled;
                     it.checked = checked;
                     known = true;
                 }
-            }
+            });
         }
         let live = items_by_tag().lock().unwrap().get(&tag).cloned().unwrap_or_default();
         if !known && live.is_empty() {
@@ -7402,6 +7737,23 @@ mod gtk {
                 }
                 let (tag, label) = (&spec.tag, &spec.label);
                 let label_c = std::ffi::CString::new(label.replace('\0', "")).unwrap();
+                // ray-daw #453: un submenú es un item sin `activate` con su GtkMenu; sus items
+                // se añaden con esta misma función y cuentan entre los hechos.
+                if spec.submenu {
+                    let item = (api.menu_item_new_with_label)(label_c.as_ptr());
+                    let sub = (api.menu_new)();
+                    made.extend(append_items(api, sub, &spec.children, alive, window));
+                    (api.menu_item_set_submenu)(item, sub);
+                    if !spec.enabled && let Some(f) = ia.set_sensitive {
+                        f(item, 0);
+                    }
+                    if !tag.is_empty() {
+                        items_by_tag().lock().unwrap().entry(tag.clone()).or_default().push((item as usize, alive.clone()));
+                    }
+                    (api.menu_shell_append)(menu, item);
+                    made.push(item as usize);
+                    continue;
+                }
                 // M236: check → GtkCheckMenuItem; icono → GtkImageMenuItem (si la lib lo trae).
                 let image_api = if spec.icon.is_empty() { None } else { ia.image_item_new.zip(ia.image_new_from_file).zip(ia.image_item_set_image) };
                 let item = if let Some(check_new) = ia.check_new.filter(|_| spec.checked) {
@@ -7435,6 +7787,45 @@ mod gtk {
             }
         }
         made
+    }
+
+    /// ray-daw #453: avisa a `GtkRecentManager` de un documento abierto (sale en «Recientes» de
+    /// los selectores de archivo y del escritorio). De cortesía: sin GTK cargado, sin la app
+    /// arrancada o sin los símbolos, no hace nada.
+    pub(super) fn recent_note(path: &str) {
+        if api().is_err() || super::ensure_app().is_err() {
+            return;
+        }
+        let Ok(path_c) = std::ffi::CString::new(path) else { return };
+        on_main(move || {
+            // SAFETY: símbolos de GTK 3 y GLib con sus firmas documentadas, en el hilo de GTK;
+            // `g_filename_to_uri` devuelve una cadena propia que se libera con `g_free`.
+            unsafe {
+                let gtk = dlopen(c"libgtk-3.so.0".as_ptr(), RTLD_NOW | RTLD_GLOBAL);
+                let glib = dlopen(c"libglib-2.0.so.0".as_ptr(), RTLD_NOW | RTLD_GLOBAL);
+                if gtk.is_null() || glib.is_null() {
+                    return;
+                }
+                let (get_default, add_item, to_uri, free) = (
+                    dlsym(gtk, c"gtk_recent_manager_get_default".as_ptr()),
+                    dlsym(gtk, c"gtk_recent_manager_add_item".as_ptr()),
+                    dlsym(glib, c"g_filename_to_uri".as_ptr()),
+                    dlsym(glib, c"g_free".as_ptr()),
+                );
+                if get_default.is_null() || add_item.is_null() || to_uri.is_null() || free.is_null() {
+                    return;
+                }
+                let get_default: unsafe extern "C" fn() -> *mut c_void = std::mem::transmute(get_default);
+                let add_item: unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char) -> i32 = std::mem::transmute(add_item);
+                let to_uri: unsafe extern "C" fn(*const std::ffi::c_char, *const std::ffi::c_char, *mut c_void) -> *mut std::ffi::c_char = std::mem::transmute(to_uri);
+                let free: unsafe extern "C" fn(*mut c_void) = std::mem::transmute(free);
+                let uri = to_uri(path_c.as_ptr(), std::ptr::null(), std::ptr::null_mut());
+                if !uri.is_null() {
+                    add_item(get_default(), uri);
+                    free(uri as *mut c_void);
+                }
+            }
+        });
     }
 
     /// M259: el contexto del `deactivate` de un menú contextual — el menú y sus items, para
@@ -10282,10 +10673,12 @@ mod win {
         // El texto vivo lleva el atajo detrás de un tabulador, como al construir el menú.
         let mut shortcut: Option<String> = None;
         for (_, items) in menu_specs().lock().unwrap().iter_mut() {
-            for it in items.iter_mut().filter(|it| it.tag == tag) {
-                it.label = title.to_string();
-                shortcut.get_or_insert_with(|| it.shortcut.clone());
-            }
+            super::MenuItemSpec::each_mut(items, &mut |it| {
+                if it.tag == tag {
+                    it.label = title.to_string();
+                    shortcut.get_or_insert_with(|| it.shortcut.clone());
+                }
+            });
         }
         let live = items_by_tag().lock().unwrap().get(tag).cloned().unwrap_or_default();
         let Some(shortcut) = shortcut else {
@@ -10331,13 +10724,13 @@ mod win {
         let tag = tag.to_string();
         let mut known = false;
         for (_, items) in menu_specs().lock().unwrap().iter_mut() {
-            for it in items.iter_mut() {
+            super::MenuItemSpec::each_mut(items, &mut |it| {
                 if it.tag == tag {
                     it.enabled = enabled;
                     it.checked = checked;
                     known = true;
                 }
-            }
+            });
         }
         let live = items_by_tag().lock().unwrap().get(&tag).cloned().unwrap_or_default();
         if !known && live.is_empty() {
@@ -10430,6 +10823,16 @@ mod win {
                     let _ = AppendMenuW(popup, MF_SEPARATOR, 0, PCWSTR::null());
                     continue;
                 }
+                // ray-daw #453: un submenú es un popup propio colgado con MF_POPUP (no lleva id
+                // de comando); sus items se añaden con esta misma función.
+                if spec.submenu {
+                    let Ok(sub) = CreatePopupMenu() else { continue };
+                    append_items(sub, &spec.children, hwnd, tags, keys, accels, next_id);
+                    let mut flags = MF_POPUP;
+                    if !spec.enabled { flags |= MF_GRAYED; }
+                    let _ = AppendMenuW(popup, flags, sub.0 as usize, PCWSTR(wide(&spec.label).as_ptr()));
+                    continue;
+                }
                 // M255: el atajo de un rol estándar se MUESTRA pero no se registra como
                 // acelerador — la tecla debe seguir llegando al webview, que ya la atiende
                 // de forma nativa (interceptarla rompería el Ctrl+C real).
@@ -10463,6 +10866,14 @@ mod win {
         }
     }
 
+    /// ray-daw #453: avisa al shell de un documento abierto (`SHAddToRecentDocs`: la Jump List de
+    /// la app y «Recientes»). De cortesía; el shell ignora lo que no puede asociar.
+    pub(super) fn recent_note(path: &str) {
+        let w = wide(path);
+        // SAFETY: SHARD_PATHW con un puntero a una ruta UTF-16 terminada en NUL, viva en la llamada.
+        unsafe { windows::Win32::UI::Shell::SHAddToRecentDocs(windows::Win32::UI::Shell::SHARD_PATHW.0 as u32, Some(w.as_ptr() as *const core::ffi::c_void)) };
+    }
+
     /// M259: ids de comando de los menús CONTEXTUALES (rango propio, cíclico: un popup vive lo
     /// que está abierto y sus ids se purgan al cerrarse).
     const POPUP_ID_BASE: u16 = 40000;
@@ -10486,7 +10897,13 @@ mod win {
                 }
                 let ctx = &mut *ctx_ptr;
                 let Ok(popup) = CreatePopupMenu() else { return };
-                let n = items.iter().filter(|it| !it.is_separator()).count() as u16;
+                // Un id por item elegible, también los de los submenús (#453).
+                let mut n = 0u16;
+                super::MenuItemSpec::each(&items, &mut |it| {
+                    if !it.is_separator() && !it.submenu {
+                        n += 1;
+                    }
+                });
                 let mut first = POPUP_NEXT.fetch_add(n, Ordering::Relaxed);
                 if first < POPUP_ID_BASE || first.wrapping_add(n) < first {
                     POPUP_NEXT.store(POPUP_ID_BASE + n, Ordering::Relaxed);
@@ -10525,7 +10942,10 @@ mod win {
         unsafe {
             let Ok(bar) = CreateMenu() else { return (tags, keys) };
             let mut next_id = MENU_ID_BASE;
-            let any_check = specs.iter().any(|(_, items)| items.iter().any(|it| it.checked || !it.icon.is_empty()));
+            let mut any_check = false;
+            for (_, items) in &specs {
+                super::MenuItemSpec::each(items, &mut |it| any_check |= it.checked || !it.icon.is_empty());
+            }
             for (title, items) in specs {
                 let Ok(popup) = CreatePopupMenu() else { continue };
                 append_items(popup, &items, hwnd, &mut tags, &mut keys, &mut accels, &mut next_id);

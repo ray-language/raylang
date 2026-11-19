@@ -122,6 +122,8 @@ impl Transpiler {
         // La firma, las marcas y los parámetros de solo lectura son los de la función GLOBAL:
         // nada de eso aplica a una closure local que la tapa.
         let sig_params: Vec<Type> = if local { Vec::new() } else { self.funcs.get(name).map(|s| s.params.clone()).unwrap_or_default() };
+        let callee_tps: std::collections::HashSet<String> =
+            if local { Default::default() } else { self.funcs.get(name).map(|s| s.tparams.iter().cloned().collect()).unwrap_or_default() };
         for (i, a) in eff.iter().enumerate() {
             write!(out, "let __rt_a{} = ", i).unwrap();
             // M396 (rayplay #168): un const arreglo de escalares a un parámetro de SOLO LECTURA va
@@ -141,9 +143,12 @@ impl Transpiler {
                 continue;
             }
             // M313: el tipo del parámetro es el esperado del argumento (si no menciona genéricos del callee).
+            // raysolve #358: los genéricos del callee llegan aquí como `Struct("B")`, no como
+            // `Var`: hay que nombrarlos, o `p(empty(), "s")` emitía `empty::<[B]>()` con una `B`
+            // que no existe en el llamador. Sin esperado, rustc lo infiere de la llamada.
             let no_marked = !marked.contains(&i);
             match sig_params.get(i) {
-                Some(pt) if no_marked && !ty_mentions_tparam(pt, &std::collections::HashSet::new()) && matches!(a.kind, ExprKind::Call { .. } | ExprKind::MapLit(_)) => {
+                Some(pt) if no_marked && !ty_mentions_tparam(pt, &callee_tps) && matches!(a.kind, ExprKind::Call { .. } | ExprKind::MapLit(_)) => {
                     let pt = pt.clone();
                     self.emit_typed(out, a, &pt)?;
                 }

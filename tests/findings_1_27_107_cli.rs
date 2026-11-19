@@ -45,3 +45,31 @@ fn a_loose_module_binds_its_builtin_named_functions_like_the_project() {
     assert_eq!(code, 65);
     assert!(err.contains("'send' is a language builtin and cannot be redefined"), "{err}");
 }
+
+/// raysolve #358: la inferencia de una llamada genérica no depende del ORDEN de sus argumentos —
+/// el que no puede tiparse solo (`empty()`) espera a que los demás fijen el parámetro de tipo.
+/// Antes `count(a, empty())` valía y `count(empty(), a)` no.
+#[test]
+fn generic_arguments_are_inferred_in_any_order() {
+    let d = tmp("infer_order");
+    std::fs::write(
+        d.join("prog.ray"),
+        "fn empty<V>() -> [V] {\n    let xs: [V] = [];\n    xs\n}\nfn count<V>(a: [V], b: [V]) -> int { a.len() + b.len() }\nfn pick<A, B>(x: Option<A>, y: [B], z: A, w: B) -> int { y.len() }\nfn main() {\n    let a = [1, 2, 3];\n    print(count(a, empty()));\n    print(count(empty(), a));\n    print(pick(Option.None, empty(), 1, \"s\"));\n}\n",
+    )
+    .unwrap();
+    for args in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let (out, err, code) = ray(&d, args);
+        assert_eq!((out.as_str(), code), ("3\n3\n0\n", 0), "{args:?}: {err}");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = d.join("prog_bin");
+        let (_o, err, code) = ray(&d, &["build", "prog.ray", "--native", "--no-stubs", "-o", bin.to_str().unwrap()]);
+        assert_eq!(code, 0, "build --native: {err}");
+        assert_eq!(String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout), "3\n3\n0\n");
+    }
+    // Si NADIE fija el parámetro, sigue siendo un error de inferencia.
+    std::fs::write(d.join("bad.ray"), "fn empty<V>() -> [V] {\n    let xs: [V] = [];\n    xs\n}\nfn count<V>(a: [V], b: [V]) -> int { a.len() + b.len() }\nfn main() { print(count(empty(), empty())); }\n").unwrap();
+    let (_out, err, code) = ray(&d, &["check", "bad.ray"]);
+    assert_eq!(code, 65);
+    assert!(err.contains("could not infer the type parameter 'V' of 'empty'"), "{err}");
+}

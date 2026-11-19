@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **La inferencia no depende del orden de los argumentos** (raysolve #358): `count(empty(), a)`
+  infiere el tipo de `empty()` de `a`, igual que `count(a, empty())`. Un argumento que no puede
+  tiparse solo (una llamada genérica sin argumentos, `[]`, `Option.None`) espera a que los demás
+  fijen el parámetro de tipo. En nativo, `p("s", empty())` con `p<B>(w: B, y: [B])` dejaba de
+  compilar con «cannot find type `B`»; ya compila.
+
 - **Submenús** (ray-daw #453): `ui.submenu(título, items)` es un item que abre un submenú. Se
   anidan, pueden ir vacíos y valen en la barra de menús, el menú de aplicación y los menús
   contextuales, en macOS, Linux y Windows. `MenuItem` gana dos campos (`children`,

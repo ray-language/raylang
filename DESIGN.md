@@ -21270,3 +21270,21 @@ y además avisa al sistema, de cortesía. No se añadió un builtin: las tres op
 Dos diferencias que quedan a la vista y están documentadas: macOS descarta de la lista los
 archivos que ya no existen y la lista propia no, y `ray run` no comparte recientes con la app
 empaquetada (son procesos con identidad distinta).
+
+## 463. La inferencia de argumentos deja de depender del orden (raysolve #358, nov 2026)
+
+`check_generic_call` tipaba los argumentos de izquierda a derecha, dando a cada uno como tipo
+esperado su parámetro sustituido con lo inferido hasta ahí. Por eso `count(a, empty())` valía y
+`count(empty(), a)` no: al llegar a `empty()` nadie había fijado `V`. Ahora un argumento que
+falla con un error de INFERENCIA (no de tipos) se aparta y se reintenta cuando los demás han
+terminado. No es unificación bidireccional —sigue sin haber variables de tipo que viajen—, es
+la misma regla aplicada en dos pasadas, y si nadie fija el parámetro el error es el de antes.
+
+El nativo tenía el fallo simétrico y más viejo: el tipo esperado de un argumento es el del
+parámetro «si no menciona genéricos del callee», pero la comprobación se hacía contra un
+conjunto vacío, y los genéricos del callee llegan como `Struct("B")`. `p("s", empty())` emitía
+`empty::<[B]>()` con una `B` que no existe en el llamador. Solo funcionaba cuando el parámetro
+de tipo del callee interior se llamaba igual que el del exterior.
+
+De #358 queda la sintaxis de argumentos de tipo explícitos (`none::<int>()`), que es una
+feature de lenguaje aparte.

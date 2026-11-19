@@ -135,3 +135,49 @@ fn notifications_show_schedule_and_tap_headless_on_all_engines() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// rayfocus #376: `error_kind` clasifica los mensajes REALES del runtime (los produce cada llamada,
+/// no están copiados aquí), para que un programa no tenga que buscar palabras en el texto.
+#[test]
+fn error_kind_classifies_the_real_messages() {
+    const KINDS: &str = r##"import std/notify;
+
+fn kind<T>(r: Result<T, string>) -> string {
+    match (r) {
+        Result.Ok(_) => "ok",
+        Result.Err(e) => match (notify.error_kind(e)) {
+            notify.ErrorKind.Unavailable => "unavailable",
+            notify.ErrorKind.Denied => "denied",
+            notify.ErrorKind.Past => "past",
+            notify.ErrorKind.Invalid => "invalid",
+            notify.ErrorKind.Other => "other",
+        },
+    }
+}
+
+fn main() {
+    let n = notify.message("Hola", "");
+    print(kind(notify.schedule(n, notify.Trigger.At(1000))));
+    print(kind(notify.schedule(n, notify.Trigger.After(30, true))));
+    print(kind(notify.schedule(n, notify.Trigger.Daily(25, 0))));
+    print(kind(notify.show(notify.message("", ""))));
+    print(kind(notify.create_channel(notify.Channel { id: "x", name: "X", description: "", importance: "loud", sound: "" })));
+    print(kind(notify.show(n)));
+    print(kind(notify.schedule(n, notify.Trigger.After(3600, false))));
+    let boom: Result<int, string> = Result.Err("something else");
+    print(kind(boom));
+}
+"##;
+    let dir = std::env::temp_dir().join(format!("ray_ui_notify_kinds_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("k.ray"), KINDS).unwrap();
+    for flags in [&["run", "k.ray"][..], &["run", "--interp", "k.ray"][..]] {
+        let vm: Box<Command_> = Box::new(move || { let mut c = Command::new(env!("CARGO_BIN_EXE_ray")); c.args(flags); c });
+        let (out, err) = run(&vm, &dir, "", "");
+        assert_eq!(out, "past\ninvalid\ninvalid\ninvalid\ninvalid\nok\nok\nother\n", "{flags:?}: {err}");
+        let (out, err) = run(&vm, &dir, "", "denied");
+        assert_eq!(out, "past\ninvalid\ninvalid\ninvalid\ninvalid\ndenied\ndenied\nother\n", "{flags:?}: {err}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

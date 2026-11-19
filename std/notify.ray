@@ -218,9 +218,10 @@ pub fn show(n: Notification) -> Result<string, string> {
 /// macOS `.app`: a native trigger; Android: `AlarmManager` + a receiver that shows it even with
 /// the app closed, re-armed after a reboot; Linux and a bare macOS binary: `Err`. Ask for
 /// permission first (`request_permission`): while the user has not decided yet
-/// (`status() == "not_determined"`) the call returns `Ok(id)` but the system drops the
-/// notification, so `pending()` stays empty. A `Trigger.At` in the past is `Err` ("… is in the
-/// past"). The errors are plain text.
+/// (`status() == "not_determined"`) iOS and macOS ask here, the call returns `Ok(id)` at once and
+/// the notification WAITS for the answer — it is scheduled when the user allows and dropped when
+/// they refuse, so `pending()` does not list it until then. A `Trigger.At` in the past is `Err`.
+/// `error_kind(e)` tells the failures apart (`Unavailable` here, `Past`, `Denied`, `Invalid`).
 pub fn schedule(n: Notification, when: Trigger) -> Result<string, string> {
     let t = match (when) {
         Trigger.After(secs, repeat) => "after:" + to_string(secs) + ":" + if (repeat) { "1" } else { "0" },
@@ -228,6 +229,49 @@ pub fn schedule(n: Notification, when: Trigger) -> Result<string, string> {
         Trigger.Daily(h, m) => "daily:" + to_string(h) + ":" + to_string(m),
     };
     tunnel("notify_show", encode(t, n))
+}
+
+/// Why a `std/notify` call failed, from `error_kind`: `Unavailable` (this system, or this kind of
+/// binary, cannot do it: scheduling on Linux or from a bare macOS binary, a platform without a
+/// backend), `Denied` (the user has not authorized notifications), `Past` (a `Trigger.At` that
+/// already went by), `Invalid` (the notification, trigger or channel is not well formed: no title
+/// nor body, a repeating `After` under 60 s, an unknown interruption level or importance, a sound
+/// that is not in the bundle…) and `Other` (anything else, e.g. a failure reported by the system).
+pub enum ErrorKind {
+    Unavailable,
+    Denied,
+    Past,
+    Invalid,
+    Other,
+}
+
+/// Classifies the `Err` text of any function of this module, so a program can branch without
+/// matching on the wording (which may change; the kind does not).
+// rayfocus #376: para distinguir «aquí no se puede programar» de «hora pasada» había que buscar
+// `past` en el mensaje. Las firmas siguen siendo `Result<_, string>`; el tipo sale del texto, y
+// `tests/ui_notify_cli.rs` fija la correspondencia con los mensajes reales del runtime.
+pub fn error_kind(e: string) -> ErrorKind {
+    if (e.contains("is in the past")) {
+        return ErrorKind.Past;
+    }
+    if (e.contains("not authorized")) {
+        return ErrorKind.Denied;
+    }
+    if (e.contains("not available") || e.contains("needs an app bundle") || e.contains("framework missing")
+        || e.contains("needs iOS")) {
+        return ErrorKind.Unavailable;
+    }
+    let invalid = [
+        "needs a title", "needs a positive", "needs at least", "is not a valid", "unknown trigger",
+        "unknown interruption", "unknown channel", "cannot contain", "is a file name", "needs an id",
+        "is not in the app bundle", "malformed",
+    ];
+    for marker in invalid {
+        if (e.contains(marker)) {
+            return ErrorKind.Invalid;
+        }
+    }
+    ErrorKind.Other
 }
 
 /// Removes a pending (scheduled) notification and, if it was already shown, takes it off the

@@ -2493,6 +2493,9 @@ fn cmd_bundle(args: &[String]) {
     // Compila el binario release a un temporal; build_native sale del proceso si algo falla.
     let (mut program, locate, multi) = load_and_locate(&path);
     check_or_exit(&mut program, &locate, multi);
+    // M247: la identidad de la app se hornea antes de CUALQUIER build del bundle. rayfocus #374:
+    // estaba solo en la rama de escritorio y `update.current()` valía "dev" en iOS y Android.
+    configure_native_app_info(&path);
     let work = std::env::temp_dir().join(format!("ray_bundle_{}", process::id()));
     let _ = fs::remove_dir_all(&work);
     if let Err(e) = fs::create_dir_all(&work) {
@@ -2883,7 +2886,6 @@ fn cmd_bundle(args: &[String]) {
     }
     // M186: el binario que empaquetamos es el que el build ESCRIBIÓ (en Windows, `bin.exe`), no el
     // nombre que le pedimos.
-    configure_native_app_info(&path); // M247
     let tmp_bin = PathBuf::from(build_native(&path, work.join("bin").to_str(), true, &exclude, None, false, stubs, fibers, &embed, false));
 
     if cfg!(target_os = "macos") {

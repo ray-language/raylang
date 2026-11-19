@@ -6,6 +6,33 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **ALPN en el lado servidor** (raygrpc #384): `net.tls_accept_alpn(h, cert, key, ["h2"])` anuncia
+  los protocolos que habla el servidor y `net.tls_alpn(h)` dice cuál se negoció. `tls_accept` no
+  anuncia ninguno, y por eso grpcurl y los clientes gRPC de `net` rechazaban un servidor raylang
+  por TLS.
+- **`std/process` y `std/update` en apps de móvil** (rayfocus #373): importar cualquiera de los dos
+  impedía empaquetar para iOS y Android sin `--allow-stubs`. Allí los procesos del SO no existen,
+  así que `process.run`, `stream`, `spawn_detached`, `update.relaunch` y `update.apply` devuelven
+  `Err` al llamarse y el programa empaqueta sin más. Lo mismo con `--without process` en escritorio.
+- `update.current()` y `update.app_id()` dan la versión y el id de `ray.toml` en los bundles de
+  iOS y Android; valían `"dev"` y `""` (rayfocus #374).
+- **`notify.error_kind(e)`** (rayfocus #376) clasifica el `Err` de `std/notify` en `Unavailable`,
+  `Denied`, `Past`, `Invalid` u `Other`, para no tener que buscar palabras en el mensaje. La
+  documentación de `schedule` cuenta lo que pasa con el permiso sin decidir: la notificación
+  espera la respuesta del usuario y `pending()` no la lista hasta entonces.
+- `ray check src/modulo.ray` da el mismo veredicto que `ray check` del proyecto cuando el módulo
+  define una función con nombre de builtin (`fn send`): dentro de su módulo esa función tapa al
+  builtin, y suelto el archivo ligaba la llamada al builtin. `ray_check` del MCP acepta un módulo
+  sin `main` (raycdc #407).
+- **Icono de macOS por tamaños** (ray-daw #452): `[app] icon` (o `--icon`) admite un `.icns` o un
+  `.iconset` hechos a mano, y `[app.macos] icon` le da a macOS el suyo mientras los demás
+  sistemas siguen con el PNG. `ray bundle --help` y `llms.txt` dicen qué tamaño pide el PNG.
+- **Paquete `db` 0.8.1 — `db/mongo`** (raycdc #451): `run_command` corre en la base de la
+  conexión (añade `$db` si falta) y una respuesta `ok: 0` es `Err`; antes el rechazo del servidor
+  volvía como `Ok`.
+- La referencia decía que `blocking` añade ~0,5 µs por llamada en la VM; allí es inerte y no
+  añade nada (rayserial #396).
+
 ## 1.27.107 — 2026-11-18
 
 - **std/audio: desenchufar el dispositivo de una salida** (ray-daw #450, macOS). Al desconectar

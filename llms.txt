@@ -552,7 +552,7 @@ System notifications, now or scheduled, phone and desktop alike: `import std/not
 without asking), `var n = notify.message(title, body); n.id = …; n.channel = …; n.data = …;
 n.actions = [notify.action("track", "Follow")];` then `notify.show(n)` or
 `notify.schedule(n, notify.Trigger.After(3600, false) | .At(unix) | .Daily(9, 0))` (`cancel(id)`,
-`pending()`, `set_badge(n)`); Android channels with `notify.create_channel(notify.Channel {…})` or `notify.channel(id, name)`; a custom sound: `n.sound_name = "alarm"` (iOS, a file of `[ios] sounds` in ray.toml) and `Channel.sound = "alarm"` (Android, a file of `[android] sounds`, per CHANNEL and fixed once created); no white flash on launch: `[ios] background = "#f1f3f5"` (+ `background_dark`) and `o.background` in `ui.open_with`;
+`pending()`, `set_badge(n)`; with the permission undecided iOS/macOS ask on `show`/`schedule`, return `Ok(id)` and hold the notification until the user answers; `notify.error_kind(e)` -> `ErrorKind.Unavailable | Denied | Past | Invalid | Other` instead of matching the message); Android channels with `notify.create_channel(notify.Channel {…})` or `notify.channel(id, name)`; a custom sound: `n.sound_name = "alarm"` (iOS, a file of `[ios] sounds` in ray.toml) and `Channel.sound = "alarm"` (Android, a file of `[android] sounds`, per CHANNEL and fixed once created); no white flash on launch: `[ios] background = "#f1f3f5"` (+ `background_dark`) and `o.background` in `ui.open_with`;
 a tap arrives as a `"notification"` event — `notify.event_tap(e)` gives `Tap { id, action, text,
 data }` (queued before `main` when the tap launches the app). iOS/macOS `.app`:
 UNUserNotificationCenter; Android: channels + AlarmManager (inexact unless `[android]
@@ -701,6 +701,7 @@ up to 20 diagnostics per run.
 ray run file.ray            # type-check + run on the VM (exit code = main's int)
 ray dev file.ray            # run + auto-restart on saved changes (hot reload; std/ui windows reload too)
 ray dev --device            # don't run here: push the source to linked devices (phone dev library / `ray dev-client <url> <dir>`) on every compiling change; the link (port + token) is saved in `.ray-dev` at the project root — keep it out of git (`ray new` already ignores it)
+ray bundle [--ios|--android] # package the app: name/icon/id from `[app] name/icon/id` of ray.toml (`--name/--icon/--id` override). `icon` = a square PNG, 1024x1024 recommended, scaled to every size; for the macOS .app it may also be a hand-made `.icns` or `.iconset` (one PNG per size, e.g. a simplified 16/32 px version), and `[app.macos] icon` gives macOS its own while the other systems keep the PNG. On iOS/Android the process subsystem is always excluded: `process.run`/`stream`/`spawn_detached` (and `update.relaunch`/`apply`) return `Err` there, so shared code can import `std/process` and `std/update`
 ray bundle --ios --dev      # the DEVELOPMENT shell (<id>.dev; also --android --dev): toolchain + VM inside; install once, scan the QR `ray dev --device` prints, reload on every save
 ray profile file.ray        # run on the VM + per-function profile on exit (self/incl time, calls; --json --out f)
 ray build file.ray          # check only (also: ray build --native for a machine binary)
@@ -720,7 +721,7 @@ removes the next patch's anchor silently — verify with grep that each patch la
 Beyond the embedded stdlib there is a Tier-2 package layer, used via `ray.toml`
 `[dependencies]` (path or registry): `net` (production webserver: keep-alive, TLS, SSE,
 WebSocket, streaming, static files with ETag/Range; gRPC: `net/grpc_server` unary server
-over h2c with a `Router`, `net/grpc_conn` persistent client h2c/TLS, `net/grpc_status`;
+over h2c with a `Router` (gRPC over TLS: wrap the accepted socket with `net.tls_accept_alpn(h, cert, key, ["h2"])` from `std/net` — plain `tls_accept` advertises no ALPN and gRPC clients refuse it; `net.tls_alpn(h)` = the negotiated protocol, `""` if none), `net/grpc_conn` persistent client h2c/TLS, `net/grpc_status`;
 messages are protobuf bytes from `std/protobuf` — codecs are hand-written, no `.proto`
 generator yet; infra: `net/udp` — UDP datagrams, `bind(host, port)`, `send_to(h, host, port,
 data)`, `recv_from(h) -> Result<Packet{host, port, data}, string>`, yields the fiber and honors

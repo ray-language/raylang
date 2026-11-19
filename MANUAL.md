@@ -1559,13 +1559,18 @@ match (ui.next_event()) {
 ```
 
 Las claves por plataforma: en iOS y en un `.app` de macOS es `UNUserNotificationCenter` (si nunca
-pediste el permiso, `show` lo pide sin esperar y la notificación sale cuando el usuario acepta); en
+pediste el permiso, `show` y `schedule` lo piden sin esperar y la notificación sale —o queda
+programada— cuando el usuario acepta; hasta entonces `pending()` no la lista); en
 Android las programadas se muestran con la app cerrada y sobreviven al reinicio, y son inexactas
 —minutos de margen— salvo que `ray.toml` declare `[android] exact_alarms = true` (para apps cuya
 función lo exige: alarmas, recordatorios); en Linux y en un binario suelto de macOS solo hay
 `show` inmediato; Windows aún no. Una pulsación que abre la app desde cero queda encolada antes de
 `main`, así que lee los eventos pronto. Para probar sin ventanas: `RAY_UI_BACKEND=headless` traza
 cada llamada y `RAY_UI_NOTIFY_CLICK=1` «pulsa» cada notificación al mostrarla.
+
+Los errores son texto, pero no hace falta leerlo: `notify.error_kind(e)` dice si es que aquí no se
+puede (`Unavailable`: programar en Linux o desde un binario suelto), que el usuario no lo permite
+(`Denied`), que la hora ya pasó (`Past`) o que la notificación está mal formada (`Invalid`).
 
 ### Alarmas (`std/alarm`)
 
@@ -2441,7 +2446,9 @@ close(h);
 ```
 
 TLS: `net.tls_connect(host, 443)` (verifica el certificado; CAs extra vía `SSL_CERT_FILE`),
-`net.tls_upgrade(h, host)` (STARTTLS sobre un socket ya abierto), `net.tls_accept` (lado servidor),
+`net.tls_upgrade(h, host)` (STARTTLS sobre un socket ya abierto), `net.tls_accept` (lado servidor;
+`net.tls_accept_alpn(h, cert, key, ["h2"])` anuncia ALPN, que es lo que exige un cliente gRPC, y
+`net.tls_alpn(h)` dice qué protocolo se negoció),
 `net.tcp_listen`/`net.tcp_accept` para servir.
 
 **Los plazos y la identidad del otro extremo** (lo que un servicio real necesita el

@@ -216,10 +216,17 @@ pub fn tls_accept(handle: int, cert: string, key: string) -> Result<int, string>
 /// `tls_alpn(h)` tells which one was chosen. `tls_accept` advertises none, which gRPC clients
 /// reject. A name is 1 to 255 bytes and has no comma.
 // raygrpc #384: sin ALPN no había gRPC por TLS con un servidor raylang.
-pub fn tls_accept_alpn(handle: int, cert: string, key: string, protocols: [string]) -> Result<int, string> {
+pub fn tls_accept_alpn(
+    handle: int,
+    cert: string,
+    key: string,
+    protocols: [string]
+) -> Result<int, string> {
     for p in protocols {
         if (p.len() == 0 || p.contains(",")) {
-            return Result.Err("invalid ALPN protocol name '" + p + "': it must not be empty or contain a comma");
+            return Result.Err(
+                "invalid ALPN protocol name '" + p + "': it must not be empty or contain a comma"
+            );
         }
     }
     let r = __tls_accept_alpn(handle, cert, key, protocols.join(","));

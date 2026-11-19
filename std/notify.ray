@@ -257,14 +257,25 @@ pub fn error_kind(e: string) -> ErrorKind {
     if (e.contains("not authorized")) {
         return ErrorKind.Denied;
     }
-    if (e.contains("not available") || e.contains("needs an app bundle") || e.contains("framework missing")
+    if (e.contains("not available")
+        || e.contains("needs an app bundle")
+        || e.contains("framework missing")
         || e.contains("needs iOS")) {
         return ErrorKind.Unavailable;
     }
     let invalid = [
-        "needs a title", "needs a positive", "needs at least", "is not a valid", "unknown trigger",
-        "unknown interruption", "unknown channel", "cannot contain", "is a file name", "needs an id",
-        "is not in the app bundle", "malformed",
+        "needs a title",
+        "needs a positive",
+        "needs at least",
+        "is not a valid",
+        "unknown trigger",
+        "unknown interruption",
+        "unknown channel",
+        "cannot contain",
+        "is a file name",
+        "needs an id",
+        "is not in the app bundle",
+        "malformed"
     ];
     for marker in invalid {
         if (e.contains(marker)) {

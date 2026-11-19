@@ -344,8 +344,9 @@ pub fn reply_json(window: int, id: int, json: string) -> Result<int, string> {
 /// (`"s"` = cmd+S, `"S"` = cmd+shift+S); empty = no shortcut; an unknown chord is an `Err` from
 /// `menu`. GTK menus stay click-only. `icon` (M236) is an image file path, or `"sf:<name>"`
 /// for an SF Symbol on macOS (ignored elsewhere; Windows takes `.bmp` files only). `enabled`
-/// and `checked` are the initial state — change them later with `set_menu_item`. Build items
-/// with `item(...)`/`separator()` to get the defaults.
+/// and `checked` are the initial state — change them later with `set_menu_item`. `children` are
+/// the items of a submenu (see `submenu`); empty for an ordinary item. Build items with
+/// `item(...)`/`separator()`/`submenu(...)` to get the defaults.
 pub struct MenuItem {
     tag: string,
     title: string,
@@ -353,6 +354,8 @@ pub struct MenuItem {
     icon: string,
     enabled: bool,
     checked: bool,
+    children: [MenuItem],
+    opens_submenu: bool,
 }
 
 /// A menu item with the defaults: no icon, enabled, unchecked (M236).
@@ -365,12 +368,49 @@ pub struct MenuItem {
 /// what lets you rebuild the Edit menu (`edit_menu`/`replace_menu("Edit", …)`) with your items
 /// between the standard ones without losing the clipboard. `set_menu_item` works on them by tag.
 pub fn item(tag: string, title: string, shortcut: string) -> MenuItem {
-    MenuItem { tag: tag, title: title, shortcut: shortcut, icon: "", enabled: true, checked: false }
+    MenuItem {
+        tag: tag,
+        title: title,
+        shortcut: shortcut,
+        icon: "",
+        enabled: true,
+        checked: false,
+        children: [],
+        opens_submenu: false
+    }
 }
 
 /// A separator line between groups of items (M236). It carries no tag and never emits an event.
 pub fn separator() -> MenuItem {
-    MenuItem { tag: "", title: "-", shortcut: "", icon: "", enabled: true, checked: false }
+    MenuItem {
+        tag: "",
+        title: "-",
+        shortcut: "",
+        icon: "",
+        enabled: true,
+        checked: false,
+        children: [],
+        opens_submenu: false
+    }
+}
+
+/// An item that opens a SUBMENU with `items` ("Open Recent ▸", "Export ▸"): it emits no event
+/// and needs no tag — its items do, like any other. Submenus nest. An empty `items` shows the
+/// submenu with nothing inside (disable it with `enabled = false` on a `var`). Give it a `tag`
+/// only to enable or disable the whole submenu later with `set_menu_item`. Works in `menu`,
+/// `menu_at`, `replace_menu`, `app_menu` and `popup_menu`, on macOS, Linux and Windows.
+// ray-daw #453: «Open Recent» había que ponerlo plano en el menú File.
+pub fn submenu(title: string, items: [MenuItem]) -> MenuItem {
+    MenuItem {
+        tag: "",
+        title: title,
+        shortcut: "",
+        icon: "",
+        enabled: true,
+        checked: false,
+        children: items,
+        opens_submenu: true
+    }
 }
 
 /// Adds one top-level menu with custom items. Clicking an item emits a `"menu"` event whose
@@ -383,21 +423,41 @@ pub fn menu(title: string, items: [MenuItem]) -> Result<int, string> {
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
-// La codificación del borde de builtins ([string], "tag\ttitle\tshortcut"), compartida por
-// menu y app_menu.
+// La codificación del borde de builtins ([string], "tag\ttitle\tshortcut\ticon\ten\tch\tdepth\tsub"),
+// compartida por menu y app_menu. La lista es PLANA: cada item lleva su profundidad y si abre un
+// submenú, y el runtime rehace el árbol (#453).
 fn encode_items(items: [MenuItem]) -> [string] {
     var encoded: [string] = [];
-    var i = 0;
-    while (i < items.len()) {
-        let it = items[i];
+    encode_level(items, 0, encoded);
+    encoded
+}
+
+fn encode_level(items: [MenuItem], depth: int, encoded: [string]) {
+    for it in items {
         let en = if (it.enabled) { "1" } else { "0" };
         let ch = if (it.checked) { "1" } else { "0" };
+        let sub = if (it.opens_submenu) { "1" } else { "0" };
         encoded.push(
-            it.tag + "\t" + it.title + "\t" + it.shortcut + "\t" + it.icon + "\t" + en + "\t" + ch
+            it.tag
+                + "\t"
+                + it.title
+                + "\t"
+                + it.shortcut
+                + "\t"
+                + it.icon
+                + "\t"
+                + en
+                + "\t"
+                + ch
+                + "\t"
+                + to_string(depth)
+                + "\t"
+                + sub
         );
-        i = i + 1;
+        if (it.opens_submenu) {
+            encode_level(it.children, depth + 1, encoded);
+        }
     }
-    encoded
 }
 
 /// Like `menu`, at `position` in the menu bar (M236, ray-sublime #68): counted from the first

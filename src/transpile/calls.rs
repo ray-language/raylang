@@ -3134,12 +3134,29 @@ impl Transpiler {
             }
             "tls_accept" if name.starts_with("__") && !self.exclude.contains("tls") => {
                 self.needs_rt_tls = true;
-                out.push_str("__ray_tls_accept(");
+                out.push_str("__ray_tls_accept_alpn(");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(", &");
                 self.emit_expr(out, eff[1])?;
                 out.push_str(", &");
                 self.emit_expr(out, eff[2])?;
+                out.push_str(", \"\")");
+            }
+            // raygrpc #384: tls_accept anunciando ALPN, y el protocolo negociado.
+            "tls_accept_alpn" if name.starts_with("__") && !self.exclude.contains("tls") => {
+                self.needs_rt_tls = true;
+                out.push_str("__ray_tls_accept_alpn(");
+                self.emit_expr(out, eff[0])?;
+                for e in &eff[1..4] {
+                    out.push_str(", &");
+                    self.emit_expr(out, e)?;
+                }
+                out.push(')');
+            }
+            "tls_alpn" if name.starts_with("__") && !self.exclude.contains("tls") => {
+                self.needs_rt_tls = true;
+                out.push_str("__ray_tls_alpn(");
+                self.emit_expr(out, eff[0])?;
                 out.push(')');
             }
             // rayreq #250: sin verificar el certificado (mismo helper, otra config).

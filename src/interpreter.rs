@@ -2960,6 +2960,27 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // raygrpc #384: tls_accept anunciando protocolos ALPN, y el protocolo negociado.
+            "__tls_accept_alpn" => {
+                let arr = match (&values[0], &values[1], &values[2], &values[3]) {
+                    (Value::Int(h), Value::Str(cert), Value::Str(key), Value::Str(protocols)) => match crate::builtins::tls_accept_alpn(*h, cert, key, protocols) {
+                        Ok(nh) => vec![Value::Str("ok".to_string()), Value::Str(nh.to_string())],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees int, string, string, string"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
+            "__tls_alpn" => {
+                let arr = match &values[0] {
+                    Value::Int(h) => match crate::builtins::tls_alpn(*h) {
+                        Ok(p) => vec![Value::Str("ok".to_string()), Value::Str(p)],
+                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                    },
+                    _ => unreachable!("the checker guarantees an int"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // Diferido TLS: STARTTLS de cliente sobre un TCP plano → ["ok", handle] o ["err", msg].
             "__tls_upgrade_insecure" => {
                 let arr = match (&values[0], &values[1]) {

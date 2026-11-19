@@ -379,6 +379,12 @@ pub enum OpCode {
     TlsUpgrade,
     /// rayreq #250: como `TlsUpgrade` sin verificar el certificado. Primitivo `__tls_upgrade_insecure`.
     TlsUpgradeInsecure,
+    /// raygrpc #384: como `TlsAccept`, con los protocolos ALPN (string separado por comas) encima.
+    /// Primitivo `__tls_accept_alpn`.
+    TlsAcceptAlpn,
+    /// raygrpc #384: saca un handle; empuja `["ok", protocolo ALPN negociado]` (`""` = ninguno)
+    /// o `["err", msg]`. Primitivo `__tls_alpn`.
+    TlsAlpn,
     /// Diferido JSON-1: el inverso de `char_code`. Saca un `int`; empuja `[char]` de 0/1 elementos
     /// (vacío si no es un code point válido: surrogates D800–DFFF o fuera de rango). Primitivo
     /// `__char_from_code`; el prelude → `char_from_code -> Option<char>`. Habilita los escapes

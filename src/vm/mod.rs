@@ -4774,6 +4774,32 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // raygrpc #384: TlsAccept anunciando protocolos ALPN.
+                OpCode::TlsAcceptAlpn => {
+                    let protocols = self.pop();
+                    let key = self.pop();
+                    let cert = self.pop();
+                    let handle = self.pop();
+                    let (HeapValue::Int(handle), HeapValue::Str(cert), HeapValue::Str(key), HeapValue::Str(protocols)) = (handle, cert, key, protocols) else {
+                        unreachable!("the checker guarantees int, string, string, string");
+                    };
+                    let elems = match crate::builtins::tls_accept_alpn(handle, &cert, &key, &protocols) {
+                        Ok(h) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
+                // raygrpc #384: el protocolo ALPN negociado (conduce el handshake pendiente).
+                OpCode::TlsAlpn => {
+                    let handle = match self.pop() { HeapValue::Int(h) => h, _ => unreachable!("the checker guarantees an int") };
+                    let elems = match crate::builtins::tls_alpn(handle) {
+                        Ok(p) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(p.into())],
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // rayreq #250: STARTTLS de cliente sin verificar el certificado.
                 OpCode::TlsUpgradeInsecure => {
                     let host = self.pop();

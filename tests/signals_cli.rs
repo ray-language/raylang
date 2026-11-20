@@ -105,6 +105,35 @@ fn select_composes_work_and_shutdown() {
     assert!(out.contains("apagando por 15"), "{out}");
 }
 
+/// rayserial #392: un bucle que nunca aparca (su única espera es una llamada FFI) ve la señal con
+/// `try_recv` y con `select_timeout(…, 0)`. Antes solo se entregaba al conmutar de fibra.
+#[test]
+fn a_loop_that_only_waits_in_ffi_sees_the_signal() {
+    for (name, probe) in [
+        ("sig_ffi_try.ray", "match (try_recv(sig)) { Received.Got(s) => { print(\"got ${s}\"); return 0; }, _ => {}, }"),
+        ("sig_ffi_select.ray", "match (select_timeout([sig], 0)) { Option.Some(_) => { print(\"got ${recv(sig).unwrap()}\"); return 0; }, Option.None => {}, }"),
+    ] {
+        let src = format!(
+            "import std/time;\n\
+            extern \"c\" {{ fn poll(fds: bytes, n: u64, timeout_ms: int) -> int; }}\n\
+            fn main() -> int {{\n\
+                let sig = signals();\n\
+                print(\"listo\");\n\
+                let start = time.monotonic_millis();\n\
+                while (time.monotonic_millis() - start < 5000) {{\n\
+                    {probe}\n\
+                    poll(b\"\", 0 as u64, 20);\n\
+                }}\n\
+                print(\"no signal\");\n\
+                1\n\
+            }}\n"
+        );
+        let (out, code) = run_and_signal(&src, name, "-TERM");
+        assert_eq!(code, 0, "{name}\n{out}");
+        assert!(out.contains("got 15"), "{name}\n{out}");
+    }
+}
+
 /// M107.4: SIGWINCH (cambio de tamaño del terminal) llega como 28 — con `select` sobre
 /// `signals()` + `term.size()`, una TUI se re-maqueta al redimensionar.
 #[test]

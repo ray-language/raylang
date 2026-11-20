@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`try_recv(signals())` ve la señal en un bucle que no aparca** (rayserial #392): en la VM, un
+  bucle cuya única espera era una llamada FFI (`poll(2)` por `extern`) o que giraba sin esperar
+  no recibía nunca SIGTERM: `try_recv` y `select_timeout(…, 0)` daban vacío hasta que el
+  programa dormía con `time.sleep`. Ahora las señales pendientes se entregan antes de mirar el
+  canal, como ya pasaba en nativo.
 - **La inferencia no depende del orden de los argumentos** (raysolve #358): `count(empty(), a)`
   infiere el tipo de `empty()` de `a`, igual que `count(a, empty())`. Un argumento que no puede
   tiparse solo (una llamada genérica sin argumentos, `[]`, `Option.None`) espera a que los demás

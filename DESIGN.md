@@ -21288,3 +21288,20 @@ de tipo del callee interior se llamaba igual que el del exterior.
 
 De #358 queda la sintaxis de argumentos de tipo explícitos (`none::<int>()`), que es una
 feature de lenguaje aparte.
+
+## 464. Las señales llegan a un bucle que no aparca (rayserial #392, nov 2026)
+
+En la VM, el handler de señales escribe en un self-pipe y levanta una bandera; el scheduler
+drenaba el pipe hacia el canal de `signals()` en dos sitios: al conmutar de fibra y cuando el
+poller despertaba en `io_wait`. Un programa de una sola fibra que espera dentro de una llamada
+FFI (`poll(2)` sobre un puerto serie) no pasa por ninguno de los dos, así que
+`try_recv(signals())` devolvía `Empty` para siempre, también con `select_timeout([sig], 0)` y
+`time.sleep(0)`. En nativo la señal llegaba en el acto.
+
+`try_recv`, `select` y `select_timeout` entregan ahora lo pendiente antes de mirar los canales
+(`deliver_pending_signals`). Ya tienen tomado el candado del scheduler, y sin `signals()`
+instalado el coste es una comparación; con él, una lectura atómica de la bandera. Se descartó
+bombear cada N instrucciones: metería una comprobación en el bucle de despacho para un caso que
+solo importa cuando el programa pregunta por el canal. `recv` no cambia: aparca, y aparcar ya
+conmuta.
+

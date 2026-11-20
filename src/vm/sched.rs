@@ -1073,6 +1073,16 @@ impl<'a> Vm<'a> {
         }
     }
 
+    /// Entrega las señales pendientes ANTES de mirar un canal sin aparcar (`try_recv`, `select`,
+    /// `select_timeout`). Sin esto solo se entregaban al conmutar de fibra o en `io_wait`: un bucle
+    /// cuya única espera es una llamada FFI no conmuta nunca y `try_recv(signals())` daba `Empty`
+    /// para siempre (rayserial #392). Sin `signals()` instalado cuesta una comparación.
+    pub(super) fn deliver_pending_signals(shared: &mut Shared) {
+        if shared.signal_chan.is_some() && crate::builtins::signals_pending() {
+            Self::deliver_signals(shared);
+        }
+    }
+
     pub(super) fn wake_recv(cur: &Fiber, shared: &mut Shared, mut fiber: Fiber, values: Vec<HeapValue>) {
         // M38.1b-2: los `values` vienen del heap de la fibra ACTUAL (el emisor en un rendezvous); se
         // transfieren al heap de la fibra que se despierta (el receptor) antes de alojar el `[T]` ahí.

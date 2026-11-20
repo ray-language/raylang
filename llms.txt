@@ -656,7 +656,9 @@ arity/type dualities.
 returns; arity 0–6; `extern "z" blocking { … }` offloads slow calls natively). An `extern fn`
 belongs to its module (call it qualified from others). A `bytes` argument is passed by pointer and
 C may write into it: `ffi.buffer(n)` (`import std/ffi;`) gives n zero bytes for an out-parameter;
-`ffi.errno()` right after the call. The VM dlopens the library at run time; a native build links
+`ffi.errno()` right after the call. Pointers: `ffi.null()`, `ffi.is_null(p)`, `ffi.offset(p, n)`,
+`ffi.addr(p) -> u64`, `ffi.read(p, n) -> bytes` (copies what `p` points at; the address is
+trusted); a parameter declared `Option<ptr>` takes `Option.None` as NULL (no `as` on `ptr`). The VM dlopens the library at run time; a native build links
 `-l<name>` at BUILD time (dev files needed). A library named differently per OS:
 `extern "z" windows "zlib1" { … }` (words `windows macos linux android ios freebsd`); check an
 optional one first with `ffi.library_available("z") -> bool`. Cost of one call (measured, arm64):

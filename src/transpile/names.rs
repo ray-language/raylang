@@ -190,6 +190,7 @@ pub(super) fn is_handled_builtin(name: &str) -> bool {
         // (`__ffi_errno()`) salía como stub que entra en pánico y rompía `--release`.
         || name == "std::ffi::errno"
         || name == "std::ffi::library_available"
+        || matches!(name, "std::ffi::null" | "std::ffi::is_null" | "std::ffi::offset" | "std::ffi::addr" | "std::ffi::read")
     {
         return true;
     }

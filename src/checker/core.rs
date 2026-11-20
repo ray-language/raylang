@@ -345,7 +345,7 @@ impl Checker {
                 let pt = self.resolve_type(&p.ty);
                 if crate::ffi::ckind(&pt).is_none() || matches!(pt, Type::Unit) {
                     return Err(self.err(p.line, p.col, format!(
-                        "the type {} of parameter '{}' of 'extern fn {}' is not FFI-marshalable (int, float, bool, string, bytes)",
+                        "the type {} of parameter '{}' of 'extern fn {}' is not FFI-marshalable (int, u64, float, bool, string, bytes, ptr, Option<ptr>)",
                         pt, p.name, e.name)));
                 }
             }

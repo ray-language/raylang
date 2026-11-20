@@ -3235,6 +3235,32 @@ fn zlib_compress(src: bytes) -> Result<bytes, string> {
 }
 ```
 
+**Punteros.** Un `ptr` no admite operadores ni `as`. `std/ffi` trae lo que hace falta: `ffi.null()`
+para pasar NULL (o declara el parámetro `Option<ptr>` y pasa `Option.None`), `ffi.is_null(p)`,
+`ffi.offset(p, n)` para apuntar `n` octetos más allá, `ffi.addr(p)` para la dirección como `u64` y
+`ffi.read(p, n)` para copiar a un `bytes` lo que hay en esa dirección:
+
+```rust
+import std/ffi;
+
+extern "c" {
+    fn opendir(path: string) -> Option<ptr>;
+    fn readdir(dir: ptr) -> Option<ptr>;   // struct dirent*, memoria de libc
+    fn closedir(dir: ptr) -> int;
+}
+
+// La entrada cruda: los primeros `n` octetos de la struct dirent.
+fn first_entry(path: string, n: int) -> Option<bytes> {
+    let dir = opendir(path)?;
+    let entry = readdir(dir).map(fn(e: ptr) -> bytes { ffi.read(e, n) });
+    closedir(dir);
+    entry
+}
+```
+
+`ffi.read` confía en la dirección como una extern confía en su firma: leer donde no hay memoria
+tumba el proceso. Solo NULL y una longitud negativa son error de ejecución.
+
 Lo que C escriba lo ven también los alias del valor (`let d2 = dest;` comparte el búfer), y cada
 evaluación de un literal `b"…"` es un búfer propio. C no debe escribir más allá de la longitud ni
 quedarse con el puntero.

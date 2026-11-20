@@ -1538,6 +1538,43 @@ impl Transpiler {
             out.push_str("__ray_ffi_errno()");
             return Ok(());
         }
+        // rayserial #394: un `ptr` es un i64 en nativo → null/is_null/offset/addr son aritmética
+        // en línea; `read` copia desde la dirección (mismos mensajes que `ffi::read_ptr`).
+        if let Some(pfn) = name.strip_prefix("std::ffi::")
+            && matches!(pfn, "null" | "is_null" | "offset" | "addr" | "read")
+        {
+            match pfn {
+                "null" => out.push_str("0i64"),
+                "is_null" => {
+                    out.push('(');
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(" == 0)");
+                }
+                "offset" => {
+                    out.push_str("i64::wrapping_add(");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(", ");
+                    self.emit_expr(out, eff[1])?;
+                    out.push(')');
+                }
+                "addr" => {
+                    out.push('(');
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str(" as u64)");
+                }
+                _ => {
+                    out.push_str("{ let __rt_p: i64 = ");
+                    self.emit_expr(out, eff[0])?;
+                    out.push_str("; let __rt_n: i64 = ");
+                    self.emit_expr(out, eff[1])?;
+                    out.push_str("; if __rt_n < 0 { panic!(\"ffi.read: the length cannot be negative\") } \
+                        else if __rt_n == 0 { Rc::<[u8]>::from(&[][..]) } \
+                        else if __rt_p == 0 { panic!(\"ffi.read: the pointer is NULL\") } \
+                        else { Rc::<[u8]>::from(unsafe { std::slice::from_raw_parts(std::hint::black_box(__rt_p) as usize as *const u8, __rt_n as usize) }) } }");
+                }
+            }
+            return Ok(());
+        }
         // M417 (rayffi #215): `ffi.library_available(lib)` → helper que prueba dlopen/LoadLibrary.
         if name == "std::ffi::library_available" {
             self.needs_ffi_lib_available = true;
@@ -3984,7 +4021,10 @@ impl Transpiler {
                     "std::time::now" | "std::time::monotonic" | "std::time::monotonic_millis" | "std::time::monotonic_nanos"
                     | "std::time::local_offset_ms" | "std::random::below" | "std::ffi::errno" => return Ok(Type::Int),
                     "std::time::sleep" | "std::random::seed" => return Ok(Type::Unit),
-                    "std::ffi::library_available" => return Ok(Type::Bool),
+                    "std::ffi::library_available" | "std::ffi::is_null" => return Ok(Type::Bool),
+                    "std::ffi::null" | "std::ffi::offset" => return Ok(Type::Ptr),
+                    "std::ffi::addr" => return Ok(Type::UInt(64)),
+                    "std::ffi::read" => return Ok(Type::Bytes),
                     "std::random::next" => return Ok(Type::Float),
                     "std::net::local_port" => return Ok(Type::Int),
                     "std::net::set_read_timeout" | "std::net::set_write_timeout" | "std::net::set_nodelay" | "std::net::set_keepalive" => return Ok(Type::Unit),

@@ -490,7 +490,7 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 | `std/huffman` | `huffman_encode huffman_decode`: solo el código Huffman **estático de HPACK** (RFC 7541, cabeceras HTTP/2) sobre `[int]` — no sirve para DEFLATE |
 | `std/protobuf` | `PbWriter`: `writer write_varint write_string write_bytes write_fixed64 write_fixed32 finish` · `parse -> Result<[PbField], _>` (total: una entrada malformada —varint cortado o de más de 10 octetos, valor que pasa del final, campo 0— es siempre `Err` con el byte) `get_int get_bytes get_string` · framing gRPC: `grpc_frame grpc_unframe` · **con signo y tipos que faltaban** (raygrpc #389): `write_varint` acepta negativos (10 octetos, el `int32`/`int64` del formato); `zigzag(n)`/`unzigzag(n)` y `write_sint` (`sint32`/`sint64`); `write_float`/`write_double` y `get_float` (lee fixed32 o fixed64 según el tipo wire); `write_packed_varints(w, field, [int])` y `read_packed_varints(bytes) -> Result<[int], string>`; `write_message(w, field, inner)` y `get_message(fields, n) -> Result<[PbField], string>`; `get_all(fields, n)` (repetidos sin empaquetar); `varint(n) -> bytes` y `read_varint(data, pos) -> Result<(int, int), string>` (valor y posición siguiente); `PbField` implementa `Show` (`#3 varint 150`) |
 | `std/uuid` | `uuid_v4() -> string` · `is_uuid_v4` · `uuid_v7()`/`uuid_v7_at(ms)` (RFC 9562, ordenables por tiempo) · `is_uuid_v7` |
-| `std/ffi` | `errno() -> int`: el `errno` del hilo — el motivo del último fallo de una extern C estilo POSIX (`fopen`/`unlink`…). **Leerlo inmediatamente** tras la llamada, sin E/S en medio (§13). En wasm: 0 · `buffer(n) -> bytes`: n octetos a cero, el búfer de salida de una extern (§13) |
+| `std/ffi` | `errno() -> int`: el `errno` del hilo — el motivo del último fallo de una extern C estilo POSIX (`fopen`/`unlink`…). **Leerlo inmediatamente** tras la llamada, sin E/S en medio (§13). En wasm: 0 · `buffer(n) -> bytes`: n octetos a cero, el búfer de salida de una extern (§13) · punteros (§13): `null() -> ptr` · `is_null(p) -> bool` · `offset(p, n) -> ptr` (n octetos más allá; puede ser negativo) · `addr(p) -> u64` · `read(p, n) -> bytes` (copia los n octetos apuntados; NULL o `n < 0` es error de ejecución) |
 
 ## 11. Paquetes adicionales (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`, `agent`, `oidc`, `yaml`, `zip`)
 
@@ -656,7 +656,7 @@ del símbolo).
 | `bytes` | puntero al buffer (NUL-termínalo tú: `b"…\x00"`); C **puede escribir** en él (parámetro de salida) | ✗ (usa `Option<bytes>`) |
 | `ptr` | puntero opaco | puntero opaco |
 | `Option<string>` / `Option<bytes>` | ✗ | `char*`: NULL → `None`; si no, **copia** hasta el NUL (nunca libera) |
-| `Option<ptr>` | ✗ | puntero: NULL → `None` |
+| `Option<ptr>` | puntero: `None` → NULL | puntero: NULL → `None` |
 
 **Coste de una llamada** (medido en arm64, rayserial #396): ~0,5 µs en la VM y ~1 ns en nativo.
 `blocking` añade entre 4 y 8 µs en nativo (un salto de hilo) y nada en la VM, donde es inerte:
@@ -675,6 +675,16 @@ recibir datos por puntero (`uLongf *destLen`, el `dest` de `compress`): reserva 
 `ffi.buffer(n)` (n octetos a cero) y léelo tras la llamada. Cada evaluación de un literal `b"…"` da
 un búfer propio (en la VM y en nativo), así que escribir en uno no cambia el literal. C no debe
 escribir fuera de la longitud del valor ni guardar el puntero tras la llamada.
+
+**Punteros.** Un `ptr` no tiene operadores ni conversión con `as`; lo que hace falta al tratar con
+C está en `std/ffi` (rayserial #394). `ffi.null()` es el puntero NULL, para un parámetro declarado
+`ptr`; si el parámetro se declara `Option<ptr>`, `Option.None` pasa NULL. `ffi.is_null(p)` lo
+comprueba. `ffi.offset(p, n)` da el puntero `n` octetos más allá (un campo de un struct, el
+siguiente elemento) y `ffi.addr(p) -> u64` la dirección como número. `ffi.read(p, n) -> bytes`
+**copia** los `n` octetos a los que apunta `p` —la `struct dirent` que devuelve `readdir`—. La
+dirección se confía, igual que la firma de una extern: leer memoria que no existe tumba el
+proceso. Solo se comprueban NULL y una longitud negativa, que son error de ejecución. Para
+trocear lo leído en enteros little- o big-endian está `std/binary`.
 
 **Entre fibras.** Un `ptr` es una dirección: cruza canales y capturas de `spawn` como un entero (en
 los dos motores), solo o dentro de un struct. Que el recurso C se pueda usar desde otro hilo es

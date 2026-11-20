@@ -4824,8 +4824,12 @@ static BUILTINS: &[Builtin] = &[
     // to_string(x) -> string (M11.1a): representación textual de un primitivo imprimible.
     Builtin { name: "to_string", opcode: OpCode::ToString, check: |a| {
         arity(a, 1, "to_string", "")?;
-        if !matches!(a[0], Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes | Type::UInt(_)) {
-            return Err((Some(0), format!("to_string only converts int/float/bool/string/char/bytes/u*, not {}", a[0])));
+        // rayfocus #459: un struct o un enum sin `Show` se convierte con la forma por defecto, la
+        // misma que muestra `print` (`Kind.Past`, `P { x: 1 }`): `"${kind}"` daba error de tipo
+        // y obligaba a un `match` solo para registrar un enum sin datos. Con `Show`, el checker
+        // ya redirige la llamada a `T#show` antes de llegar aquí.
+        if !matches!(a[0], Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes | Type::UInt(_) | Type::Struct(_, _) | Type::Enum(_, _)) {
+            return Err((Some(0), format!("to_string only converts int/float/bool/string/char/bytes/u*, structs and enums, not {}", a[0])));
         }
         Ok(Type::String)
     } },

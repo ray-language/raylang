@@ -1625,6 +1625,12 @@ impl<'a> TypeRewriter<'a> {
             for (_, ty) in &mut s.fields {
                 self.rewrite_type(ty);
             }
+            for (_, tr, args) in &mut s.bound_args {
+                self.rewrite_name(tr); // #357: el bound con argumentos, como el par de `bounds`
+                for arg in args.iter_mut() {
+                    self.rewrite_type(arg);
+                }
+            }
             for (_, tr) in &mut s.bounds {
                 self.rewrite_name(tr); // M9.4: el trait del bound se namespaca como cualquier tipo
             }
@@ -1635,6 +1641,12 @@ impl<'a> TypeRewriter<'a> {
             for v in &mut e.variants {
                 for ty in &mut v.payload {
                     self.rewrite_type(ty);
+                }
+            }
+            for (_, tr, args) in &mut e.bound_args {
+                self.rewrite_name(tr); // #357: el bound con argumentos, como el par de `bounds`
+                for arg in args.iter_mut() {
+                    self.rewrite_type(arg);
                 }
             }
             for (_, tr) in &mut e.bounds {
@@ -1671,6 +1683,12 @@ impl<'a> TypeRewriter<'a> {
             for arg in &mut imp.trait_args {
                 self.rewrite_type(arg);
             }
+            for (_, tr, args) in &mut imp.bound_args {
+                self.rewrite_name(tr); // #357: el bound con argumentos, como el par de `bounds`
+                for arg in args.iter_mut() {
+                    self.rewrite_type(arg);
+                }
+            }
             for (_, tr) in &mut imp.bounds {
                 self.rewrite_name(tr);
             }
@@ -1688,6 +1706,12 @@ impl<'a> TypeRewriter<'a> {
             self.rewrite_type(&mut p.ty);
         }
         self.rewrite_type(&mut f.return_type);
+        for (_, tr, args) in &mut f.bound_args {
+            self.rewrite_name(tr); // #357: el bound con argumentos, como el par de `bounds`
+            for arg in args.iter_mut() {
+                self.rewrite_type(arg);
+            }
+        }
         for (_, tr) in &mut f.bounds {
             self.rewrite_name(tr);
         }

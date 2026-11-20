@@ -357,6 +357,8 @@ pub struct StructDef {
     /// Bounds de los parámetros de tipo: los `T: Show` de `struct Caja<T: Show>` (M9.4). Vacío =
     /// sin bounds. Se verifican en la **construcción** del struct (no hay runtime).
     pub bounds: Vec<(String, String)>,
+    /// Argumentos de tipo de los bounds que los llevan (raysolve #357); ver [`BoundArgs`].
+    pub bound_args: BoundArgs,
     pub fields: Vec<(String, Type)>,
     /// Línea (1-basada) de cada campo, en el mismo orden que `fields`. Solo la usa el FORMATEADOR,
     /// para acotar un comentario a su campo (los `VariantDef` de un enum ya llevan la suya). Vacío
@@ -388,6 +390,8 @@ pub struct EnumDef {
     /// Bounds de los parámetros de tipo: los `T: Eq` de `enum Lista<T: Eq>` (M9.4). Vacío = sin
     /// bounds. Se verifican en la **construcción** de una variante (no hay runtime).
     pub bounds: Vec<(String, String)>,
+    /// Argumentos de tipo de los bounds que los llevan (raysolve #357); ver [`BoundArgs`].
+    pub bound_args: BoundArgs,
     pub variants: Vec<VariantDef>,
     pub line: usize,
     pub col: usize,
@@ -421,6 +425,25 @@ pub struct TraitDef {
     pub col: usize,
 }
 
+/// Argumentos de tipo de los bounds sobre un trait GENÉRICO (raysolve #357): `S: Source<V>` deja
+/// en `bounds` el par `("S", "Source")` de siempre y aquí `("S", "Source", [V])`. Va aparte para
+/// que todo lo que solo mira «qué trait acota a qué parámetro» siga leyendo `bounds`.
+pub type BoundArgs = Vec<(String, String, Vec<Type>)>;
+
+/// Los argumentos de tipo del bound `tp: tr` (vacío si no lleva).
+pub fn bound_args_of<'a>(bound_args: &'a BoundArgs, tp: &str, tr: &str) -> &'a [Type] {
+    bound_args.iter().find(|(p, t, _)| p == tp && t == tr).map(|(_, _, a)| a.as_slice()).unwrap_or(&[])
+}
+
+/// Los bounds de `tp` como texto de fuente (`Source<V>`, `Eq`), en orden de declaración. `show`
+/// escribe un tipo: el formateador usa el suyo, la documentación el `Display`.
+pub fn bound_texts(tp: &str, bounds: &[(String, String)], bound_args: &BoundArgs, show: &dyn Fn(&Type) -> String) -> Vec<String> {
+    bounds.iter().filter(|(p, _)| p == tp).map(|(_, tr)| {
+        let args = bound_args_of(bound_args, tp, tr);
+        if args.is_empty() { tr.clone() } else { format!("{}<{}>", tr, args.iter().map(show).collect::<Vec<_>>().join(", ")) }
+    }).collect()
+}
+
 /// La **firma** de un método de trait (M9): `fn name(self, p: T, ...) -> R;`.
 /// `params` incluye `self` como **primer** parámetro (su `ty` es `Type::SelfType`).
 #[derive(Debug, Clone, PartialEq)]
@@ -431,6 +454,8 @@ pub struct MethodSig {
     pub type_params: Vec<String>,
     /// Bounds de esos parámetros de tipo (M40.2c): pares `(parámetro, trait)`. Vacío = sin bounds.
     pub bounds: Vec<(String, String)>,
+    /// Argumentos de tipo de los bounds que los llevan (raysolve #357); ver [`BoundArgs`].
+    pub bound_args: BoundArgs,
     pub params: Vec<Param>,
     pub return_type: Type, // Unit si se omitió el `-> ...`
     /// Cuerpo **por defecto** (M9.3a): `Some` si la firma trae un bloque en vez de `;`.
@@ -459,6 +484,8 @@ pub struct ImplBlock {
     pub type_params: Vec<String>,
     /// Bounds de esos parámetros (M9.2b): `impl<T: A + B> ...`. Pares `(parámetro, trait)`.
     pub bounds: Vec<(String, String)>,
+    /// Argumentos de tipo de los bounds que los llevan (raysolve #357); ver [`BoundArgs`].
+    pub bound_args: BoundArgs,
     pub target: Type,
     pub methods: Vec<Function>,
     /// M418 (raydata #206): `true` si el impl NO lo escribió el programa — un `@derive` o el
@@ -484,6 +511,8 @@ pub struct Function {
     /// `fn f<T: A + B>(...)`. Vacío = sin bounds. Cada bound exige que `T` implemente el
     /// trait, y habilita llamar sus métodos sobre un valor de tipo `T` dentro del cuerpo.
     pub bounds: Vec<(String, String)>,
+    /// Argumentos de tipo de los bounds que los llevan (raysolve #357); ver [`BoundArgs`].
+    pub bound_args: BoundArgs,
     pub params: Vec<Param>,
     pub return_type: Type, // Unit si se omitió el `-> ...`
     pub body: Block,

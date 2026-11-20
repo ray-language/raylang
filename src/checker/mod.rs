@@ -73,6 +73,9 @@ struct FnSig {
     /// Bounds de los parámetros de tipo (M9.2): pares `(parámetro, trait)`. Vacío = sin
     /// bounds. Para verificar la llamada (los diccionarios a pasar) y para reenviarlos.
     bounds: Vec<(String, String)>,
+    /// raysolve #357: los argumentos de tipo de los bounds sobre traits genéricos, ya RESUELTOS
+    /// (los parámetros de tipo de la función como `Var`).
+    bound_args: BoundArgs,
 }
 
 /// Datos de un **impl genérico** (M9.2b) —`impl<T: B> Trait for Caja<T>`— que `dict_for`
@@ -609,6 +612,8 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
             type_params.extend(m.type_params.iter().cloned());
             let mut bounds = imp.bounds.clone();
             bounds.extend(m.bounds.iter().cloned());
+            let mut bound_args = imp.bound_args.clone();
+            bound_args.extend(m.bound_args.iter().cloned());
             let mut body = m.body.clone();
             if !trait_sigma.is_empty() { subst_named_block(&mut body, &trait_sigma); }
             program.functions.push(Function {
@@ -617,6 +622,7 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
                 name,
                 type_params,
                 bounds,
+                bound_args,
                 params,
                 return_type: subst_named(&subst_self(&m.return_type, &imp.target), &trait_sigma),
                 body,
@@ -647,12 +653,15 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
             type_params.extend(tm.type_params.iter().cloned());
             let mut bounds = imp.bounds.clone();
             bounds.extend(tm.bounds.iter().cloned());
+            let mut bound_args = imp.bound_args.clone();
+            bound_args.extend(tm.bound_args.iter().cloned());
             program.functions.push(Function {
                 annotations: Vec::new(),
                 is_pub: false,
                 name: mangle(&key, &tm.name),
                 type_params,
                 bounds,
+                bound_args,
                 params,
                 return_type: subst_named(&subst_self(&tm.return_type, &imp.target), &trait_sigma),
                 body,
@@ -731,6 +740,16 @@ struct Checker {
     /// Se verifican en la construcción del valor (no hay runtime).
     struct_bounds: HashMap<String, Vec<(String, String)>>,
     enum_bounds: HashMap<String, Vec<(String, String)>>,
+    /// raysolve #357: argumentos de tipo (resueltos) de los bounds de cada struct/enum.
+    struct_bound_args: HashMap<String, BoundArgs>,
+    enum_bound_args: HashMap<String, BoundArgs>,
+    /// Argumentos de tipo de los bounds de la función (o impl) en curso: `S: Source<V>` →
+    /// `("S", "Source", [Var V])`. Los leen `resolve_bound_method` y `trait_args_for`.
+    current_bound_args: BoundArgs,
+    /// `(clave_de_tipo, trait genérico)` → el objetivo del impl (`Fixed<V>`, con `Var`) y los
+    /// argumentos con los que implementa el trait (`[Var V]`, o `[int]` en un impl concreto).
+    /// Hay un impl por tipo, así que el tipo determina los argumentos del trait.
+    impl_trait_args: HashMap<(String, String), (Type, Vec<Type>)>,
     /// Spans de expresiones del parser (M33a-2): inicio → fin. Los consulta `err()` para
     /// subrayar la expresión completa; una posición ausente degrada a extensión 1.
     expr_spans: HashMap<(usize, usize), (usize, usize)>,

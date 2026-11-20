@@ -866,8 +866,7 @@ fn fn_signature(f: &crate::ast::Function) -> String {
         String::new()
     } else {
         let parts: Vec<String> = f.type_params.iter().map(|tp| {
-            let traits: Vec<&str> =
-                f.bounds.iter().filter(|(p, _)| p == tp).map(|(_, t)| t.as_str()).collect();
+            let traits = crate::ast::bound_texts(tp, &f.bounds, &f.bound_args, &|t| t.to_string());
             if traits.is_empty() { tp.clone() } else { format!("{}: {}", tp, traits.join(" + ")) }
         }).collect();
         format!("<{}>", parts.join(", "))

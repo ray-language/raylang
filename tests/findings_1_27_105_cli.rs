@@ -235,8 +235,7 @@ fn supertrait_and_generic_trait_errors_say_what_is_wrong() {
     // Un supertrait que no existe se señala en el trait, no como un bound ajeno en un impl.
     let err = check("unknown_generic.ray", "trait G: Nope { fn g(self) -> int; }\nstruct W<T> { v: T, }\nimpl<T: G> G for W<T> { fn g(self) -> int { 1 } }\nfn main() -> int { 0 }\n");
     assert!(err.contains("the supertrait 'Nope' of 'G' is not a declared trait"), "{err}");
-    let err = check("bound.ray", "trait Source<V> { fn get(self) -> V; }\nfn f<V, S: Source<V>>(s: S) -> int { 0 }\nfn main() -> int { 0 }\n");
-    assert!(err.contains("a bound cannot take type arguments yet ('S: Source<…>')"), "{err}");
+    // (El bound sobre un trait genérico, `S: Source<V>`, ya existe: tests/generic_trait_bounds_cli.rs.)
     let err = check("dyn.ray", "trait Source<V> { fn get(self) -> V; }\nfn f(s: dyn Source<int>) -> int { 0 }\nfn main() -> int { 0 }\n");
     assert!(err.contains("'dyn Source<…>' is not supported yet"), "{err}");
 }

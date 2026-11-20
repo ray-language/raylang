@@ -635,7 +635,7 @@ fn format_program(p: &Program, cur: &mut Cur) -> String {
                 "{}type {}{} = {};",
                 if it.is_pub { "pub " } else { "" },
                 it.name,
-                fmt_generics(&it.type_params, &[]),
+                fmt_generics(&it.type_params, &[], &Vec::new()),
                 fmt_type(&it.target)
             ),
             Top::Enum(it) => fmt_enum(cur, it),
@@ -797,12 +797,12 @@ fn fmt_type(t: &Type) -> String {
 }
 
 /// `<T, U>` o `<T: A + B, U>` a partir de los parámetros de tipo y sus bounds.
-fn fmt_generics(type_params: &[String], bounds: &[(String, String)]) -> String {
+fn fmt_generics(type_params: &[String], bounds: &[(String, String)], bound_args: &BoundArgs) -> String {
     if type_params.is_empty() {
         return String::new();
     }
     let parts: Vec<String> = type_params.iter().map(|tp| {
-        let bs: Vec<&str> = bounds.iter().filter(|(p, _)| p == tp).map(|(_, t)| t.as_str()).collect();
+        let bs = bound_texts(tp, bounds, bound_args, &fmt_type);
         if bs.is_empty() {
             tp.clone()
         } else {
@@ -923,7 +923,7 @@ fn fmt_struct(cur: &mut Cur, it: &StructDef) -> String {
     // doc-comment del ítem siguiente. Un struct sintético (sin `field_lines`) no tiene comentarios.
     let mut s = fmt_annotations(&it.annotations);
     let pref = if it.is_pub { "pub " } else { "" };
-    let gens = fmt_generics(&it.type_params, &it.bounds);
+    let gens = fmt_generics(&it.type_params, &it.bounds, &it.bound_args);
     if it.fields.is_empty() {
         s.push_str(&format!("{}struct {}{} {{ }}", pref, it.name, gens));
         return s;
@@ -947,7 +947,7 @@ fn fmt_struct(cur: &mut Cur, it: &StructDef) -> String {
 fn fmt_enum(cur: &mut Cur, it: &EnumDef) -> String {
     let mut s = fmt_annotations(&it.annotations);
     let pref = if it.is_pub { "pub " } else { "" };
-    let gens = fmt_generics(&it.type_params, &it.bounds);
+    let gens = fmt_generics(&it.type_params, &it.bounds, &it.bound_args);
     if it.variants.is_empty() {
         s.push_str(&format!("{}enum {}{} {{ }}", pref, it.name, gens));
         return s;
@@ -970,7 +970,7 @@ fn fmt_enum(cur: &mut Cur, it: &EnumDef) -> String {
 
 fn fmt_trait(cur: &mut Cur, it: &TraitDef) -> String {
     let pref = if it.is_pub { "pub " } else { "" };
-    let mut gens = fmt_generics(&it.type_params, &[]);
+    let mut gens = fmt_generics(&it.type_params, &[], &Vec::new());
     if !it.supertraits.is_empty() {
         gens.push_str(": ");
         gens.push_str(&it.supertraits.join(" + "));
@@ -995,7 +995,7 @@ fn fmt_trait(cur: &mut Cur, it: &TraitDef) -> String {
 
 fn fmt_method_sig(cur: &mut Cur, m: &MethodSig) -> String {
     // M40.2c: métodos genéricos — renderizar los parámetros de tipo propios (`fn map<U>`).
-    let gens = fmt_generics(&m.type_params, &m.bounds);
+    let gens = fmt_generics(&m.type_params, &m.bounds, &m.bound_args);
     // La firma vive dentro del `trait`/`impl` → base 1: la sangría de la cabecera la antepone el
     // emisor del bloque, pero los parámetros repartidos y su `)` sí la llevan.
     let prefix = format!("fn {}{}", m.name, gens);
@@ -1013,7 +1013,7 @@ fn fmt_method_sig(cur: &mut Cur, m: &MethodSig) -> String {
 }
 
 fn fmt_impl(cur: &mut Cur, it: &ImplBlock) -> String {
-    let gens = fmt_generics(&it.type_params, &it.bounds);
+    let gens = fmt_generics(&it.type_params, &it.bounds, &it.bound_args);
     let trait_args = if it.trait_args.is_empty() {
         String::new()
     } else {
@@ -1041,7 +1041,7 @@ fn fmt_impl(cur: &mut Cur, it: &ImplBlock) -> String {
 fn fmt_function(cur: &mut Cur, f: &Function) -> String {
     let mut s = fmt_annotations(&f.annotations);
     let pref = if f.is_pub { "pub " } else { "" };
-    let gens = fmt_generics(&f.type_params, &f.bounds);
+    let gens = fmt_generics(&f.type_params, &f.bounds, &f.bound_args);
     let prefix = format!("{}fn {}{}", pref, f.name, gens);
     let suffix = fmt_return(&f.return_type);
     let head = fmt_params_commented(cur, &f.params, 0, &prefix, &suffix, f.line, f.body.line)

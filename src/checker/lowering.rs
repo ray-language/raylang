@@ -570,6 +570,9 @@ pub(super) fn append_dict_params(program: &mut Program) {
     let trait_sigs: HashMap<String, Vec<MethodSig>> = program.traits.iter()
         .map(|t| (t.name.clone(), t.methods.clone()))
         .collect();
+    let trait_tparams: HashMap<String, Vec<String>> = program.traits.iter()
+        .map(|t| (t.name.clone(), t.type_params.clone()))
+        .collect();
     for f in &mut program.functions {
         if f.bounds.is_empty() {
             continue;
@@ -577,10 +580,15 @@ pub(super) fn append_dict_params(program: &mut Program) {
         for (tp, trait_name) in &f.bounds {
             let Some(methods) = trait_sigs.get(trait_name) else { continue };
             let self_ty = Type::Var(tp.clone());
+            // raysolve #357: en `S: Source<W>`, el `V` del trait es `W` en el tipo del diccionario.
+            let tsigma: HashMap<String, Type> = trait_tparams.get(trait_name).cloned().unwrap_or_default()
+                .into_iter()
+                .zip(bound_args_of(&f.bound_args, tp, trait_name).iter().cloned())
+                .collect();
             for m in methods {
                 f.params.push(Param {
                     name: dict_param_name(tp, trait_name, &m.name),
-                    ty: method_fn_type(m, &self_ty),
+                    ty: subst_named(&method_fn_type(m, &self_ty), &tsigma),
                     line: f.line,
                     col: f.col,
                 });
@@ -814,6 +822,7 @@ pub(super) fn lower_dyn(program: &mut Program, coercions: &CoercionMap, dispatch
             name: dyn_struct_name(set),
             type_params: Vec::new(),
             bounds: Vec::new(),
+            bound_args: Vec::new(),
             fields,
             field_lines: Vec::new(),
             field_cols: Vec::new(),

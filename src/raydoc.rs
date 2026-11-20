@@ -88,7 +88,7 @@ pub fn generate(src: &str, title: &str) -> Result<String, String> {
     if !aliases.is_empty() {
         out.push_str("## Type aliases\n\n");
         for a in aliases {
-            out.push_str(&format!("### `type {}{} = {}`\n\n", a.name, generics(&a.type_params, &[]), a.target));
+            out.push_str(&format!("### `type {}{} = {}`\n\n", a.name, generics(&a.type_params, &[], &Vec::new()), a.target));
             emit_doc(&mut out, &lines, a.line);
         }
     }
@@ -201,12 +201,12 @@ fn doc_above(lines: &[&str], line: usize) -> Option<String> {
 }
 
 /// Renderiza `<T, U: Bound>` a partir de los parámetros de tipo y sus bounds. Vacío si no hay.
-fn generics(tps: &[String], bounds: &[(String, String)]) -> String {
+fn generics(tps: &[String], bounds: &[(String, String)], bound_args: &crate::ast::BoundArgs) -> String {
     if tps.is_empty() {
         return String::new();
     }
     let parts: Vec<String> = tps.iter().map(|tp| {
-        let bs: Vec<&str> = bounds.iter().filter(|(p, _)| p == tp).map(|(_, t)| t.as_str()).collect();
+        let bs = crate::ast::bound_texts(tp, bounds, bound_args, &|t| t.to_string());
         if bs.is_empty() { tp.clone() } else { format!("{tp}: {}", bs.join(" + ")) }
     }).collect();
     format!("<{}>", parts.join(", "))
@@ -227,19 +227,19 @@ fn sig_return(ret: &Type) -> String {
 }
 
 fn sig_function(f: &Function) -> String {
-    format!("fn {}{}({}){}", f.name, generics(&f.type_params, &f.bounds), sig_params(&f.params), sig_return(&f.return_type))
+    format!("fn {}{}({}){}", f.name, generics(&f.type_params, &f.bounds, &f.bound_args), sig_params(&f.params), sig_return(&f.return_type))
 }
 
 fn sig_method(m: &MethodSig) -> String {
-    format!("fn {}{}({}){}", m.name, generics(&m.type_params, &m.bounds), sig_params(&m.params), sig_return(&m.return_type))
+    format!("fn {}{}({}){}", m.name, generics(&m.type_params, &m.bounds, &m.bound_args), sig_params(&m.params), sig_return(&m.return_type))
 }
 
 fn sig_struct(s: &StructDef) -> String {
     let fields = s.fields.iter().map(|(n, t)| format!("{n}: {t}")).collect::<Vec<_>>().join(", ");
     if fields.is_empty() {
-        format!("struct {}{}", s.name, generics(&s.type_params, &s.bounds))
+        format!("struct {}{}", s.name, generics(&s.type_params, &s.bounds, &s.bound_args))
     } else {
-        format!("struct {}{} {{ {fields} }}", s.name, generics(&s.type_params, &s.bounds))
+        format!("struct {}{} {{ {fields} }}", s.name, generics(&s.type_params, &s.bounds, &s.bound_args))
     }
 }
 
@@ -252,12 +252,12 @@ fn sig_enum(e: &EnumDef) -> String {
             format!("{}({})", v.name, tys)
         }
     }).collect::<Vec<_>>().join(", ");
-    format!("enum {}{} {{ {variants} }}", e.name, generics(&e.type_params, &e.bounds))
+    format!("enum {}{} {{ {variants} }}", e.name, generics(&e.type_params, &e.bounds, &e.bound_args))
 }
 
 fn sig_trait(t: &TraitDef) -> String {
     let supers = if t.supertraits.is_empty() { String::new() } else { format!(": {}", t.supertraits.join(" + ")) };
-    format!("trait {}{}{supers}", t.name, generics(&t.type_params, &[]))
+    format!("trait {}{}{supers}", t.name, generics(&t.type_params, &[], &Vec::new()))
 }
 
 #[cfg(test)]

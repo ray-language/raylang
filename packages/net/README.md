@@ -173,7 +173,9 @@ fn main() -> int {
   `stream_send(s, msg)`, `stream_close_send(s)`, `stream_recv(s) -> Result<Option<bytes>, string>`
   (`Ok(None)` = el servidor terminó), `stream_reply(s)` (estado, cabeceras y trailers) y
   `stream_cancel(s)`; uno a la vez por conexión. `call_once_tls` es la llamada de un disparo
-  sobre TLS con metadatos y plazo.
+  sobre TLS con metadatos y plazo. `connect_tls_opts(host, port, opts: net.TlsOptions)` da las
+  opciones TLS por conexión: una CA propia (`ca_pem`, sin tocar `SSL_CERT_FILE`), el modo sin
+  verificar (`insecure`) y los protocolos ALPN a ofrecer. Pide raylang 1.27.110.
 - **`net/grpc_status`** — los códigos gRPC (`OK`…`UNAUTHENTICATED`), `Status { code, message }`,
   `new`/`fail`, `code_name`, `from_http` y el percent-encoding de `grpc-message`. Hoja.
 - **`net/grpc_h2`** — el núcleo de conexión HTTP/2 que comparten servidor y cliente (`Link`: frames

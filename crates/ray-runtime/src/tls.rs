@@ -466,6 +466,60 @@ mod imp {
         .clone()
     }
 
+    /// raygrpc #387: la config de cliente de UNA conexión — `protocols` son los nombres ALPN
+    /// separados por comas (vacío = sin ALPN); `ca_pem` no vacío hace que se confíe SOLO en esas
+    /// autoridades (lo que hace `grpcurl -cacert`: una CA propia sin tocar `SSL_CERT_FILE`, que
+    /// es de todo el proceso); `insecure` no verifica el certificado (desarrollo). Sin `ca_pem`
+    /// ni `insecure`, las raíces de siempre (webpki + `SSL_CERT_FILE`).
+    pub fn client_config_opts(protocols: &str, ca_pem: &str, insecure: bool) -> Result<Arc<rustls::ClientConfig>, String> {
+        let alpn = super::parse_alpn(protocols)?;
+        let mut cfg = if insecure {
+            (*insecure_client_config()).clone()
+        } else {
+            let mut roots = rustls::RootCertStore::empty();
+            if ca_pem.trim().is_empty() {
+                roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+                if let Ok(path) = std::env::var("SSL_CERT_FILE") {
+                    use rustls::pki_types::pem::PemObject;
+                    if let Ok(certs) = rustls::pki_types::CertificateDer::pem_file_iter(&path) {
+                        for cert in certs.flatten() {
+                            let _ = roots.add(cert);
+                        }
+                    }
+                }
+            } else {
+                use rustls::pki_types::pem::PemObject;
+                let mut added = 0;
+                for cert in rustls::pki_types::CertificateDer::pem_slice_iter(ca_pem.as_bytes()) {
+                    let cert = cert.map_err(|e| format!("invalid CA certificate (PEM): {e}"))?;
+                    roots.add(cert).map_err(|e| format!("invalid CA certificate: {e}"))?;
+                    added += 1;
+                }
+                if added == 0 {
+                    return Err("the CA text holds no PEM certificate (pass the PEM text, not a path)".to_string());
+                }
+            }
+            rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth()
+        };
+        cfg.alpn_protocols = alpn;
+        Ok(Arc::new(cfg))
+    }
+
+    /// raygrpc #387: conexión TLS de cliente con opciones por conexión (ver
+    /// [`client_config_opts`]). Completa el handshake (bloqueante), para que el ALPN negociado
+    /// se pueda consultar al volver; no exige ninguno: lo comprueba quien llama.
+    pub fn connect_opts(host: &str, port: i64, protocols: &str, ca_pem: &str, insecure: bool) -> Result<TlsStream, String> {
+        let cfg = client_config_opts(protocols, ca_pem, insecure)?;
+        let sn = rustls::pki_types::ServerName::try_from(host.to_string())
+            .map_err(|_| format!("invalid server name for TLS: {host}"))?;
+        let mut conn = rustls::ClientConnection::new(cfg, sn).map_err(|e| e.to_string())?;
+        let mut sock = TcpStream::connect((host, port as u16)).map_err(|e| e.to_string())?;
+        while conn.is_handshaking() {
+            conn.complete_io(&mut sock).map_err(|e| handshake_eof(e, true).to_string())?;
+        }
+        Ok(TlsStream::Client(rustls::StreamOwned::new(conn, sock)))
+    }
+
     /// rayreq #250: como [`upgrade`], sin verificar el certificado del servidor.
     pub fn upgrade_insecure(sock: TcpStream, host: &str) -> Result<TlsStream, String> {
         let sn = rustls::pki_types::ServerName::try_from(host.to_string())
@@ -498,7 +552,7 @@ mod imp {
 }
 
 #[cfg(feature = "tls")]
-pub use imp::{accept, accept_alpn, connect, connect_h2, insecure_client_config, upgrade, upgrade_insecure, TlsStream};
+pub use imp::{accept, accept_alpn, client_config_opts, connect, connect_h2, connect_opts, insecure_client_config, upgrade, upgrade_insecure, TlsStream};
 
 // --- Stubs sin la feature `tls` (el binario compila sin rustls; el consumidor no los alcanza) ---
 #[cfg(not(feature = "tls"))]
@@ -533,6 +587,9 @@ mod stub {
     const UNAVAIL: &str = "TLS not available (build without the 'tls' feature)";
     pub fn connect(_host: &str, _port: i64) -> Result<TlsStream, String> { Err(UNAVAIL.to_string()) }
     pub fn connect_h2(_host: &str, _port: i64) -> Result<TlsStream, String> { Err(UNAVAIL.to_string()) }
+    pub fn connect_opts(_host: &str, _port: i64, _protocols: &str, _ca_pem: &str, _insecure: bool) -> Result<TlsStream, String> {
+        Err(UNAVAIL.to_string())
+    }
     pub fn upgrade(_sock: TcpStream, _host: &str) -> Result<TlsStream, String> { Err(UNAVAIL.to_string()) }
     pub fn upgrade_insecure(_sock: TcpStream, _host: &str) -> Result<TlsStream, String> { Err(UNAVAIL.to_string()) }
     pub fn accept(_sock: TcpStream, _cert_pem: &str, _key_pem: &str) -> Result<TlsStream, String> {
@@ -544,7 +601,7 @@ mod stub {
 }
 
 #[cfg(not(feature = "tls"))]
-pub use stub::{accept, accept_alpn, connect, connect_h2, upgrade, upgrade_insecure, TlsStream};
+pub use stub::{accept, accept_alpn, connect, connect_h2, connect_opts, upgrade, upgrade_insecure, TlsStream};
 
 /// raygrpc #384: la lista de protocolos ALPN de `tls_accept_alpn` (separados por comas) en la
 /// forma que pide rustls. Un nombre ALPN ocupa de 1 a 255 bytes (RFC 7301 §3.1); vacío = sin ALPN.

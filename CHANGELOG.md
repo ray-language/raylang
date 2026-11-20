@@ -6,6 +6,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`net.tls_connect_opts(host, port, opts)`** (raygrpc #387): TLS de cliente con opciones por
+  conexión. `TlsOptions { alpn, ca_pem, insecure }` (se parte de `net.tls_options()`): los
+  protocolos ALPN a ofrecer, una CA propia en PEM —solo se confía en ella para esa conexión, sin
+  tocar `SSL_CERT_FILE`, que es de todo el proceso— y el modo sin verificación, para desarrollo.
+- **Nativo: una función de la raíz con el nombre de una del prelude ya no rompe los módulos.**
+  Con un `fn try_call(…)` propio en `main.ray`, las funciones de un módulo o paquete que llamaban
+  al `try_call` del prelude se compilaban como stubs que fallaban al ejecutarse (el build avisaba
+  «emitted as stubs»). La VM no estaba afectada.
+
 - **Paquete `net` 0.17.0 — gRPC con streaming, metadatos de respuesta, TLS y reflexión**
   (raygrpc #385, #386, #387):
   - Servidor: `route_stream` registra un handler `fn(ServerStream) -> Status` para
@@ -17,7 +26,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   - `net/grpc_reflection`: `enable(r, files)` añade la reflexión (`grpcurl list` y `describe`).
   - Cliente (`grpc_conn`): `Reply.headers` y `Reply.trailers` por separado; streams con
     `open_stream`, `stream_send`, `stream_close_send`, `stream_recv`, `stream_reply`,
-    `stream_cancel`; `call_once_tls`.
+    `stream_cancel`; `call_once_tls`; `connect_tls_opts` (una CA propia o sin verificación para
+    una conexión). El paquete pide raylang 1.27.110.
   - **Cambio**: `Call` gana dos campos y `Reply` otros dos; un literal `Call { … }` o
     `Reply { … }` escrito a mano hay que completarlo.
 

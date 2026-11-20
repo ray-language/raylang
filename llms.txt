@@ -740,6 +740,10 @@ Beyond the embedded stdlib there is a Tier-2 package layer, used via `ray.toml`
 `[dependencies]` (path or registry): `net` (production webserver: keep-alive, TLS, SSE,
 WebSocket, streaming, static files with ETag/Range; gRPC: `net/grpc_server` unary server
 over h2c with a `Router` (gRPC over TLS: wrap the accepted socket with `net.tls_accept_alpn(h, cert, key, ["h2"])` from `std/net` — plain `tls_accept` advertises no ALPN and gRPC clients refuse it; `net.tls_alpn(h)` = the negotiated protocol, `""` if none), `net/grpc_conn` persistent client h2c/TLS, `net/grpc_status`;
+net 0.17: streaming handlers with `route_stream` (the handler pulls with `recv` and pushes with `send`),
+response headers and trailers with `set_header` and `set_trailer`, a TLS listener with `bind_tls`,
+reflection for grpcurl with `net/grpc_reflection`, client streams with `open_stream`, and a private CA
+or no verification for one connection with `connect_tls_opts` over `net.tls_connect_opts`;
 messages are protobuf bytes from `std/protobuf` — codecs are hand-written, no `.proto`
 generator yet; infra: `net/udp` — UDP datagrams, `bind(host, port)`, `send_to(h, host, port,
 data)`, `recv_from(h) -> Result<Packet{host, port, data}, string>`, yields the fiber and honors

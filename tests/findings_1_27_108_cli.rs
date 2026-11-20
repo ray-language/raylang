@@ -152,3 +152,34 @@ fn a_loose_module_keeps_the_prelude_function_it_shares_a_name_with() {
     assert_eq!(code, 0, "{err}");
     assert_eq!(out, "42\n");
 }
+
+/// Una función de la raíz con el nombre de una del prelude que es raylang puro (`try_call`): los
+/// módulos siguen llamando a la del prelude (el alias `try_call#prelude`). En nativo el alias se
+/// trataba como el nombre pelado, su tipo salía el de la función de la raíz y la función del
+/// módulo que lo llamaba se emitía como un stub que fallaba al ejecutarse (así dejó de correr el
+/// handler de `net/grpc_server` en un programa que definía su propio `try_call`).
+#[test]
+fn a_root_function_named_like_a_prelude_one_does_not_break_modules_natively() {
+    let d = tmp("root_try_call");
+    std::fs::create_dir_all(d.join("src")).unwrap();
+    std::fs::write(d.join("ray.toml"), "[package]\nname = \"tc\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::write(
+        d.join("src/guard.ray"),
+        "pub fn safe(f: fn() -> int) -> string {\n    match (try_call(f)) {\n        Result.Ok(v) => \"ok ${v}\",\n        Result.Err(e) => \"caught: ${e}\",\n    }\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        d.join("src/main.ray"),
+        "import guard;\n\nfn try_call(label: string, n: int) {\n    print(\"mine: ${label} ${n}\");\n}\n\nfn main() -> int {\n    try_call(\"root\", 1);\n    print(guard.safe(fn() -> int { 41 + 1 }));\n    print(guard.safe(fn() -> int {\n        panic(\"boom\");\n        0\n    }));\n    0\n}\n",
+    )
+    .unwrap();
+    let expected = "mine: root 1\nok 42\ncaught: boom\n";
+    let (out, err, code) = ray(&d, &["run"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, expected);
+    let (out, err, code) = ray(&d, &["build", "--native", "-o", "tc"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(!err.contains("emitted as stubs") && !out.contains("emitted as stubs"), "{out}{err}");
+    let native = Command::new(d.join("tc")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&native.stdout), expected, "{}", String::from_utf8_lossy(&native.stderr));
+}

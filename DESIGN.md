@@ -21572,8 +21572,24 @@ funciona sin dar nada. Para `describe` hacen falta los descriptores, que no se p
 **Cliente.** `grpc_conn` lleva un stream a la vez por conexión; `Reply` separa cabeceras y
 trailers según el HEADERS en que llegaron.
 
-**Lo que queda de #387.** Las opciones TLS por conexión (`ca_pem`, `insecure`) necesitan un
-primitivo nuevo en el núcleo: `std/net` solo ofrece `tls_connect_h2(host, port)`.
+**Opciones TLS por conexión.** `std/net` solo tenía `tls_connect_h2(host, port)`: la CA se
+cambiaba con `SSL_CERT_FILE` para todo el proceso (raygrpc se relanzaba a sí mismo para su
+`-cacert`). Se añade el primitivo `__tls_connect_opts` y `net.tls_connect_opts(host, port,
+TlsOptions { alpn, ca_pem, insecure })`. Con `ca_pem`, la conexión confía SOLO en esa CA (lo que
+hace `grpcurl -cacert`): sumarla a las raíces del sistema, como hace `SSL_CERT_FILE`, no sirve
+para fijar una CA privada. `insecure` reutiliza el verificador de `tls_upgrade_insecure`. La
+config la arma `ray_runtime::tls::client_config_opts`, que comparten la VM y el nativo. Como
+`net/grpc_conn` la usa, el paquete pide raylang 1.27.110 y no se puede publicar antes de esa
+release.
+
+**Un fallo del nativo que destapó la prueba.** El primer test de gRPC sobre TLS definía una
+función propia `try_call` en `main.ray`. En la VM no pasa nada: los módulos llaman al alias
+`try_call#prelude`. En nativo, `x#prelude` se trataba siempre como el builtin interceptado `x`,
+quitándole el sufijo; pero `try_call` es raylang puro y su definición se emite, así que el
+nombre pelado resolvía a la función de la raíz, el tipo de la llamada salía `unit` y `respond`
+de `net/grpc_server` se emitía como stub. El síntoma era engañoso (el handler no corría y la
+llamada vencía por plazo; parecía un cuelgue de TLS). `split_prelude_alias` distingue ahora el
+alias de una función emitida del de un builtin interceptado.
 
 Verificado con `grpcurl` 1.9 real: `list`, `describe`, una llamada unaria con sus cabeceras y
 trailers, un stream bidireccional de tres mensajes y lo mismo sobre TLS con `-cacert`.

@@ -913,6 +913,9 @@ pub enum OpCode {
     /// Como `TlsConnect` pero ofreciendo **ALPN `h2`** (HTTP/2) y exigiendo que el servidor lo negocie
     /// (M31.2a). Primitivo `__tls_connect_h2`; el prelude → `Result<int,string>`.
     TlsConnectH2,
+    /// raygrpc #387: TLS de cliente con opciones por conexión (ALPN, CA propia, sin verificar).
+    /// Saca `insecure` (bool), `ca_pem`, `protocols`, `port` y `host`. Primitivo `__tls_connect_opts`.
+    TlsConnectOpts,
     /// Saca la clave, el cert (strings) y el handle (int); envuelve un socket TCP aceptado en una sesión
     /// **TLS de servidor** y empuja un `[string]` etiquetado. Primitivo `__tls_accept` (M19.4b); prelude
     /// → `Result<int,string>`. Habilita servir `https`/`wss`.

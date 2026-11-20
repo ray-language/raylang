@@ -354,3 +354,89 @@ fn a_waiting_stream_handler_does_not_block_the_other_calls_of_its_connection() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert_eq!(stdout, "stream 1: <one>\nstream 3: unary\nstream 1: <two>\n", "{}", String::from_utf8_lossy(&out.stderr));
 }
+
+/// raygrpc #385/#387: gRPC sobre TLS (`bind_tls`, ALPN h2) y las opciones TLS por conexión del
+/// cliente (`connect_tls_opts`): una CA propia sin `SSL_CERT_FILE`, y el modo sin verificar. El
+/// certificado de `tests/fixtures` lo firma su CA de prueba. VM y nativo, servidor y cliente en el
+/// mismo proceso.
+const TLS_MAIN: &str = r#"import std/fs;
+import std/net;
+import net/grpc_server;
+import net/grpc_conn;
+from net/grpc_status import Status;
+from net/grpc_server import Call;
+
+fn say(c: Call) -> Result<bytes, Status> {
+    Result.Ok(c.message)
+}
+
+fn build() -> grpc_server.Router {
+    grpc_server.router().route("/t.S/Say", say)
+}
+
+fn attempt(label: string, opened: Result<grpc_conn.Conn, string>) {
+    let none: Map<string, string> = Map.new();
+    match (opened) {
+        Result.Ok(c) => {
+            match (grpc_conn.call(c, "/t.S/Say", b"hola", none, 3000)) {
+                Result.Ok(r) => print("${label}: ${r.status} ${from_utf8(r.message).unwrap_or("?")}"),
+                Result.Err(e) => print("${label}: call ERR ${e}"),
+            }
+            grpc_conn.disconnect(c);
+        },
+        Result.Err(e) => print("${label}: ERR ${e.contains("certificate") || e.contains("UnknownIssuer") || e.contains("PEM")}"),
+    }
+}
+
+fn main() -> int {
+    let l = grpc_server.bind_tls("127.0.0.1", 0, fs.read_file("cert.pem").unwrap(), fs.read_file("key.pem").unwrap()).unwrap();
+    let port = l.port;
+    let _ = spawn(fn() -> int {
+        let _ = grpc_server.serve_router(l, build);
+        0
+    });
+    let ca = fs.read_file("ca.pem").unwrap();
+    // Sin la CA de prueba, el certificado no verifica.
+    attempt("default roots", grpc_conn.connect_tls("localhost", port));
+    // Con la CA propia, solo para esta conexión.
+    var with_ca = net.tls_options();
+    with_ca.alpn = ["h2"];
+    with_ca.ca_pem = ca;
+    attempt("own ca", grpc_conn.connect_tls_opts("localhost", port, with_ca));
+    // Sin verificar.
+    var insecure = net.tls_options();
+    insecure.alpn = ["h2"];
+    insecure.insecure = true;
+    attempt("insecure", grpc_conn.connect_tls_opts("localhost", port, insecure));
+    // Una CA que no es un PEM.
+    var bad = net.tls_options();
+    bad.ca_pem = "/path/to/ca.pem";
+    attempt("bad ca", grpc_conn.connect_tls_opts("localhost", port, bad));
+    exit(0);
+    0
+}
+"#;
+
+#[test]
+fn grpc_over_tls_with_per_connection_options() {
+    let base = std::env::temp_dir().join("ray_grpc_streaming_tls");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(base.join("src")).unwrap();
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    std::fs::write(
+        base.join("ray.toml"),
+        format!("[package]\nname = \"probe\"\nversion = \"0.1.0\"\n\n[dependencies]\nnet = \"path:{}/packages/net\"\n", repo.display()),
+    )
+    .unwrap();
+    for (from, to) in [("tls_cert.pem", "cert.pem"), ("tls_key.pem", "key.pem"), ("tls_ca.pem", "ca.pem")] {
+        std::fs::copy(repo.join("tests/fixtures").join(from), base.join(to)).unwrap();
+    }
+    std::fs::write(base.join("src/main.ray"), TLS_MAIN).unwrap();
+    let expected = "default roots: ERR true\nown ca: 0 hola\ninsecure: 0 hola\nbad ca: ERR true\n";
+    let out = Command::new(BIN).arg("run").current_dir(&base).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), expected, "{}", String::from_utf8_lossy(&out.stderr));
+    let built = Command::new(BIN).args(["build", "--native", "-o", "probe.bin"]).current_dir(&base).output().unwrap();
+    assert!(built.status.success(), "{}", String::from_utf8_lossy(&built.stderr));
+    let native = Command::new(base.join("probe.bin")).current_dir(&base).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&native.stdout), expected, "{}", String::from_utf8_lossy(&native.stderr));
+}

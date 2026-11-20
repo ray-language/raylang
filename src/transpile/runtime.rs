@@ -1879,6 +1879,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "fn __ray_tls_connect_h2(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
                 "    let host = host.to_string();\n",
                 "    match ray_runtime::fibers::run_blocking(move || ray_runtime::tls::connect_h2(&host, port)) { Ok(s) => { let _ = s.set_nonblocking(true); __ray_tls_tag_ok(__ray_tls_wrap(s)) }, Err(e) => __ray_tls_tag_err(e) } }\n",
+                "fn __ray_tls_connect_opts(host: &str, port: i64, protocols: &str, ca_pem: &str, insecure: bool) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+                "    let (host, protocols, ca_pem) = (host.to_string(), protocols.to_string(), ca_pem.to_string());\n",
+                "    match ray_runtime::fibers::run_blocking(move || ray_runtime::tls::connect_opts(&host, port, &protocols, &ca_pem, insecure)) { Ok(s) => { let _ = s.set_nonblocking(true); __ray_tls_tag_ok(__ray_tls_wrap(s)) }, Err(e) => __ray_tls_tag_err(e) } }\n",
             ));
         } else {
             out.push_str(concat!(
@@ -1886,6 +1889,8 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    match ray_runtime::tls::connect(host, port) { Ok(s) => __ray_tls_tag_ok(__ray_tls_wrap(s)), Err(e) => __ray_tls_tag_err(e) } }\n",
                 "fn __ray_tls_connect_h2(host: &str, port: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
                 "    match ray_runtime::tls::connect_h2(host, port) { Ok(s) => __ray_tls_tag_ok(__ray_tls_wrap(s)), Err(e) => __ray_tls_tag_err(e) } }\n",
+                "fn __ray_tls_connect_opts(host: &str, port: i64, protocols: &str, ca_pem: &str, insecure: bool) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
+                "    match ray_runtime::tls::connect_opts(host, port, protocols, ca_pem, insecure) { Ok(s) => __ray_tls_tag_ok(__ray_tls_wrap(s)), Err(e) => __ray_tls_tag_err(e) } }\n",
             ));
         }
         out.push_str(concat!(

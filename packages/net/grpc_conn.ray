@@ -62,6 +62,30 @@ pub fn connect_tls(host: string, port: int) -> Result<Conn, string> {
     open_conn(handle, host, port, true)
 }
 
+/// Connects over TLS with per-connection options (net 0.17.0, raygrpc #387; needs raylang
+/// 1.27.110): `opts.ca_pem` trusts your own certificate authority for this connection only
+/// (what `grpcurl -cacert` does, instead of `SSL_CERT_FILE` for the whole process),
+/// `opts.insecure` skips the verification (development), and `opts.alpn` are the protocols to
+/// offer — `["h2"]` is what gRPC servers expect and the server must then pick it; `[]` offers
+/// none, for a server that speaks HTTP/2 over TLS without ALPN. Start from `net.tls_options()`.
+pub fn connect_tls_opts(host: string, port: int, opts: net.TlsOptions) -> Result<Conn, string> {
+    let handle = net.tls_connect_opts(host, port, opts)?;
+    if (opts.alpn.len() > 0) {
+        let picked = match (net.tls_alpn(handle)) {
+            Result.Ok(p) => p,
+            Result.Err(e) => {
+                close(handle);
+                return Result.Err(e);
+            },
+        };
+        if (picked != "h2") {
+            close(handle);
+            return Result.Err("the server did not negotiate HTTP/2 (ALPN 'h2')");
+        }
+    }
+    open_conn(handle, host, port, true)
+}
+
 fn open_conn(handle: int, host: string, port: int, tls: bool) -> Result<Conn, string> {
     let l = h2.new_link(handle);
     match (h2.write(l, preface() + settings_empty())) {

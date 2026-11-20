@@ -197,6 +197,9 @@ struct Stream {
     parts: [bytes],
     size: int,
     too_big: bool,
+    // raygrpc #385: la ruta no tiene handler ni hay fallback: se responde UNIMPLEMENTED al ver
+    // las cabeceras, sin esperar el END_STREAM (un stream bidireccional no lo envía nunca).
+    unknown: bool,
     deadline: int,
 }
 
@@ -265,7 +268,9 @@ fn run_conn(l: h2.Link, opts: Options, r: Router) -> Result<int, string> {
     h2.write(l, settings_empty())?;
     let streams: Map<int, Stream> = Map.new();
     let ready = Ready { ids: [], head: 0 };
-    let on_frame = fn(fr: h2.Frame) -> Result<int, string> { on_stream_frame(l, streams, ready, opts, fr) };
+    let on_frame = fn(fr: h2.Frame) -> Result<int, string> {
+        on_stream_frame(l, streams, ready, opts, r, fr)
+    };
     while (true) {
         let fr = h2.read_frame(l)?;
         if (!h2.control(l, fr)?) {
@@ -297,6 +302,7 @@ fn on_stream_frame(
     streams: Map<int, Stream>,
     ready: Ready,
     opts: Options,
+    r: Router,
     fr: h2.Frame
 ) -> Result<int, string> {
     let id = fr.stream_id;
@@ -324,6 +330,7 @@ fn on_stream_frame(
             }
         }
         let parts: [bytes] = [];
+        let unknown = !r.routes.contains_key(h2.find(hs, ":path")) && !r.routes.contains_key("");
         streams.insert(
             id,
             Stream {
@@ -332,11 +339,12 @@ fn on_stream_frame(
                 parts: parts,
                 size: 0,
                 too_big: false,
+                unknown: unknown,
                 deadline: deadline
             }
         );
         h2.open_stream(l, id);
-        if (end) {
+        if (end || unknown) {
             ready.ids.push(id);
         }
         return Result.Ok(0);
@@ -390,6 +398,11 @@ fn metadata_of(hs: [HEntry]) -> Map<string, string> {
 
 // Comprueba la petición y desenmarca su mensaje; Err(Status) cuando no se puede servir.
 fn request_message(s: Stream, opts: Options) -> Result<bytes, Status> {
+    if (s.unknown) {
+        return Result.Err(
+            status.new(status.UNIMPLEMENTED, "unknown method ${h2.find(s.headers, ":path")}")
+        );
+    }
     if (s.too_big) {
         return Result.Err(
             status.new(

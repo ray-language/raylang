@@ -29,28 +29,11 @@ fn xor_bytes(a: bytes, b: bytes) -> bytes {
     bytes_of(out)
 }
 
-// PBKDF2-HMAC-SHA256 con dkLen = 32 (un solo bloque): result = U1 ⊕ U2 ⊕ … ⊕ Uc, con U1 = HMAC(pw,
-// salt‖INT(1)) y Ui = HMAC(pw, U_{i-1}).
+// PBKDF2-HMAC-SHA256 con dkLen = 32. raycdc #408: lo calcula `std/crypto` (el bucle de HMAC escrito
+// aquí costaba 44 ms por conexión a mongod con 15 000 iteraciones, frente a 1 ms). `scram_final` ya
+// acota las iteraciones a 1..=10 000 000, dentro de lo que el builtin acepta.
 fn pbkdf2_sha256(pw: bytes, salt: bytes, iterations: int) -> bytes {
-    var msg: [int] = [];
-    var i = 0;
-    while (i < salt.len()) {
-        msg.push(salt[i]);
-        i = i + 1;
-    }
-    msg.push(0);  // INT(1) big-endian
-    msg.push(0);
-    msg.push(0);
-    msg.push(1);
-    var u = crypto.hmac_sha256(pw, bytes_of(msg));  // U1
-    var result = u;
-    var c = 1;
-    while (c < iterations) {
-        u = crypto.hmac_sha256(pw, u);  // Ui = HMAC(pw, U_{i-1})
-        result = xor_bytes(result, u);
-        c = c + 1;
-    }
-    result
+    crypto.pbkdf2_hmac_sha256(pw, salt, iterations, 32).unwrap_or(b"")
 }
 
 // RFC 5802 §5.1: en el nombre de usuario (`n=`), '=' se envía como '=3D' y ',' como '=2C'. Sin esto,

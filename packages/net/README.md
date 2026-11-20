@@ -191,6 +191,16 @@ fn main() -> int {
 - **`net/oauth2`** — flujo OAuth2 (client credentials, authorization code). Sobre `net/http` + `std/json`
   + `std/url`.
 - **`net/webserver`** — servidor HTTP async + SSE (sobre el scheduler de fibras). Sobre `std/url`.
+  0.15.1: **`serve_raw_on(listener, handler)`**, `serve_raw_on_limits` y `serve_raw_with_on`
+  (raycdc #406) — el handler crudo (petición + conexión: un upgrade a WebSocket, SSE) sobre un
+  listener ya abierto, para enlazar el puerto 0 y conocerlo antes de servir. El upgrade:
+  `net.socket_write(conn, websocket.handshake_response(req.headers.get_or("sec-websocket-key", "")))`
+  y después `websocket.server_conn(conn)` + `read_message`. Con **`quiet()`**, el cliente que
+  corta a mitad de la respuesta (EPIPE, ECONNRESET) ya no se anota en stderr (raycrawl #371): es
+  el cliente que se va, como los 400 y 408. `net/scram` deriva la clave con
+  `crypto.pbkdf2_hmac_sha256` (raycdc #408: 44 ms → 1 ms por conexión a mongod en la VM), y
+  `net/grpc_server` responde UNIMPLEMENTED a una ruta sin handler en cuanto llegan las
+  cabeceras, sin esperar a que el cliente cierre su lado (raygrpc #385).
   0.15.0 (rayblob #284): **cuerpo de la petición bajo demanda** — `options().with_body_stream()`
   deja el cuerpo en la conexión: `req.body` llega vacío, `req.body_stream` es `Some(BodyStream)` y el
   handler tira de él con `next_body_chunk(req) -> Result<Option<bytes>, string>` (un trozo por

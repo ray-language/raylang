@@ -891,7 +891,12 @@ fn module_prefix(m: &Module) -> Option<String> {
 /// builtin («send expects 2 arguments»). Aquí se le da el mismo nombre global que tendría
 /// importada, solo a esas funciones: el resto de la entrada sigue sin namespacing.
 fn entry_shadow_name(m: &Module, name: &str) -> Option<String> {
-    if !m.is_entry || name.starts_with("__") || !crate::builtins::is_builtin(name) {
+    // Lo mismo con una función del PRELUDE (`fn get` en `db/bson`): suelta, el módulo pasaba por
+    // raíz y su `get` redefinía la del prelude para todo el archivo, así que `m.get(k)` sobre un
+    // `Map` ligaba a la `get` del módulo («expected [Field], got Map<…>»). En el proyecto esa
+    // función es `bson::get` y el `get` del prelude sigue visible.
+    let shadows = crate::builtins::is_builtin(name) || crate::prelude::functions().iter().any(|f| f.name == name);
+    if !m.is_entry || name.starts_with("__") || !shadows {
         return None;
     }
     if m.program.functions.iter().any(|f| f.name == "main") {

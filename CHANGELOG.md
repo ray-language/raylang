@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ray check` de un módulo suelto con una función de nombre de prelude**: `ray check
+  packages/db/bson.ray` fallaba («argument 1 of 'get': expected [Field], got Map<…>») porque el
+  `get` del módulo redefinía el del prelude para todo el archivo. Ahora da el mismo veredicto que
+  dentro del proyecto, como ya pasaba con los nombres de builtin (raycdc #407).
+
 - **Paquete `db` 0.9.0 — `db/bson` con `Decimal128` y subtipos binarios** (raycdc #402):
   - `Bson.Decimal128(bytes)` con `decimal128_to_string` y `decimal128_from_string`. Un
     `NumberDecimal` ya no hace fallar `mongo.find` (`unsupported BSON type: 19`).

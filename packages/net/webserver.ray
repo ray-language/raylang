@@ -2555,6 +2555,22 @@ fn default_http_conf() -> HttpConf {
     HttpConf { stream_bodies: false, pass_too_large: false, quiet: false }
 }
 
+// raycrawl #371: ¿el fallo al escribir la respuesta es el CLIENTE que se fue (cortó la descarga,
+// cerró la pestaña)? EPIPE / ECONNRESET en Unix, 10053 / 10054 en Windows. No es un error del
+// servidor: con `quiet` no se anota, como los 400 y 408.
+fn client_went_away(e: string) -> bool {
+    e.contains("Broken pipe")
+        || e.contains("Connection reset")
+        || e.contains("os error 10053")
+        || e.contains("os error 10054")
+}
+
+fn log_response_error(e: string, conf: HttpConf) {
+    if (!(conf.quiet && client_went_away(e))) {
+        eprint("response: " + e);
+    }
+}
+
 fn handle_http(conn: int, handler: fn(Request) -> Response, limits: Limits) {
     handle_http_with(conn, handler, limits, default_http_conf());
 }
@@ -2584,7 +2600,7 @@ fn handle_http_with(conn: int, handler: fn(Request) -> Response, limits: Limits,
                     Result.Err(denied) => {
                         match (send_response(conn, denied)) {
                             Result.Ok(_) => { },
-                            Result.Err(e) => eprint("response: " + e),
+                            Result.Err(e) => log_response_error(e, conf),
                         }
                         follow = false;
                         continue;
@@ -2615,7 +2631,7 @@ fn handle_http_with(conn: int, handler: fn(Request) -> Response, limits: Limits,
                         match (send_response_keep(conn, resp, !close && !unread, is_head, cx)) {
                             Result.Ok(_) => { },
                             Result.Err(e) => {
-                                eprint("response: " + e);
+                                log_response_error(e, conf);
                                 follow = false;
                             },
                         }
@@ -3203,6 +3219,37 @@ pub fn serve_on_limits(
 ) -> Result<int, string> {
     accept_loop(listener, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
         handle_http(c, handler, limits);
+    })
+}
+
+/// Like `serve_raw`, on an already-open listener (see `serve_on` for the bind/serve split): the
+/// handler receives the request AND the connection, which is what a WebSocket upgrade or an SSE
+/// stream needs. Bind with port 0, read `net.local_port(listener)` and serve:
+/// `serve_raw_on(listener, fn(req: Request, conn: int) { if (websocket.is_upgrade(req)) { … } })`.
+pub fn serve_raw_on(listener: int, handler: fn(Request, int)) -> Result<int, string> {
+    serve_raw_on_limits(listener, default_limits(), handler)
+}
+
+/// Like `serve_raw_on`, with explicit safety limits (see `Limits`).
+pub fn serve_raw_on_limits(
+    listener: int,
+    limits: Limits,
+    handler: fn(Request, int)
+) -> Result<int, string> {
+    accept_loop(listener, limits, fn(c: int) -> Result<int, string> { Result.Ok(c) }, fn(c: int) {
+        handle(c, handler, limits);
+    })
+}
+
+/// Like `serve_raw_with` (a handler FACTORY, run inside each connection's fiber), on an
+/// already-open listener.
+pub fn serve_raw_with_on(
+    listener: int,
+    make_handler: fn() -> fn(Request, int)
+) -> Result<int, string> {
+    serve_raw_on_limits(listener, default_limits(), fn(req: Request, conn: int) {
+        let h: fn(Request, int) = make_handler();
+        h(req, conn)
     })
 }
 

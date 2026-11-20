@@ -6,6 +6,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Paquete `net` 0.15.1** (hallazgos de la re-medición de 1.27.108):
+  - `webserver.serve_raw_on(listener, handler)`, `serve_raw_on_limits` y `serve_raw_with_on`
+    (raycdc #406): el handler crudo sobre un listener ya abierto, para un WebSocket o un SSE en
+    el puerto 0.
+  - Con `quiet()`, el cliente que corta a mitad de la respuesta ya no deja
+    `response: Broken pipe` en stderr (raycrawl #371).
+  - `net/scram` deriva la clave con `crypto.pbkdf2_hmac_sha256` (raycdc #408).
+  - `net/grpc_server` responde UNIMPLEMENTED a una ruta sin handler al llegar las cabeceras
+    (raygrpc #385); antes un stream que no cerraba su lado esperaba hasta el plazo del cliente.
+
 ## 1.27.109 — 2026-11-20
 
 - **`[app] display_name`** (ray-sublime #454): el nombre visible de la app aparte del identificador.

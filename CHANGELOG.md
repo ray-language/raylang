@@ -6,6 +6,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Paquete `db` 0.9.0 — `db/bson` con `Decimal128` y subtipos binarios** (raycdc #402):
+  - `Bson.Decimal128(bytes)` con `decimal128_to_string` y `decimal128_from_string`. Un
+    `NumberDecimal` ya no hace fallar `mongo.find` (`unsupported BSON type: 19`).
+  - `Bson.BinSub(subtipo, bytes)` para los binarios con subtipo (un UUID es `BinSub(4, …)`).
+    **Cambio**: al decodificar, un binario de subtipo distinto de 0 llega como `BinSub` y no como
+    `Bin`.
+  - El codificador escribe sobre `bytesbuilder`: 2000 documentos de 11 KB, de 2141 ms a 66 ms en
+    la VM.
+
 - **Paquete `net` 0.15.1** (hallazgos de la re-medición de 1.27.108):
   - `webserver.serve_raw_on(listener, handler)`, `serve_raw_on_limits` y `serve_raw_with_on`
     (raycdc #406): el handler crudo sobre un listener ya abierto, para un WebSocket o un SSE en

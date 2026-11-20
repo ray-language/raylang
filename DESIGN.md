@@ -21487,3 +21487,31 @@ Queda sin arreglar, anotado en IDEAS §129: la forma por defecto de un struct co
 difiere entre la VM (`[1, z]`) y nativo (`(1, z)`). Ya pasaba con `print`; ahora también llega a
 un string.
 
+## 469. `db/bson`: Decimal128, subtipos binarios y el codificador (raycdc #402, nov 2026)
+
+**Decimal128.** La variante lleva los 16 octetos tal cual (`Decimal128(bytes)`), no un valor
+decodificado: raylang no tiene un decimal de 34 dígitos y convertir a `float` perdería justo lo
+que un `NumberDecimal` existe para guardar (los precios, los ceros a la derecha). El texto sale
+y entra con `decimal128_to_string` / `decimal128_from_string`, que siguen el algoritmo de la
+especificación de BSON (notación científica cuando el exponente es positivo o el ajustado baja
+de -6). `from_string` es exacta: no redondea; un exponente fuera de rango se absorbe con ceros
+del coeficiente cuando se puede (`1E+6112` = `10E+6111`) y si no es `Err`. El coeficiente (113
+bits) se divide y multiplica por 10 a mano sobre sus octetos, sin depender de `std/bigint`: así
+`db` no arrastra ese subsistema a los binarios nativos.
+
+**Subtipos binarios.** Se añadió `BinSub(subtipo, bytes)` en vez de cambiar `Bin(bytes)` a dos
+campos, que rompía a todo el que construye o empareja `Bin` (el propio `db/mongo` lo hace para
+SCRAM). El coste es un cambio de comportamiento al decodificar: un binario de subtipo distinto
+de 0 llega ahora como `BinSub`. Se aceptó porque la alternativa, seguir devolviendo `Bin` y
+perder el subtipo, es el fallo que reportaba el hallazgo (un CDC no puede reescribir un UUID
+como binario genérico). Va como 0.9.0 y anotado como cambio.
+
+**Codificador.** Armaba un `[int]` octeto a octeto y copiaba cada documento anidado otra vez.
+Ahora escribe sobre un `BytesBuilder`: un string o un binario entran como un trozo. Medido con
+2000 documentos de 11 KB (20 strings y un binario de 10 KB): 2141 ms → 66 ms en la VM, 16 ms en
+nativo. Los vectores de bsonspec.org siguen saliendo octeto a octeto.
+
+**Verificación.** Además de los vectores, contra un `mongod` 9.0.4 real en los dos sentidos: lo
+que inserta mongosh (`NumberDecimal`, `UUID`, `BinData`) se lee con los mismos dígitos, y lo que
+inserta raylang lo imprime mongosh igual que el texto de origen.
+

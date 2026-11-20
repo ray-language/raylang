@@ -11,13 +11,19 @@
 //     de round-trip es semántica, no de octetos.
 //   - `Double` usa los bits IEEE 754 (`float_bits`/`float_from_bits` de std/math, M54.1a). Es
 //     obligatorio para un cliente: el propio servidor responde `{ ok: 1.0 }` como double.
-//   - `Bin` decodifica cualquier subtipo (se descarta) y codifica subtipo 0 (genérico).
-//   - `Date` (0x09, epoch-ms) y `Timestamp` (0x11, interno) soportados; los no soportados
-//     (Regex, Decimal128, …) → error claro al decodificar.
+//   - `Bin` es el binario genérico (subtipo 0). Cualquier otro subtipo (UUID 4, el antiguo 2, MD5…)
+//     es `BinSub(subtipo, octetos)` al decodificar y al codificar (raycdc #402, db 0.9.0; antes el
+//     subtipo se descartaba y todo volvía como `Bin`).
+//   - `Date` (0x09, epoch-ms) y `Timestamp` (0x11, interno) soportados.
+//   - `Decimal128` (0x13) lleva sus 16 octetos tal cual (IEEE 754-2008 BID, little-endian);
+//     `decimal128_to_string` / `decimal128_from_string` lo pasan a texto y de vuelta sin perder
+//     dígitos. Los no soportados (Regex, …) → error claro al decodificar.
 //
 // Gramática (recordatorios): el enum recursivo va por el heap ([Field]/[Bson]); los enteros LE
 // se arman por mitades de 32 bits (b7<<56 desbordaría i64; hi*2^32+lo es exacto y total).
 import std/math;
+import std/collections/bytesbuilder;
+from std/collections/bytesbuilder import BytesBuilder;
 from std/json import Json, parse;
 from net/time import from_epoch_millis, to_iso8601;
 
@@ -41,6 +47,14 @@ pub enum Bson {
     /// A 32-bit integer (type 0x10) for ENCODING only — what commands like `saslContinue`
     /// (`conversationId`) demand on MongoDB 6+. Decoded int32 values still come back as `Int`.
     Int32(int),
+    /// Binary data with a subtype other than 0 (type 0x05): `BinSub(4, uuid_bytes)` is a UUID,
+    /// 2 the legacy binary, 5 an MD5. `Bin(b)` stays the generic subtype 0; decoding yields
+    /// `BinSub` for every other subtype (before db 0.9.0 the subtype was dropped).
+    BinSub(int, bytes),
+    /// A `NumberDecimal` (type 0x13): the 16 raw octets of an IEEE 754-2008 decimal128 (BID,
+    /// little-endian, as on the wire). `decimal128_to_string` gives its text (`"12.50"`) and
+    /// `decimal128_from_string` builds one; `dump` shows `decimal(12.50)`.
+    Decimal128(bytes),
 }
 
 /// One element of a document: a name and its value.
@@ -82,45 +96,44 @@ fn type_byte(v: Bson) -> int {
         Bson.Date(_) => 9,
         Bson.Timestamp(_) => 17,
         Bson.Int32(_) => 16,
+        Bson.BinSub(_, _) => 5,
+        Bson.Decimal128(_) => 19,
     };
 }
 
-fn enc_le32(out: [int], n: int) {
-    out.push(n & 255);
-    out.push(n >> 8 & 255);
-    out.push(n >> 16 & 255);
-    out.push(n >> 24 & 255);
+// raycdc #402: el codificador escribe sobre un `BytesBuilder`. Antes armaba un `[int]` octeto a
+// octeto (2375 ms frente a 148 ms en la VM para 2000 documentos de 10,9 KB): un string o un binario
+// entran ahora como UN trozo.
+fn enc_le32(out: BytesBuilder, n: int) {
+    bytesbuilder.push_byte(out, n);
+    bytesbuilder.push_byte(out, n >> 8);
+    bytesbuilder.push_byte(out, n >> 16);
+    bytesbuilder.push_byte(out, n >> 24);
 }
 
-fn enc_le64(out: [int], n: int) {
+fn enc_le64(out: BytesBuilder, n: int) {
     var i = 0;
     while (i < 8) {
-        out.push(n >> 8 * i & 255);
+        bytesbuilder.push_byte(out, n >> 8 * i);
         i = i + 1;
     }
 }
 
 // Un cstring: los octetos UTF-8 + el terminador 0. (BSON prohíbe 0x00 dentro de un nombre;
 // no lo validamos: un nombre raylang legítimo no lo trae.)
-fn enc_cstring(out: [int], s: string) {
-    let bs = s.to_bytes();
-    var i = 0;
-    while (i < bs.len()) {
-        out.push(bs[i]);
-        i = i + 1;
-    }
-    out.push(0);
+fn enc_cstring(out: BytesBuilder, s: string) {
+    bytesbuilder.push(out, s.to_bytes());
+    bytesbuilder.push_byte(out, 0);
 }
 
-fn enc_bytes(out: [int], b: bytes) {
-    var i = 0;
-    while (i < b.len()) {
-        out.push(b[i]);
-        i = i + 1;
-    }
+fn enc_binary(out: BytesBuilder, subtype: int, b: bytes) {
+    // binary: int32 longitud + subtipo + octetos.
+    enc_le32(out, b.len());
+    bytesbuilder.push_byte(out, subtype);
+    bytesbuilder.push(out, b);
 }
 
-fn enc_value(out: [int], v: Bson) {
+fn enc_value(out: BytesBuilder, v: Bson) {
     match (v) {
         Bson.Double(f) => {
             enc_le64(out, math.float_bits(f));
@@ -129,16 +142,11 @@ fn enc_value(out: [int], v: Bson) {
             // string: int32 (longitud en octetos + 1) + UTF-8 + 0x00.
             let bs = s.to_bytes();
             enc_le32(out, bs.len() + 1);
-            enc_bytes(out, bs);
-            out.push(0);
+            bytesbuilder.push(out, bs);
+            bytesbuilder.push_byte(out, 0);
         },
         Bson.Doc(fields) => {
-            let inner = enc_doc(fields);
-            var i = 0;
-            while (i < inner.len()) {
-                out.push(inner[i]);
-                i = i + 1;
-            }
+            bytesbuilder.push(out, enc_doc(fields));
         },
         Bson.Arr(items) => {
             // Un arreglo ES un documento con claves "0", "1", … (así lo define el spec).
@@ -148,28 +156,32 @@ fn enc_value(out: [int], v: Bson) {
                 fields.push(Field { name: to_string(i), value: items[i] });
                 i = i + 1;
             }
-            let inner = enc_doc(fields);
-            var j = 0;
-            while (j < inner.len()) {
-                out.push(inner[j]);
-                j = j + 1;
-            }
+            bytesbuilder.push(out, enc_doc(fields));
         },
         Bson.Bin(b) => {
-            // binary: int32 longitud + subtipo (0 = genérico) + octetos.
-            enc_le32(out, b.len());
-            out.push(0);
-            enc_bytes(out, b);
+            enc_binary(out, 0, b);
+        },
+        Bson.BinSub(subtype, b) => {
+            if (subtype < 0 || subtype > 255) {
+                panic("a BSON binary subtype is one octet (0..255), not " + to_string(subtype));
+            }
+            enc_binary(out, subtype, b);
         },
         Bson.ObjectId(b) => {
             // 12 octetos exactos; menos/más es un error del programador, no un dato → panic.
             if (b.len() != 12) {
                 panic("ObjectId must have 12 bytes, has " + to_string(b.len()));
             }
-            enc_bytes(out, b);
+            bytesbuilder.push(out, b);
+        },
+        Bson.Decimal128(b) => {
+            if (b.len() != 16) {
+                panic("Decimal128 must have 16 bytes, has " + to_string(b.len()));
+            }
+            bytesbuilder.push(out, b);
         },
         Bson.Bool(x) => {
-            out.push(if (x) { 1 } else { 0 });
+            bytesbuilder.push_byte(out, if (x) { 1 } else { 0 });
         },
         Bson.Null => { },
         Bson.Int(n) => {
@@ -187,32 +199,28 @@ fn enc_value(out: [int], v: Bson) {
     }
 }
 
-// Codifica un documento completo como [int] (para anidar sin re-copiar bytes).
-fn enc_doc(fields: [Field]) -> [int] {
-    var body: [int] = [];
+// Codifica un documento completo (la longitud va delante, así que el cuerpo se arma aparte).
+fn enc_doc(fields: [Field]) -> bytes {
+    let body = bytesbuilder.new();
     var i = 0;
     while (i < fields.len()) {
         let f = fields[i];
-        body.push(type_byte(f.value));
+        bytesbuilder.push_byte(body, type_byte(f.value));
         enc_cstring(body, f.name);
         enc_value(body, f.value);
         i = i + 1;
     }
     // longitud total = 4 (la propia longitud) + cuerpo + 1 (el 0x00 final).
-    var out: [int] = [];
-    enc_le32(out, body.len() + 5);
-    var j = 0;
-    while (j < body.len()) {
-        out.push(body[j]);
-        j = j + 1;
-    }
-    out.push(0);
-    out
+    let out = bytesbuilder.new();
+    enc_le32(out, bytesbuilder.len(body) + 5);
+    bytesbuilder.push(out, bytesbuilder.build(body));
+    bytesbuilder.push_byte(out, 0);
+    bytesbuilder.build(out)
 }
 
 /// Encodes a document (a list of fields) as BSON bytes.
 pub fn encode(fields: [Field]) -> bytes {
-    bytes_of(enc_doc(fields))
+    enc_doc(fields)
 }
 
 // ── Decodificación ───────────────────────────────────────────────────────────
@@ -341,9 +349,12 @@ fn rd_value(d: Dec, t: int, depth: int) -> Result<Bson, string> {
         if (n < 0) {
             return Result.Err(dec_err("negative binary length", start));
         }
-        let _subtype = rd_u8(d)?;
+        let subtype = rd_u8(d)?;
         let raw = rd_exact(d, n)?;
-        return Result.Ok(Bson.Bin(raw));
+        if (subtype == 0) {
+            return Result.Ok(Bson.Bin(raw));
+        }
+        return Result.Ok(Bson.BinSub(subtype, raw));
     }
     if (t == 7) {
         let raw = rd_exact(d, 12)?;
@@ -371,6 +382,10 @@ fn rd_value(d: Dec, t: int, depth: int) -> Result<Bson, string> {
     if (t == 17) {
         let v = rd_le64(d)?;
         return Result.Ok(Bson.Timestamp(v));
+    }
+    if (t == 19) {
+        let raw = rd_exact(d, 16)?;
+        return Result.Ok(Bson.Decimal128(raw));
     }
     Result.Err(dec_err("unsupported BSON type: " + to_string(t), d.pos - 1))
 }
@@ -413,6 +428,234 @@ pub fn decode(b: bytes) -> Result<[Field], string> {
         return Result.Err(dec_err("leftover data after the document", d.pos));
     }
     Result.Ok(fields)
+}
+
+// ── Decimal128 (IEEE 754-2008, BID) ──────────────────────────────────────────
+//
+// 128 bits, little-endian en el cable: signo (bit 127), exponente con sesgo 6176 (14 bits) y
+// coeficiente entero de hasta 34 dígitos (113 bits). El coeficiente no cabe en un `int`: se
+// trata como 15 octetos (los 14 bajos y el bit 112) y se divide/multiplica por 10 a mano.
+const DECIMAL_BIAS: int = 6176;
+
+const DECIMAL_DIGITS: int = 34;
+
+// Los dígitos decimales de un entero sin signo dado por sus octetos big-endian ("0" si es cero).
+fn magnitude_digits(big_endian: [int]) -> string {
+    var n = big_endian;
+    var digits: [int] = [];
+    var nonzero = true;
+    while (nonzero) {
+        var rem = 0;
+        nonzero = false;
+        var i = 0;
+        while (i < n.len()) {
+            let cur = rem * 256 + n[i];
+            n[i] = cur / 10;
+            rem = cur % 10;
+            if (n[i] != 0) {
+                nonzero = true;
+            }
+            i = i + 1;
+        }
+        digits.push(rem);
+    }
+    var s = "";
+    var k = digits.len() - 1;
+    while (k >= 0) {
+        s = s + to_string(digits[k]);
+        k = k - 1;
+    }
+    s
+}
+
+/// The text of a decimal128 (the 16 octets of a `Bson.Decimal128`), as MongoDB prints a
+/// `NumberDecimal`: `12.50`, `-0.001`, `1E+3`, `1.234E-10`, `Infinity`, `-Infinity`, `NaN`. Every
+/// digit is kept (the trailing zeros too). Anything that is not 16 octets gives `"NaN"`.
+pub fn decimal128_to_string(b: bytes) -> string {
+    if (b.len() != 16) {
+        return "NaN";
+    }
+    let top = b[15];
+    let sign = if ((top & 128) != 0) { "-" } else { "" };
+    var exponent = 0;
+    var digits = "0";
+    if ((top >> 5 & 3) == 3) {
+        let special = top >> 2 & 31;
+        if (special == 30) {
+            return sign + "Infinity";
+        }
+        if (special == 31) {
+            return "NaN";
+        }
+        // La forma con el coeficiente por encima de 2^113 no es canónica: vale cero.
+        exponent = ((top & 31) << 9 | b[14] << 1 | b[13] >> 7) - DECIMAL_BIAS;
+    } else {
+        exponent = ((top & 127) << 7 | b[14] >> 1) - DECIMAL_BIAS;
+        var magnitude: [int] = [b[14] & 1];
+        var i = 13;
+        while (i >= 0) {
+            magnitude.push(b[i]);
+            i = i - 1;
+        }
+        digits = magnitude_digits(magnitude);
+        if (digits.len() > DECIMAL_DIGITS) {
+            // Más de 34 dígitos tampoco es canónico: cero.
+            digits = "0";
+        }
+    }
+    let adjusted = exponent + digits.len() - 1;
+    if (exponent > 0 || adjusted < 0 - 6) {
+        // Notación científica: un dígito, el resto tras el punto y el exponente ajustado.
+        var out = sign + digits.substring(0, 1);
+        if (digits.len() > 1) {
+            out = out + "." + digits.substring(1, digits.len());
+        }
+        return out + "E" + if (adjusted >= 0) { "+" } else { "" } + to_string(adjusted);
+    }
+    if (exponent == 0) {
+        return sign + digits;
+    }
+    let point = digits.len() + exponent;
+    if (point > 0) {
+        return sign + digits.substring(0, point) + "." + digits.substring(point, digits.len());
+    }
+    var zeros = "";
+    var z = point;
+    while (z < 0) {
+        zeros = zeros + "0";
+        z = z + 1;
+    }
+    sign + "0." + zeros + digits
+}
+
+/// Builds the 16 octets of a decimal128 from its text: an optional sign, digits with an
+/// optional decimal point and an optional exponent (`"12.50"`, `"-0.001"`, `"1E+3"`, `"1.5e-7"`),
+/// or `Infinity` / `-Infinity` / `NaN`. Exact: `Err` when the number has more than 34 significant
+/// digits or does not fit the exponent range, instead of rounding.
+/// `Bson.Decimal128(decimal128_from_string("12.50")?)` is `NumberDecimal("12.50")`.
+pub fn decimal128_from_string(text: string) -> Result<bytes, string> {
+    let invalid = "invalid decimal128: '" + text + "'";
+    var out: [int] = [];
+    var i = 0;
+    while (i < 16) {
+        out.push(0);
+        i = i + 1;
+    }
+    var s = text.trim();
+    var negative = false;
+    if (s.starts_with("-")) {
+        negative = true;
+        s = s.substring(1, s.len());
+    } else if (s.starts_with("+")) {
+        s = s.substring(1, s.len());
+    }
+    let lower = s.to_lower();
+    if (lower == "infinity" || lower == "inf") {
+        out[15] = if (negative) { 248 } else { 120 };
+        return Result.Ok(bytes_of(out));
+    }
+    if (lower == "nan") {
+        out[15] = 124;
+        return Result.Ok(bytes_of(out));
+    }
+    // Mantisa y exponente.
+    var mantissa = lower;
+    var exponent = 0;
+    match (lower.index_of("e")) {
+        Option.Some(at) => {
+            mantissa = lower.substring(0, at);
+            var exp_text = lower.substring(at + 1, lower.len());
+            if (exp_text.starts_with("+")) {
+                exp_text = exp_text.substring(1, exp_text.len());
+            }
+            match (parse_int(exp_text)) {
+                Option.Some(e) => {
+                    exponent = e;
+                },
+                Option.None => {
+                    return Result.Err(invalid);
+                },
+            }
+        },
+        Option.None => { },
+    }
+    var digits = "";
+    var seen_point = false;
+    var seen_digit = false;
+    var k = 0;
+    while (k < mantissa.len()) {
+        let c = mantissa[k];
+        if (c == '.') {
+            if (seen_point) {
+                return Result.Err(invalid);
+            }
+            seen_point = true;
+        } else if (c >= '0' && c <= '9') {
+            seen_digit = true;
+            // Los ceros a la izquierda no cuentan como dígitos significativos.
+            if (digits != "" || c != '0') {
+                digits = digits + to_string(c);
+            }
+            if (seen_point) {
+                exponent = exponent - 1;
+            }
+        } else {
+            return Result.Err(invalid);
+        }
+        k = k + 1;
+    }
+    if (!seen_digit) {
+        return Result.Err(invalid);
+    }
+    if (digits.len() > DECIMAL_DIGITS) {
+        return Result.Err(
+            "decimal128 holds 34 significant digits, '" + text + "' has " + to_string(digits.len())
+        );
+    }
+    // Un exponente fuera de -6176..6111 aún es exacto si el coeficiente lo absorbe: ceros a la
+    // derecha hacia arriba (`1E+6112` = `10E+6111`) o quitándolos hacia abajo (`10E-6177`).
+    if (digits == "") {
+        if (exponent > 6111) {
+            exponent = 6111;
+        }
+        if (exponent < 0 - DECIMAL_BIAS) {
+            exponent = 0 - DECIMAL_BIAS;
+        }
+    }
+    while (exponent > 6111 && digits.len() < DECIMAL_DIGITS) {
+        digits = digits + "0";
+        exponent = exponent - 1;
+    }
+    while (exponent < 0 - DECIMAL_BIAS && digits.ends_with("0")) {
+        digits = digits.substring(0, digits.len() - 1);
+        exponent = exponent + 1;
+    }
+    if (exponent < 0 - DECIMAL_BIAS || exponent > 6111) {
+        return Result.Err(
+            "decimal128 cannot hold '" + text + "' exactly: its exponent is out of range"
+        );
+    }
+    // Coeficiente: out = out * 10 + dígito, sobre los octetos little-endian.
+    var d = 0;
+    while (d < digits.len()) {
+        var carry = char_code(digits[d]) - 48;
+        var j = 0;
+        while (j < 15) {
+            let cur = out[j] * 10 + carry;
+            out[j] = cur & 255;
+            carry = cur >> 8;
+            j = j + 1;
+        }
+        d = d + 1;
+    }
+    // Exponente sesgado en los bits 113..126 y el signo en el 127.
+    let biased = exponent + DECIMAL_BIAS << 1;
+    out[14] = out[14] | biased & 255;
+    out[15] = biased >> 8 & 127;
+    if (negative) {
+        out[15] = out[15] | 128;
+    }
+    Result.Ok(bytes_of(out))
 }
 
 // ── Puente Json ↔ Bson (diferido JSON-2) ─────────────────────────────────────
@@ -476,8 +719,8 @@ fn int_to_float(n: int) -> float {
 }
 
 /// Converts BSON to JSON, with documented degradation (JSON is the smaller type system):
-/// `Int` becomes a JSON number (precision loss beyond 2^53), `ObjectId` and `Bin` become hex
-/// strings, and `Doc` field order is lost (Json objects are Maps → keys sorted on output).
+/// `Int` becomes a JSON number (precision loss beyond 2^53), `ObjectId`, `Bin` and `BinSub` become
+/// hex strings, `Decimal128` its decimal text (a string, to keep every digit), and `Doc` field order is lost (Json objects are Maps → keys sorted on output).
 pub fn to_json(v: Bson) -> Json {
     return match (v) {
         Bson.Double(f) => Json.JNum(f),
@@ -500,6 +743,8 @@ pub fn to_json(v: Bson) -> Json {
         Bson.Date(ms) => Json.JStr(iso_ms(ms)),
         Bson.Timestamp(t) => Json.JNum(int_to_float(t)),
         Bson.Int32(n) => Json.JNum(int_to_float(n)),
+        Bson.BinSub(_, b) => Json.JStr(hex_of(b)),
+        Bson.Decimal128(b) => Json.JStr(decimal128_to_string(b)),
     };
 }
 
@@ -551,6 +796,8 @@ pub fn dump(v: Bson) -> string {
         Bson.Date(ms) => "date(" + iso_ms(ms) + ")",
         Bson.Timestamp(t) => "timestamp(" + to_string(t >> 32) + "," + to_string(t & 4294967295) + ")",
         Bson.Int32(n) => to_string(n),
+        Bson.BinSub(subtype, b) => "bin(" + to_string(subtype) + ":" + hex_of(b) + ")",
+        Bson.Decimal128(b) => "decimal(" + decimal128_to_string(b) + ")",
     };
 }
 

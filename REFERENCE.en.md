@@ -583,7 +583,7 @@ fiber). For custom typed state, the ACTOR pattern (one owning fiber + channels):
 | `db/postgres` | extended wire v3: `connect`/`connect_tls` (sslRequest) · `query`/`exec` with `$1, $2…` · SCRAM · db 0.2.0: `pool`/`pool_tls(host, port, user, password, database, size) -> Pool` · `pool_query` (retries once on a fresh connection when the reused one fails on the wire) · `pool_exec` (no retry) · `pool_with(p, f)` (one connection for the whole of `f`) · `pool_tx(p, f)` (BEGIN/COMMIT/ROLLBACK) · `pool_close` · db 0.2.1: `pool_with_retry(p, f)` (idempotent blocks); `pool_tx` retries the `BEGIN` on a fresh connection when it failed on the wire ; FATAL errors of class 57P (restart, `pg_terminate_backend`) are phrased as a closed connection so the pool discards them |
 | `db/sqlite` | embedded (rusqlite in the host): `connect(":memory:" \| path)` · `query`/`exec` with `?1…` · `last_insert_rowid` |
 | `db/mongo` | OP_MSG + BSON: `connect`/`connect_tls` · `insert find update delete` (filters = BSON documents) · `run_command` · full cursors (getMore) · db 0.2.0: `pool`/`pool_tls(…, size)` · `pool_find` (retries once) · `pool_insert`/`pool_run_command` (no retry) · `pool_with(p, f)` · `pool_close` · db 0.2.1: `pool_with_retry(p, f)` (idempotent blocks) · db 0.8.0: `connect_auth`/`connect_tls_auth(host, port, user, password, auth_db, database, nonce)` and `pool_auth`/`pool_tls_auth` — authenticate against `auth_db` (the `authSource`) and operate on `database`; `connect` uses one database for both |
-| `db/bson` | `enum Bson` · `encode`/`decode` · `dump` · JSON bridge (`doc_from_json from_json to_json`) |
+| `db/bson` | `enum Bson` · `encode`/`decode` · `dump` · JSON bridge (`doc_from_json from_json to_json`) · db 0.9.0: `Bson.Decimal128(bytes)` (a `NumberDecimal`, its 16 raw octets) with `decimal128_to_string` / `decimal128_from_string` (exact, no rounding) and `Bson.BinSub(subtype, bytes)` for binaries with a subtype (a UUID is `BinSub(4, …)`; decoding yields `BinSub` for every subtype other than 0) |
 
 A uniform API across the 4 clients: `connect → Conn`, `query → Result<[[string]], string>` (mongo:
 documents), `exec → Result<int, string>`, `disconnect`. Parameter binding (anti-injection) in all of them.
@@ -854,4 +854,4 @@ orientations) **replaces** it; the rest are added.
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:78a8f9587441 -->
+<!-- sync: sha256:a58c84c0ecc0 -->

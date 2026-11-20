@@ -3969,7 +3969,7 @@ impl Checker {
                 && let Some(show) = self.methods.get(&(key, "show".to_string())).cloned()
             {
                 let ty = self.check_named_call_recv(&show, args, line, col, expected, &at)?;
-                self.ufcs_sites.insert((line, col, name.to_string(), usize::MAX), show);
+                self.ufcs_sites.insert((line, col, name.to_string(), super::lowering::rename_site_depth(args, name, line, col)), show);
                 return Ok(ty);
             }
             // #359: `to_string(p)` (y `"${p}"`) con `p: P` y `P: Show` es `p.show()`: se llama al
@@ -3978,7 +3978,7 @@ impl Checker {
             if let Type::Var(tp) = &at
                 && self.current_fn_bounds.iter().any(|(bp, tr)| bp == tp && tr == "Show")
             {
-                self.ufcs_sites.insert((line, col, name.to_string(), usize::MAX), dict_param_name(tp, "Show", "show"));
+                self.ufcs_sites.insert((line, col, name.to_string(), super::lowering::rename_site_depth(args, name, line, col)), dict_param_name(tp, "Show", "show"));
                 return Ok(Type::String);
             }
         }
@@ -4003,7 +4003,7 @@ impl Checker {
         if !self.current_fn_is_root && !name.contains("::") && self.overridden_prelude.contains(name) {
             let alias = format!("{name}#prelude");
             let ty = self.check_named_call_impl(&alias, args, line, col, expected, hover_direct, None)?;
-            self.ufcs_sites.insert((line, col, name.to_string(), usize::MAX), alias);
+            self.ufcs_sites.insert((line, col, name.to_string(), super::lowering::rename_site_depth(args, name, line, col)), alias);
             return Ok(ty);
         }
         self.check_named_call_impl(name, args, line, col, expected, hover_direct, None)

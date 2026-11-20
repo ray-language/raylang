@@ -86,3 +86,55 @@ fn an_empty_map_argument_waits_for_the_others_like_an_empty_array() {
         assert_eq!(out, "0\n", "{args:?}");
     }
 }
+
+/// raysolve #456: `"${to_string(v)}"` con un `v` que tiene `Show`. La envoltura `to_string(…)` de
+/// la interpolación comparte posición y nombre con la llamada escrita, y el renombre a `N#show`
+/// caía en las dos: ICE en la VM y E0308 en nativo.
+#[test]
+fn to_string_of_a_show_value_inside_an_interpolation_is_applied_once() {
+    let d = tmp("interp_to_string");
+    let src = r#"@derive(Show)
+struct N {
+    n: int,
+}
+
+struct M {
+    n: int,
+}
+
+impl Show for M {
+    fn show(self) -> string {
+        "M(${self.n})"
+    }
+}
+
+fn wrap<V: Show>(v: V) -> string {
+    "<${to_string(v)}>"
+}
+
+fn main() -> int {
+    let v = N { n: 2 };
+    print("${to_string(v)}");
+    print("a ${to_string(v)} b");
+    print("${to_string(v).len()}");
+    print("${to_string(Option.Some(N { n: 3 }))}");
+    print("${to_string(M { n: 4 })}");
+    print(wrap(M { n: 5 }));
+    print("${"${to_string(v)}"}");
+    print("${to_string(to_string(v))}");
+    print("${v} ${to_string(7)}");
+    0
+}
+"#;
+    std::fs::write(d.join("prog.ray"), src).unwrap();
+    let expected = "N { n: 2 }\na N { n: 2 } b\n10\nOption.Some(N { n: 3 })\nM(4)\n<M(5)>\nN { n: 2 }\nN { n: 2 }\nN { n: 2 } 7\n";
+    for args in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let (out, err, code) = ray(&d, args);
+        assert_eq!(code, 0, "{args:?}: {err}");
+        assert_eq!(out, expected, "{args:?}");
+    }
+    let (out, err, code) = ray(&d, &["build", "--native", "prog.ray", "-o", "prog"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let native = Command::new(d.join("prog")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&native.stdout), expected);
+}

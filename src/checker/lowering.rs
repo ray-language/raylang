@@ -52,6 +52,36 @@ pub(crate) fn ufcs_chain_depth(object: &Expr, name: &str, line: usize, col: usiz
     depth
 }
 
+/// #456: la profundidad de un sitio de RENOMBRE (`to_string(x)` → `T#show(x)`, `f` → `f#prelude`).
+/// La interpolación `"${e}"` baja a `to_string(e)` con la posición de `e`, así que en
+/// `"${to_string(v)}"` la envoltura y la llamada escrita comparten `(línea, col, nombre)`: el
+/// registro de la interior renombraba también la envoltura y `show` se aplicaba dos veces (ICE en
+/// la VM, E0308 en nativo). Cuenta las llamadas con ese nombre y esa posición que hay DEBAJO, por
+/// los hijos que arrancan en la misma posición; la más interior queda en `usize::MAX`.
+pub(crate) fn rename_site_depth(args: &[Expr], name: &str, line: usize, col: usize) -> usize {
+    fn count(e: &Expr, name: &str, line: usize, col: usize) -> usize {
+        if e.line != line || e.col != col {
+            return 0;
+        }
+        match &e.kind {
+            ExprKind::Call { callee, args } => match &callee.kind {
+                ExprKind::Ident(n) => {
+                    usize::from(n == name) + args.first().map_or(0, |a| count(a, name, line, col))
+                }
+                _ => count(callee, name, line, col),
+            },
+            ExprKind::Field { object, .. } => count(object, name, line, col),
+            ExprKind::Binary { left, .. } => count(left, name, line, col),
+            ExprKind::Index { array, .. } => count(array, name, line, col),
+            ExprKind::Try(inner) | ExprKind::Cast { expr: inner, .. } => count(inner, name, line, col),
+            ExprKind::Match { scrutinee, .. } => count(scrutinee, name, line, col),
+            ExprKind::Block(b) => b.tail.as_ref().map_or(0, |t| count(t, name, line, col)),
+            _ => 0,
+        }
+    }
+    usize::MAX - args.first().map_or(0, |a| count(a, name, line, col))
+}
+
 pub(super) fn lower_ufcs(program: &mut Program, sites: &UfcsSiteMap) {
     if sites.is_empty() {
         return;
@@ -100,9 +130,9 @@ pub(super) fn lower_ufcs_expr(expr: &mut Expr, sites: &UfcsSiteMap) {
     // M270: un `Call(Ident)` registrado con profundidad `usize::MAX` solo se RENOMBRA (el callee pasa
     // a ser la función destino, los argumentos quedan): `to_string(x)` → `T#show(x)` y la función del
     // prelude redefinida en la raíz → `nombre#prelude` dentro de los módulos.
-    if let ExprKind::Call { callee, .. } = &mut expr.kind
+    if let ExprKind::Call { callee, args } = &mut expr.kind
         && let ExprKind::Ident(n) = &callee.kind
-        && let Some(target) = sites.get(&(expr.line, expr.col, n.clone(), usize::MAX)).cloned()
+        && let Some(target) = sites.get(&(expr.line, expr.col, n.clone(), rename_site_depth(args, n, expr.line, expr.col))).cloned()
     {
         callee.kind = ExprKind::Ident(target);
     }

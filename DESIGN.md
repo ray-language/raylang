@@ -21402,3 +21402,26 @@ El bound a secas sobre un trait genérico (`S: Source`) se aceptaba en 1.27.107 
 parámetro sin resolver; ahora es error, igual que `impl Source for X`. Se mantiene el rechazo y
 va anotado en el CHANGELOG como cambio que puede romper código.
 
+
+
+## 467. `to_string` dentro de una interpolación (raysolve #456, nov 2026)
+
+`"${e}"` baja en el parser a `to_string(e)`, y esa envoltura nace con la posición de `e`. Los
+renombres de sitio (`to_string(x)` → `T#show(x)`, `f` → `f#prelude`) se registran en `ufcs_sites`
+con la clave `(línea, col, nombre, usize::MAX)`. En `"${to_string(v)}"` la envoltura y la llamada
+escrita tienen la misma posición y el mismo nombre: el checker registraba solo la interior (el
+argumento de la envoltura ya es `string`), pero la bajada encontraba la clave también para la
+envoltura y la renombraba. Resultado: `N#show(N#show(v))`, un ICE en la VM («the checker
+guarantees an object») y un E0308 en nativo.
+
+Es la misma clase de colisión que M267 resolvió para las cadenas `r.unwrap_or(x).unwrap_or(y)`, y
+se resuelve igual: el cuarto campo de la clave pasa a ser una profundidad
+(`rename_site_depth`), `usize::MAX` menos el número de llamadas con ese nombre y esa posición que
+hay debajo, siguiendo solo los hijos que arrancan en la misma posición (callee, receptor,
+operando izquierdo, primer argumento). La llamada más interior queda en `usize::MAX`, como antes.
+Se calcula igual al registrar y al bajar porque la bajada reescribe de fuera hacia dentro.
+
+Se descartó la propuesta del hallazgo («que la interpolación no vuelva a aplicar `Show` a una
+expresión cuyo tipo ya es `string`»): la interpolación ya no lo aplicaba; el fallo estaba en la
+tabla por posición, y un caso especial para `string` habría dejado la misma colisión en
+`"${to_string(v).len()}"`.

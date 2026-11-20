@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`to_string` de un valor con `Show` dentro de una interpolación** (raysolve #456):
+  `"${to_string(v)}"` con un `v` struct o enum con `Show` (derivado, escrito a mano o por un bound
+  `V: Show`) daba un error interno en la VM y no compilaba en nativo, porque `show` se aplicaba dos
+  veces. Ahora da lo mismo que `print(to_string(v))`. También con texto alrededor, con un método
+  encadenado (`"${to_string(v).len()}"`) y con interpolaciones anidadas.
+
 ## 1.27.108 — 2026-11-20
 
 - **Bounds sobre traits genéricos** (raysolve #357): `fn first<V, S: Source<V>>(s: S) -> V`. Un

@@ -682,7 +682,9 @@ sobre el que se escriben las capas 1 y 2.
 ### 10.1 Global
 
 - **Núcleo**: `print eprint to_string len panic exit assert assert_eq` · tipos imprimibles: `int
-  float bool string char bytes u*` y (vía `show`) tipos con `Show`.
+  float bool string char bytes u*` y (vía `show`) tipos con `Show`; un struct o un enum sin
+  `Show` se muestra con su forma por defecto (`Kind.Past`, `P { x: 1 }`), igual en `print`,
+  `to_string` y la interpolación.
 - **Recuperación de fallos** (M97): `try_call(f: fn() -> T) -> Result<T, string>` ejecuta `f` y
   convierte un `panic` o error de ejecución en `Err(mensaje)` — el fallo **como valor**, sin
   excepciones. La recuperación ocurre en la **misma fibra**: lo que `f` mutó antes de fallar

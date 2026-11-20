@@ -2345,6 +2345,8 @@ ships it as a stub that panics when called instead (what `ray build --native` do
 instead of the compiled program; install it once, pair it with the link `ray dev --device` prints, and every saved \
 change reloads the program on the phone (files, keychain, network and audio are the phone's).\n\
   name/icon/id default to [app] name/icon/id of ray.toml (icon relative to the project root); \
+[app] display_name is the visible name when it differs from the identifier (the .app folder, the menu bar, the .desktop Name, \
+the exe's product name, the label on iOS/Android), while the binary, the default id and the release zips keep the name; \
 the flags override them. [app.plist] keys go verbatim into the macOS and iOS Info.plist; \
 NSLocalNetworkUsageDescription is added when the program imports std/net, std/udp or net.";
 

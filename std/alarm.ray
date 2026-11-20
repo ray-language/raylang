@@ -15,8 +15,10 @@
 //! simulator build rings but delivers no answer). Before
 //! iOS 26, and on the desktop, `status()` is `"unsupported"` and `schedule` is `Err`:
 //! `std/notify` with `sound_name` rings once. Headless: `Ok` + trace (`RAY_UI_TRACE=1`), an in-memory pending list,
-//! `RAY_UI_ALARM_PERMISSION=denied|not_determined|unsupported` and `RAY_UI_ALARM_RESPONSE=stop|snooze`
-//! (answers every alarm as it is scheduled; tests).
+//! `RAY_UI_ALARM_PERMISSION=granted|denied|not_determined|unsupported` (`granted` by default on
+//! EVERY platform, the desktop too: headless simulates a phone that has alarms; set `unsupported`
+//! to test the desktop path) and `RAY_UI_ALARM_RESPONSE=stop|snooze` (answers every alarm as it is
+//! scheduled; tests).
 //!
 //! The shells carry the alarm pieces only when the program imports this module: Android
 //! declares its alarm permissions (`USE_EXACT_ALARM`, `USE_FULL_SCREEN_INTENT`, a media-playback

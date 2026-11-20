@@ -21425,3 +21425,46 @@ Se descartó la propuesta del hallazgo («que la interpolación no vuelva a apli
 expresión cuyo tipo ya es `string`»): la interpolación ya no lo aplicaba; el fallo estaba en la
 tabla por posición, y un caso especial para `string` habría dejado la misma colisión en
 `"${to_string(v).len()}"`.
+
+## 468. Ronda sobre la re-medición de 1.27.108 (nov 2026)
+
+Las apps re-midieron sus hallazgos con 1.27.108 y quedaron estos, cada uno con su decisión.
+
+**`to_string` de un struct o un enum sin `Show` (rayfocus #459).** `print` ya mostraba cualquier
+struct o enum con la forma por defecto; `to_string` y la interpolación los rechazaban, así que
+`"${notify.error_kind(e)}"` no compilaba. La regla pasa a ser una sola: lo que `print` muestra,
+`to_string` lo convierte, con el mismo texto. Los tres motores ya tenían el formateador; solo
+cambia la regla de tipado del builtin. Con `Show`, el checker sigue redirigiendo a `T#show`
+antes de llegar al builtin. Se descartó un `ErrorKind.name()` por tipo: resolvía un enum y
+dejaba los demás igual.
+
+**Variádicas de libc (rayserial #460).** `fcntl(fd, cmd, arg)` declarado con aridad fija es
+comportamiento indefinido en Apple arm64 (el argumento variádico va por la pila) y la VM pasó de
+«no hace nada» a «deja banderas basura». No se persigue qué cambió: está fuera de contrato y no
+hay un valor correcto que devolver. Tampoco se convierte en error, porque en Linux x86_64 y
+arm64 la misma declaración funciona y hay código que la usa. Queda un aviso del checker
+(`variadic_externs`, con la tabla de variádicas de libc y sus parámetros fijos; `open` con dos
+argumentos no avisa) y la referencia dice que la VM y nativo difieren. El `extern` variádico de
+verdad sigue en IDEAS con el tema de la serie (#393).
+
+**`[app] display_name` (ray-sublime #454).** `[app] name` ya cambiaba el nombre, pero también el
+binario, el id por defecto y los artefactos. `display_name` cambia solo lo que se ve. En macOS
+la carpeta se llama `<display_name>.app`: Finder, el Dock y Launchpad muestran el nombre de la
+carpeta, no `CFBundleDisplayName` (comprobado con un bundle de prueba: con la clave puesta y la
+carpeta sin renombrar, el nombre mostrado seguía siendo el del paquete). El auto-update no se
+rompe: `apply_at` extrae el directorio superior del zip, se llame como se llame, y lo pone en la
+ruta de la instalación, que conserva su nombre. En Linux y Windows las rutas no cambian; cambian
+el `Name=` y los textos de versión del `.exe`.
+
+**`std/notify` headless con el permiso sin decidir (rayfocus #458).** La doc de `schedule` dice
+que en iOS y macOS la notificación espera la respuesta y no sale en `pending()`; headless la
+listaba al momento, así que una prueba no veía lo que iba a pasar en el dispositivo. Ahora
+espera, y `RAY_UI_NOTIFY_PERMISSION_ANSWER` simula la respuesta cuando el programa pide el
+permiso. Para `std/alarm` (#377) no se cambia el valor por defecto: headless simula un teléfono
+con alarmas, y devolver `unsupported` en el escritorio dejaría sin probar el camino que importa;
+se documenta.
+
+**`std/protobuf` (raygrpc #463).** El décimo octeto de un varint solo puede aportar un bit.
+Si trae más y es el último, es `Err` («does not fit in 64 bits»); si además continúa, sigue
+siendo «longer than 10 bytes».
+

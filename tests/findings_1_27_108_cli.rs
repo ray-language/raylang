@@ -47,3 +47,21 @@ fn a_struct_or_an_enum_without_show_interpolates_like_print() {
     let native = Command::new(d.join("prog")).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&native.stdout), expected);
 }
+
+/// ray-daw #455: `ray release --help` y `ray keygen --help` explican sus opciones y salen con 0
+/// (antes: la línea de uso y 64). Un flag desconocido sigue siendo error de uso.
+#[test]
+fn release_and_keygen_help_explain_their_options() {
+    let d = tmp("release_help");
+    let (out, err, code) = ray(&d, &["release", "--help"]);
+    assert_eq!(code, 0, "{err}");
+    for needle in ["usage: ray release", "--publish", "--repo OWNER/NAME", "--no-sign", "ray release seal <dist>", "private"] {
+        assert!(out.contains(needle), "falta {needle}: {out}");
+    }
+    let (out, err, code) = ray(&d, &["keygen", "--help"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("usage: ray keygen") && out.contains("--force") && out.contains("[app] public_key"), "{out}");
+    let (out, err, code) = ray(&d, &["release", "--bogus"]);
+    assert_eq!(code, 64, "{out}");
+    assert!(err.starts_with("usage: ray release") && err.lines().count() == 1, "{err}");
+}

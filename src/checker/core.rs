@@ -2631,6 +2631,17 @@ impl Checker {
             && !params.iter().any(type_has_var)
         {
             let params: Vec<Type> = params.iter().map(|p| self.resolve_type(p)).collect();
+            // Revisión de 1.27.109: `to_string` como valor sobre un tipo con `Show` daría la forma
+            // por defecto e ignoraría el `show` del usuario; se pide el método.
+            if b.name == "to_string"
+                && let [p] = params.as_slice()
+                && matches!(p, Type::Struct(_, _) | Type::Enum(_, _))
+                && type_key_of(p).is_some_and(|k| self.methods.contains_key(&(k, "show".to_string())))
+            {
+                return Err(self.err(expr.line, expr.col, format!(
+                    "the builtin 'to_string' cannot be used as a value of type {expected}: {p} has its own 'show'; pass a function that calls it, e.g. 'fn(x: {p}) -> string {{ x.show() }}'"
+                )));
+            }
             return match (b.check)(&params) {
                 Ok(ret) => {
                     let ret = self.resolve_type(&ret);
@@ -3598,8 +3609,15 @@ impl Checker {
                 // M9.1: ¿es un método de trait del tipo concreto del receptor? Tiene
                 // prioridad sobre la función libre (UFCS), pero no sobre un campo del
                 // struct. El sitio se registra apuntando a la función **manglada**.
-                let trait_method = type_key_of(&recv_ty)
-                    .and_then(|key| self.methods.get(&(key, name.clone())).cloned());
+                // Revisión de 1.27.109: `q.to_string()` sobre un tipo con `Show` es `q.show()`, como
+                // `to_string(q)`; sin esto caía en el builtin y mostraba la forma por defecto.
+                let trait_method = type_key_of(&recv_ty).and_then(|key| {
+                    self.methods.get(&(key.clone(), name.clone())).cloned().or_else(|| {
+                        (name == "to_string" && args.is_empty() && matches!(recv_ty, Type::Struct(_, _) | Type::Enum(_, _)))
+                            .then(|| self.methods.get(&(key, "show".to_string())).cloned())
+                            .flatten()
+                    })
+                });
                 if let Some(mangled) = trait_method {
                     let mut all = Vec::with_capacity(args.len() + 1);
                     all.push((**object).clone());

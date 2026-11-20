@@ -57,16 +57,18 @@ pub(crate) fn ufcs_chain_depth(object: &Expr, name: &str, line: usize, col: usiz
 /// `"${to_string(v)}"` la envoltura y la llamada escrita comparten `(línea, col, nombre)`: el
 /// registro de la interior renombraba también la envoltura y `show` se aplicaba dos veces (ICE en
 /// la VM, E0308 en nativo). Cuenta las llamadas con ese nombre y esa posición que hay DEBAJO, por
-/// los hijos que arrancan en la misma posición; la más interior queda en `usize::MAX`.
+/// la cadena de primeros hijos (callee, receptor, operando izquierdo, primer argumento); la más
+/// interior queda en `usize::MAX`.
 pub(crate) fn rename_site_depth(args: &[Expr], name: &str, line: usize, col: usize) -> usize {
     fn count(e: &Expr, name: &str, line: usize, col: usize) -> usize {
-        if e.line != line || e.col != col {
-            return 0;
-        }
+        // Se baja por el primer hijo aunque el nodo esté en OTRA posición: un pipeline
+        // `to_string(q) |> wrap` es una llamada en la posición de `wrap` cuyo primer argumento
+        // sigue en la de la envoltura (revisión de 1.27.109). Solo cuenta la posición exacta.
+        let here = e.line == line && e.col == col;
         match &e.kind {
             ExprKind::Call { callee, args } => match &callee.kind {
                 ExprKind::Ident(n) => {
-                    usize::from(n == name) + args.first().map_or(0, |a| count(a, name, line, col))
+                    usize::from(here && n == name) + args.first().map_or(0, |a| count(a, name, line, col))
                 }
                 _ => count(callee, name, line, col),
             },

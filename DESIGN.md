@@ -21468,3 +21468,22 @@ se documenta.
 Si trae más y es el último, es `Err` («does not fit in 64 bits»); si además continúa, sigue
 siendo «longer than 10 bytes».
 
+**Revisión antes de 1.27.109.** La revisión del rango encontró y se corrigió:
+
+- La colisión de #456 sobrevivía con un pipeline: `"${to_string(q) |> wrap}"` es una llamada en
+  la posición de `wrap` cuyo primer argumento está en la de la envoltura. `rename_site_depth`
+  baja ahora por la cadena de primeros hijos sin exigir que el nodo intermedio comparta posición.
+- `q.to_string()` y `qs.map(to_string)` sobre un tipo con `Show` caían en el builtin relajado por
+  #459 e ignoraban el `show`. El primero resuelve a `T#show`; el segundo es un error que pide una
+  función que llame a `show`.
+- El shell `--dev` de iOS y Android perdía su `-dev` en la etiqueta: el nombre visible se
+  calculaba antes de añadir el sufijo. `--name` manda también sobre `display_name`, que no puede
+  llevar separadores de ruta (da nombre a la carpeta `.app`).
+- La etiqueta de Android no se escapaba (`Tom & Jerry's` rompía el build de Gradle).
+- El aviso de variádicas es solo para `extern "c"` y subraya `fn nombre`.
+- El espejo selfhost acepta structs y enums en `to_string` con el mismo mensaje.
+
+Queda sin arreglar, anotado en IDEAS §129: la forma por defecto de un struct con un campo tupla
+difiere entre la VM (`[1, z]`) y nativo (`(1, z)`). Ya pasaba con `print`; ahora también llega a
+un string.
+

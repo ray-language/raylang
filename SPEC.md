@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.108** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.109** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -684,7 +684,8 @@ sobre el que se escriben las capas 1 y 2.
 - **Núcleo**: `print eprint to_string len panic exit assert assert_eq` · tipos imprimibles: `int
   float bool string char bytes u*` y (vía `show`) tipos con `Show`; un struct o un enum sin
   `Show` se muestra con su forma por defecto (`Kind.Past`, `P { x: 1 }`), igual en `print`,
-  `to_string` y la interpolación.
+  `to_string` y la interpolación. Límite conocido: un campo TUPLA dentro de esa forma por
+  defecto sale `[1, z]` en la VM y `(1, z)` en nativo; con `@derive(Show)` es `(1, z)` en todos.
 - **Recuperación de fallos** (M97): `try_call(f: fn() -> T) -> Result<T, string>` ejecuta `f` y
   convierte un `panic` o error de ejecución en `Err(mensaje)` — el fallo **como valor**, sin
   excepciones. La recuperación ocurre en la **misma fibra**: lo que `f` mutó antes de fallar
@@ -777,7 +778,10 @@ distintas);
   compilación correcta; **no invalidan el programa ni cambian el código de salida** y el LSP los
   publica con severidad *Warning*. El primero: el resultado **descartado** de una función del
   prelude que devuelve un valor nuevo sin tocar su argumento (`sort(xs);`, `xs.sort();`,
-  `s.trim();`, `xs.map(f);`…), salvo que el usuario la haya redefinido.
+  `s.trim();`, `xs.map(f);`…), salvo que el usuario la haya redefinido. El segundo: un
+  `extern "c"` que declara con su argumento variádico una función variádica de libc (`fcntl`,
+  `ioctl`, `open` con modo, `printf` y familia): la llamada está fuera de contrato (§13 de la
+  referencia).
 - **Códigos de salida**: el `int` de `main` (`& 0xFF`, 0 si unit) · **64** uso incorrecto del
   CLI · **65** error de compilación (léxico/sintaxis/tipos/carga de módulos) · **66** archivo
   ilegible · **69** el binario no incluye el subsistema que el comando necesita (build *slim*) ·

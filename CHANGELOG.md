@@ -6,6 +6,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.109 — 2026-11-20
+
 - **`[app] display_name`** (ray-sublime #454): el nombre visible de la app aparte del identificador.
   Con `[package] name = "ray-sublime"` y `[app] display_name = "Ray Sublime"`, `ray bundle` nombra
   así la carpeta `.app`, `CFBundleName`/`CFBundleDisplayName`, el `Name=` del `.desktop`,
@@ -14,7 +16,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   conserva el nombre de su carpeta al actualizarse.
 - **Interpolar un struct o un enum sin `Show`** (rayfocus #459): `"${kind}"` y `to_string(kind)`
   dan la forma por defecto (`Kind.Past`, `P { x: 1 }`), la misma que `print`. Antes era un error
-  de tipo y obligaba a un `match` solo para registrar un enum.
+  de tipo y obligaba a un `match` solo para registrar un enum. `q.to_string()` sobre un tipo con
+  `Show` usa su `show`, igual que `to_string(q)`.
 - **`std/protobuf`** (raygrpc #463): un varint de 10 octetos cuyo décimo octeto pasa de 1 no cabe
   en 64 bits y ahora es `Err` (se aceptaba descartando bits). El error del tipo wire no soportado
   sigue el formato del resto: `protobuf: unsupported wire type 3 of field 1 at byte 0`.

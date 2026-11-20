@@ -3323,6 +3323,15 @@ fn want_int(a: [Type], cargs: [Expr], i: int, msg: string) -> Result<int, TypeEr
     Result.Ok(0)
 }
 
+// rayfocus #459: un struct o un enum declarado se convierte con su forma por defecto (espejo de
+// la regla de `to_string` en `src/builtins.rs`). Un parámetro de tipo no es un tipo de usuario.
+fn is_user_type(c: Checker, t: Type) -> bool {
+    match (t) {
+        Type.TNamed(n, _) => c.structs.contains_key(n) || c.enums.contains_key(n),
+        _ => false,
+    }
+}
+
 fn check_to_string(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Type, TypeError> {
     b_arity("to_string", 1, "", cargs.len(), line, col)?;
     let a = check_args_types(c, cargs)?;
@@ -3330,12 +3339,14 @@ fn check_to_string(c: Checker, cargs: [Expr], line: int, col: int) -> Result<Typ
         || type_eq(a[0], Type.TFloat)
         || type_eq(a[0], Type.TBool)
         || type_eq(a[0], Type.TString)
-        || type_eq(a[0], Type.TChar))) {
+        || type_eq(a[0], Type.TChar)
+        || is_user_type(c, a[0]))) {
         return Result.Err(
             terr(
                 cargs[0].line,
                 cargs[0].col,
-                "to_string only converts int/float/bool/string/char, not " + type_str(a[0])
+                "to_string only converts int/float/bool/string/char/bytes/u*, structs and enums, not "
+                    + type_str(a[0])
             )
         );
     }

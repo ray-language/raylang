@@ -760,7 +760,7 @@ fn cmd_release(args: &[String]) {
         process::exit(status.code().unwrap_or(70));
     }
     // ray-sublime #454: en macOS la carpeta del bundle lleva `[app] display_name` si lo hay.
-    let display = manifest.app_display_name.clone().filter(|d| !d.trim().is_empty()).unwrap_or_else(|| name.clone());
+    let display = declared_display_name(&manifest).unwrap_or_else(|| name.clone());
     let bundle_dir = if cfg!(target_os = "macos") { work.join(format!("{display}.app")) } else { work.join(&name) };
     if !bundle_dir.is_dir() {
         eprintln!("release: bundle not found at '{}'", bundle_dir.display());
@@ -1699,6 +1699,18 @@ fn cmd_dev_device(args: &[String]) {
     }
 }
 
+/// ray-sublime #454: `[app] display_name` del manifiesto, si lo declara. Da nombre a la carpeta
+/// `.app` en macOS, así que no puede llevar separadores de ruta. La comparten `ray bundle` y
+/// `ray release`, que busca el bundle por ese nombre.
+fn declared_display_name(m: &Manifest) -> Option<String> {
+    let d = m.app_display_name.as_ref().map(|d| d.trim().to_string()).filter(|d| !d.is_empty())?;
+    if d.contains('/') || d.contains('\\') || d == "." || d == ".." {
+        eprintln!("[app] display_name '{d}' cannot contain a path separator: it names the .app folder on macOS");
+        process::exit(64);
+    }
+    Some(d)
+}
+
 /// M330 D5: el id de la app del proyecto en `root` — `[app] id` del ray.toml, o el derivado del
 /// nombre de la app/paquete con la misma regla que `ray bundle` (`org.raylang.<slug>`).
 /// El nombre con el que el usuario conoce la app: `[app] name` del manifiesto, si no el nombre
@@ -2469,14 +2481,15 @@ fn cmd_bundle(args: &[String]) {
     });
     // M208: `--name`/`--icon`/`--id` → `[app] name/icon/id` del ray.toml → defaults. El icono del
     // manifiesto es relativo a la raíz del proyecto (el bundle puede correrse desde cualquier cwd).
+    let name_given = name_arg.is_some();
     let name = name_arg
         .or_else(|| manifest.as_ref().and_then(|m| m.app_name.clone()))
         .or_else(|| manifest.as_ref().map(|m| m.name.clone()))
         .unwrap_or_else(|| {
             Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("app").to_string()
         });
-    // ray-sublime #454: el nombre visible. Sin `[app] display_name` es el propio `name`.
-    let display = manifest.as_ref().and_then(|m| m.app_display_name.clone()).filter(|d| !d.trim().is_empty()).unwrap_or_else(|| name.clone());
+    // ray-sublime #454: el nombre visible. `--name` manda sobre el manifiesto, también aquí.
+    let display_decl = if name_given { None } else { manifest.as_ref().and_then(declared_display_name) };
     let icon_from_flag = icon_arg.is_some();
     let icon: Option<String> = icon_arg.or_else(|| {
         manifest.as_ref().and_then(|m| m.app_icon.as_ref().map(|i| m.root.join(i).to_string_lossy().into_owned()))
@@ -2508,6 +2521,13 @@ fn cmd_bundle(args: &[String]) {
         (format!("{name}-dev"), format!("{bundle_id}.dev"))
     } else {
         (name, bundle_id)
+    };
+    // El shell de desarrollo se distingue también en lo visible: `<display_name>-dev`; sin
+    // `display_name`, el nombre visible es el propio nombre (ya con su `-dev`).
+    let display = match display_decl {
+        Some(d) if dev => format!("{d}-dev"),
+        Some(d) => d,
+        None => name.clone(),
     };
     // El application id de Android sigue el mismo camino (`.dev`) — nunca el de la app real.
     let id_arg = if dev { Some(bundle_id.clone()) } else { id_arg };

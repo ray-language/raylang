@@ -21537,3 +21537,44 @@ así meter en `std/crypto` un cifrado RSA que `ring` no ofrece y que habría que
 sin TLS: registro como réplica y volcado del binlog, con los tipos de evento en el orden que da
 `mysqlbinlog`.
 
+## 471. gRPC: streaming, metadatos de respuesta, TLS y reflexión (raygrpc #385–#387, nov 2026)
+
+`net/grpc_server` era unario: esperaba el END_STREAM, llamaba al handler y respondía. raygrpc
+tuvo que escribir su propio servidor y su propio cliente sobre `net/grpc_h2` para la reflexión
+y para devolver trailers.
+
+**Un handler de streaming corre en la fibra de la conexión.** No se le da una fibra propia: el
+`Router` lleva funciones, y en nativo un valor con funciones no cruza a otra fibra (por eso
+`build` se llama dentro de cada conexión). El handler `fn(ServerStream) -> Status` arranca al
+llegar las cabeceras; su stream sigue en la tabla y recibe los DATA mientras corre. `recv` lee
+de la conexión cuando no tiene un mensaje completo.
+
+**El problema que enseñó `grpcurl`.** La primera versión dejaba en cola las demás llamadas
+mientras un handler esperaba. `grpcurl` abre el stream de reflexión, lo deja abierto y hace su
+llamada por la misma conexión: se colgaba hasta el plazo. Ahora la atención de streams listos
+(`drain_ready`) es reentrante: un handler que espera en `recv` o en `idle` atiende las demás
+llamadas que van llegando, también otro handler de streaming, que corre hasta el final anidado.
+Es disciplina de pila, no concurrencia real: dos streams de larga vida intercalados en la misma
+conexión avanzan de uno en uno. Cubre el caso real (un stream abierto más llamadas cortas) sin
+mover funciones entre fibras. Un handler que espera algo propio (un canal de eventos) debe
+hacerlo con `idle(s, ms)`, no durmiendo.
+
+**Metadatos de respuesta.** `Call` gana `response_headers` y `response_trailers`, que el
+handler llena con `set_header` / `set_trailer`; el servidor los lee al volver el handler, con
+éxito o con un estado de error. Se descartó cambiar el tipo de retorno del handler
+(`Reply { message, headers, trailers }`): rompía todos los handlers existentes. Añadir campos a
+`Call` solo rompe a quien construye un `Call` a mano.
+
+**Reflexión.** La lista de servicios sale de las rutas del router, así que `grpcurl list`
+funciona sin dar nada. Para `describe` hacen falta los descriptores, que no se pueden derivar
+(no hay generador de `.proto`): se pasan serializados, como los escribe `protoc`.
+
+**Cliente.** `grpc_conn` lleva un stream a la vez por conexión; `Reply` separa cabeceras y
+trailers según el HEADERS en que llegaron.
+
+**Lo que queda de #387.** Las opciones TLS por conexión (`ca_pem`, `insecure`) necesitan un
+primitivo nuevo en el núcleo: `std/net` solo ofrece `tls_connect_h2(host, port)`.
+
+Verificado con `grpcurl` 1.9 real: `list`, `describe`, una llamada unaria con sus cabeceras y
+trailers, un stream bidireccional de tres mensajes y lo mismo sobre TLS con `-cacert`.
+

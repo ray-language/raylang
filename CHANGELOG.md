@@ -6,6 +6,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Paquete `net` 0.17.0 — gRPC con streaming, metadatos de respuesta, TLS y reflexión**
+  (raygrpc #385, #386, #387):
+  - Servidor: `route_stream` registra un handler `fn(ServerStream) -> Status` para
+    server-streaming, client-streaming y bidireccional (`recv`, `send`, `idle`). Un handler que
+    espera no bloquea las demás llamadas de su conexión.
+  - Cabeceras y trailers de respuesta: `set_header` / `set_trailer` en un handler unario,
+    `stream_header` / `stream_trailer` en uno de streaming.
+  - `bind_tls(host, port, cert_pem, key_pem)`: gRPC sobre TLS con ALPN `h2`.
+  - `net/grpc_reflection`: `enable(r, files)` añade la reflexión (`grpcurl list` y `describe`).
+  - Cliente (`grpc_conn`): `Reply.headers` y `Reply.trailers` por separado; streams con
+    `open_stream`, `stream_send`, `stream_close_send`, `stream_recv`, `stream_reply`,
+    `stream_cancel`; `call_once_tls`.
+  - **Cambio**: `Call` gana dos campos y `Reply` otros dos; un literal `Call { … }` o
+    `Reply { … }` escrito a mano hay que completarlo.
+
 - **Paquete `net` 0.16.0 — streaming sobre una conexión persistente** (raycrawl #370):
   `http.conn_stream` y `http.pool_stream` devuelven el `Stream` de siempre sobre una conexión
   keep-alive. Leído el cuerpo hasta el final, la conexión se reutiliza; cortar antes la descarta.

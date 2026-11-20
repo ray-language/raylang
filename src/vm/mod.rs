@@ -1670,6 +1670,7 @@ impl<'a> Vm<'a> {
                     let h = self.pop_channel();
                     let (l, c2) = pos!();
                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                    Self::deliver_pending_signals(&mut sh); // #392
                     // Handle stale (canal liberado = cerrado y drenado) → Closed, como recv da None.
                     if sh.chan(h).is_none() {
                         drop(sh);
@@ -1911,6 +1912,7 @@ impl<'a> Vm<'a> {
                     // listo entre medias dispararía `wake_select_waiters` antes de que estemos aparcados →
                     // wake perdido → cuelgue.
                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                    Self::deliver_pending_signals(&mut sh); // #392
                     let mut ready_idx = None;
                     for (i, &c) in chans.iter().enumerate() {
                         // M98.3: un handle stale (canal liberado) responde como cerrado → listo,
@@ -1967,6 +1969,7 @@ impl<'a> Vm<'a> {
                         };
                         // Guard único a través del escaneo Y el park (atómico, como Select).
                         let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                        Self::deliver_pending_signals(&mut sh); // #392
                         let mut ready_idx = None;
                         for (i, &c) in chans.iter().enumerate() {
                             let buffered_or_closed = match sh.chan(c) {

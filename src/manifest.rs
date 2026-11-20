@@ -98,6 +98,10 @@ pub struct Manifest {
     /// solo de la línea de órdenes (`--name`, `--icon`, `--id`) se declara UNA vez aquí; los flags
     /// siguen mandando si se dan. `icon` es relativo a la raíz del proyecto.
     pub app_name: Option<String>,
+    /// ray-sublime #454: `[app] display_name` — el nombre VISIBLE de la app (barra de menú, Dock,
+    /// lanzador, propiedades del exe, etiqueta en el móvil) cuando difiere del identificador:
+    /// `name` sigue dando el binario, la carpeta del bundle, los artefactos y el id por defecto.
+    pub app_display_name: Option<String>,
     pub app_icon: Option<String>,
     /// ray-daw #452: `[app.macos] icon` — un `.icns` o un `.iconset` hechos a mano para el `.app`
     /// (cada tamaño por separado: la versión simplificada de 16 y 32 px); gana a `icon` en macOS.
@@ -291,6 +295,7 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut android_sounds = Vec::new();
     let mut app_copyright = None;
     let mut app_name = None;
+    let mut app_display_name = None;
     let mut app_icon = None;
     let mut app_icon_macos = None;
     let mut app_id = None;
@@ -412,6 +417,7 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "description" => app_description = Some(as_string()?),
                 // M208: nombre/icono/id de la app para `ray bundle`.
                 "name" => app_name = Some(as_string()?),
+                "display_name" => app_display_name = Some(as_string()?),
                 "icon" => app_icon = Some(as_string()?),
                 "id" => app_id = Some(as_string()?),
                 // M458 (pepa #412): el número de compilación de las tiendas.
@@ -574,6 +580,7 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         android_application_id,
         app_copyright,
         app_name,
+        app_display_name,
         app_icon,
         app_icon_macos,
         app_id,
@@ -819,10 +826,11 @@ mod tests {
         assert!(bare.app_copyright.is_none() && bare.app_description.is_none());
         // M208: [app] name/icon/id — lo que antes solo entraba por --name/--icon/--id.
         let m = parse_src(
-            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[app]\nname = \"Demo App\"\nicon = \"assets/icon.png\"\nid = \"org.example.demo\"\n",
+            "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[app]\nname = \"Demo App\"\ndisplay_name = \"Demo\"\nicon = \"assets/icon.png\"\nid = \"org.example.demo\"\n",
         )
         .unwrap();
         assert_eq!(m.app_name.as_deref(), Some("Demo App"));
+        assert_eq!(m.app_display_name.as_deref(), Some("Demo"));
         assert_eq!(m.app_icon.as_deref(), Some("assets/icon.png"));
         assert_eq!(m.app_id.as_deref(), Some("org.example.demo"));
         assert!(bare.app_name.is_none() && bare.app_icon.is_none() && bare.app_id.is_none());

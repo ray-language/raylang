@@ -719,7 +719,9 @@ fn cmd_release(args: &[String]) {
         let _ = fs::remove_dir_all(&work);
         process::exit(status.code().unwrap_or(70));
     }
-    let bundle_dir = if cfg!(target_os = "macos") { work.join(format!("{name}.app")) } else { work.join(&name) };
+    // ray-sublime #454: en macOS la carpeta del bundle lleva `[app] display_name` si lo hay.
+    let display = manifest.app_display_name.clone().filter(|d| !d.trim().is_empty()).unwrap_or_else(|| name.clone());
+    let bundle_dir = if cfg!(target_os = "macos") { work.join(format!("{display}.app")) } else { work.join(&name) };
     if !bundle_dir.is_dir() {
         eprintln!("release: bundle not found at '{}'", bundle_dir.display());
         process::exit(70);
@@ -2431,6 +2433,8 @@ fn cmd_bundle(args: &[String]) {
         .unwrap_or_else(|| {
             Path::new(&path).file_stem().and_then(|s| s.to_str()).unwrap_or("app").to_string()
         });
+    // ray-sublime #454: el nombre visible. Sin `[app] display_name` es el propio `name`.
+    let display = manifest.as_ref().and_then(|m| m.app_display_name.clone()).filter(|d| !d.trim().is_empty()).unwrap_or_else(|| name.clone());
     let icon_from_flag = icon_arg.is_some();
     let icon: Option<String> = icon_arg.or_else(|| {
         manifest.as_ref().and_then(|m| m.app_icon.as_ref().map(|i| m.root.join(i).to_string_lossy().into_owned()))
@@ -2622,6 +2626,13 @@ fn cmd_bundle(args: &[String]) {
             crate::bundle_android::write_project(&proj, &name, &app_id, &version, build_number.or(manifest.as_ref().and_then(|m| m.app_build)).unwrap_or(1), &abis, mipmaps.is_some(), devtools, manifest.as_ref().is_some_and(|m| m.android_background_audio), if dev { Some(app_id.as_str()) } else { None }, manifest.as_ref().is_some_and(|m| m.android_exact_alarms), dev || uses_module(&path, "std/alarm"), dev || manifest.as_ref().is_some_and(|m| m.android_record_audio))
         {
             eprintln!("bundle: could not write the Gradle project: {e}");
+            process::exit(74);
+        }
+        // ray-sublime #454: la etiqueta del lanzador es el nombre visible.
+        if display != name
+            && let Err(e) = crate::bundle_android::write_label(&proj, &display)
+        {
+            eprintln!("bundle: could not write the app label: {e}");
             process::exit(74);
         }
         // M447 (pepa #331): `[android] sounds` → res/raw/<nombre>.<ext> (el nombre de recurso va en
@@ -2879,6 +2890,10 @@ fn cmd_bundle(args: &[String]) {
             localizations: manifest.as_ref().map(|m| m.app_plist_localized.clone()).unwrap_or_default(),
             url_scheme: dev.then(|| bundle_id.clone()),
         };
+        // ray-sublime #454: el nombre bajo el icono es el visible (salvo que `[ios.plist]` ya lo dé).
+        if display != name && !ios_plist.iter().any(|(k, _)| k == "CFBundleDisplayName") {
+            ios_plist.push(("CFBundleDisplayName".to_string(), crate::manifest::PlistValue::Str(display.clone())));
+        }
         if let Err(e) = crate::bundle_ios::write_project(&proj, &name, &bundle_id, &version, &signing, opts, &ios_plist) {
             eprintln!("bundle: could not write the Xcode project: {e}");
             process::exit(74);
@@ -2909,17 +2924,17 @@ fn cmd_bundle(args: &[String]) {
         if uses_network(&path) && !extra.iter().any(|(k, _)| k == "NSLocalNetworkUsageDescription") {
             extra.push((
                 "NSLocalNetworkUsageDescription".to_string(),
-                crate::manifest::PlistValue::Str(format!("{name} connects to devices on your local network.")),
+                crate::manifest::PlistValue::Str(format!("{display} connects to devices on your local network.")),
             ));
         }
         let signing = signing_config(manifest.as_ref(), sign_arg, notary_arg, entitlements_arg);
         let opens: Vec<String> = manifest.as_ref().map(|m| m.app_opens.clone()).unwrap_or_default();
         warn_unknown_open_types(&opens);
-        bundle_macos(&out_dir, &name, &version, &bundle_id, icon_macos.as_deref().or(icon.as_deref()), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &extra, &opens, &tmp_bin, &signing);
+        bundle_macos(&out_dir, &name, &display, &version, &bundle_id, icon_macos.as_deref().or(icon.as_deref()), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &extra, &opens, &tmp_bin, &signing);
     } else if cfg!(unix) {
         let opens: Vec<String> = manifest.as_ref().map(|m| m.app_opens.clone()).unwrap_or_default();
         warn_unknown_open_types(&opens);
-        bundle_linux(&out_dir, &name, icon.as_deref(), &opens, &tmp_bin);
+        bundle_linux(&out_dir, &name, &display, icon.as_deref(), &opens, &tmp_bin);
     } else if cfg!(windows) {
         // M180 (W7d): `<name><name>.exe` (subsistema WINDOWS + icono + VERSIONINFO como
         // recursos) y el acceso directo `<name>.lnk`.
@@ -2941,6 +2956,7 @@ fn cmd_bundle(args: &[String]) {
         if let Err(e) = crate::bundle_windows::bundle(
             &out_dir,
             &name,
+            &display,
             &version,
             manifest.as_ref().and_then(|m| m.app_copyright.as_deref()),
             icon.as_deref().map(Path::new),
@@ -3293,8 +3309,10 @@ fn sign_and_notarize_macos(app: &Path, signing: &Signing) {
     }
 }
 
-fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon: Option<&str>, copyright: Option<&str>, extra: &[(String, crate::manifest::PlistValue)], opens: &[String], bin: &Path, signing: &Signing) {
-    let app = out_dir.join(format!("{name}.app"));
+fn bundle_macos(out_dir: &Path, name: &str, display: &str, version: &str, bundle_id: &str, icon: Option<&str>, copyright: Option<&str>, extra: &[(String, crate::manifest::PlistValue)], opens: &[String], bin: &Path, signing: &Signing) {
+    // ray-sublime #454: la carpeta lleva el nombre VISIBLE: Finder, el Dock y Launchpad muestran
+    // el nombre del `.app`, no `CFBundleDisplayName`. El ejecutable y el id siguen con `name`.
+    let app = out_dir.join(format!("{display}.app"));
     let _ = fs::remove_dir_all(&app);
     let macos_dir = app.join("Contents/MacOS");
     let resources = app.join("Contents/Resources");
@@ -3334,13 +3352,21 @@ fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon
         };
         extra_keys.push_str(&format!("\x20 <key>{}</key>{value}\n", plist_escape(k)));
     }
+    // `[app.plist] CFBundleDisplayName` manda si el proyecto ya lo declara (no se duplica la clave).
+    let display = plist_escape(display);
+    let display_key = if extra.iter().any(|(k, _)| k == "CFBundleDisplayName") {
+        String::new()
+    } else {
+        format!("\x20 <key>CFBundleDisplayName</key><string>{display}</string>\n")
+    };
     let plist = format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
          <plist version=\"1.0\">\n<dict>\n\
          \x20 <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>\n\
          \x20 <key>CFBundlePackageType</key><string>APPL</string>\n\
-         \x20 <key>CFBundleName</key><string>{name}</string>\n\
+         \x20 <key>CFBundleName</key><string>{display}</string>\n\
+         {display_key}\
          \x20 <key>CFBundleExecutable</key><string>{name}</string>\n\
          \x20 <key>CFBundleIdentifier</key><string>{bundle_id}</string>\n\
          \x20 <key>CFBundleVersion</key><string>{version}</string>\n\
@@ -3365,7 +3391,7 @@ fn bundle_macos(out_dir: &Path, name: &str, version: &str, bundle_id: &str, icon
 /// El "bundle" de Linux: un directorio con el binario + el lanzador `.desktop` (el `Exec=` va
 /// ABSOLUTO — un .desktop con ruta relativa no funciona desde un lanzador; para instalarlo,
 /// copiarlo a ~/.local/share/applications ajustando la ruta si se mueve el directorio).
-fn bundle_linux(out_dir: &Path, name: &str, icon: Option<&str>, opens: &[String], bin: &Path) {
+fn bundle_linux(out_dir: &Path, name: &str, display: &str, icon: Option<&str>, opens: &[String], bin: &Path) {
     let dir = out_dir.join(name);
     let _ = fs::remove_dir_all(&dir);
     if let Err(e) = fs::create_dir_all(&dir) {
@@ -3396,7 +3422,7 @@ fn bundle_linux(out_dir: &Path, name: &str, icon: Option<&str>, opens: &[String]
     let mime_line = desktop_mime_line(opens);
     let exec_args = if opens.is_empty() { "" } else { " %F" };
     let desktop = format!(
-        "[Desktop Entry]\nType=Application\nName={name}\nExec={}/{name}{exec_args}\n{icon_line}{mime_line}Terminal=false\nCategories=Utility;\n",
+        "[Desktop Entry]\nType=Application\nName={display}\nExec={}/{name}{exec_args}\n{icon_line}{mime_line}Terminal=false\nCategories=Utility;\n",
         abs.display()
     );
     if let Err(e) = fs::write(dir.join(format!("{name}.desktop")), desktop) {

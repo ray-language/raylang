@@ -65,3 +65,27 @@ fn release_and_keygen_help_explain_their_options() {
     assert_eq!(code, 64, "{out}");
     assert!(err.starts_with("usage: ray release") && err.lines().count() == 1, "{err}");
 }
+
+/// rayfocus #458: en headless, con el permiso sin decidir, lo programado espera la respuesta (no
+/// sale en `pending()`), como en iOS y macOS; `RAY_UI_NOTIFY_PERMISSION_ANSWER` simula la respuesta
+/// al pedir el permiso.
+#[test]
+fn a_headless_notification_waits_while_the_permission_is_undecided() {
+    let d = tmp("notify_undecided");
+    let src = "import std/notify;\n\nfn main() -> int {\n    let id = notify.schedule(notify.message(\"t\", \"b\"), notify.Trigger.After(3600, false));\n    print(id.is_ok());\n    print(notify.pending().unwrap().len());\n    print(notify.request_permission());\n    print(notify.pending().unwrap().len());\n    0\n}\n";
+    std::fs::write(d.join("prog.ray"), src).unwrap();
+    let run = |answer: Option<&str>| {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_ray"));
+        c.args(["run", "prog.ray"]).current_dir(&d).env("RAY_UI_BACKEND", "headless").env("RAY_UI_NOTIFY_PERMISSION", "not_determined");
+        match answer {
+            Some(a) => c.env("RAY_UI_NOTIFY_PERMISSION_ANSWER", a),
+            None => c.env_remove("RAY_UI_NOTIFY_PERMISSION_ANSWER"),
+        };
+        let o = c.output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).into_owned()
+    };
+    assert_eq!(run(None), "true\n0\nResult.Ok(not_determined)\n0\n");
+    assert_eq!(run(Some("granted")), "true\n0\nResult.Ok(granted)\n1\n");
+    assert_eq!(run(Some("denied")), "true\n0\nResult.Ok(denied)\n0\n");
+}

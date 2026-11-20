@@ -291,6 +291,18 @@ mod headless {
         &P
     }
 
+    // rayfocus #458: con el permiso sin decidir, lo programado ESPERA la respuesta del usuario
+    // (como en iOS y macOS) y no sale en `pending()`. `answered` guarda la respuesta simulada.
+    fn waiting() -> &'static Mutex<Vec<(String, String)>> {
+        static W: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+        &W
+    }
+
+    fn answered() -> &'static Mutex<Option<String>> {
+        static A: Mutex<Option<String>> = Mutex::new(None);
+        &A
+    }
+
     fn trace(line: &str) {
         if crate::ui::ui_trace() {
             eprintln!("[ui] notify {line}");
@@ -302,6 +314,23 @@ mod headless {
             "notify_permission" => {
                 let (provisional, time_sensitive) = parse_permission_flags(arg);
                 trace(&format!("permission provisional={provisional} time_sensitive={time_sensitive}"));
+                // `RAY_UI_NOTIFY_PERMISSION_ANSWER=granted|denied`: lo que el usuario responde al
+                // diálogo. Lo que esperaba pasa a pendiente (o se descarta si se niega).
+                if status_text(false) == "not_determined"
+                    && let Ok(answer) = std::env::var("RAY_UI_NOTIFY_PERMISSION_ANSWER")
+                    && (answer == "granted" || answer == "denied")
+                {
+                    trace(&format!("permission answered {answer}"));
+                    let held: Vec<(String, String)> = std::mem::take(&mut *waiting().lock().unwrap());
+                    if answer == "granted" {
+                        let mut p = pending().lock().unwrap();
+                        for (id, t) in held {
+                            p.retain(|(i, _)| *i != id);
+                            p.push((id, t));
+                        }
+                    }
+                    *answered().lock().unwrap() = Some(answer);
+                }
                 Ok(status_text(provisional))
             }
             "notify_status" => Ok(status_text(false)),
@@ -331,7 +360,8 @@ mod headless {
                     return Err("notify: notifications are not authorized for this app".to_string());
                 }
                 if trigger != Trigger::Now {
-                    let mut p = pending().lock().unwrap();
+                    let undecided = status_text(false) == "not_determined";
+                    let mut p = if undecided { waiting().lock().unwrap() } else { pending().lock().unwrap() };
                     p.retain(|(id, _)| *id != n.id);
                     p.push((n.id.clone(), trigger_text(&trigger)));
                 }
@@ -347,11 +377,13 @@ mod headless {
             "notify_cancel" => {
                 trace(&format!("cancel {arg}"));
                 pending().lock().unwrap().retain(|(id, _)| id != arg.trim());
+                waiting().lock().unwrap().retain(|(id, _)| id != arg.trim());
                 Ok(String::new())
             }
             "notify_cancel_all" => {
                 trace("cancel all");
                 pending().lock().unwrap().clear();
+                waiting().lock().unwrap().clear();
                 Ok(String::new())
             }
             "notify_pending" => Ok(pending().lock().unwrap().iter().map(|(id, _)| id.clone()).collect::<Vec<_>>().join("\n")),
@@ -368,8 +400,13 @@ mod headless {
         }
     }
 
-    /// `RAY_UI_NOTIFY_PERMISSION` = `granted` (por defecto) | `denied` | `not_determined`.
+    /// `RAY_UI_NOTIFY_PERMISSION` = `granted` (por defecto) | `denied` | `not_determined`. Una
+    /// respuesta simulada al diálogo (`RAY_UI_NOTIFY_PERMISSION_ANSWER`) sustituye al
+    /// `not_determined` desde que se pide el permiso.
     fn status_text(provisional: bool) -> String {
+        if let Some(answer) = answered().lock().unwrap().clone() {
+            return if answer == "granted" && provisional { "provisional".to_string() } else { answer };
+        }
         match std::env::var("RAY_UI_NOTIFY_PERMISSION").as_deref() {
             Ok("denied") => "denied".to_string(),
             Ok("not_determined") => "not_determined".to_string(),

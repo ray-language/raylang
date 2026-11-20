@@ -42,7 +42,7 @@ use enums::*;
 use traits::*;
 use lowering::*;
 pub use traits::{generate_derives, member_completion};
-pub use warnings::{discarded_results, Warning};
+pub use warnings::{discarded_results, program_warnings, variadic_externs, Warning};
 
 /// Error de tipos con ubicación. `len` (M33a) es la extensión del error en
 /// caracteres; por ahora siempre `1` (subrayar la **expresión** completa exige

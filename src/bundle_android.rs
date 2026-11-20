@@ -2656,6 +2656,13 @@ dependencies {{
     )
 }
 
+/// ray-sublime #454: la etiqueta visible de la app (`[app] display_name`) sobre un proyecto ya
+/// escrito por [`write_project`], que la deja en el nombre.
+pub fn write_label(dir: &Path, label: &str) -> Result<(), String> {
+    let p = dir.join("app/src/main/res/values/strings.xml");
+    std::fs::write(&p, strings_xml(label)).map_err(|e| format!("{}: {e}", p.display()))
+}
+
 fn strings_xml(name: &str) -> String {
     format!(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n  <string name=\"app_name\">{name}</string>\n</resources>\n"

@@ -115,7 +115,7 @@ pub fn analyze_all(src: &str) -> Vec<Diag> {
     // `check_all_modulo`: sin exigir `main`. Un buffer sin guardar puede ser un archivo de módulo
     // (sin entrada); que le falte `main` es asunto de proyecto (lo cazan `ray build`/`ray run`), no
     // un diagnóstico de este archivo. Así un módulo suelto muestra sus errores reales, no ese ruido.
-    let warnings = checker::discarded_results(&program);
+    let warnings = checker::program_warnings(&program);
     let mut out: Vec<Diag> = checker::check_all_modulo(&mut program)
         .into_iter()
         .map(|e| diag(e.line, e.col, e.len, e.to_string()))
@@ -274,7 +274,7 @@ pub(super) fn analyze_modular(uri: &str, src: &str) -> Option<Vec<Diag>> {
             // global). Solo publicamos SUS errores: los de otros módulos pertenecen a sus URIs.
             let entry_start = loaded.modules.iter().map(|m| m.start_line).min().unwrap_or(1);
             let mut program = loaded.program;
-            let warnings = checker::discarded_results(&program);
+            let warnings = checker::program_warnings(&program);
             // `check_all_modulo`: el archivo abierto puede ser un **submódulo sin `main`** (legítimo);
             // no exigimos la entrada para no marcar "falta la función de entrada 'main'" en cada módulo.
             let diags = checker::check_all_modulo(&mut program)

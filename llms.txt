@@ -183,7 +183,8 @@ but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
 - "Indeterminate" expressions need an expected type or annotation: `[]`, `Option.None`,
   `Map.new()`, `Channel.new()` → write `let m: Map<string, int> = Map.new();`. The other
   branch of an `if`/arm of a `match` counts as context: `if (c) { Option.Some(1) } else {
-  Option.None }` infers `Option<int>`.
+  Option.None }` infers `Option<int>`. There are NO explicit type arguments: `none::<int>()`
+  and `f<int>(x)` do not parse — annotate the `let` or pass the type through an argument.
 - A `while (true)` with no `break` of its own DIVERGES: a `fn f() -> Result<T, E>` may end in
   it (exit with `return`) — no dead `Result.Err("unreachable")` after the loop.
 - `==`/`!=` are STRUCTURAL (primitives, tuples, arrays, `@derive(Eq)`, `Option`/`Result`), EXCEPT on a
@@ -192,6 +193,8 @@ but it returns int`. Fatal errors: `panic("msg")`; assertions: `assert(cond)`,
   `[x].contains(y)` stay structural. Inside `fn f<T: Eq>(a: T, b: T)`, `a == b` compiles and uses the bound.
 - Tuples support `==` and satisfy `Eq`/`Show` bounds element-wise: `assert_eq(f(), ("h", 81))`
   works (there is no `print(tuple)` / `to_string(tuple)`: show is only via those bounds).
+- A struct or an enum WITHOUT `Show` still prints and interpolates with its default form
+  (`"${kind}"` → `Kind.Past`, `P { x: 1 }`); with `Show`, `print`/`to_string`/`${}` use your `show`.
 - Strings are immutable, indexed BY CHARACTER: `s[i]` yields `char`; `s[i] = c` is an
   error; `s.len()` counts characters; `s.to_bytes()` for raw UTF-8 octets.
 - No char arithmetic: `'a' + 1` is an error → `char_code(c)` / `char_from_code(n)`.
@@ -487,6 +490,9 @@ by `<platform>-<arch>` = `platform() + "-" + arch()`, each with `url`, hex `sha2
 `update.current()` is the baked version or `"dev"`; call `update.cleanup()` at startup.
 Publisher side: `ray keygen` (once; writes `[app] public_key`) and `ray release -o dist
 [--publish]` (bundle → zip + signed update.json; run once per platform over the same dist/).
+`--publish` uploads to the GitHub release of `--tag` (default `v<version>`) with `gh`, in the
+repository of `--repo OWNER/NAME` (default: GH_REPO, else the folder's), and warns if it is private
+(std/update sends no credentials). `ray release --help` / `ray keygen --help` list every option.
 
 Markdown: `std/markdown` (`markdown.to_html(md)`, `parse(md) -> [Block]`) is CommonMark + GFM
 (setext, task items, alerts `[!NOTE]`, footnotes, tables, tight/loose lists; inline: delimiter-
@@ -523,7 +529,11 @@ freeze in the background, so a sequencer belongs in the raylang program, not in 
 recording (macOS, iOS, Linux, Android, Windows): audio.open_input(rate, channels, format,
 latency_ms) then audio.read(h) (parks the fiber until captured frames arrive) and
 audio.recorded_ms(h); on iOS set [ios] audio_session = "play_and_record", on Android
-[android] record_audio = true; RAY_AUDIO_SOURCE=tone or =null for tests;
+[android] record_audio = true; a macOS app packaged with ray bundle needs
+NSMicrophoneUsageDescription in [app.plist] and, signed with the hardened runtime, the entitlement
+com.apple.security.device.audio-input ([app] entitlements), or the input is silent and macOS never
+asks; the system converts if the device runs at another rate (Device.sample_rate is the device's
+own); RAY_AUDIO_SOURCE=tone or =null for tests;
 choosing the device: audio.devices() lists Device { id, name, input_channels, output_channels,
 default_input, default_output, sample_rate, transport } and audio.open_device(id, rate,
 channels, format, latency_ms) / audio.open_input_device(id, …) open one (empty list on iOS;
@@ -669,8 +679,10 @@ optional one first with `ffi.library_available("z") -> bool`. Cost of one call (
 ~0.5 µs on the VM, ~1 ns natively; `blocking` adds 4–8 µs natively (a thread hop) and nothing on
 the VM (it is inert there), so declare `blocking` only what can really wait (a `read` on a device, a `poll` with a
 timeout) — never a `poll(…, 0)` or a getter. VARIADIC C functions cannot be called: not only
-`printf` but `ioctl`, `fcntl` and `open` with O_CREAT — on Apple arm64 they fail or silently do
-nothing; wrap them in a fixed-arity C function. Full rules: §13 of raylang://reference.md.
+`printf` but `ioctl`, `fcntl` and `open` with O_CREAT — on Apple arm64 they fail, silently do
+nothing or (on the VM) leave the fd with garbage flags, and the VM and a native binary differ;
+wrap them in a fixed-arity C function. Declaring one of them with its variadic argument
+(`fn fcntl(fd: int, cmd: int, arg: int) -> int`) compiles with a warning. Full rules: §13 of raylang://reference.md.
 
 ## Mistakes you will make, and the exact errors
 
@@ -707,7 +719,7 @@ up to 20 diagnostics per run.
 ray run file.ray            # type-check + run on the VM (exit code = main's int)
 ray dev file.ray            # run + auto-restart on saved changes (hot reload; std/ui windows reload too)
 ray dev --device            # don't run here: push the source to linked devices (phone dev library / `ray dev-client <url> <dir>`) on every compiling change; the link (port + token) is saved in `.ray-dev` at the project root — keep it out of git (`ray new` already ignores it)
-ray bundle [--ios|--android] # package the app: name/icon/id from `[app] name/icon/id` of ray.toml (`--name/--icon/--id` override). `icon` = a square PNG, 1024x1024 recommended, scaled to every size; for the macOS .app it may also be a hand-made `.icns` or `.iconset` (one PNG per size, e.g. a simplified 16/32 px version), and `[app.macos] icon` gives macOS its own while the other systems keep the PNG. On iOS/Android the process subsystem is always excluded: `process.run`/`stream`/`spawn_detached` (and `update.relaunch`/`apply`) return `Err` there, so shared code can import `std/process` and `std/update`
+ray bundle [--ios|--android] # package the app: name/icon/id from `[app] name/icon/id` of ray.toml (`--name/--icon/--id` override). `[app] display_name = "Ray Sublime"` is the VISIBLE name when it differs from the identifier (the `.app` folder, menu bar and Dock on macOS, `Name=` of the .desktop, the exe's product name, the label on iOS/Android); the binary, the default id and the release zips keep the name. `icon` = a square PNG, 1024x1024 recommended, scaled to every size; for the macOS .app it may also be a hand-made `.icns` or `.iconset` (one PNG per size, e.g. a simplified 16/32 px version), and `[app.macos] icon` gives macOS its own while the other systems keep the PNG. On iOS/Android the process subsystem is always excluded: `process.run`/`stream`/`spawn_detached` (and `update.relaunch`/`apply`) return `Err` there, so shared code can import `std/process` and `std/update`
 ray bundle --ios --dev      # the DEVELOPMENT shell (<id>.dev; also --android --dev): toolchain + VM inside; install once, scan the QR `ray dev --device` prints, reload on every save
 ray profile file.ray        # run on the VM + per-function profile on exit (self/incl time, calls; --json --out f)
 ray build file.ray          # check only (also: ray build --native for a machine binary)

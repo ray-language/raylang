@@ -265,7 +265,18 @@ pub fn open_input_device(
 /// Available on macOS, iOS, Linux (ALSA), Android and Windows. The first time, the system asks
 /// for microphone permission: on iOS the app needs `[ios] audio_session = "play_and_record"`
 /// and on Android `[android] record_audio = true`. Without the permission the input delivers
-/// silence on macOS and iOS, and `open_input` returns `Err` on Android and Windows. `RAY_AUDIO_SOURCE=null` (silence) or `=tone` (440 Hz) replace
+/// silence on macOS and iOS, and `open_input` returns `Err` on Android and Windows.
+///
+/// A macOS app packaged with `ray bundle` must declare the text of the permission in
+/// `[app.plist]` (`NSMicrophoneUsageDescription = "…"`) and, when it is signed with the hardened
+/// runtime (`--sign`), carry the entitlement `com.apple.security.device.audio-input`
+/// (`[app] entitlements = "file.plist"`): without it the input is silent and macOS never asks.
+///
+/// The system converts when the device runs at another sample rate: the rate you ask for is the
+/// rate you read. `Device.sample_rate` is the device's own; ask for that one to avoid the
+/// conversion.
+///
+/// `RAY_AUDIO_SOURCE=null` (silence) or `=tone` (440 Hz) replace
 /// the device with a real-time source, for tests.
 // M463 (ray-daw #422).
 pub fn open_input(

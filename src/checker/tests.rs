@@ -2075,7 +2075,9 @@ fn builtins_as_function_values() {
     assert!(check_src("fn main() { let f: fn(int) -> string = to_string; print(f(1)); }").is_ok());
     assert!(check_src("fn apply(f: fn(char) -> int, c: char) -> int { f(c) }\nfn main() { print(apply(char_code, 'a')); }").is_ok());
     // Un tipo que el builtin no acepta, un retorno que no cuadra y el uso sin tipo esperado.
-    err_contains("struct P { x: int }\nfn main() { let ps = [P { x: 1 }]; print(ps.map(to_string)); }", "the builtin 'to_string' cannot be used as a value of type fn(P) -> U");
+    err_contains("fn main() { let ps = [[1]]; print(ps.map(to_string)); }", "the builtin 'to_string' cannot be used as a value of type fn([int]) -> U");
+    // rayfocus #459: un struct sin `Show` ya se convierte (la forma por defecto, como `print`).
+    assert!(check_src("struct P { x: int }\nfn main() { let ps = [P { x: 1 }]; print(ps.map(to_string)); }").is_ok());
     err_contains("fn main() { let f: fn(int) -> int = to_string; }", "'f' is declared as fn(int) -> int but initialized with fn(int) -> string");
     err_contains("fn main() { let g = to_string; }", "name 'to_string' not declared (the builtin 'to_string' can be a value only where a function type is expected");
     // Una variable local con el nombre del builtin gana (no es el builtin).

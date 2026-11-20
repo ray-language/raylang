@@ -55,6 +55,42 @@ fn app_name_and_id_come_from_the_manifest() {
     }
 }
 
+/// ray-sublime #454: `[app] display_name` es el nombre visible; el binario y el id siguen saliendo
+/// del nombre del paquete.
+#[test]
+fn display_name_is_the_visible_name_and_the_package_name_stays_the_identifier() {
+    if !have_rustc() {
+        return;
+    }
+    let base = std::env::temp_dir().join("ray_bundle_cli_display");
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(
+        base.join("ray.toml"),
+        "[package]\nname = \"ray-probe\"\nversion = \"1.0.0\"\nentry = \"main.ray\"\n\n[app]\ndisplay_name = \"Ray Probe\"\n",
+    )
+    .unwrap();
+    std::fs::write(base.join("main.ray"), "fn main() { print(\"hi\"); }\n").unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_ray"))
+        .args(["bundle", "main.ray", "--without", "mimalloc,ahash,fibers", "-o", "."])
+        .current_dir(&base)
+        .output()
+        .expect("corre");
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    if cfg!(target_os = "macos") {
+        let plist = std::fs::read_to_string(base.join("Ray Probe.app/Contents/Info.plist")).expect("la carpeta lleva el nombre visible");
+        assert!(plist.contains("<key>CFBundleName</key><string>Ray Probe</string>"), "{plist}");
+        assert!(plist.contains("<key>CFBundleDisplayName</key><string>Ray Probe</string>"), "{plist}");
+        assert!(plist.contains("<key>CFBundleExecutable</key><string>ray-probe</string>"), "{plist}");
+        assert!(plist.contains("<key>CFBundleIdentifier</key><string>org.raylang.ray-probe</string>"), "{plist}");
+        assert!(base.join("Ray Probe.app/Contents/MacOS/ray-probe").is_file());
+    } else if cfg!(target_os = "linux") {
+        let desktop = std::fs::read_to_string(base.join("ray-probe/ray-probe.desktop")).expect("la carpeta y el .desktop llevan el nombre del paquete");
+        assert!(desktop.contains("\nName=Ray Probe\n"), "{desktop}");
+        assert!(desktop.contains("/ray-probe\n") || desktop.contains("/ray-probe "), "{desktop}");
+    }
+}
+
 /// M209: `[app.plist]` va tal cual al Info.plist (cadena y bool) y el permiso de red local se añade
 /// solo cuando el programa importa la red. Solo aplica al `.app` de macOS.
 #[test]

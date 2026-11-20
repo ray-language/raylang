@@ -6,6 +6,33 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`[app] display_name`** (ray-sublime #454): el nombre visible de la app aparte del identificador.
+  Con `[package] name = "ray-sublime"` y `[app] display_name = "Ray Sublime"`, `ray bundle` nombra
+  así la carpeta `.app`, `CFBundleName`/`CFBundleDisplayName`, el `Name=` del `.desktop`,
+  `FileDescription`/`ProductName` del `.exe` y la etiqueta en iOS y Android; el binario, el id por
+  defecto y los zips de `ray release` siguen con el nombre del paquete. Una instalación anterior
+  conserva el nombre de su carpeta al actualizarse.
+- **Interpolar un struct o un enum sin `Show`** (rayfocus #459): `"${kind}"` y `to_string(kind)`
+  dan la forma por defecto (`Kind.Past`, `P { x: 1 }`), la misma que `print`. Antes era un error
+  de tipo y obligaba a un `match` solo para registrar un enum.
+- **`std/protobuf`** (raygrpc #463): un varint de 10 octetos cuyo décimo octeto pasa de 1 no cabe
+  en 64 bits y ahora es `Err` (se aceptaba descartando bits). El error del tipo wire no soportado
+  sigue el formato del resto: `protobuf: unsupported wire type 3 of field 1 at byte 0`.
+- **Aviso al declarar una variádica de libc** (rayserial #460): `extern "c" { fn fcntl(fd: int,
+  cmd: int, arg: int) -> int; }` compila con un aviso (`fcntl`, `ioctl`, `open` con modo, `printf`
+  y familia). En Apple arm64 esas llamadas no hacen nada o, en la VM, dejan el descriptor con
+  banderas basura; la referencia lo dice ahora.
+- **`std/notify` en headless** (rayfocus #458): con `RAY_UI_NOTIFY_PERMISSION=not_determined` lo
+  programado espera fuera de `pending()`, como en iOS y macOS, y
+  `RAY_UI_NOTIFY_PERMISSION_ANSWER=granted|denied` simula la respuesta al pedir el permiso.
+- **`ray release --help` y `ray keygen --help`** (ray-daw #455) explican cada opción y salen con 0.
+- **Documentación**: la clave de `ed25519_sign` (semilla o PKCS#8; raycert #461); un socket se
+  cierra con el `close(h)` del preludio (#462); lo que necesita un `.app` de macOS para grabar y
+  la conversión de frecuencia en `open_input` (ray-daw #457); `scope` espera a `spawn_local` y un
+  ejemplo de trabajador aislado con canales (raycrawl #368); headless concede las alarmas por
+  defecto en cualquier plataforma (rayfocus #377); no existen los argumentos de tipo explícitos
+  (raysolve #358).
+
 - **`to_string` de un valor con `Show` dentro de una interpolación** (raysolve #456):
   `"${to_string(v)}"` con un `v` struct o enum con `Show` (derivado, escrito a mano o por un bound
   `V: Show`) daba un error interno en la VM y no compilaba en nativo, porque `show` se aplicaba dos

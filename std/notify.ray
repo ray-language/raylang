@@ -7,8 +7,11 @@
 //! regenerate a shell older than 1.27.91), libnotify on Linux and the classic center or `osascript`
 //! for a bare macOS binary (immediate `show` only; the rest is `Ok` without effect or `Err`).
 //! Windows: not available yet (`Err`). Headless: `Ok` + trace (`RAY_UI_TRACE=1`), an in-memory
-//! pending list, `RAY_UI_NOTIFY_PERMISSION=denied` simulates the refusal and `RAY_UI_NOTIFY_CLICK=1`
-//! (or `=<action id>`) taps every notification as it is shown (tests).
+//! pending list, `RAY_UI_NOTIFY_PERMISSION=granted|denied|not_determined` sets the permission
+//! (`granted` by default; with `not_determined` what is scheduled waits out of `pending()`, as on
+//! iOS and macOS, until `request_permission` gets the answer given in
+//! `RAY_UI_NOTIFY_PERMISSION_ANSWER=granted|denied`) and `RAY_UI_NOTIFY_CLICK=1` (or `=<action id>`)
+//! taps every notification as it is shown (tests).
 //!
 //! Ask for the permission in context — when the user enables the feature that needs it, not at
 //! launch — and check `status()` before relying on it: the user can revoke it in Settings at any

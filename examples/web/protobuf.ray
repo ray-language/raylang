@@ -208,8 +208,9 @@ struct VarintResult {
 }
 
 // Decodifica un varint desde `pos`; devuelve el valor y la posición siguiente. `next` vale -1 si
-// el varint se corta antes de su último octeto, y -2 si pasa de 10 octetos (64 bits): `parse` es
-// total y esto viene de la red (#388).
+// el varint se corta antes de su último octeto, -2 si pasa de 10 octetos y -3 si el décimo trae
+// bits que no caben en 64 (solo puede valer 0 o 1; #463): `parse` es total y esto viene de la
+// red (#388).
 fn decode_varint(data: bytes, pos: int) -> VarintResult {
     var result = 0;
     var shift = 0;
@@ -220,6 +221,9 @@ fn decode_varint(data: bytes, pos: int) -> VarintResult {
             return VarintResult { value: 0, next: -2 };
         }
         let b = data[p];
+        if (shift == 63 && (b & 128) == 0 && b > 1) {
+            return VarintResult { value: 0, next: -3 };
+        }
         result = result | (b & 127) << shift;
         p = p + 1;
         if ((b & 128) == 0) {
@@ -233,6 +237,8 @@ fn decode_varint(data: bytes, pos: int) -> VarintResult {
 fn varint_error(what: string, v: VarintResult, pos: int) -> string {
     if (v.next == -2) {
         "protobuf: the varint of the ${what} at byte ${pos} is longer than 10 bytes"
+    } else if (v.next == -3) {
+        "protobuf: the varint of the ${what} at byte ${pos} does not fit in 64 bits"
     } else {
         "protobuf: truncated varint of the ${what} at byte ${pos}"
     }
@@ -250,7 +256,7 @@ fn read_le(data: bytes, pos: int, nbytes: int) -> int {
 }
 
 /// Reads a bare varint at `pos`: `Ok((value, next))` with the position after it, or `Err` when
-/// it is cut short or longer than 10 bytes. The cursor of a hand-written reader: a delimited
+/// it is cut short, longer than 10 bytes or does not fit in 64 bits. The cursor of a hand-written reader: a delimited
 /// stream, a packed field.
 pub fn read_varint(data: bytes, pos: int) -> Result<(int, int), string> {
     let v = decode_varint(data, pos);
@@ -277,7 +283,7 @@ pub fn read_packed_varints(body: bytes) -> Result<[int], string> {
 /// Parses a protobuf message into its raw fields (schema-less: number + wire type + value).
 /// Supports wire types 0 (varint), 1 (fixed64), 2 (length-delimited), and 5 (fixed32).
 /// Total: malformed input is always an `Err` that names the byte — a truncated or over-long
-/// varint, a value that runs past the end of the data, field number 0, or any other wire type.
+/// varint, one whose tenth byte overflows 64 bits, a value that runs past the end of the data, field number 0, or any other wire type.
 pub fn parse(data: bytes) -> Result<[PbField], string> {
     var fields: [PbField] = [];
     var pos = 0;
@@ -332,7 +338,9 @@ pub fn parse(data: bytes) -> Result<[PbField], string> {
             );
             pos = pos + width;
         } else {
-            return Result.Err("unsupported wire type: " + to_string(wire));
+            return Result.Err(
+                "protobuf: unsupported wire type ${wire} of field ${number} at byte ${at}"
+            );
         }
     }
     Result.Ok(fields)

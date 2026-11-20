@@ -262,8 +262,9 @@ let s = to_string(42);          // "42"
 let msg = "total: ${3.5}";      // "total: 3.5"
 ```
 
-Para tus propios tipos, implementa (o deriva) el trait `Show` y quedan admitidos por
-`print`/`to_string`/`${}` (§9).
+Para tus propios tipos, implementa (o deriva) el trait `Show` y `print`/`to_string`/`${}` usan
+tu `show` (§9). Sin `Show`, un struct o un enum se muestra con su forma por defecto
+(`Kind.Past`, `P { x: 1 }`): basta para registrar un enum en un log.
 
 **Desde string** (parseo, puede fallar): `parse_int` / `parse_float` devuelven `Option` — el fallo
 es un valor, no una excepción ni un cero silencioso:

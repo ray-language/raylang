@@ -466,8 +466,8 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "spawn_local" => "Like `spawn`, but in a native binary the task is pinned to the CURRENT scheduler worker: no cross-thread wake-up, it runs when the caller yields (sub-microsecond for short helpers). The building block of per-worker state (one actor per worker, Seastar style: see `worker_id`). In the VM it is a plain `spawn`.",
         "worker_id" => "Index of the scheduler worker running this task (0..worker_count()). Stable for the task's whole life in a native binary (tasks never migrate); in the VM it is the current thread's worker index. Use it to pick per-worker state (one actor per worker).",
         "worker_count" => "Number of scheduler workers (cores, or `RAYLANG_THREADS`).",
-        "spawn_isolated" => "Like `spawn`, but the task starts in a fresh handle domain: it cannot use the files, sockets, processes or windows opened by other tasks (they behave as closed), and its own handles are invisible to them. Tasks it spawns (`spawn`, `spawn_local`) inherit its domain and share its handles. Channels DO cross domains: pass one in and talk to the isolated task through it. The building block for running plugins or less-trusted code in-process.",
-        "scope" => "Runs the closure as a structured-concurrency scope: on return it joins every task spawned inside, cancelling siblings and re-raising the first failure.",
+        "spawn_isolated" => "Like `spawn`, but the task starts in a fresh handle domain: it cannot use the files, sockets, processes or windows opened by other tasks (they behave as closed), and its own handles are invisible to them. Tasks it spawns (`spawn`, `spawn_local`) inherit its domain and share its handles. Channels DO cross domains: pass one in and talk to the isolated task through it — `let jobs: Channel<string> = Channel.bounded(8); let done: Channel<int> = Channel.bounded(8); let w = spawn_isolated(fn() -> int { while let Option.Some(j) = recv(jobs) { send(done, j.len()); } 0 }); send(jobs, \"abc\"); recv(done); close(jobs); join(w);`. The building block for running plugins or less-trusted code in-process.",
+        "scope" => "Runs the closure as a structured-concurrency scope: on return it joins every task spawned inside (`spawn`, `spawn_local` and `spawn_isolated` alike), cancelling siblings and re-raising the first failure. A panic in the body itself cancels the children before it propagates.",
         "send" => "Sends a value into a channel. Blocks if the channel is bounded and full (backpressure). Runtime error on a closed channel (use `try_send` when the receiver may be gone).",
         // M190: las funciones ASOCIADAS (tabla ASSOC) también responden en `ray_doc`/hover — antes
         // `ray_doc "Channel.bounded"` negaba el símbolo y la única fuente era la tabla de REFERENCE.
@@ -479,7 +479,7 @@ pub fn doc(name: &str) -> Option<&'static str> {
         "try_send" => "Sends into a channel WITHOUT blocking: `true` if the value was delivered or queued, `false` if the channel is closed or full. Never fails: the non-panicking counterpart of `send` for producers whose consumer may be gone.",
         "try_recv" => "Receives from a channel WITHOUT blocking: `Received.Got(v)` if a value was ready, `Received.Empty` if the channel is open but empty, `Received.Closed` if it is closed and drained.",
         "signals" => "Returns the process's OS-signal channel (SIGTERM=15, SIGINT=2, SIGWINCH=28 arrive as ints) for graceful shutdown and terminal-resize handling. SIGHUP, SIGQUIT and SIGUSR1/2 keep their OS default unless you ask for them with `process.listen_signal` (std/process). A singleton; composes with `recv`/`select`. Unix only (VM and native binary).",
-        "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`; a sender blocked on a full channel wakes up and its `send` fails). Idempotent. For a file handle: closes the file. For a window handle from `ui.open` (std/ui): closes the window (the event loop reports `closed`; there is no `ui.close`). For an audio output from `audio.open` (std/audio): ends the output WITHOUT blocking — what is already queued (up to the latency hint) still plays, ending with a short fade-out (`audio.drain` waits for it; `audio.flush` discards it without closing). To jump or pause without overlap, keep the output open and `flush`.",
+        "close" => "For a channel: closes it (pending values can still be received; `recv` then yields `None`; a sender blocked on a full channel wakes up and its `send` fails). Idempotent. For a file handle: closes the file. For a socket from `std/net` (a TCP or TLS connection, a listener): closes it (there is no `net.close`). For a window handle from `ui.open` (std/ui): closes the window (the event loop reports `closed`; there is no `ui.close`). For an audio output from `audio.open` (std/audio): ends the output WITHOUT blocking — what is already queued (up to the latency hint) still plays, ending with a short fade-out (`audio.drain` waits for it; `audio.flush` discards it without closing). To jump or pause without overlap, keep the output open and `flush`.",
         // --- I/O ---
         "__exists" => "Whether a file or directory exists at the given path.",
         "__local_port" => "Returns the local port a listener socket is bound to (useful with port 0 = OS-assigned).",
@@ -4824,8 +4824,12 @@ static BUILTINS: &[Builtin] = &[
     // to_string(x) -> string (M11.1a): representación textual de un primitivo imprimible.
     Builtin { name: "to_string", opcode: OpCode::ToString, check: |a| {
         arity(a, 1, "to_string", "")?;
-        if !matches!(a[0], Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes | Type::UInt(_)) {
-            return Err((Some(0), format!("to_string only converts int/float/bool/string/char/bytes/u*, not {}", a[0])));
+        // rayfocus #459: un struct o un enum sin `Show` se convierte con la forma por defecto, la
+        // misma que muestra `print` (`Kind.Past`, `P { x: 1 }`): `"${kind}"` daba error de tipo
+        // y obligaba a un `match` solo para registrar un enum sin datos. Con `Show`, el checker
+        // ya redirige la llamada a `T#show` antes de llegar aquí.
+        if !matches!(a[0], Type::Int | Type::Float | Type::Bool | Type::String | Type::Char | Type::Bytes | Type::UInt(_) | Type::Struct(_, _) | Type::Enum(_, _)) {
+            return Err((Some(0), format!("to_string only converts int/float/bool/string/char/bytes/u*, structs and enums, not {}", a[0])));
         }
         Ok(Type::String)
     } },

@@ -32,7 +32,7 @@ use std::process::Command;
 /// Empaqueta `bin` (el binario nativo ya construido) como `<out_dir>\<name>\`. Devuelve el
 /// directorio del bundle; los fallos que impiden el bundle son `Err` (el CLI sale 74); el icono
 /// y el acceso directo son best-effort con aviso, como el codesign ad-hoc de macOS.
-pub fn bundle(out_dir: &Path, name: &str, version: &str, copyright: Option<&str>, icon: Option<&Path>, bin: &Path, sign: Option<&str>) -> Result<PathBuf, String> {
+pub fn bundle(out_dir: &Path, name: &str, display: &str, version: &str, copyright: Option<&str>, icon: Option<&Path>, bin: &Path, sign: Option<&str>) -> Result<PathBuf, String> {
     let dir = out_dir.join(name);
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).map_err(|e| format!("could not create '{}': {e}", dir.display()))?;
@@ -40,7 +40,7 @@ pub fn bundle(out_dir: &Path, name: &str, version: &str, copyright: Option<&str>
     fs::copy(bin, &exe).map_err(|e| format!("could not place the binary: {e}"))?;
     set_gui_subsystem(&exe)?;
 
-    let mut resources: Vec<(u16, u16, Vec<u8>)> = vec![(RT_VERSION, 1, version_info(name, version, copyright))];
+    let mut resources: Vec<(u16, u16, Vec<u8>)> = vec![(RT_VERSION, 1, version_info(name, display, version, copyright))];
     if let Some(icon) = icon {
         match icon_resources(icon, &dir) {
             Ok((group, image)) => {
@@ -251,7 +251,7 @@ fn ps_quote(p: &Path) -> String {
 /// El bloque VS_VERSIONINFO completo: raíz con VS_FIXEDFILEINFO + StringFileInfo (tabla
 /// `040904B0`: inglés-US, Unicode) + VarFileInfo/Translation. Versión `a.b.c[.d]` (los sufijos
 /// no numéricos se ignoran: "1.6.0-beta" → 1.6.0.0).
-fn version_info(name: &str, version: &str, copyright: Option<&str>) -> Vec<u8> {
+fn version_info(name: &str, display: &str, version: &str, copyright: Option<&str>) -> Vec<u8> {
     let parts: Vec<u16> = version
         .split('.')
         .map(|p| p.chars().take_while(|c| c.is_ascii_digit()).collect::<String>().parse::<u16>().unwrap_or(0))
@@ -266,11 +266,11 @@ fn version_info(name: &str, version: &str, copyright: Option<&str>) -> Vec<u8> {
     }
     let file_version = format!("{}.{}.{}.{}", parts[0], parts[1], parts[2], parts[3]);
     let mut strings = vec![
-        ("FileDescription", name.to_string()),
+        ("FileDescription", display.to_string()),
         ("FileVersion", file_version.clone()),
         ("InternalName", name.to_string()),
         ("OriginalFilename", format!("{name}.exe")),
-        ("ProductName", name.to_string()),
+        ("ProductName", display.to_string()),
         ("ProductVersion", version.to_string()),
     ];
     if let Some(c) = copyright.filter(|c| !c.is_empty()) {
@@ -391,7 +391,7 @@ mod tests {
 
     #[test]
     fn version_info_is_a_well_formed_tree() {
-        let v = version_info("mini-app", "2.5.0-beta", Some("© 2026 Ray"));
+        let v = version_info("mini-app", "Mini App", "2.5.0-beta", Some("© 2026 Ray"));
         assert_eq!(v.len() % 4, 0, "relleno a 4");
         assert_eq!(u16::from_le_bytes([v[0], v[1]]) as usize, v.len(), "wLength de la raíz = todo");
         assert_eq!(u16::from_le_bytes([v[2], v[3]]), 52, "wValueLength = VS_FIXEDFILEINFO");

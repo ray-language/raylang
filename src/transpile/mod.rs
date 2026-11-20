@@ -361,6 +361,24 @@ pub fn native_app_info() -> [String; 3] {
 }
 
 pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: bool, embed: &[(String, String)], lib_mode: bool) -> Result<Transpiled, String> {
+    // raysolve #357: el diccionario de un método con parámetros de tipo PROPIOS (`map<U>` de
+    // `Iterator<T>`) no tiene tipo en Rust (haría falta polimorfismo de rango 2), así que una
+    // función acotada por ese trait no se puede emitir. Se dice aquí, con nombres; si no, la
+    // firma salía con un tipo que no existe (`U`) y fallaba `rustc`.
+    for f in prog.functions.iter().filter(|f| f.line < crate::prelude::LINE_BASE) {
+        for p in &f.params {
+            let parts: Vec<&str> = p.name.split('#').collect();
+            let [_, tr, method] = parts.as_slice() else { continue };
+            let generic = prog.traits.iter().any(|t| t.name == *tr
+                && t.methods.iter().any(|m| m.name == *method && !m.type_params.is_empty()));
+            if generic {
+                return Err(format!(
+                    "'{}' is bounded by the trait '{}', whose method '{}' has type parameters of its own: that bound is not supported in a native build yet (it runs on the VM); bound by a trait without generic methods, or pass the function it needs as an argument",
+                    f.name, tr, method
+                ));
+            }
+        }
+    }
     // Índice de firmas de funciones NO genéricas y NO sintéticas (para inferir tipos de llamada).
     let mut funcs = HashMap::new();
     let mut prelude_values = HashMap::new();

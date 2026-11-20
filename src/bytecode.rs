@@ -221,10 +221,13 @@ pub enum OpCode {
     /// Builtin `__ffi_lib_available` (std/ffi.library_available, M417): saca el nombre corto de una
     /// librería (string) y empuja si se puede cargar en este sistema (bool).
     FfiLibAvailable,
-    /// Builtin `__ffi_ptr` (std/ffi.null/offset, rayserial #394): saca un int y empuja el `ptr`
-    /// con esa dirección.
-    FfiPtr,
-    /// Builtin `__ffi_addr` (std/ffi.is_null/addr/offset): saca un `ptr` y empuja su dirección (int).
+    /// Builtin `__ffi_null` (std/ffi.null, rayserial #394): empuja el `ptr` NULL. Ningún builtin
+    /// convierte un entero en `ptr`: un puntero no NULL solo sale de una `extern`.
+    FfiNull,
+    /// Builtin `__ffi_offset` (std/ffi.offset): saca `(ptr, n)` y empuja el `ptr` `n` octetos
+    /// más allá. Sobre NULL es error de ejecución (no se fabrican direcciones).
+    FfiOffset,
+    /// Builtin `__ffi_addr` (std/ffi.is_null/addr): saca un `ptr` y empuja su dirección (int).
     FfiAddr,
     /// Builtin `__ffi_read` (std/ffi.read): saca `(ptr, n)` y empuja los `n` octetos a los que apunta.
     FfiRead,

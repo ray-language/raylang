@@ -73,6 +73,9 @@ struct FnSig {
     /// Bounds de los parámetros de tipo (M9.2): pares `(parámetro, trait)`. Vacío = sin
     /// bounds. Para verificar la llamada (los diccionarios a pasar) y para reenviarlos.
     bounds: Vec<(String, String)>,
+    /// raysolve #357: los argumentos de tipo de los bounds sobre traits genéricos, ya RESUELTOS
+    /// (los parámetros de tipo de la función como `Var`).
+    bound_args: BoundArgs,
 }
 
 /// Datos de un **impl genérico** (M9.2b) —`impl<T: B> Trait for Caja<T>`— que `dict_for`
@@ -87,6 +90,9 @@ struct GenImpl {
     target: Type,
     /// Bounds del impl: deciden si el diccionario es plano o un closure anidado.
     bounds: Vec<(String, String)>,
+    /// Argumentos (resueltos) de los bounds genéricos del impl (`impl<V, S: Source<V>> …`): al
+    /// elegir este impl por diccionario se verifican contra el tipo concreto.
+    bound_args: BoundArgs,
 }
 
 /// Información de una variable en un ámbito.
@@ -589,9 +595,17 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
         // `type_params`/`bounds` del impl); de ahí, `append_dict_params` y
         // `resolve_bound_method` los tratan como cualquier función con bounds. Para un impl
         // concreto (M9.1) ambos son vacíos → función ordinaria, como antes.
+        // Los métodos que ESCRIBE el impl están en términos del impl: un parámetro suyo que se
+        // llame como el del trait lo tapa (`trait Source<V>` + `impl<V: Show> Source<string> for
+        // Boxed<V>`: ahí `V` es el del impl, no `string`). Los cuerpos por defecto, en cambio,
+        // están escritos en términos del TRAIT y llevan la σ entera.
+        let impl_sigma: HashMap<String, Type> = trait_sigma.iter()
+            .filter(|(name, _)| !imp.type_params.contains(name))
+            .map(|(n, t)| (n.clone(), t.clone()))
+            .collect();
         for m in &imp.methods {
             let params = m.params.iter()
-                .map(|p| Param { ty: subst_named(&subst_self(&p.ty, &imp.target), &trait_sigma), ..p.clone() })
+                .map(|p| Param { ty: subst_named(&subst_self(&p.ty, &imp.target), &impl_sigma), ..p.clone() })
                 .collect();
             // M28.2: un método de un impl `From<S>` se inyecta con nombre manglado **por origen**
             // (`E#from#string`) para no colisionar con otros `impl From<...> for E`. El resto
@@ -609,16 +623,21 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
             type_params.extend(m.type_params.iter().cloned());
             let mut bounds = imp.bounds.clone();
             bounds.extend(m.bounds.iter().cloned());
+            let mut bound_args = imp.bound_args.clone();
+            bound_args.extend(m.bound_args.iter().map(|(tp, tr, args)| {
+                (tp.clone(), tr.clone(), args.iter().map(|a| subst_named(&subst_self(a, &imp.target), &impl_sigma)).collect())
+            }));
             let mut body = m.body.clone();
-            if !trait_sigma.is_empty() { subst_named_block(&mut body, &trait_sigma); }
+            if !impl_sigma.is_empty() { subst_named_block(&mut body, &impl_sigma); }
             program.functions.push(Function {
                 annotations: Vec::new(),
                 is_pub: false,
                 name,
                 type_params,
                 bounds,
+                bound_args,
                 params,
-                return_type: subst_named(&subst_self(&m.return_type, &imp.target), &trait_sigma),
+                return_type: subst_named(&subst_self(&m.return_type, &imp.target), &impl_sigma),
                 body,
                 line: m.line,
                 col: m.col,
@@ -633,7 +652,7 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
                 continue; // el impl lo redefine: gana el del impl
             }
             let params = tm.params.iter()
-                .map(|p| Param { ty: subst_named(&subst_self(&p.ty, &imp.target), &trait_sigma), ..p.clone() })
+                .map(|p| Param { ty: subst_self(&subst_named(&p.ty, &trait_sigma), &imp.target), ..p.clone() })
                 .collect();
             // Clonar el cuerpo del defecto y renumerar sus posiciones (únicas por impl).
             let mut body = body.clone();
@@ -647,14 +666,19 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
             type_params.extend(tm.type_params.iter().cloned());
             let mut bounds = imp.bounds.clone();
             bounds.extend(tm.bounds.iter().cloned());
+            let mut bound_args = imp.bound_args.clone();
+            bound_args.extend(tm.bound_args.iter().map(|(tp, tr, args)| {
+                (tp.clone(), tr.clone(), args.iter().map(|a| subst_self(&subst_named(a, &trait_sigma), &imp.target)).collect())
+            }));
             program.functions.push(Function {
                 annotations: Vec::new(),
                 is_pub: false,
                 name: mangle(&key, &tm.name),
                 type_params,
                 bounds,
+                bound_args,
                 params,
-                return_type: subst_named(&subst_self(&tm.return_type, &imp.target), &trait_sigma),
+                return_type: subst_self(&subst_named(&tm.return_type, &trait_sigma), &imp.target),
                 body,
                 line: tm.line,
                 col: tm.col,
@@ -731,6 +755,16 @@ struct Checker {
     /// Se verifican en la construcción del valor (no hay runtime).
     struct_bounds: HashMap<String, Vec<(String, String)>>,
     enum_bounds: HashMap<String, Vec<(String, String)>>,
+    /// raysolve #357: argumentos de tipo (resueltos) de los bounds de cada struct/enum.
+    struct_bound_args: HashMap<String, BoundArgs>,
+    enum_bound_args: HashMap<String, BoundArgs>,
+    /// Argumentos de tipo de los bounds de la función (o impl) en curso: `S: Source<V>` →
+    /// `("S", "Source", [Var V])`. Los leen `resolve_bound_method` y `trait_args_for`.
+    current_bound_args: BoundArgs,
+    /// `(clave_de_tipo, trait genérico)` → el objetivo del impl (`Fixed<V>`, con `Var`) y los
+    /// argumentos con los que implementa el trait (`[Var V]`, o `[int]` en un impl concreto).
+    /// Hay un impl por tipo, así que el tipo determina los argumentos del trait.
+    impl_trait_args: HashMap<(String, String), (Type, Vec<Type>)>,
     /// Spans de expresiones del parser (M33a-2): inicio → fin. Los consulta `err()` para
     /// subrayar la expresión completa; una posición ausente degrada a extensión 1.
     expr_spans: HashMap<(usize, usize), (usize, usize)>,

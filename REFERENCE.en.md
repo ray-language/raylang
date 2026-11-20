@@ -54,7 +54,13 @@ Reserved (cannot be used as identifiers):
 > Option.Some(x) = it.next() { … }`), without parentheses, like `if let`; it takes `break`,
 > `continue` and a label. **Supertraits**: `trait Version: Ord + Show { … }` — the `impl` of
 > `Version` requires those of `Ord` and `Show`, and a bound `V: Version` includes all three;
-> `dyn Version` does not carry them (write `dyn Version + Show`).
+> `dyn Version` does not carry them (write `dyn Version + Show`). **Bounds on generic traits**:
+> with `trait Source<V> { fn get(self) -> V; }`, `fn first<V, S: Source<V>>(s: S) -> V` bounds
+> `S` and takes `V` from the impl of the type passed (`first(Seven { })` is `int` if `impl
+> Source<int> for Seven`); the argument may be concrete (`S: Source<int>`) and it works on
+> functions, structs, enums and impls. A type implements a trait only once. There is no `dyn
+> Source<V>`, and a native build cannot bound by a trait with generic methods of its own
+> (`I: Iterator<int>`).
 
 ## 2. Symbols and operators
 
@@ -488,7 +494,7 @@ for v in it { print(v); }                    // 5, 7
 | `std/huffman` | `huffman_encode huffman_decode`: only the **static HPACK** Huffman code (RFC 7541, HTTP/2 headers) over `[int]` — not usable for DEFLATE |
 | `std/protobuf` | `PbWriter`: `writer write_varint write_string write_bytes write_fixed64 write_fixed32 finish` · `parse -> Result<[PbField], _>` (total: malformed input —a truncated or over-10-byte varint, a value running past the end, field 0— is always an `Err` that names the byte) `get_int get_bytes get_string` · gRPC framing: `grpc_frame grpc_unframe` · **signed values and the missing types** (raygrpc #389): `write_varint` takes negatives (10 bytes, the format's `int32`/`int64`); `zigzag(n)`/`unzigzag(n)` and `write_sint` (`sint32`/`sint64`); `write_float`/`write_double` and `get_float` (reads fixed32 or fixed64 by wire type); `write_packed_varints(w, field, [int])` and `read_packed_varints(bytes) -> Result<[int], string>`; `write_message(w, field, inner)` and `get_message(fields, n) -> Result<[PbField], string>`; `get_all(fields, n)` (unpacked repeated fields); `varint(n) -> bytes` and `read_varint(data, pos) -> Result<(int, int), string>` (value and next position); `PbField` implements `Show` (`#3 varint 150`) |
 | `std/uuid` | `uuid_v4() -> string` · `is_uuid_v4` · `uuid_v7()`/`uuid_v7_at(ms)` (RFC 9562, time-sortable) · `is_uuid_v7` |
-| `std/ffi` | `errno() -> int`: the thread's `errno` — the reason of the last failure of a POSIX-style extern C function (`fopen`/`unlink`…). **Read it immediately** after the call, with no I/O in between (§13). On wasm: 0 · `buffer(n) -> bytes`: n zero bytes, the output buffer of an extern (§13) · pointers (§13): `null() -> ptr` · `is_null(p) -> bool` · `offset(p, n) -> ptr` (n bytes further; may be negative) · `addr(p) -> u64` · `read(p, n) -> bytes` (copies the n bytes pointed at; NULL or `n < 0` is a runtime error) |
+| `std/ffi` | `errno() -> int`: the thread's `errno` — the reason of the last failure of a POSIX-style extern C function (`fopen`/`unlink`…). **Read it immediately** after the call, with no I/O in between (§13). On wasm: 0 · `buffer(n) -> bytes`: n zero bytes, the output buffer of an extern (§13) · pointers (§13): `null() -> ptr` · `is_null(p) -> bool` · `offset(p, n) -> ptr` (n bytes further; may be negative; NULL is an error) · `addr(p) -> u64` · `read(p, n) -> bytes` (copies the n bytes pointed at; NULL or `n < 0` is a runtime error) |
 
 ## 11. Additional packages (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`, `agent`, `oidc`, `yaml`, `zip`)
 
@@ -681,7 +687,8 @@ literal. C must not write past the value's length nor keep the pointer after the
 **Pointers.** A `ptr` has no operators and no `as` conversion; what dealing with C needs lives in
 `std/ffi` (rayserial #394). `ffi.null()` is the NULL pointer, for a parameter declared `ptr`; if
 the parameter is declared `Option<ptr>`, `Option.None` passes NULL. `ffi.is_null(p)` checks it.
-`ffi.offset(p, n)` gives the pointer `n` bytes further (a struct field, the next element) and
+`ffi.offset(p, n)` gives the pointer `n` bytes further (a struct field, the next element; on NULL
+it is a runtime error: a pointer that is not NULL can only come from an `extern`) and
 `ffi.addr(p) -> u64` the address as a number. `ffi.read(p, n) -> bytes` **copies** the `n` bytes
 `p` points at — the `struct dirent` that `readdir` returns. The address is trusted, like the
 signature of an extern: reading memory that is not there crashes the process. Only NULL and a
@@ -841,4 +848,4 @@ orientations) **replaces** it; the rest are added.
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:87e7fc4a60a6 -->
+<!-- sync: sha256:5db089d630df -->

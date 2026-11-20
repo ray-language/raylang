@@ -148,6 +148,15 @@ pub fn ckind(ty: &crate::ast::Type) -> Option<CKind> {
     }
 }
 
+/// rayserial #394: el puntero `n` octetos más allá de `addr` (`std/ffi.offset`). NULL no se
+/// desplaza: así un programa sin `extern` no puede fabricar una dirección.
+pub fn offset_ptr(addr: i64, n: i64) -> Result<i64, String> {
+    if addr == 0 {
+        return Err("ffi.offset: the pointer is NULL".into());
+    }
+    Ok(addr.wrapping_add(n))
+}
+
 /// rayserial #394: copia `n` octetos desde la dirección `addr` (`std/ffi.read`). La dirección se
 /// CONFÍA, como la firma de una extern: solo se rechazan NULL y una longitud negativa.
 pub fn read_ptr(addr: i64, n: i64) -> Result<Vec<u8>, String> {

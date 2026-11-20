@@ -520,6 +520,7 @@ fn synth_main(body: Block) -> Function {
         name: "main".into(),
         type_params: vec![],
         bounds: vec![],
+        bound_args: vec![],
         params: vec![],
         return_type: Type::Int,
         body,

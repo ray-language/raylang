@@ -22,6 +22,10 @@ impl Checker {
             aliases: HashMap::new(),
             struct_bounds: HashMap::new(),
             enum_bounds: HashMap::new(),
+            struct_bound_args: HashMap::new(),
+            enum_bound_args: HashMap::new(),
+            current_bound_args: Vec::new(),
+            impl_trait_args: HashMap::new(),
             scopes: Vec::new(),
             expr_spans: HashMap::new(),
             accumulate: false,
@@ -277,10 +281,17 @@ impl Checker {
         // traits). Cada bound debe acotar un parámetro real con un trait existente.
         for s in &program.structs {
             self.check_type_def_bounds(&s.name, &s.type_params, &s.bounds, "struct", s.line, s.col)?;
+            self.type_params = s.type_params.iter().cloned().collect();
+            let ba = self.resolve_bound_args(&s.bounds, &s.bound_args, s.line, s.col)?;
+            self.struct_bound_args.insert(s.name.clone(), ba);
         }
         for e in &program.enums {
             self.check_type_def_bounds(&e.name, &e.type_params, &e.bounds, "enum", e.line, e.col)?;
+            self.type_params = e.type_params.iter().cloned().collect();
+            let ba = self.resolve_bound_args(&e.bounds, &e.bound_args, e.line, e.col)?;
+            self.enum_bound_args.insert(e.name.clone(), ba);
         }
+        self.type_params.clear();
 
         // M288: hover/ir-a-definición de los nombres de tipo escritos en ANOTACIONES (params,
         // retornos, `let x: T`, campos, payloads, `dyn A`). El AST `Type` no lleva posición; los
@@ -302,11 +313,13 @@ impl Checker {
             // M9.2: validar los bounds —cada uno acota un parámetro de tipo real con un
             // trait existente—. La firma guarda los bounds para verificar las llamadas.
             self.check_bounds(f)?;
+            let bound_args = self.resolve_bound_args(&f.bounds, &f.bound_args, f.line, f.col)?;
             let sig = FnSig {
                 type_params: f.type_params.clone(),
                 params: f.params.iter().map(|p| self.resolve_type(&p.ty)).collect(),
                 ret: self.resolve_type(&f.return_type),
                 bounds: f.bounds.clone(),
+                bound_args,
             };
             self.functions.insert(f.name.clone(), sig);
             if f.is_pub {
@@ -360,6 +373,7 @@ impl Checker {
                 params: e.params.iter().map(|p| self.resolve_type(&p.ty)).collect(),
                 ret,
                 bounds: Vec::new(),
+                bound_args: Vec::new(),
             };
             self.functions.insert(e.name.clone(), sig);
         }
@@ -472,6 +486,7 @@ impl Checker {
         // M9.2: los bounds de esta función en ámbito, para resolver `x.metodo()` con
         // `x: T` acotado y para reenviar diccionarios.
         self.current_fn_bounds = f.bounds.clone();
+        self.current_bound_args = self.functions.get(&f.name).map(|s| s.bound_args.clone()).unwrap_or_default();
         for p in &f.params {
             self.ensure_type(&p.ty, p.line, p.col)?;
         }
@@ -479,6 +494,7 @@ impl Checker {
         let r = self.check_fn_body(&f.params, &f.return_type, &f.body, f.line, f.col, &format!("'{}'", f.name));
         self.current_self = None;
         self.current_fn_bounds = Vec::new();
+        self.current_bound_args = Vec::new();
         self.type_params.clear();
         r
     }
@@ -496,6 +512,75 @@ impl Checker {
                 return Err(self.err(f.line, f.col, format!(
                     "trait '{}' not declared (in the bound of '{}')", tr, f.name
                 )));
+            }
+        }
+        Ok(())
+    }
+
+    /// raysolve #357: valida y resuelve los argumentos de tipo de los bounds (`S: Source<V>`). Un
+    /// bound sobre un trait genérico lleva exactamente sus argumentos; sobre uno sin parámetros,
+    /// ninguno. Los parámetros de tipo del dueño deben estar ya en `self.type_params`.
+    pub(super) fn resolve_bound_args(&self, bounds: &[(String, String)], bound_args: &BoundArgs, line: usize, col: usize)
+        -> Result<BoundArgs, TypeError>
+    {
+        let mut out = Vec::new();
+        for (tp, tr) in bounds {
+            let want = self.trait_tparams.get(tr).map_or(0, |t| t.len());
+            let args = bound_args_of(bound_args, tp, tr);
+            if args.len() != want {
+                return Err(self.err(line, col, if args.is_empty() {
+                    format!("the trait '{tr}' takes {want} type parameter(s): write the bound as '{tp}: {tr}<…>'")
+                } else {
+                    format!("the trait '{tr}' takes {want} type parameter(s), but the bound '{tp}: {tr}<…>' passes {}", args.len())
+                }));
+            }
+            if args.is_empty() {
+                continue;
+            }
+            for a in args {
+                self.ensure_type(a, line, col)?;
+            }
+            out.push((tp.clone(), tr.clone(), args.iter().map(|a| self.resolve_type(a)).collect()));
+        }
+        Ok(out)
+    }
+
+    /// raysolve #357: con qué argumentos implementa `concrete` el trait genérico `tr`. Un
+    /// parámetro de tipo del llamador responde con su propio bound; un tipo concreto, con su
+    /// impl (hay uno por tipo). `None` si el trait no es genérico o el tipo no lo implementa.
+    pub(super) fn trait_args_for(&self, concrete: &Type, tr: &str) -> Option<Vec<Type>> {
+        if let Type::Var(u) = concrete {
+            let a = bound_args_of(&self.current_bound_args, u, tr);
+            return if a.is_empty() { None } else { Some(a.to_vec()) };
+        }
+        let key = type_key_of(concrete)?;
+        let (target, args) = self.impl_trait_args.get(&(key, tr.to_string()))?;
+        let mut s = HashMap::new();
+        unify(target, concrete, &mut s).ok()?;
+        Some(args.iter().map(|a| subst(a, &s)).collect())
+    }
+
+    /// raysolve #357: casa los argumentos de cada bound genérico con los del impl del tipo al que
+    /// resolvió su parámetro. Fija los parámetros de tipo que solo aparecen en el bound (`V` de
+    /// `fn first<V, S: Source<V>>(s: S)`) y rechaza el que no casa. Un parámetro aún sin resolver
+    /// se salta: se llama antes y después de los argumentos que esperan inferencia.
+    pub(super) fn unify_bound_args(&self, bound_args: &BoundArgs, sigma: &mut HashMap<String, Type>, label: &str, line: usize, col: usize)
+        -> Result<(), TypeError>
+    {
+        // Una vuelta por bound alcanza el punto fijo cuando uno alimenta a otro (`S: A<V>, V: B<W>`).
+        for _ in 0..bound_args.len() {
+            for (tp, tr, args) in bound_args {
+                let Some(concrete) = sigma.get(tp).cloned() else { continue };
+                let Some(have) = self.trait_args_for(&concrete, tr) else { continue };
+                for (want, got) in args.iter().zip(&have) {
+                    if unify(want, got, sigma).is_err() {
+                        let show = |ts: &[Type]| ts.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ");
+                        let wanted: Vec<Type> = args.iter().map(|a| subst(a, sigma)).collect();
+                        return Err(self.err(line, col, format!(
+                            "{concrete} implements '{tr}<{}>', but {label} requires '{tp}: {tr}<{}>'", show(&have), show(&wanted)
+                        )));
+                    }
+                }
             }
         }
         Ok(())
@@ -634,11 +719,29 @@ impl Checker {
                 continue;
             }
 
+            // raysolve #357: con qué argumentos implementa este tipo el trait genérico.
+            let want = self.trait_tparams.get(&imp.trait_name).map_or(0, |t| t.len());
+            if imp.trait_args.len() != want {
+                return Err(self.err(imp.line, imp.col, format!(
+                    "the trait '{}' takes {} type parameter(s), but the impl passes {}",
+                    imp.trait_name, want, imp.trait_args.len()
+                )));
+            }
+            if want > 0 {
+                let args: Vec<Type> = imp.trait_args.iter().map(|t| self.resolve_type(t)).collect();
+                self.impl_trait_args.insert((key.clone(), imp.trait_name.clone()), (target.clone(), args));
+            }
+
             // Registrar el impl genérico (para `dict_for`: diccionarios anidados).
             if !imp.type_params.is_empty() {
                 self.generic_impls.insert(
                     (key.clone(), imp.trait_name.clone()),
-                    GenImpl { type_params: imp.type_params.clone(), target: target.clone(), bounds: imp.bounds.clone() },
+                    GenImpl {
+                        type_params: imp.type_params.clone(),
+                        target: target.clone(),
+                        bounds: imp.bounds.clone(),
+                        bound_args: self.resolve_bound_args(&imp.bounds, &imp.bound_args, imp.line, imp.col)?,
+                    },
                 );
             }
 
@@ -864,10 +967,11 @@ impl Checker {
                 m.name, m.params.len(), tm.params.len()
             )));
         }
-        // Los tipos del trait se sustituyen: `Self`→target y los parámetros de tipo del trait por los
-        // argumentos del impl (`T`→`int` para `impl Iterator<int>`, M40.2). Se resuelve ANTES de la σ
-        // del trait: `resolve_type` normaliza `T` (`Struct`) a `Var`, que es lo que `subst` sustituye.
-        let expected = |ty: &Type| subst(&self.resolve_type(&subst_self(ty, target)), trait_sigma);
+        // Los tipos del trait se sustituyen: los parámetros de tipo del trait por los argumentos del
+        // impl (`T`→`int` para `impl Iterator<int>`, M40.2) y `Self`→target, EN ESE ORDEN: el target
+        // menciona parámetros del impl, que pueden llamarse como los del trait sin ser ellos
+        // (`trait Source<V>` + `impl<V: Show> Source<string> for Boxed<V>`).
+        let expected = |ty: &Type| self.resolve_type(&subst_self(&subst_named(ty, trait_sigma), target));
         for (i, (tp, ip)) in tm.params.iter().zip(&m.params).enumerate() {
             let want = expected(&tp.ty);
             let got = self.resolve_type(&subst_self(&ip.ty, target));
@@ -1694,12 +1798,30 @@ impl Checker {
         let mut sigma = seed_sigma_from_expected(expected_owned.as_ref(), name, &tparams);
         // Cada campo declarado debe estar presente exactamente una vez; su valor
         // determina (unifica) los parámetros de tipo del struct.
+        // raysolve #357: los bounds genéricos del struct, con sus parámetros renombrados igual que
+        // los campos. `Solver { src: Seven { }, seen: [] }` con `S: Source<V>` saca `V` del impl
+        // de `Seven`, y el campo que no podía tiparse solo (`[]`) espera a eso.
+        let bound_args = self.struct_bound_args.get(name).cloned().unwrap_or_default();
+        let rename: HashMap<String, Type> = orig_tparams.iter().cloned().zip(tparams.iter().map(|t| Type::Var(t.clone()))).collect();
+        let fresh_bound_args: BoundArgs = bound_args.iter().map(|(tp, tr, args)| {
+            let ftp = match rename.get(tp) { Some(Type::Var(f)) => f.clone(), _ => tp.clone() };
+            (ftp, tr.clone(), args.iter().map(|a| subst(a, &rename)).collect())
+        }).collect();
+        let label = format!("'{name}'");
+        let mut waiting: Vec<(&String, &Type, &Expr)> = Vec::new();
         for (dname, dty) in &declared {
             let matches: Vec<&(String, Expr)> = fields.iter().filter(|(fname, _)| fname == dname).collect();
             match matches.as_slice() {
                 [] => return Err(self.err(line, col, format!("missing field '{}' in the literal of '{}'{}", dname, name, self.constructor_hint(name)))),
                 [(_, value)] => {
-                    let vt = self.check_ctor_value_against(value, dty, &sigma)?;
+                    let vt = match self.check_ctor_value_against(value, dty, &sigma) {
+                        Ok(t) => t,
+                        Err(e) if !fresh_bound_args.is_empty() && is_inference_error(&e) => {
+                            waiting.push((dname, dty, value));
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    };
                     unify(dty, &vt, &mut sigma).map_err(|reason| self.err(value.line, value.col, format!(
                         "field '{}' of '{}': {}", dname, name, reason
                     )))?;
@@ -1707,10 +1829,17 @@ impl Checker {
                 _ => return Err(self.err(line, col, format!("field '{}' of '{}' repeated", dname, name))),
             }
         }
+        self.unify_bound_args(&fresh_bound_args, &mut sigma, &label, line, col)?;
+        for (dname, dty, value) in waiting {
+            let vt = self.check_ctor_value_against(value, dty, &sigma)?;
+            unify(dty, &vt, &mut sigma).map_err(|reason| self.err(value.line, value.col, format!(
+                "field '{}' of '{}': {}", dname, name, reason
+            )))?;
+        }
         let targs = self.finalize_type_args(&tparams, &sigma, &format!("the struct '{}'", name), line, col)?;
         // M9.4: cada parámetro acotado debe resolver a un tipo que satisfaga su bound.
         let bounds = self.struct_bounds.get(name).cloned().unwrap_or_default();
-        self.check_construction_bounds(name, &orig_tparams, &targs, &bounds, line, col)?;
+        self.check_construction_bounds(name, &orig_tparams, &targs, &bounds, &bound_args, line, col)?;
         Ok(Type::Struct(name.to_string(), targs))
     }
 
@@ -1718,7 +1847,7 @@ impl Checker {
     /// tipo acotado resolvió a un tipo que **satisface** su bound. `targs` está en el orden de
     /// `tparams`. Es solo una comprobación (no genera diccionarios: un valor de datos no llama métodos).
     pub(super) fn check_construction_bounds(&self, name: &str, tparams: &[String], targs: &[Type],
-        bounds: &[(String, String)], line: usize, col: usize) -> Result<(), TypeError>
+        bounds: &[(String, String)], bound_args: &BoundArgs, line: usize, col: usize) -> Result<(), TypeError>
     {
         for (tp, trait_name) in bounds {
             let Some(pos) = tparams.iter().position(|p| p == tp) else { continue };
@@ -1729,6 +1858,9 @@ impl Checker {
                 )));
             }
         }
+        // raysolve #357: un bound genérico (`S: Source<V>`) exige además ESOS argumentos.
+        let mut sigma: HashMap<String, Type> = tparams.iter().cloned().zip(targs.iter().cloned()).collect();
+        self.unify_bound_args(bound_args, &mut sigma, &format!("'{name}'"), line, col)?;
         Ok(())
     }
 
@@ -1782,7 +1914,8 @@ impl Checker {
         let targs = self.finalize_type_args(&tparams, &sigma, &format!("the variant '{}.{}'", enum_name, variant), line, col)?;
         // M9.4: cada parámetro acotado debe resolver a un tipo que satisfaga su bound.
         let bounds = self.enum_bounds.get(enum_name).cloned().unwrap_or_default();
-        self.check_construction_bounds(enum_name, &orig_tparams, &targs, &bounds, line, col)?;
+        let bound_args = self.enum_bound_args.get(enum_name).cloned().unwrap_or_default();
+        self.check_construction_bounds(enum_name, &orig_tparams, &targs, &bounds, &bound_args, line, col)?;
         Ok(Type::Enum(enum_name.to_string(), targs))
     }
 
@@ -3950,8 +4083,8 @@ impl Checker {
 
         // Función de nivel superior: llamada directa.
         if let Some(sig) = self.functions.get(name) {
-            let (type_params, params, ret, bounds) =
-                (sig.type_params.clone(), sig.params.clone(), sig.ret.clone(), sig.bounds.clone());
+            let (type_params, params, ret, bounds, bound_args) =
+                (sig.type_params.clone(), sig.params.clone(), sig.ret.clone(), sig.bounds.clone(), sig.bound_args.clone());
             let label = format!("'{}'", name);
             if type_params.is_empty() {
                 // No genérica: aridad y tipos exactos.
@@ -3959,7 +4092,7 @@ impl Checker {
             }
             // Genérica: inferir los argumentos de tipo unificando con los argumentos.
             let (ret_ty, sigma) =
-                self.check_generic_call(&type_params, &params, &ret, args, &label, line, col, expected, recv)?;
+                self.check_generic_call(&type_params, &params, &ret, args, &label, line, col, expected, recv, &bound_args)?;
             // M9.2: si la función tiene bounds, registrar los diccionarios a pasar en este
             // sitio (verificando que cada tipo inferido cumple su bound).
             if !bounds.is_empty() {
@@ -4052,6 +4185,7 @@ impl Checker {
         col: usize,
         expected: Option<&Type>,
         recv: Option<&Type>,
+        bound_args: &BoundArgs,
     ) -> Result<(Type, HashMap<String, Type>), TypeError> {
         if args.len() != params.len() {
             return Err(self.err(line, col, format!("{}{}", arity_message(label, params.len(), args.len()), self.shadow_hint(label))));
@@ -4072,7 +4206,8 @@ impl Checker {
                 // los payloads de un constructor de enum, `check_value_against`).
                 match self.check_value_against(arg, param, &sigma) {
                     Ok(t) => t,
-                    Err(e) if i + 1 < args.len() && is_inference_error(&e) => {
+                    // (#357: también el último, si un bound genérico puede fijar lo que falta.)
+                    Err(e) if (i + 1 < args.len() || !bound_args.is_empty()) && is_inference_error(&e) => {
                         waiting.push(i);
                         continue;
                     }
@@ -4083,6 +4218,9 @@ impl Checker {
                 "argument {} of {}: {}{}{}", i + 1, label, reason, self.shadow_hint(label), array_remove_hint(label, &at)
             )))?;
         }
+        // raysolve #357: lo que fijan los bounds genéricos (`S: Source<V>` con `S` ya inferido da
+        // `V`) vale también para los argumentos que esperaban, y se repasa cuando terminan.
+        self.unify_bound_args(bound_args, &mut sigma, label, line, col)?;
         for i in waiting {
             let (arg, param) = (&args[i], &params[i]);
             let at = self.check_value_against(arg, param, &sigma)?;
@@ -4090,6 +4228,7 @@ impl Checker {
                 "argument {} of {}: {}{}{}", i + 1, label, reason, self.shadow_hint(label), array_remove_hint(label, &at)
             )))?;
         }
+        self.unify_bound_args(bound_args, &mut sigma, label, line, col)?;
         // M40.3b: los argumentos mandan; si algún parámetro de tipo NO aparece en ellos (p. ej. un
         // constructor vacío `set_new() -> Set<T>`), se rellena desde el tipo ESPERADO unificando el
         // retorno con él. Best-effort en un σ aparte para no alterar lo ya inferido de los argumentos.
@@ -4103,6 +4242,9 @@ impl Checker {
                 }
             }
         }
+        // Un parámetro acotado que salió del tipo esperado (`let f: fn(Seven) -> int = drain(…)`)
+        // también debe casar con los argumentos de su bound.
+        self.unify_bound_args(bound_args, &mut sigma, label, line, col)?;
         // Todos los parámetros de tipo deben haber quedado determinados.
         for tp in type_params {
             if !sigma.contains_key(tp) {
@@ -4148,9 +4290,15 @@ impl Checker {
             .unwrap_or_else(|| crate::ice!("the method '{}' is not in trait '{}'", method, trait_name))
             .clone();
         let self_ty = Type::Var(tp.to_string());
+        // raysolve #357: los parámetros de tipo del trait valen los argumentos del bound
+        // (`S: Source<W>` → el `V` de `fn get(self) -> V` es `W`).
+        let tsigma: HashMap<String, Type> = self.trait_tparams.get(trait_name).cloned().unwrap_or_default()
+            .into_iter()
+            .zip(bound_args_of(&self.current_bound_args, tp, trait_name).iter().cloned())
+            .collect();
         // El receptor ya casó con `self` (es `T`); comprobar los argumentos restantes.
         let expected: Vec<Type> = sig.params.iter().skip(1)
-            .map(|p| self.resolve_type(&subst_self(&p.ty, &self_ty)))
+            .map(|p| self.resolve_type(&subst_named(&subst_self(&p.ty, &self_ty), &tsigma)))
             .collect();
         if args.len() != expected.len() {
             return Err(self.err(line, col, format!(
@@ -4166,7 +4314,7 @@ impl Checker {
                 )));
             }
         }
-        let ret = self.resolve_type(&subst_self(&sig.return_type, &self_ty));
+        let ret = self.resolve_type(&subst_named(&subst_self(&sig.return_type, &self_ty), &tsigma));
         Ok(Some((dict_param_name(tp, trait_name, method), ret)))
     }
 
@@ -4290,7 +4438,13 @@ impl Checker {
                 .and_then(|ms| ms.iter().find(|m| m.name == method))
                 .cloned()
                 .unwrap_or_else(|| crate::ice!("the method does not belong to the trait (the impl was validated)"));
-            return self.synth_dict_closure(&gi, &key, &sig, concrete, line, col);
+            // raysolve #357: en un trait genérico, la firma del closure lleva los argumentos con
+            // los que ESTE tipo implementa el trait, no los parámetros del trait.
+            let tsigma: HashMap<String, Type> = self.trait_tparams.get(trait_name).cloned().unwrap_or_default()
+                .into_iter()
+                .zip(self.trait_args_for(concrete, trait_name).unwrap_or_default())
+                .collect();
+            return self.synth_dict_closure(&gi, &key, &sig, concrete, &tsigma, line, col);
         }
         // Impl no genérico, o genérico **sin** bounds: la función manglada tiene la aridad
         // justa (solo el receptor + params), así que se pasa como valor plano.
@@ -4374,19 +4528,22 @@ impl Checker {
         Ok(Expr { kind: ExprKind::Func(Box::new(fe)), line, col })
     }
 
-    pub(super) fn synth_dict_closure(&self, gi: &GenImpl, key: &str, sig: &MethodSig, concrete: &Type, line: usize, col: usize)
+    pub(super) fn synth_dict_closure(&self, gi: &GenImpl, key: &str, sig: &MethodSig, concrete: &Type, tsigma: &HashMap<String, Type>, line: usize, col: usize)
         -> Result<Expr, TypeError>
     {
         // σ_impl: parámetros de tipo del impl → argumentos concretos (casar `Caja<T>` con
         // `Caja<int>` → T=int).
         let mut sigma_impl: HashMap<String, Type> = HashMap::new();
         let _ = unify(&gi.target, concrete, &mut sigma_impl);
+        // Los bounds genéricos del impl (`S: Source<V>`) exigen ESOS argumentos al tipo concreto,
+        // igual que en una llamada directa al método.
+        self.unify_bound_args(&gi.bound_args, &mut sigma_impl, &format!("the impl for {concrete}"), line, col)?;
         // Parámetros del closure: `self: concrete`, luego el resto del método (Self→concrete).
         let mut params = Vec::new();
         let mut fwd_args = Vec::new();
         for (i, p) in sig.params.iter().enumerate() {
             let name = format!("__d{}", i);
-            let ty = if i == 0 { concrete.clone() } else { subst_self(&p.ty, concrete) };
+            let ty = if i == 0 { concrete.clone() } else { subst_named(&subst_self(&p.ty, concrete), tsigma) };
             params.push(Param { name: name.clone(), ty, line, col });
             fwd_args.push(ident_expr(&name, line, col));
         }
@@ -4419,7 +4576,7 @@ impl Checker {
             line, col,
         };
         let body = Block { statements: Vec::new(), tail: Some(Box::new(call)), line, col, end_line: line };
-        let fe = FnExpr { id: 0, params, return_type: subst_self(&sig.return_type, concrete), body, line, col };
+        let fe = FnExpr { id: 0, params, return_type: subst_named(&subst_self(&sig.return_type, concrete), tsigma), body, line, col };
         Ok(Expr { kind: ExprKind::Func(Box::new(fe)), line, col })
     }
 
@@ -4628,5 +4785,7 @@ fn mentions_type(msg: &str, ty: &str) -> bool {
 /// `Option.None`), y no un error de tipos de verdad? Quien lo recibe puede reintentar con más
 /// contexto.
 pub(super) fn is_inference_error(e: &TypeError) -> bool {
-    e.msg.starts_with("could not infer the type parameter") || e.msg.starts_with("cannot infer the type of [] here")
+    e.msg.starts_with("could not infer the type parameter")
+        || e.msg.starts_with("cannot infer the type of [] here")
+        || e.msg.starts_with("cannot infer the type of [:] here")
 }

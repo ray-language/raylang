@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.107** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.108** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -227,7 +227,23 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
 - Los **traits con parámetros de tipo** (`trait From<S>`, `trait Iterator<T>`) existen con
   semántica limitada: `From<S> { fn convert(origen: S) -> Self; }` alimenta la conversión de `?`
   (§6.7), e `Iterator<T> { fn next(self) -> Option<T>; }` habilita `for x in it` (§5) por despacho
-  por punto ordinario. Usar un trait parametrizado del usuario en bounds o `dyn` es error.
+  por punto ordinario. Un trait propio también puede llevarlos (`trait Source<V> { fn get(self)
+  -> V; }`), y se implementa con sus argumentos: `impl Source<int> for Seven`,
+  `impl<V> Source<V> for Fixed<V>`. **Un tipo implementa un trait una sola vez**: no caben
+  `impl Source<int>` e `impl Source<string>` para el mismo tipo, así que el tipo determina los
+  argumentos del trait.
+- **Bounds sobre un trait con parámetros de tipo** (raysolve #357): `fn first<V, S: Source<V>>(s:
+  S) -> V`. El bound lleva exactamente los argumentos que el trait declara (`S: Source` a secas,
+  o `S: Eq<int>`, son error) y pueden ser cualquier tipo: un parámetro de tipo del dueño
+  (`Source<V>`), uno concreto (`Source<int>`) o uno compuesto (`Source<[V]>`). Dentro del cuerpo,
+  los métodos de `S` se tipan con esos argumentos en lugar de los parámetros del trait. En una
+  llamada, el impl del tipo que instancia `S` debe implementar el trait **con esos argumentos**:
+  si un parámetro de tipo solo aparece en el bound (`V` en `first`), se infiere del impl; si ya
+  estaba fijado y no casa, es error. Lo mismo al construir un `struct`/`enum` acotado y en los
+  bounds de un `impl`. Un parámetro del llamador con el bound `T: Source<int>` satisface
+  `S: Source<V>` con `V = int`. Tras `dyn`, un trait con parámetros de tipo sigue siendo error.
+  El binario nativo no admite un bound sobre un trait cuyos métodos declaran parámetros de tipo
+  propios (`Iterator<T>`, por `map<U>`): es error de `ray build --native`; en la VM funciona.
 - **Alias de tipo** (M311): `[pub] type Nombre[<T, …>] = tipo;` da un nombre a un tipo en
   posición de tipo. **No es un tipo nuevo**: `type Id = int` es `int` en todas partes (`Id` e
   `int` son intercambiables; un `Pair<T> = (T, T)` casa con la tupla). Los parámetros se

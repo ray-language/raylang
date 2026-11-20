@@ -156,3 +156,49 @@ fn tls_alpn_native() {
     check_engine(&|| Command::new(&bin));
     let _ = std::fs::remove_file(&bin);
 }
+
+/// De la revisión previa a 1.27.108: en la VM, `tls_alpn` sobre una conexión cuyo cliente abrió
+/// TCP y no manda el ClientHello APARCA la fibra; antes esperaba hasta 10 s con el candado del
+/// registro de handles tomado y las demás fibras del servidor se paraban con ella.
+#[test]
+fn a_silent_client_does_not_stall_the_other_fibers_of_a_vm_server() {
+    const PROG: &str = r#"
+import std/net;
+import std/fs;
+import std/time;
+
+fn main() -> int {
+    let a = args();
+    let cert = fs.read_file(a[0]).unwrap();
+    let key = fs.read_file(a[1]).unwrap();
+    let l = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(l);
+    let silent = net.tcp_connect("127.0.0.1", port).unwrap();
+    let c = net.tcp_accept(l).unwrap();
+    spawn(fn() {
+        let h = net.tls_accept_alpn(c, cert, key, ["h2"]).unwrap();
+        let _ = net.tls_alpn(h);
+    });
+    time.sleep(50);
+    let start = time.monotonic_millis();
+    let c2 = net.tcp_connect("127.0.0.1", port).unwrap();
+    let s2 = net.tcp_accept(l).unwrap();
+    let _ = net.socket_write(c2, "ping");
+    let got = net.socket_read(s2).unwrap();
+    let took = time.monotonic_millis() - start;
+    print("${got} ${took < 3000}");
+    close(silent);
+    0
+}
+"#;
+    let mut path = std::env::temp_dir();
+    path.push(format!("tls_alpn_silent_{}.ray", std::process::id()));
+    std::fs::write(&path, PROG).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_raylang"))
+        .arg(&path)
+        .args([fixture("tls_cert.pem"), fixture("tls_key.pem")])
+        .output()
+        .expect("corre el servidor");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("ping true"), "{stdout}{}", String::from_utf8_lossy(&out.stderr));
+}

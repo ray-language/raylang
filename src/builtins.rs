@@ -3358,6 +3358,39 @@ pub fn tls_alpn(h: i64) -> Result<String, String> {
     }
 }
 
+/// `tls_alpn` para la VM: avanza el handshake SIN esperar. `Ok(None)` = falta que el peer
+/// hable; la fibra aparca en el socket y reintenta. `tls_alpn` espera con el candado del
+/// registro tomado y el hilo del worker ocupado (hasta 10 s): un cliente que abre TCP y calla
+/// habría parado a todas las demás fibras de un servidor que pregunta el protocolo tras cada
+/// `tls_accept_alpn`.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn tls_alpn_nb(h: i64) -> Result<Option<String>, String> {
+    let mut reg = registry().lock().unwrap();
+    match reg.open.get_mut(&h) {
+        Some(OpenHandle::Tls(tc)) => {
+            while tc.conn.is_handshaking() {
+                match tc.conn.complete_io(&mut tc.sock) {
+                    Ok(_) => {}
+                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        // Con datos propios por enviar y el búfer del socket lleno (no pasa en
+                        // una conexión recién aceptada) no hay lectura que esperar: se conduce.
+                        if tc.conn.wants_write() {
+                            tls_finish_handshake(tc)?;
+                            break;
+                        }
+                        return Ok(None);
+                    }
+                    Err(e) => return Err(tls_io_err(&e, true)),
+                }
+            }
+            Ok(Some(tc.conn.alpn_protocol().map(|p| String::from_utf8_lossy(p).into_owned()).unwrap_or_default()))
+        }
+        Some(_) => Err(format!("handle {} is not a TLS connection", h)),
+        None => Err(format!("invalid handle: {}", h)),
+    }
+}
+
 /// M124: el resumen del certificado del PEER de una conexión TLS — "expira en N días" es EL check
 /// que todo operador quiere (raywatch, IDEAS §70.1). `tls_connect` deja el handshake para la
 /// primera I/O, así que aquí se CONDUCE si sigue pendiente (acotado a 10 s): en la VM el socket es
@@ -3502,6 +3535,8 @@ pub fn tls_accept(_h: i64, _cert_pem: &str, _key_pem: &str) -> Result<i64, Strin
 pub fn tls_accept_alpn(_h: i64, _cert_pem: &str, _key_pem: &str, _protocols: &str) -> Result<i64, String> { Err(NET_TLS_UNAVAILABLE.to_string()) }
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
 pub fn tls_alpn(_h: i64) -> Result<String, String> { Err(NET_TLS_UNAVAILABLE.to_string()) }
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn tls_alpn_nb(_h: i64) -> Result<Option<String>, String> { Err(NET_TLS_UNAVAILABLE.to_string()) }
 
 /// Envuelve un socket TCP plano YA CONECTADO (handle `h`) en una sesión TLS de **cliente** —
 /// el simétrico de `tls_accept`, para STARTTLS (Postgres sslRequest, MySQL caching_sha2
@@ -5648,9 +5683,13 @@ static BUILTINS: &[Builtin] = &[
         Ok(Type::Bool)
     } },
     // rayserial #394: un `ptr` deja de ser del todo opaco (std/ffi.null/is_null/offset/addr/read).
-    Builtin { name: "__ffi_ptr", opcode: OpCode::FfiPtr, check: |a| {
-        arity(a, 1, "__ffi_ptr", " (address)")?;
-        if a[0] != Type::Int { return Err((Some(0), format!("__ffi_ptr expects an int (the address), not {}", a[0]))); }
+    // Ninguno convierte un entero en `ptr`: un puntero no NULL solo puede salir de una `extern`,
+    // así que declarar una `extern` sigue siendo la única salida de las garantías (SECURITY.md).
+    Builtin { name: "__ffi_null", opcode: OpCode::FfiNull, check: |a| { nullary(a, "__ffi_null")?; Ok(Type::Ptr) } },
+    Builtin { name: "__ffi_offset", opcode: OpCode::FfiOffset, check: |a| {
+        arity(a, 2, "__ffi_offset", " (ptr, n)")?;
+        if a[0] != Type::Ptr { return Err((Some(0), format!("__ffi_offset expects a ptr, not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__ffi_offset expects an int (the byte offset), not {}", a[1]))); }
         Ok(Type::Ptr)
     } },
     Builtin { name: "__ffi_addr", opcode: OpCode::FfiAddr, check: |a| {

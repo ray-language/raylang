@@ -54,7 +54,12 @@ Reservadas (no pueden usarse como identificadores):
 > Option.Some(x) = it.next() { … }`), sin paréntesis, como `if let`; admite `break`, `continue`
 > y etiqueta. **Supertraits**: `trait Version: Ord + Show { … }` — el `impl` de `Version` exige
 > los de `Ord` y `Show`, y un bound `V: Version` incluye los tres; `dyn Version` no los
-> arrastra (se escribe `dyn Version + Show`).
+> arrastra (se escribe `dyn Version + Show`). **Bounds sobre traits genéricos**: con
+> `trait Source<V> { fn get(self) -> V; }`, `fn first<V, S: Source<V>>(s: S) -> V` acota `S` y
+> saca `V` del impl del tipo que se pasa (`first(Seven { })` es `int` si `impl Source<int> for
+> Seven`); el argumento puede ser concreto (`S: Source<int>`) y vale en funciones, structs,
+> enums e impls. Un tipo implementa un trait una sola vez. No hay `dyn Source<V>`, y en nativo
+> no se puede acotar por un trait con métodos genéricos propios (`I: Iterator<int>`).
 
 ## 2. Símbolos y operadores
 
@@ -490,7 +495,7 @@ calificado por el *leaf*: `import std/math;` → `math.gcd(12, 18)`.
 | `std/huffman` | `huffman_encode huffman_decode`: solo el código Huffman **estático de HPACK** (RFC 7541, cabeceras HTTP/2) sobre `[int]` — no sirve para DEFLATE |
 | `std/protobuf` | `PbWriter`: `writer write_varint write_string write_bytes write_fixed64 write_fixed32 finish` · `parse -> Result<[PbField], _>` (total: una entrada malformada —varint cortado o de más de 10 octetos, valor que pasa del final, campo 0— es siempre `Err` con el byte) `get_int get_bytes get_string` · framing gRPC: `grpc_frame grpc_unframe` · **con signo y tipos que faltaban** (raygrpc #389): `write_varint` acepta negativos (10 octetos, el `int32`/`int64` del formato); `zigzag(n)`/`unzigzag(n)` y `write_sint` (`sint32`/`sint64`); `write_float`/`write_double` y `get_float` (lee fixed32 o fixed64 según el tipo wire); `write_packed_varints(w, field, [int])` y `read_packed_varints(bytes) -> Result<[int], string>`; `write_message(w, field, inner)` y `get_message(fields, n) -> Result<[PbField], string>`; `get_all(fields, n)` (repetidos sin empaquetar); `varint(n) -> bytes` y `read_varint(data, pos) -> Result<(int, int), string>` (valor y posición siguiente); `PbField` implementa `Show` (`#3 varint 150`) |
 | `std/uuid` | `uuid_v4() -> string` · `is_uuid_v4` · `uuid_v7()`/`uuid_v7_at(ms)` (RFC 9562, ordenables por tiempo) · `is_uuid_v7` |
-| `std/ffi` | `errno() -> int`: el `errno` del hilo — el motivo del último fallo de una extern C estilo POSIX (`fopen`/`unlink`…). **Leerlo inmediatamente** tras la llamada, sin E/S en medio (§13). En wasm: 0 · `buffer(n) -> bytes`: n octetos a cero, el búfer de salida de una extern (§13) · punteros (§13): `null() -> ptr` · `is_null(p) -> bool` · `offset(p, n) -> ptr` (n octetos más allá; puede ser negativo) · `addr(p) -> u64` · `read(p, n) -> bytes` (copia los n octetos apuntados; NULL o `n < 0` es error de ejecución) |
+| `std/ffi` | `errno() -> int`: el `errno` del hilo — el motivo del último fallo de una extern C estilo POSIX (`fopen`/`unlink`…). **Leerlo inmediatamente** tras la llamada, sin E/S en medio (§13). En wasm: 0 · `buffer(n) -> bytes`: n octetos a cero, el búfer de salida de una extern (§13) · punteros (§13): `null() -> ptr` · `is_null(p) -> bool` · `offset(p, n) -> ptr` (n octetos más allá; puede ser negativo; NULL es error) · `addr(p) -> u64` · `read(p, n) -> bytes` (copia los n octetos apuntados; NULL o `n < 0` es error de ejecución) |
 
 ## 11. Paquetes adicionales (`net`, `web`, `rpc`, `db`, `tz`, `cron`, `mcp`, `llm`, `agent`, `oidc`, `yaml`, `zip`)
 
@@ -680,7 +685,8 @@ escribir fuera de la longitud del valor ni guardar el puntero tras la llamada.
 C está en `std/ffi` (rayserial #394). `ffi.null()` es el puntero NULL, para un parámetro declarado
 `ptr`; si el parámetro se declara `Option<ptr>`, `Option.None` pasa NULL. `ffi.is_null(p)` lo
 comprueba. `ffi.offset(p, n)` da el puntero `n` octetos más allá (un campo de un struct, el
-siguiente elemento) y `ffi.addr(p) -> u64` la dirección como número. `ffi.read(p, n) -> bytes`
+siguiente elemento; sobre NULL es error de ejecución: un puntero que no sea NULL solo sale de una
+`extern`) y `ffi.addr(p) -> u64` la dirección como número. `ffi.read(p, n) -> bytes`
 **copia** los `n` octetos a los que apunta `p` —la `struct dirent` que devuelve `readdir`—. La
 dirección se confía, igual que la firma de una extern: leer memoria que no existe tumba el
 proceso. Solo se comprueban NULL y una longitud negativa, que son error de ejecución. Para

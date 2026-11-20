@@ -6,12 +6,37 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.108 — 2026-11-20
+
+- **Bounds sobre traits genéricos** (raysolve #357): `fn first<V, S: Source<V>>(s: S) -> V`. Un
+  trait con parámetros de tipo ya se podía declarar e implementar, pero no acotar con él; había
+  que pasar las funciones a mano en un struct de closures. Ahora el bound lleva sus argumentos
+  (`S: Source<V>`, `S: Source<int>`, `S: Source<[V]>`) en funciones, structs, enums e impls, y
+  el parámetro que solo aparece en el bound se infiere del impl del tipo que se pasa. Si el
+  impl no casa, el error lo dice: `Seven implements 'Source<int>', but 'store' requires 'S:
+  Source<string>'`. Igual en la VM, el intérprete y nativo. Quedan fuera `dyn Source<V>` y, solo
+  en nativo, acotar por un trait con métodos genéricos propios (`I: Iterator<int>`), que da un
+  error de build con nombres en vez de fallar en `rustc`.
+- Un parámetro de un `impl` puede llamarse como el del trait sin ser él: con `trait Source<V>`,
+  `impl<V: Show> Source<string> for Boxed<V>` daba un error de firmas («is Boxed<V>, but the
+  trait requires Boxed<string>») y ahora compila.
+- **Cambio que puede romper código**: un trait con parámetros de tipo se nombra siempre con sus
+  argumentos. `impl Source for X` y el bound `S: Source` a secas (con `trait Source<V>`) son
+  ahora error; antes se aceptaban y dejaban el parámetro del trait sin resolver. El mensaje
+  dice qué escribir: `write the bound as 'S: Source<…>'`.
+- `size([:], 1)` con `fn size<V>(m: Map<string, V>, v: V)` infiere el mapa vacío del otro
+  argumento, como ya hacía con `[]` (raysolve #358).
+- En la VM, `net.tls_alpn` sobre una conexión cuyo cliente aún no ha hablado aparca la fibra
+  en vez de esperar con el hilo: un cliente mudo ya no para a las demás fibras del servidor.
+- Windows: `ui.set_menu_item` sobre el tag de un submenú lo habilita o deshabilita en vivo.
 - **`std/ffi`: punteros que se pueden usar** (rayserial #394): `ffi.null()`, `ffi.is_null(p)`,
   `ffi.offset(p, n)`, `ffi.addr(p) -> u64` y `ffi.read(p, n) -> bytes`, que copia lo que hay en
   la dirección (la `struct dirent` de `readdir`). Y un parámetro de `extern` puede declararse
   `Option<ptr>`: `Option.None` pasa NULL. Antes un `ptr` no se podía construir, comparar con
   NULL ni leer, y había que declarar los parámetros como `u64` o copiar con `memcpy`. Igual en
-  la VM, el intérprete y nativo.
+  la VM, el intérprete y nativo. Un puntero que no sea NULL solo sale de una `extern`:
+  `ffi.offset` sobre NULL es error, así que un programa sin `extern` sigue sin poder leer
+  memoria arbitraria.
 - **`try_recv(signals())` ve la señal en un bucle que no aparca** (rayserial #392): en la VM, un
   bucle cuya única espera era una llamada FFI (`poll(2)` por `extern`) o que giraba sin esperar
   no recibía nunca SIGTERM: `try_recv` y `select_timeout(…, 0)` daban vacío hasta que el

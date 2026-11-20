@@ -97,7 +97,7 @@ pub struct Parser {
 const MAX_PARSE_DEPTH: usize = 1000;
 
 /// Parámetros de tipo y sus bounds (M9.2): `(nombres, pares (parámetro, trait))`.
-type TypeParamsAndBounds = (Vec<String>, Vec<(String, String)>);
+type TypeParamsAndBounds = (Vec<String>, Vec<(String, String)>, BoundArgs);
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
@@ -236,7 +236,7 @@ impl Parser {
             self.no_annotations(&anns, "a type alias")?;
             let kw = self.advance();
             let (name, _, _) = self.expect_ident("the alias name")?;
-            let (type_params, bounds) = self.type_params_with_bounds()?;
+            let (type_params, bounds, _) = self.type_params_with_bounds()?;
             if let Some((tp, tr)) = bounds.first() {
                 return Err(self.error_here(format!("a type alias takes no bounds ('{tp}: {tr}'); put the bound on the function or struct that uses it")));
             }
@@ -390,7 +390,7 @@ impl Parser {
     fn enum_def(&mut self) -> Result<EnumDef, ParseError> {
         let kw = self.expect(&TokenKind::Enum, "'enum'")?;
         let (name, _, _) = self.expect_ident("the enum name")?;
-        let (type_params, bounds) = self.type_params_with_bounds()?; // M9.4: bounds en `<T: Trait>`
+        let (type_params, bounds, bound_args) = self.type_params_with_bounds()?; // M9.4: bounds en `<T: Trait>`
         self.expect(&TokenKind::LBrace, "'{' after the enum name")?;
         let mut variants = Vec::new();
         while !self.check(&TokenKind::RBrace) {
@@ -412,7 +412,7 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace, "'}' to close the enum")?;
-        Ok(EnumDef { annotations: Vec::new(), is_pub: false, name, type_params, bounds, variants, line: kw.line, col: kw.col })
+        Ok(EnumDef { annotations: Vec::new(), is_pub: false, name, type_params, bounds, bound_args, variants, line: kw.line, col: kw.col })
     }
 
     /// struct_def = 'struct' IDENT '{' [ field { ',' field } [ ',' ] ] '}'
@@ -420,7 +420,7 @@ impl Parser {
     fn struct_def(&mut self) -> Result<StructDef, ParseError> {
         let kw = self.expect(&TokenKind::Struct, "'struct'")?;
         let (name, _, _) = self.expect_ident("the struct name")?;
-        let (type_params, bounds) = self.type_params_with_bounds()?; // M9.4: bounds en `<T: Trait>`
+        let (type_params, bounds, bound_args) = self.type_params_with_bounds()?; // M9.4: bounds en `<T: Trait>`
         self.expect(&TokenKind::LBrace, "'{' after the struct name")?;
         let mut fields = Vec::new();
         let mut field_lines = Vec::new();
@@ -440,7 +440,7 @@ impl Parser {
             }
         }
         self.expect(&TokenKind::RBrace, "'}' to close the struct")?;
-        Ok(StructDef { annotations: Vec::new(), is_pub: false, name, type_params, bounds, fields, field_lines, field_cols, field_type_pos, line: kw.line, col: kw.col })
+        Ok(StructDef { annotations: Vec::new(), is_pub: false, name, type_params, bounds, bound_args, fields, field_lines, field_cols, field_type_pos, line: kw.line, col: kw.col })
     }
 
     /// function = 'fn' IDENT [ '<' tparam { ',' tparam } '>' ] '(' [ params ] ')'
@@ -456,7 +456,7 @@ impl Parser {
             )));
         }
         let (name, _, _) = self.expect_ident("the function name")?;
-        let (type_params, bounds) = self.type_params_with_bounds()?;
+        let (type_params, bounds, bound_args) = self.type_params_with_bounds()?;
         self.expect(&TokenKind::LParen, "'(' after the function name")?;
         let params = if self.check(&TokenKind::RParen) {
             Vec::new()
@@ -479,6 +479,7 @@ impl Parser {
             name,
             type_params,
             bounds,
+            bound_args,
             params,
             return_type,
             body,
@@ -564,7 +565,7 @@ impl Parser {
         let kw = self.expect(&TokenKind::Trait, "'trait'")?;
         let (name, _, _) = self.expect_ident("the trait name")?;
         // M28.2: parámetros de tipo del trait, `trait From<S>`. Sin `<`, vacío (trait de M9).
-        let (type_params, _) = self.type_params_with_bounds()?;
+        let (type_params, _, _) = self.type_params_with_bounds()?;
         // raysolve #357: supertraits, `trait Version: Ord + Show { … }` (calificados también).
         let mut supertraits = Vec::new();
         if self.eat(&TokenKind::Colon) {
@@ -597,7 +598,7 @@ impl Parser {
         let kw = self.expect(&TokenKind::Fn, "'fn' in a method signature")?;
         let (name, _, _) = self.expect_ident("the method name")?;
         // M40.2c: parámetros de tipo propios del método, `fn map<U>(self, ...)`. Sin `<`, vacío.
-        let (type_params, bounds) = self.type_params_with_bounds()?;
+        let (type_params, bounds, bound_args) = self.type_params_with_bounds()?;
         self.expect(&TokenKind::LParen, "'(' after the method name")?;
         let params = self.method_params()?;
         self.expect(&TokenKind::RParen, "')'")?;
@@ -613,7 +614,7 @@ impl Parser {
             self.expect(&TokenKind::Semicolon, "';' or a '{ ... }' body for the method")?;
             None
         };
-        Ok(MethodSig { name, type_params, bounds, params, return_type, default_body, line: kw.line, col: kw.col })
+        Ok(MethodSig { name, type_params, bounds, bound_args, params, return_type, default_body, line: kw.line, col: kw.col })
     }
 
     /// impl_block = 'impl' IDENT 'for' type '{' { impl_method } '}'  (M9)
@@ -624,7 +625,7 @@ impl Parser {
         let kw = self.expect(&TokenKind::Impl, "'impl'")?;
         // Parámetros de tipo del impl (M9.2b): `impl<T: A + B> Trait for Caja<T>`. Sin `<`,
         // ambos quedan vacíos (impl concreto de M9.1).
-        let (type_params, bounds) = self.type_params_with_bounds()?;
+        let (type_params, bounds, bound_args) = self.type_params_with_bounds()?;
         let (mut trait_name, _, _) = self.expect_ident("the trait name")?;
         // M309 (findings #52): `impl ports.Repo for MysqlOrders` — trait calificado por módulo.
         if self.eat(&TokenKind::Dot) {
@@ -653,7 +654,7 @@ impl Parser {
             methods.push(self.impl_method()?);
         }
         self.expect(&TokenKind::RBrace, "'}' to close the impl")?;
-        Ok(ImplBlock { trait_name, trait_args, type_params, bounds, target, methods, synthetic: false, line: kw.line, col: kw.col })
+        Ok(ImplBlock { trait_name, trait_args, type_params, bounds, bound_args, target, methods, synthetic: false, line: kw.line, col: kw.col })
     }
 
     /// impl_method = 'fn' IDENT [ '<' type_params '>' ] '(' [ method_params ] ')' [ '->' type ] block
@@ -663,7 +664,7 @@ impl Parser {
     fn impl_method(&mut self) -> Result<Function, ParseError> {
         let kw = self.expect(&TokenKind::Fn, "'fn' in an impl method")?;
         let (name, _, _) = self.expect_ident("the method name")?;
-        let (type_params, bounds) = self.type_params_with_bounds()?;
+        let (type_params, bounds, bound_args) = self.type_params_with_bounds()?;
         self.expect(&TokenKind::LParen, "'(' after the method name")?;
         let params = self.method_params()?;
         self.expect(&TokenKind::RParen, "')'")?;
@@ -679,6 +680,7 @@ impl Parser {
             name,
             type_params,
             bounds,
+            bound_args,
             params,
             return_type,
             body,
@@ -727,6 +729,7 @@ impl Parser {
     fn type_params_with_bounds(&mut self) -> Result<TypeParamsAndBounds, ParseError> {
         let mut params = Vec::new();
         let mut bounds = Vec::new();
+        let mut bound_args = Vec::new();
         if self.eat(&TokenKind::Lt) {
             loop {
                 let (name, _, _) = self.expect_ident("a type parameter name")?;
@@ -740,13 +743,11 @@ impl Parser {
                             let (t, _, _) = self.expect_ident("the trait name after 'M.'")?;
                             tr = format!("{}.{}", tr, t);
                         }
-                        // raysolve #357: un trait genérico (`trait Source<V>`) se puede declarar e
-                        // implementar, pero aún no acotar con él: el error lo dice, en vez de
-                        // «expected '>'».
+                        // raysolve #357: `S: Source<V>` — el bound sobre un trait genérico lleva
+                        // sus argumentos de tipo.
                         if self.check(&TokenKind::Lt) {
-                            return Err(self.error_here(format!(
-                                "a bound cannot take type arguments yet ('{name}: {tr}<…>'): bound by a trait without type parameters, or pass the functions it needs as arguments"
-                            )));
+                            let args = self.type_args()?;
+                            bound_args.push((name.clone(), tr.clone(), args));
                         }
                         bounds.push((name.clone(), tr));
                         if !self.eat(&TokenKind::Plus) {
@@ -761,7 +762,7 @@ impl Parser {
             }
             self.close_type_angle("'>' to close the type parameters")?;
         }
-        Ok((params, bounds))
+        Ok((params, bounds, bound_args))
     }
 
     /// Lista opcional de argumentos de tipo: `< type { ',' type } >` (M6). Como

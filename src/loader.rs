@@ -24,7 +24,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::ast::{Block, Expr, ExprKind, FnExpr, ForIter, ForPat, Function, MethodSig, Pattern, PatternKind, Program, Stmt, StmtKind, Type};
+use crate::ast::{Block, BoundArgs, Expr, ExprKind, FnExpr, ForIter, ForPat, Function, MethodSig, Pattern, PatternKind, Program, Stmt, StmtKind, Type};
 use crate::diagnostic;
 
 /// Un error de carga, ya **renderizado** con su contexto de fuente (la línea + `^`), listo
@@ -1625,9 +1625,7 @@ impl<'a> TypeRewriter<'a> {
             for (_, ty) in &mut s.fields {
                 self.rewrite_type(ty);
             }
-            for (_, tr) in &mut s.bounds {
-                self.rewrite_name(tr); // M9.4: el trait del bound se namespaca como cualquier tipo
-            }
+            self.rewrite_bounds(&mut s.bounds, &mut s.bound_args);
             self.tparams.pop();
         }
         for e in &mut program.enums {
@@ -1637,9 +1635,7 @@ impl<'a> TypeRewriter<'a> {
                     self.rewrite_type(ty);
                 }
             }
-            for (_, tr) in &mut e.bounds {
-                self.rewrite_name(tr); // M9.4
-            }
+            self.rewrite_bounds(&mut e.bounds, &mut e.bound_args);
             self.tparams.pop();
         }
         for t in &mut program.traits {
@@ -1671,9 +1667,7 @@ impl<'a> TypeRewriter<'a> {
             for arg in &mut imp.trait_args {
                 self.rewrite_type(arg);
             }
-            for (_, tr) in &mut imp.bounds {
-                self.rewrite_name(tr);
-            }
+            self.rewrite_bounds(&mut imp.bounds, &mut imp.bound_args);
             for method in &mut imp.methods {
                 self.tparams.push(method.type_params.iter().cloned().collect());
                 self.rewrite_function(method);
@@ -1688,10 +1682,22 @@ impl<'a> TypeRewriter<'a> {
             self.rewrite_type(&mut p.ty);
         }
         self.rewrite_type(&mut f.return_type);
-        for (_, tr) in &mut f.bounds {
+        self.rewrite_bounds(&mut f.bounds, &mut f.bound_args);
+        self.rewrite_block(&mut f.body);
+    }
+
+    /// Los bounds de un dueño (función, struct, enum, impl o firma de método): el trait se
+    /// namespaca como cualquier tipo (M9.4) y, si el bound lleva argumentos (#357), ellos también.
+    fn rewrite_bounds(&self, bounds: &mut [(String, String)], bound_args: &mut BoundArgs) {
+        for (_, tr) in bounds.iter_mut() {
             self.rewrite_name(tr);
         }
-        self.rewrite_block(&mut f.body);
+        for (_, tr, args) in bound_args.iter_mut() {
+            self.rewrite_name(tr);
+            for arg in args.iter_mut() {
+                self.rewrite_type(arg);
+            }
+        }
     }
 
     fn rewrite_method(&self, m: &mut MethodSig) {
@@ -1699,6 +1705,7 @@ impl<'a> TypeRewriter<'a> {
             self.rewrite_type(&mut p.ty);
         }
         self.rewrite_type(&mut m.return_type);
+        self.rewrite_bounds(&mut m.bounds, &mut m.bound_args);
         if let Some(b) = &mut m.default_body {
             self.rewrite_block(b);
         }

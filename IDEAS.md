@@ -4783,3 +4783,22 @@ de la alarma es nuestra y puede mostrar los tres.
 **Impacto**: aditivo para quien construye la alarma con `alarm.message` (los campos nuevos rompen
 un literal `Alarm { … }` escrito a mano). **Riesgo**: hay que probarlo en un iPhone con iOS 26 y
 en Android con la app cerrada.
+
+## 128. Lo que queda de los traits genéricos (raysolve #357)
+
+Los bounds `S: Source<V>` están hechos (DESIGN §466). Tres cosas quedaron fuera a propósito:
+
+- **`dyn Source<V>`**. Un trait object se baja a un struct sintetizado sin parámetros; haría
+  falta uno por instancia (`__dyn_Source<int>`) o un struct genérico, y sustituir el parámetro
+  del trait en las firmas de la vtable. **Impacto**: aditivo. Sin demanda todavía.
+- **Bound nativo sobre un trait con métodos genéricos** (`I: Iterator<int>`). El paso de
+  diccionarios no puede llevar una función polimórfica en Rust. Las salidas son generar un trait
+  de Rust por trait de raylang (cambia cómo se bajan TODOS los bounds en nativo) o pasar al
+  diccionario solo los métodos sin parámetros propios y rechazar el uso de los otros dentro del
+  cuerpo. La segunda es barata y cubriría `it.next()`. **Impacto**: solo nativo; hoy es un error
+  de build claro.
+- **Varios impls del mismo trait genérico para un tipo** (`impl Source<int>` e
+  `impl Source<string>` para `Both`). Exige manglar con el argumento y elegir impl por él en
+  cada llamada. **Impacto**: rompe la regla «el tipo determina los argumentos», sobre la que se
+  apoya la inferencia de §466. No hacerlo sin un caso real.
+

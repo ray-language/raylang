@@ -108,7 +108,11 @@ let s = Shape.Circle(2.0);                       // construction is qualified
 trait Greeter { fn greet(self) -> string; }
 // Supertraits: `trait Version: Ord + Show { … }` — an impl of Version needs impls of Ord and
 // Show, and `V: Version` lets you call the methods of all three. A trait with type parameters
-// (`trait Source<V>`) cannot be a bound or go after `dyn` yet.
+// bounds with its arguments: `trait Source<V> { fn get(self) -> V; }` +
+// `fn first<V, S: Source<V>>(s: S) -> V { s.get() }` — V is inferred from the impl of the type
+// passed (one impl of a trait per type). `S: Source<int>` and bounds on structs/impls work too.
+// No `dyn Source<V>`; a native build rejects a bound on a trait whose methods have their own
+// type parameters (`I: Iterator<int>`), which the VM runs.
 impl Greeter for Point {
     fn greet(self) -> string { "point at ${self.x}" }
 }

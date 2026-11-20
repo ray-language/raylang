@@ -1101,6 +1101,15 @@ impl<'a> Vm<'a> {
                             HeapValue::Str(s) => crate::ffi::FfiVal::Str(s),
                             HeapValue::Bytes(b) => crate::ffi::FfiVal::Bytes(&b[..]),
                             HeapValue::Ptr(p) => crate::ffi::FfiVal::Int(*p), // M41.4b
+                            // rayserial #394: `Option<ptr>` → la dirección, o NULL si es `None`.
+                            HeapValue::Obj(h) => match self.cur.heap.get(*h) {
+                                Obj::Enum(e) => match e.payload.first() {
+                                    Some(HeapValue::Ptr(p)) => crate::ffi::FfiVal::Int(*p),
+                                    _ => crate::ffi::FfiVal::Int(0),
+                                },
+                                _ => return Err(runtime_error(pos!().0, pos!().1,
+                                    "non-marshalable argument at the FFI boundary")),
+                            },
                             _ => return Err(runtime_error(pos!().0, pos!().1,
                                 "non-marshalable argument at the FFI boundary")),
                         });
@@ -5082,6 +5091,20 @@ impl<'a> Vm<'a> {
                     HeapValue::Str(lib) => self.push(HeapValue::Bool(crate::ffi::library_available(&lib))),
                     _ => unreachable!("the checker guarantees a string"),
                 },
+                OpCode::FfiPtr => match self.pop() {
+                    HeapValue::Int(a) => self.push(HeapValue::Ptr(a)),
+                    _ => unreachable!("the checker guarantees an int"),
+                },
+                OpCode::FfiAddr => match self.pop() {
+                    HeapValue::Ptr(p) => self.push(HeapValue::Int(p)),
+                    _ => unreachable!("the checker guarantees a ptr"),
+                },
+                OpCode::FfiRead => {
+                    let n = match self.pop() { HeapValue::Int(n) => n, _ => unreachable!("the checker guarantees an int") };
+                    let p = match self.pop() { HeapValue::Ptr(p) => p, _ => unreachable!("the checker guarantees a ptr") };
+                    let data = crate::ffi::read_ptr(p, n).map_err(|m| runtime_error(pos!().0, pos!().1, &m))?;
+                    self.push(HeapValue::bytes(data));
+                }
                 OpCode::Monotonic => self.push(HeapValue::Int(crate::builtins::monotonic_millis())),
                 OpCode::MonotonicNanos => self.push(HeapValue::Int(crate::builtins::monotonic_nanos())),
                 OpCode::LocalOffset => match self.pop() {

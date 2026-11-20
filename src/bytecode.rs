@@ -221,6 +221,13 @@ pub enum OpCode {
     /// Builtin `__ffi_lib_available` (std/ffi.library_available, M417): saca el nombre corto de una
     /// librería (string) y empuja si se puede cargar en este sistema (bool).
     FfiLibAvailable,
+    /// Builtin `__ffi_ptr` (std/ffi.null/offset, rayserial #394): saca un int y empuja el `ptr`
+    /// con esa dirección.
+    FfiPtr,
+    /// Builtin `__ffi_addr` (std/ffi.is_null/addr/offset): saca un `ptr` y empuja su dirección (int).
+    FfiAddr,
+    /// Builtin `__ffi_read` (std/ffi.read): saca `(ptr, n)` y empuja los `n` octetos a los que apunta.
+    FfiRead,
     /// Builtin `print`: saca un valor, lo imprime, y empuja unit.
     Print,
 

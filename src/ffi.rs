@@ -140,8 +140,33 @@ pub fn ckind(ty: &crate::ast::Type) -> Option<CKind> {
         Type::String => Some(CKind::Str),
         Type::Bytes => Some(CKind::Bytes),
         Type::Ptr => Some(CKind::Ptr),
+        // rayserial #394: `Option<ptr>` como ARGUMENTO: `None` viaja como NULL.
+        Type::Struct(n, args) | Type::Enum(n, args) if n == "Option" && args.len() == 1 && args[0] == Type::Ptr => {
+            Some(CKind::OptPtr)
+        }
         _ => None,
     }
+}
+
+/// rayserial #394: copia `n` octetos desde la dirección `addr` (`std/ffi.read`). La dirección se
+/// CONFÍA, como la firma de una extern: solo se rechazan NULL y una longitud negativa.
+pub fn read_ptr(addr: i64, n: i64) -> Result<Vec<u8>, String> {
+    if n < 0 {
+        return Err("ffi.read: the length cannot be negative".into());
+    }
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    if addr == 0 {
+        return Err("ffi.read: the pointer is NULL".into());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    // SAFETY: contrato del llamador (frontera FFI): `addr` apunta a `n` octetos legibles.
+    unsafe {
+        Ok(std::slice::from_raw_parts(addr as usize as *const u8, n as usize).to_vec())
+    }
+    #[cfg(target_arch = "wasm32")]
+    Err("ffi.read is not available in the web playground".into())
 }
 
 /// Clasifica el tipo de **retorno** de una extern fn. Admite los primitivos (`int/float/bool/unit`) y,

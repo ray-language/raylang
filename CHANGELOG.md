@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/ffi`: punteros que se pueden usar** (rayserial #394): `ffi.null()`, `ffi.is_null(p)`,
+  `ffi.offset(p, n)`, `ffi.addr(p) -> u64` y `ffi.read(p, n) -> bytes`, que copia lo que hay en
+  la dirección (la `struct dirent` de `readdir`). Y un parámetro de `extern` puede declararse
+  `Option<ptr>`: `Option.None` pasa NULL. Antes un `ptr` no se podía construir, comparar con
+  NULL ni leer, y había que declarar los parámetros como `u64` o copiar con `memcpy`. Igual en
+  la VM, el intérprete y nativo.
 - **`try_recv(signals())` ve la señal en un bucle que no aparca** (rayserial #392): en la VM, un
   bucle cuya única espera era una llamada FFI (`poll(2)` por `extern`) o que giraba sin esperar
   no recibía nunca SIGTERM: `try_recv` y `select_timeout(…, 0)` daban vacío hasta que el

@@ -5647,6 +5647,23 @@ static BUILTINS: &[Builtin] = &[
         if a[0] != Type::String { return Err((Some(0), format!("__ffi_lib_available expects a string (the library name), not {}", a[0]))); }
         Ok(Type::Bool)
     } },
+    // rayserial #394: un `ptr` deja de ser del todo opaco (std/ffi.null/is_null/offset/addr/read).
+    Builtin { name: "__ffi_ptr", opcode: OpCode::FfiPtr, check: |a| {
+        arity(a, 1, "__ffi_ptr", " (address)")?;
+        if a[0] != Type::Int { return Err((Some(0), format!("__ffi_ptr expects an int (the address), not {}", a[0]))); }
+        Ok(Type::Ptr)
+    } },
+    Builtin { name: "__ffi_addr", opcode: OpCode::FfiAddr, check: |a| {
+        arity(a, 1, "__ffi_addr", " (ptr)")?;
+        if a[0] != Type::Ptr { return Err((Some(0), format!("__ffi_addr expects a ptr, not {}", a[0]))); }
+        Ok(Type::Int)
+    } },
+    Builtin { name: "__ffi_read", opcode: OpCode::FfiRead, check: |a| {
+        arity(a, 2, "__ffi_read", " (ptr, n)")?;
+        if a[0] != Type::Ptr { return Err((Some(0), format!("__ffi_read expects a ptr, not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__ffi_read expects an int (the length), not {}", a[1]))); }
+        Ok(Type::Bytes)
+    } },
 
     Builtin { name: "__now",       opcode: OpCode::Now,       check: |a| { nullary(a, "__now")?; Ok(Type::Int) } },
     Builtin { name: "__monotonic", opcode: OpCode::Monotonic, check: |a| { nullary(a, "__monotonic")?; Ok(Type::Int) } },

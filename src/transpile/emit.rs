@@ -303,6 +303,15 @@ impl Transpiler {
                         }
                     }
                     Type::Ptr => passes.push(format!("(__p{} as *mut std::ffi::c_void)", i)),
+                    // rayserial #394: `Option<ptr>` → la dirección, o NULL si es `None`.
+                    Type::Enum(n, args) if n == "Option" && args.len() == 1 && normalize_type(&args[0]) == Type::Ptr => {
+                        if blocking {
+                            writeln!(out, "    let __rt_a{} = __p{}.unwrap_or(0);", i, i).unwrap();
+                            passes.push(format!("(__rt_a{} as *mut std::ffi::c_void)", i));
+                        } else {
+                            passes.push(format!("(__p{}.unwrap_or(0) as *mut std::ffi::c_void)", i));
+                        }
+                    }
                     other => return Err(format!("FFI argument is not marshalable: {:?}", other)),
                 }
             }

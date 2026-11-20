@@ -3206,6 +3206,56 @@ fn ffi_extern_unit_return_can_be_written() {
 }
 
 #[test]
+fn ffi_pointers_can_be_null_offset_and_read() {
+    // rayserial #394: `ptr` deja de ser opaco del todo — `ffi.null/is_null/offset/addr/read` y
+    // `Option<ptr>` como ARGUMENTO (None = NULL), también en un bloque `blocking`. VM ≡ nativo.
+    let base = tmp("ffi_ptr_helpers");
+    let file = base.join("main.ray");
+    std::fs::write(
+        &file,
+        "import std/ffi;\n\
+         extern \"c\" {\n\
+         \x20 fn realloc(p: Option<ptr>, n: u64) -> Option<ptr>;\n\
+         \x20 fn memcpy(dst: ptr, src: bytes, n: u64) -> ptr;\n\
+         }\n\
+         extern \"c\" blocking {\n\
+         \x20 fn free(p: Option<ptr>);\n\
+         }\n\
+         fn main() -> int {\n\
+         \x20 let n = ffi.null();\n\
+         \x20 print(\"${ffi.is_null(n)} ${ffi.addr(n)} ${ffi.read(n, 0).len()}\");\n\
+         \x20 let p = realloc(Option.None, 8 as u64).unwrap();\n\
+         \x20 memcpy(p, b\"abcdefgh\", 8 as u64);\n\
+         \x20 print(ffi.is_null(p));\n\
+         \x20 print(ffi.read(p, 8).to_string());\n\
+         \x20 print(ffi.read(ffi.offset(p, 3), 2).to_string());\n\
+         \x20 print(ffi.addr(ffi.offset(p, 3)) - ffi.addr(p));\n\
+         \x20 print(ffi.is_null(ffi.offset(ffi.offset(p, 5), 0 - 5)) == ffi.is_null(p));\n\
+         \x20 free(Option.Some(p));\n\
+         \x20 free(Option.None);\n\
+         \x20 0\n\
+         }\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&base, &["run", file.to_str().unwrap()]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "true 0 0\nfalse\n6162636465666768\n6465\n3\ntrue\n", "{out}");
+    // Leer de NULL es un error de ejecución con posición, no una caída.
+    let bad = base.join("bad.ray");
+    std::fs::write(&bad, "import std/ffi;\nfn main() { print(ffi.read(ffi.null(), 4).len()); }\n").unwrap();
+    let (_o, berr, bcode) = ray(&base, &["run", bad.to_str().unwrap()]);
+    assert_ne!(bcode, 0);
+    assert!(berr.contains("ffi.read: the pointer is NULL"), "{berr}");
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let (_o, nerr, ncode) = ray(&base, &["build", file.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(ncode, 0, "{nerr}");
+        let native = Command::new(&bin).output().expect("corre el binario nativo");
+        assert_eq!(String::from_utf8_lossy(&native.stdout), out, "nativo ≡ VM");
+    }
+}
+
+#[test]
 fn ffi_errno_reads_the_last_failure_reason() {
     // Revisión FFI jul 2026: `std/ffi.errno()` lee el errno del hilo justo tras la extern. fopen
     // de una ruta inexistente → None + ENOENT (2 en Linux y macOS). Determinista → e2e por

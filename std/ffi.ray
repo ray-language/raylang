@@ -24,3 +24,25 @@ pub fn library_available(lib: string) -> bool { __ffi_lib_available(lib) }
 pub fn buffer(n: int) -> bytes {
     if (n <= 0) { b"" } else { "\0".repeat(n).to_bytes() }
 }
+
+// rayserial #394: `ptr` era opaco del todo (ni NULL, ni lectura, ni aritmética).
+/// The NULL pointer, for an extern parameter declared `ptr` (`openpty(…, ffi.null(), ffi.null())`).
+/// A parameter declared `Option<ptr>` takes `Option.None` for the same thing.
+pub fn null() -> ptr { __ffi_ptr(0) }
+
+/// Whether `p` is the NULL pointer.
+pub fn is_null(p: ptr) -> bool { __ffi_addr(p) == 0 }
+
+/// The pointer `n` bytes after `p` (`n` may be negative): the address of a struct field or of the
+/// next element. Plain address arithmetic, with no bounds of any kind.
+pub fn offset(p: ptr, n: int) -> ptr { __ffi_ptr(__ffi_addr(p) + n) }
+
+/// The address `p` holds, as a number: to log it, compare two pointers or hand it to an extern
+/// parameter declared `u64`.
+pub fn addr(p: ptr) -> u64 { __ffi_addr(p) as u64 }
+
+/// Copies the `n` bytes `p` points at into a `bytes` of its own (the `struct dirent` that
+/// `readdir` returns, a field of a C struct). The address is TRUSTED, like an extern signature:
+/// reading memory that is not there crashes the process. A NULL `p` with `n > 0`, or a negative
+/// `n`, is a runtime error; `n == 0` gives an empty value without touching `p`.
+pub fn read(p: ptr, n: int) -> bytes { __ffi_read(p, n) }

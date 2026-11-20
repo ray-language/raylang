@@ -267,7 +267,10 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   `int`↔C `int` (32 bits, con signo), `u64`↔C `long`/`size_t` (64 bits), `float`↔double, `bool`↔int
   (aridad 0..=6 — límite del checker, idéntico en todos los motores), y como **argumento** `string`↔`char*` (NUL-terminado) y `bytes`↔puntero al buffer
   (M41.2). Un puntero opaco (`FILE*`, handle) se pasa como `u64` o, con seguridad de tipos, como **`ptr`**
-  (M41.4b: un puntero **opaco** — se recibe/pasa/compara por identidad, pero no se desreferencia ni opera).
+  (M41.4b: un puntero **opaco** para el lenguaje — se recibe/pasa/compara por identidad y no tiene
+  operadores ni `as`; `std/ffi` da `null()`, `is_null`, `offset`, `addr` y `read(p, n) -> bytes`, que
+  confía en la dirección como una `extern` confía en su firma). Un argumento `Option<ptr>` pasa `None`
+  como `NULL`.
   El **retorno** admite `int`/`u64`/`float`/`bool`/`unit`, `ptr`/`Option<ptr>` (`NULL → None`, p. ej.
   `fopen`), y para un `char*`, **`Option<bytes>`** (`NULL → None`; la frontera copia los bytes hasta el NUL
   y no libera el puntero) o **`Option<string>`** (azúcar que valida UTF-8; bytes inválidos → error de

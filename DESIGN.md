@@ -21305,3 +21305,22 @@ bombear cada N instrucciones: metería una comprobación en el bucle de despacho
 solo importa cuando el programa pregunta por el canal. `recv` no cambia: aparca, y aparcar ya
 conmuta.
 
+## 465. `ptr` deja de ser del todo opaco (rayserial #394, nov 2026)
+
+Un `ptr` solo se podía recibir de una extern y devolverlo a otra. Para pasar NULL a `openpty`
+había que mentir en la firma (`u64`), y para leer la `struct dirent` de `readdir`, declarar un
+`memcpy` a un búfer propio. El hallazgo pedía `0 as ptr` o helpers.
+
+Se eligieron helpers en `std/ffi` y no `as`: `ptr as u64` habría abierto la aritmética de
+punteros en el lenguaje (SPEC, tres motores, el espejo selfhost) para algo que solo tiene
+sentido junto a una `extern`. `null`, `is_null`, `offset` y `addr` son raylang sobre dos
+builtins que reinterpretan (`__ffi_ptr`, `__ffi_addr`); en nativo un `ptr` ya es un `i64` y se
+emiten como aritmética en línea. `read(p, n)` es el único que toca memoria: copia, nunca
+presta, y confía en la dirección igual que una extern confía en su firma. Comprueba lo que sí
+puede comprobar (NULL, longitud negativa) y lo demás es contrato del llamador. No hay `write`:
+escribir en memoria de C ya se hace pasando un `bytes` como argumento.
+
+`Option<ptr>` como argumento es el simétrico del retorno que ya existía: `None` es NULL. Quita
+la necesidad de `null()` en las firmas que lo declaran, y deja a la vista cuáles lo admiten.
+Los helpers little-endian que pedía el hallazgo ya existen en `std/binary`.
+

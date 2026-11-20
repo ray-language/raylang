@@ -1064,6 +1064,15 @@ impl<'a> Interpreter<'a> {
                         return Err(runtime_error(callee.line, callee.col,
                             crate::builtins::NET_TLS_UNAVAILABLE));
                     }
+                    // rayserial #394: `ffi.read` puede fallar (NULL, longitud negativa) → aquí, con posición.
+                    if name == "__ffi_read" {
+                        if let (Value::Ptr(p), Value::Int(n)) = (&values[0], &values[1]) {
+                            return match crate::ffi::read_ptr(*p, *n) {
+                                Ok(data) => Ok(Value::Bytes(Rc::new(data))),
+                                Err(m) => Err(runtime_error(callee.line, callee.col, &m)),
+                            };
+                        }
+                    }
                     // raysql #303/#299: los fallos con POSICIÓN de los primitivos nuevos (eval_builtin
                     // no puede fallar): bounds de remove_at/insert_at y el modo de format_float.
                     if name == "__array_remove_at" || name == "__array_insert_at" {
@@ -3142,6 +3151,14 @@ impl<'a> Interpreter<'a> {
                 Value::Str(lib) => Value::Bool(crate::ffi::library_available(lib)),
                 _ => unreachable!("the checker guarantees a string"),
             },
+            "__ffi_ptr" => match &values[0] {
+                Value::Int(a) => Value::Ptr(*a),
+                _ => unreachable!("the checker guarantees an int"),
+            },
+            "__ffi_addr" => match &values[0] {
+                Value::Ptr(p) => Value::Int(*p),
+                _ => unreachable!("the checker guarantees a ptr"),
+            },
             "__monotonic" => Value::Int(crate::builtins::monotonic_millis()),
             "__monotonic_nanos" => Value::Int(crate::builtins::monotonic_nanos()),
             "__local_offset" => match &values[0] {
@@ -3390,6 +3407,11 @@ fn value_to_ffi(v: &Value) -> crate::ffi::FfiVal<'_> {
         Value::Str(s) => crate::ffi::FfiVal::Str(s.as_str()),      // M41.2: → char* (NUL-terminado en ffi::call)
         Value::Bytes(b) => crate::ffi::FfiVal::Bytes(b.as_slice()), // M41.2: → puntero al buffer crudo
         Value::Ptr(p) => crate::ffi::FfiVal::Int(*p),              // M41.4b: la dirección opaca por registro
+        // rayserial #394: `Option<ptr>` → la dirección, o NULL si es `None`.
+        Value::Enum(e) => match e.payload.first() {
+            Some(Value::Ptr(p)) => crate::ffi::FfiVal::Int(*p),
+            _ => crate::ffi::FfiVal::Int(0),
+        },
         _ => unreachable!("the checker guarantees a type marshalable at the FFI boundary"),
     }
 }

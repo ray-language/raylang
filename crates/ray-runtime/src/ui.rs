@@ -5745,7 +5745,6 @@ mod mac {
                 let index_of: MsgI64Id = std::mem::transmute(msg_send());
                 let item_at: MsgIdI64 = std::mem::transmute(msg_send());
                 let submenu_of: MsgId = std::mem::transmute(msg_send());
-                let count: MsgI64 = std::mem::transmute(msg_send());
                 let remove_all: MsgVoid = std::mem::transmute(msg_send());
                 let add: MsgVoidId = std::mem::transmute(msg_send());
                 let idx = index_of(main_menu as Id, sel(b"indexOfItemWithTitle:\0"), nsstring(&title));
@@ -5757,7 +5756,6 @@ mod mac {
                 if menu.is_null() {
                     return Err(format!("ui: the menu '{title}' has no submenu"));
                 }
-                let _ = &count;
                 let mut old: Vec<usize> = Vec::new();
                 collect_items(menu, &mut old);
                 {
@@ -10831,6 +10829,20 @@ mod win {
                     let mut flags = MF_POPUP;
                     if !spec.enabled { flags |= MF_GRAYED; }
                     let _ = AppendMenuW(popup, flags, sub.0 as usize, PCWSTR(wide(&spec.label).as_ptr()));
+                    // Con tag, la cabecera recibe un id propio (por posición: AppendMenuW le dejó
+                    // el HMENU como id) y se registra como cualquier item, para que
+                    // `set_menu_item` la habilite o deshabilite en vivo. No entra en `tags`: una
+                    // cabecera no emite WM_COMMAND.
+                    if !spec.tag.is_empty() {
+                        let pos = GetMenuItemCount(Some(popup)) - 1;
+                        if pos >= 0 {
+                            let info = MENUITEMINFOW { cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32, fMask: MIIM_ID, wID: *next_id as u32, ..Default::default() };
+                            if SetMenuItemInfoW(popup, pos as u32, true, &info).is_ok() {
+                                items_by_tag().lock().unwrap().entry(spec.tag.clone()).or_default().push((hwnd.0 as usize, *next_id));
+                                *next_id = next_id.wrapping_add(1);
+                            }
+                        }
+                    }
                     continue;
                 }
                 // M255: el atajo de un rol estándar se MUESTRA pero no se registra como

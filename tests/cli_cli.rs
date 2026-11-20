@@ -3246,6 +3246,17 @@ fn ffi_pointers_can_be_null_offset_and_read() {
     let (_o, berr, bcode) = ray(&base, &["run", bad.to_str().unwrap()]);
     assert_ne!(bcode, 0);
     assert!(berr.contains("ffi.read: the pointer is NULL"), "{berr}");
+    // De la revisión previa a 1.27.108: sin `extern` no se fabrica una dirección. NULL no se
+    // desplaza y no hay builtin que convierta un entero en `ptr` (antes: segfault con
+    // `ffi.read(ffi.offset(ffi.null(), 4096), 8)`).
+    std::fs::write(&bad, "import std/ffi;\nfn main() { print(ffi.read(ffi.offset(ffi.null(), 4096), 8).len()); }\n").unwrap();
+    let (_o, berr, bcode) = ray(&base, &["run", bad.to_str().unwrap()]);
+    assert_ne!(bcode, 0);
+    assert!(berr.contains("ffi.offset: the pointer is NULL"), "{berr}");
+    std::fs::write(&bad, "fn main() { print(__ffi_addr(__ffi_ptr(4096))); }\n").unwrap();
+    let (_o, berr, bcode) = ray(&base, &["check", bad.to_str().unwrap()]);
+    assert_eq!(bcode, 65);
+    assert!(berr.contains("function '__ffi_ptr' not declared"), "{berr}");
     if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
         let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
         let (_o, nerr, ncode) = ray(&base, &["build", file.to_str().unwrap(), "--native", "-o", bin.to_str().unwrap()]);

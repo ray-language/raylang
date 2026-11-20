@@ -28,14 +28,15 @@ pub fn buffer(n: int) -> bytes {
 // rayserial #394: `ptr` era opaco del todo (ni NULL, ni lectura, ni aritmética).
 /// The NULL pointer, for an extern parameter declared `ptr` (`openpty(…, ffi.null(), ffi.null())`).
 /// A parameter declared `Option<ptr>` takes `Option.None` for the same thing.
-pub fn null() -> ptr { __ffi_ptr(0) }
+pub fn null() -> ptr { __ffi_null() }
 
 /// Whether `p` is the NULL pointer.
 pub fn is_null(p: ptr) -> bool { __ffi_addr(p) == 0 }
 
 /// The pointer `n` bytes after `p` (`n` may be negative): the address of a struct field or of the
-/// next element. Plain address arithmetic, with no bounds of any kind.
-pub fn offset(p: ptr, n: int) -> ptr { __ffi_ptr(__ffi_addr(p) + n) }
+/// next element. Plain address arithmetic, with no bounds of any kind. A NULL `p` is a runtime
+/// error: a pointer that is not NULL can only come from an extern.
+pub fn offset(p: ptr, n: int) -> ptr { __ffi_offset(p, n) }
 
 /// The address `p` holds, as a number: to log it, compare two pointers or hand it to an extern
 /// parameter declared `u64`.

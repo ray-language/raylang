@@ -4805,12 +4805,32 @@ impl<'a> Vm<'a> {
                 // raygrpc #384: el protocolo ALPN negociado (conduce el handshake pendiente).
                 OpCode::TlsAlpn => {
                     let handle = match self.pop() { HeapValue::Int(h) => h, _ => unreachable!("the checker guarantees an int") };
-                    let elems = match crate::builtins::tls_alpn(handle) {
-                        Ok(p) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(p.into())],
-                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    // El handshake pendiente no se espera con el hilo: la fibra aparca en el socket
+                    // (como `SocketRead`) y el opcode se re-ejecuta cuando el peer habla.
+                    let elems = match crate::builtins::tls_alpn_nb(handle) {
+                        Ok(Some(p)) => Some(vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(p.into())]),
+                        Err(e) => Some(vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())]),
+                        Ok(None) => None,
                     };
-                    let h = self.cur.heap.allocate(Obj::Array(elems));
-                    self.push(HeapValue::Obj(h));
+                    match elems {
+                        Some(elems) => {
+                            let h = self.cur.heap.allocate(Obj::Array(elems));
+                            self.push(HeapValue::Obj(h));
+                        }
+                        None => {
+                            self.push(HeapValue::Int(handle));
+                            self.cur.frames.last_mut().unwrap().ip -= 1;
+                            let fiber = Self::take_current_fiber(&mut self.cur);
+                            let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
+                            {
+                                let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+                                sh.io_parked.push(IoParked { fd, fiber, pending_write: None, handle, deadline: crate::builtins::read_deadline(handle) });
+                                sh.running -= 1;
+                            }
+                            let (l, c2) = pos!();
+                            if !self.poll_next(l, c2)? { self.stop = true; }
+                        }
+                    }
                 }
                 // rayreq #250: STARTTLS de cliente sin verificar el certificado.
                 OpCode::TlsUpgradeInsecure => {
@@ -5091,10 +5111,13 @@ impl<'a> Vm<'a> {
                     HeapValue::Str(lib) => self.push(HeapValue::Bool(crate::ffi::library_available(&lib))),
                     _ => unreachable!("the checker guarantees a string"),
                 },
-                OpCode::FfiPtr => match self.pop() {
-                    HeapValue::Int(a) => self.push(HeapValue::Ptr(a)),
-                    _ => unreachable!("the checker guarantees an int"),
-                },
+                OpCode::FfiNull => self.push(HeapValue::Ptr(0)),
+                OpCode::FfiOffset => {
+                    let n = match self.pop() { HeapValue::Int(n) => n, _ => unreachable!("the checker guarantees an int") };
+                    let p = match self.pop() { HeapValue::Ptr(p) => p, _ => unreachable!("the checker guarantees a ptr") };
+                    let q = crate::ffi::offset_ptr(p, n).map_err(|m| runtime_error(pos!().0, pos!().1, &m))?;
+                    self.push(HeapValue::Ptr(q));
+                }
                 OpCode::FfiAddr => match self.pop() {
                     HeapValue::Ptr(p) => self.push(HeapValue::Int(p)),
                     _ => unreachable!("the checker guarantees a ptr"),

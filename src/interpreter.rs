@@ -1073,6 +1073,14 @@ impl<'a> Interpreter<'a> {
                             };
                         }
                     }
+                    if name == "__ffi_offset" {
+                        if let (Value::Ptr(p), Value::Int(n)) = (&values[0], &values[1]) {
+                            return match crate::ffi::offset_ptr(*p, *n) {
+                                Ok(q) => Ok(Value::Ptr(q)),
+                                Err(m) => Err(runtime_error(callee.line, callee.col, &m)),
+                            };
+                        }
+                    }
                     // raysql #303/#299: los fallos con POSICIÓN de los primitivos nuevos (eval_builtin
                     // no puede fallar): bounds de remove_at/insert_at y el modo de format_float.
                     if name == "__array_remove_at" || name == "__array_insert_at" {
@@ -3151,10 +3159,7 @@ impl<'a> Interpreter<'a> {
                 Value::Str(lib) => Value::Bool(crate::ffi::library_available(lib)),
                 _ => unreachable!("the checker guarantees a string"),
             },
-            "__ffi_ptr" => match &values[0] {
-                Value::Int(a) => Value::Ptr(*a),
-                _ => unreachable!("the checker guarantees an int"),
-            },
+            "__ffi_null" => Value::Ptr(0),
             "__ffi_addr" => match &values[0] {
                 Value::Ptr(p) => Value::Int(*p),
                 _ => unreachable!("the checker guarantees a ptr"),

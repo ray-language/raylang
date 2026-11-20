@@ -1551,11 +1551,12 @@ impl Transpiler {
                     out.push_str(" == 0)");
                 }
                 "offset" => {
-                    out.push_str("i64::wrapping_add(");
+                    // NULL no se desplaza (mismo texto que `ffi::offset_ptr`).
+                    out.push_str("{ let __rt_p: i64 = ");
                     self.emit_expr(out, eff[0])?;
-                    out.push_str(", ");
+                    out.push_str("; let __rt_n: i64 = ");
                     self.emit_expr(out, eff[1])?;
-                    out.push(')');
+                    out.push_str("; if __rt_p == 0 { panic!(\"ffi.offset: the pointer is NULL\") } __rt_p.wrapping_add(__rt_n) }");
                 }
                 "addr" => {
                     out.push('(');

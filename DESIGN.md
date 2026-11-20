@@ -21324,6 +21324,14 @@ escribir en memoria de C ya se hace pasando un `bytes` como argumento.
 la necesidad de `null()` en las firmas que lo declaran, y deja a la vista cuáles lo admiten.
 Los helpers little-endian que pedía el hallazgo ya existen en `std/binary`.
 
+**De la revisión previa a 1.27.108.** La primera versión tenía dos builtins que reinterpretaban,
+`__ffi_ptr(int) -> ptr` y `__ffi_addr`, y `offset` era aritmética en raylang. Con eso
+`ffi.read(ffi.offset(ffi.null(), 4096), 8)` daba un segfault en un programa sin ninguna
+`extern`, y los builtins `__…` son llamables desde código de usuario. Rompía el contrato de
+SECURITY.md: declarar una `extern` es la única salida de las garantías. Ahora ningún builtin
+convierte un entero en puntero (`__ffi_null` es nulario) y `__ffi_offset` rechaza NULL, así que
+todo puntero no NULL desciende de uno que devolvió una `extern`.
+
 ## 466. Bounds sobre traits genéricos (raysolve #357, nov 2026)
 
 `trait Source<V>` se podía declarar e implementar desde M40.2, pero no usar de forma genérica:
@@ -21377,4 +21385,20 @@ objetivo, y pisaba el `V` del impl que el objetivo acababa de traer. Era anterio
 genéricos, pero ellos lo vuelven fácil de pisar. Ahora la σ del trait se aplica antes que
 `Self` al comparar firmas y al bajar los métodos por defecto (escritos en términos del trait),
 y en los métodos que escribe el impl (en términos del impl) sus propios parámetros la tapan.
+
+**De la revisión previa a 1.27.108.** Tres sitios donde el argumento del bound no llegaba:
+- Un impl genérico con un bound genérico propio (`impl<V, S: Source<V>> Source<[V]> for Pair<V,
+  S>`), elegido por diccionario. `GenImpl` no guardaba los argumentos y el closure anidado se
+  sintetizaba sin compararlos: `first(Pair { a: "s", b: Seven { } })` pasaba y la VM moría con
+  un ICE. Ahora `synth_dict_closure` los unifica como una llamada directa.
+- Un parámetro acotado que solo se fija por el tipo esperado
+  (`let f: fn(Seven) -> int = drain("str")`): la unificación de bounds corría antes de sembrar
+  desde el esperado. Se repite después.
+- El bound de un MÉTODO que menciona el parámetro del trait (`fn feed<K: Sink<V>>` en
+  `trait Feed<V>`): al bajar el método a función, los argumentos del bound no recibían la σ del
+  trait y quedaba un `V` sin declarar.
+
+El bound a secas sobre un trait genérico (`S: Source`) se aceptaba en 1.27.107 y dejaba el
+parámetro sin resolver; ahora es error, igual que `impl Source for X`. Se mantiene el rechazo y
+va anotado en el CHANGELOG como cambio que puede romper código.
 

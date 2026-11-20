@@ -236,3 +236,31 @@ fn an_impl_type_parameter_may_share_the_name_of_the_trait_parameter() {
         assert_eq!(String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout), expected);
     }
 }
+
+/// De la revisión previa a 1.27.108. Tres sitios donde el argumento del bound no se comprobaba o
+/// no se sustituía: el bound de un impl genérico elegido por diccionario, un parámetro acotado
+/// que sale del tipo ESPERADO, y el bound de un método que menciona el parámetro del trait.
+#[test]
+fn bound_arguments_are_checked_through_dictionaries_expected_types_and_method_bounds() {
+    let d = tmp("review");
+    let run = |name: &str, body: &str| {
+        std::fs::write(d.join(name), format!("{TRAITS}fn first<V, S: Source<V>>(s: S) -> V {{ s.get() }}\n\n{body}\n")).unwrap();
+        ray(&d, &["run", name])
+    };
+    let pair = "struct Pair<V, S> { a: V, b: S }\nimpl<V, S: Source<V>> Source<[V]> for Pair<V, S> {\n    fn get(self) -> [V] { [self.a, self.b.get()] }\n    fn put(self, v: [V]) -> int { 0 }\n}\n";
+    let (out, err, code) = run("dict_ok.ray", &format!("{pair}fn main() {{ print(first(Pair {{ a: 1, b: Seven {{ }} }})); }}"));
+    assert_eq!((out.as_str(), code), ("[1, 7]\n", 0), "{err}");
+    // Antes: pasaba el checker y la VM moría con un ICE al indexar un int como string.
+    let (_o, err, code) = run("dict_bad.ray", &format!("{pair}fn main() {{ let xs: [string] = first(Pair {{ a: \"s\", b: Seven {{ }} }}); print(xs[1].len()); }}"));
+    assert_eq!(code, 65, "{err}");
+    assert!(err.contains("Seven implements 'Source<int>', but the impl for Pair<string, Seven> requires 'S: Source<string>'"), "{err}");
+    let drain = "fn drain<V, S: Source<V>>(v: V) -> fn(S) -> int { fn(s: S) -> int { s.put(v) } }\n";
+    let (out, err, code) = run("expected_ok.ray", &format!("{drain}fn main() {{ let f: fn(Seven) -> int = drain(5); print(f(Seven {{ }})); }}"));
+    assert_eq!((out.as_str(), code), ("5\n", 0), "{err}");
+    let (_o, err, code) = run("expected_bad.ray", &format!("{drain}fn main() {{ let f: fn(Seven) -> int = drain(\"str\"); print(f(Seven {{ }})); }}"));
+    assert_eq!(code, 65, "{err}");
+    assert!(err.contains("Seven implements 'Source<int>', but 'drain' requires 'S: Source<string>'"), "{err}");
+    std::fs::write(d.join("method.ray"), "trait Sink<V> { fn take(self, v: V) -> int; }\ntrait Feed<V> {\n    fn get(self) -> V;\n    fn feed<K: Sink<V>>(self, k: K) -> int { k.take(self.get()) }\n}\nstruct Seven { }\nimpl Feed<int> for Seven { fn get(self) -> int { 7 } }\nstruct Acc { }\nimpl Sink<int> for Acc { fn take(self, v: int) -> int { v + 1 } }\nfn main() { print(Seven { }.feed(Acc { })); }\n").unwrap();
+    let (out, err, code) = ray(&d, &["run", "method.ray"]);
+    assert_eq!((out.as_str(), code), ("8\n", 0), "{err}");
+}

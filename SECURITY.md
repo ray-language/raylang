@@ -251,7 +251,12 @@ La **única** vía por la que un programa raylang puede salirse de las garantía
 **Declarar una función `extern` ES el acto que asume la responsabilidad de seguridad** (no hay un bloque
 `unsafe {}` por llamada porque la declaración ya lo es). Todo lo que ocurra al otro lado de esa frontera
 (corrupción de memoria, UB, etc.) **es responsabilidad de quien la declara**, exactamente como el `unsafe`
-de Rust. El *playground* web y las builds `wasm32` **no** incluyen FFI (ni red/TLS/cripto), y un
+de Rust. Los punteros de `std/ffi` (rayserial #394) viven dentro de esa misma frontera: un `ptr`
+que no sea NULL solo puede salir de una `extern` —`ffi.null()` da NULL, `ffi.offset` sobre NULL es
+error de ejecución y ningún builtin convierte un entero en `ptr`—, y `ffi.read(p, n)` sobre NULL
+es error. Un programa sin `extern` no puede, por tanto, leer una dirección; uno que sí la declara
+responde de los punteros que recibe y de lo que lee de ellos.
+El *playground* web y las builds `wasm32` **no** incluyen FFI (ni red/TLS/cripto), y un
 binario construido sin la feature `ffi` no puede cargar código nativo en absoluto.
 
 ### Auto-actualización (`std/update`, M247)
@@ -316,7 +321,9 @@ documentada:
   librería para saber si está; cargarla ejecuta sus inicializadores, el mismo contrato que llamarla).
   El binario nativo emite para `ffi.library_available` un `dlopen`/`dlclose` (unix) o
   `LoadLibraryA`/`FreeLibrary` (Windows) declarados a mano sobre una `CString` propia viva durante la
-  llamada (`__ray_ffi_lib_available`).
+  llamada (`__ray_ffi_lib_available`). `read_ptr` (rayserial #394, `std/ffi.read`) hace un
+  `slice::from_raw_parts` sobre la dirección de un `ptr` no NULL y copia: la dirección viene de una
+  `extern` y se confía como su firma; el nativo emite el mismo bloque en línea.
 - **`src/builtins.rs` (`read_file_arc_str`, M433) y el runtime emitido del nativo (`__ray_read_file`,
   `__ray_join`)** — un `Arc<[u8]>`/`Rc<[u8]>` nacido a cero (`new_zeroed_slice().assume_init()`: todo
   octeto a cero es un `u8` válido) y, tras validar UTF-8 con `str::from_utf8`, el cast
@@ -467,6 +474,13 @@ documentada:
   de `AcceleratorKeyPressed`, que corre ahí); la tabla de aceleradores es propia y se destruye con la
   ventana; `GetKeyState` solo consulta modificadores.
   - M226: el esquema `ray://app/…` (`WKURLSchemeHandler`) sirve la interfaz y los archivos montados **sin socket**: no hay puerto local que otro proceso pueda alcanzar ni permiso de red local en el bundle; los montajes de directorio se canonicalizan y `..` nunca sale de ellos (403 antes de tocar el disco); solo GET/HEAD; sin cabeceras CORS, así que una página de otro origen no puede leer lo servido.
+  - Submenús y documentos recientes (ray-daw #453): en macOS, los mismos `objc_msgSend` a firma
+    exacta sobre `NSMenu`/`NSMenuItem` (`setSubmenu:`, recorrido recursivo `collect_items` en el
+    hilo principal) y `NSDocumentController` (`noteNewRecentDocumentURL:`,
+    `clearRecentDocuments:`). En Linux, `gtk_recent_manager_get_default`/`add_item` y
+    `g_filename_to_uri`/`g_free` resueltos por `dlsym` y casteados a la firma del header, sobre
+    `CString` propias vivas durante la llamada. En Windows, `SHAddToRecentDocs(SHARD_PATHW, …)`
+    con un búfer UTF-16 propio terminado en NUL.
 - **`crates/ray-runtime/src/keychain.rs`** — el llavero del sistema (`std/keychain`, M266), **sin
   crates**: en macOS, `SecItemAdd`/`SecItemCopyMatching`/`SecItemUpdate`/`SecItemDelete` con
   diccionarios CoreFoundation propios (RAII sobre `CFRelease`, lectura de los estáticos `kSec*`);

@@ -90,6 +90,9 @@ struct GenImpl {
     target: Type,
     /// Bounds del impl: deciden si el diccionario es plano o un closure anidado.
     bounds: Vec<(String, String)>,
+    /// Argumentos (resueltos) de los bounds genéricos del impl (`impl<V, S: Source<V>> …`): al
+    /// elegir este impl por diccionario se verifican contra el tipo concreto.
+    bound_args: BoundArgs,
 }
 
 /// Información de una variable en un ámbito.
@@ -621,7 +624,9 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
             let mut bounds = imp.bounds.clone();
             bounds.extend(m.bounds.iter().cloned());
             let mut bound_args = imp.bound_args.clone();
-            bound_args.extend(m.bound_args.iter().cloned());
+            bound_args.extend(m.bound_args.iter().map(|(tp, tr, args)| {
+                (tp.clone(), tr.clone(), args.iter().map(|a| subst_named(&subst_self(a, &imp.target), &impl_sigma)).collect())
+            }));
             let mut body = m.body.clone();
             if !impl_sigma.is_empty() { subst_named_block(&mut body, &impl_sigma); }
             program.functions.push(Function {
@@ -662,7 +667,9 @@ fn prepare_program(program: &mut Program) -> Result<PreludeOrigin, TypeError> {
             let mut bounds = imp.bounds.clone();
             bounds.extend(tm.bounds.iter().cloned());
             let mut bound_args = imp.bound_args.clone();
-            bound_args.extend(tm.bound_args.iter().cloned());
+            bound_args.extend(tm.bound_args.iter().map(|(tp, tr, args)| {
+                (tp.clone(), tr.clone(), args.iter().map(|a| subst_self(&subst_named(a, &trait_sigma), &imp.target)).collect())
+            }));
             program.functions.push(Function {
                 annotations: Vec::new(),
                 is_pub: false,

@@ -73,3 +73,16 @@ fn generic_arguments_are_inferred_in_any_order() {
     assert_eq!(code, 65);
     assert!(err.contains("could not infer the type parameter 'V' of 'empty'"), "{err}");
 }
+
+/// De la revisión previa a 1.27.108 (raysolve #358): el mapa vacío `[:]` también espera a que los
+/// demás argumentos fijen el parámetro de tipo, como `[]`.
+#[test]
+fn an_empty_map_argument_waits_for_the_others_like_an_empty_array() {
+    let d = tmp("empty_map_arg");
+    std::fs::write(d.join("prog.ray"), "fn size<V>(m: Map<string, V>, v: V) -> int { m.len() }\nfn main() { print(size([:], 1)); }\n").unwrap();
+    for args in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let (out, err, code) = ray(&d, args);
+        assert_eq!(code, 0, "{args:?}: {err}");
+        assert_eq!(out, "0\n", "{args:?}");
+    }
+}

@@ -736,7 +736,12 @@ impl Checker {
             if !imp.type_params.is_empty() {
                 self.generic_impls.insert(
                     (key.clone(), imp.trait_name.clone()),
-                    GenImpl { type_params: imp.type_params.clone(), target: target.clone(), bounds: imp.bounds.clone() },
+                    GenImpl {
+                        type_params: imp.type_params.clone(),
+                        target: target.clone(),
+                        bounds: imp.bounds.clone(),
+                        bound_args: self.resolve_bound_args(&imp.bounds, &imp.bound_args, imp.line, imp.col)?,
+                    },
                 );
             }
 
@@ -4237,6 +4242,9 @@ impl Checker {
                 }
             }
         }
+        // Un parámetro acotado que salió del tipo esperado (`let f: fn(Seven) -> int = drain(…)`)
+        // también debe casar con los argumentos de su bound.
+        self.unify_bound_args(bound_args, &mut sigma, label, line, col)?;
         // Todos los parámetros de tipo deben haber quedado determinados.
         for tp in type_params {
             if !sigma.contains_key(tp) {
@@ -4527,6 +4535,9 @@ impl Checker {
         // `Caja<int>` → T=int).
         let mut sigma_impl: HashMap<String, Type> = HashMap::new();
         let _ = unify(&gi.target, concrete, &mut sigma_impl);
+        // Los bounds genéricos del impl (`S: Source<V>`) exigen ESOS argumentos al tipo concreto,
+        // igual que en una llamada directa al método.
+        self.unify_bound_args(&gi.bound_args, &mut sigma_impl, &format!("the impl for {concrete}"), line, col)?;
         // Parámetros del closure: `self: concrete`, luego el resto del método (Self→concrete).
         let mut params = Vec::new();
         let mut fwd_args = Vec::new();
@@ -4774,5 +4785,7 @@ fn mentions_type(msg: &str, ty: &str) -> bool {
 /// `Option.None`), y no un error de tipos de verdad? Quien lo recibe puede reintentar con más
 /// contexto.
 pub(super) fn is_inference_error(e: &TypeError) -> bool {
-    e.msg.starts_with("could not infer the type parameter") || e.msg.starts_with("cannot infer the type of [] here")
+    e.msg.starts_with("could not infer the type parameter")
+        || e.msg.starts_with("cannot infer the type of [] here")
+        || e.msg.starts_with("cannot infer the type of [:] here")
 }

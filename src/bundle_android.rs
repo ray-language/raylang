@@ -2663,7 +2663,30 @@ pub fn write_label(dir: &Path, label: &str) -> Result<(), String> {
     std::fs::write(&p, strings_xml(label)).map_err(|e| format!("{}: {e}", p.display()))
 }
 
+/// El texto de un `<string>` de recursos de Android: escapes de XML y los propios de aapt2
+/// (`'`, `"`, `\\`, y un `@`/`?` inicial, que serían una referencia).
+fn android_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len() + 8);
+    for (i, c) in text.chars().enumerate() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '\'' => out.push_str("\\'"),
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '@' | '?' if i == 0 => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 fn strings_xml(name: &str) -> String {
+    let name = android_string(name);
     format!(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<resources>\n  <string name=\"app_name\">{name}</string>\n</resources>\n"
     )
@@ -2816,6 +2839,14 @@ pub fn write_project(
 
 #[cfg(test)]
 mod tests {
+    /// Revisión de 1.27.109: `[app] display_name` es texto libre y va a strings.xml.
+    #[test]
+    fn the_app_label_is_escaped_for_android_resources() {
+        assert_eq!(super::android_string("Tom & Jerry's <Notes>"), "Tom &amp; Jerry\\'s &lt;Notes&gt;");
+        assert_eq!(super::android_string("@home"), "\\@home");
+        assert!(super::strings_xml("A & B").contains("<string name=\"app_name\">A &amp; B</string>"));
+    }
+
     use super::*;
 
     #[test]

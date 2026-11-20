@@ -89,3 +89,42 @@ fn a_headless_notification_waits_while_the_permission_is_undecided() {
     assert_eq!(run(Some("granted")), "true\n0\nResult.Ok(granted)\n1\n");
     assert_eq!(run(Some("denied")), "true\n0\nResult.Ok(denied)\n0\n");
 }
+
+/// Revisión de 1.27.109: (1) la colisión de #456 sobrevivía con un pipeline dentro de la
+/// interpolación (la llamada está en la posición del lado derecho y su primer argumento en la de
+/// la envoltura); (2) `q.to_string()` sobre un tipo con `Show` usa su `show`, como `to_string(q)`;
+/// (3) `to_string` como valor sobre un tipo con `Show` se rechaza en vez de ignorar el `show`.
+#[test]
+fn to_string_follows_the_user_show_in_every_form() {
+    let d = tmp("to_string_forms");
+    let src = "struct Q {\n    n: int,\n}\n\nimpl Show for Q {\n    fn show(self) -> string {\n        \"Q!${self.n}\"\n    }\n}\n\nfn wrap(s: string) -> string {\n    \"<\" + s + \">\"\n}\n\nfn mk(s: string) -> Q {\n    Q { n: s.len() }\n}\n\nfn main() -> int {\n    let q = Q { n: 9 };\n    print(\"${to_string(q) |> wrap}\");\n    print(\"${to_string(q) |> mk}\");\n    print(q.to_string());\n    print(\"${q.to_string()}\");\n    0\n}\n";
+    std::fs::write(d.join("prog.ray"), src).unwrap();
+    let expected = "<Q!9>\nQ!3\nQ!9\nQ!9\n";
+    for args in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let (out, err, code) = ray(&d, args);
+        assert_eq!(code, 0, "{args:?}: {err}");
+        assert_eq!(out, expected, "{args:?}");
+    }
+    let (out, err, code) = ray(&d, &["build", "--native", "prog.ray", "-o", "prog"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let native = Command::new(d.join("prog")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&native.stdout), expected);
+
+    let bad = "struct Q {\n    n: int,\n}\n\nimpl Show for Q {\n    fn show(self) -> string {\n        \"Q\"\n    }\n}\n\nfn main() -> int {\n    let qs = [Q { n: 1 }];\n    print(qs.map(to_string));\n    0\n}\n";
+    std::fs::write(d.join("bad.ray"), bad).unwrap();
+    let (_, err, code) = ray(&d, &["run", "bad.ray"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("Q has its own 'show'; pass a function that calls it"), "{err}");
+}
+
+/// Revisión de 1.27.109: el aviso de variádicas es solo para libc; una función homónima de otra
+/// librería no avisa.
+#[test]
+fn a_same_named_function_of_another_library_is_not_a_libc_variadic() {
+    let d = tmp("variadic_other_lib");
+    let src = "extern \"mylib\" {\n    fn open(a: int, b: int, c: int) -> int;\n}\n\nfn main() -> int {\n    0\n}\n";
+    std::fs::write(d.join("prog.ray"), src).unwrap();
+    let (_, err, code) = ray(&d, &["check", "prog.ray"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(!err.contains("variadic"), "{err}");
+}

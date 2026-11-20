@@ -4802,3 +4802,17 @@ Los bounds `S: Source<V>` están hechos (DESIGN §466). Tres cosas quedaron fuer
   cada llamada. **Impacto**: rompe la regla «el tipo determina los argumentos», sobre la que se
   apoya la inferencia de §466. No hacerlo sin un caso real.
 
+## 129. La forma por defecto de un struct con un campo tupla difiere entre la VM y nativo
+
+Visto en la revisión de 1.27.109. `struct H { t: (int, string) }` sin `Show`: `print(h)` (y desde
+1.27.109 `to_string(h)` y `"${h}"`) da `H { t: [1, z] }` en la VM y el intérprete, y
+`H { t: (1, z) }` en nativo. En el runtime de la VM una tupla es un arreglo (erasure), y el
+formateador por defecto no tiene el tipo. `print` de una tupla suelta ya se arregló con el
+diccionario `Show` sintetizado (M316); falta lo mismo para un struct o un enum SIN `Show` cuyos
+campos contienen tuplas.
+
+**Propuesta**: que el checker sintetice el `show` por defecto (el que genera `@derive(Show)`)
+para un struct o un enum sin `Show` cuando alguno de sus campos, transitivamente, contiene una
+tupla, y lo use en `print`/`to_string`/interpolación. **Impacto**: aditivo; cambia la salida de
+la VM solo en ese caso. Mientras tanto, `@derive(Show)` da la misma forma en los tres motores.
+

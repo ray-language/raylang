@@ -80,7 +80,8 @@ const VARIADIC: &[(&str, usize)] = &[
 /// no un error. Solo el módulo de entrada, como el resto de avisos.
 pub fn variadic_externs(program: &Program) -> Vec<Warning> {
     let mut out = Vec::new();
-    for e in program.externs.iter().filter(|e| !e.name.contains("::")) {
+    // Solo libc (`extern "c"`): una función homónima de otra librería no es la variádica.
+    for e in program.externs.iter().filter(|e| !e.name.contains("::") && e.lib == "c") {
         if let Some((_, fixed)) = VARIADIC.iter().find(|(n, _)| *n == e.symbol)
             && e.params.len() > *fixed
         {
@@ -91,7 +92,8 @@ pub fn variadic_externs(program: &Program) -> Vec<Warning> {
                 ),
                 line: e.line,
                 col: e.col,
-                len: e.symbol.chars().count(),
+                // La posición del extern es la de su `fn`: el subrayado cubre `fn nombre`.
+                len: 3 + e.symbol.chars().count(),
             });
         }
     }

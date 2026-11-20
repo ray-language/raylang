@@ -52,6 +52,60 @@ const PURE: &[(&str, &str)] = &[
     ("to_bytes", "new bytes"),
 ];
 
+/// Funciones de libc VARIÁDICAS en C y cuántos parámetros fijos tienen. `open` con dos argumentos
+/// no usa la parte variádica, así que solo se avisa cuando la declaración pasa de los fijos.
+const VARIADIC: &[(&str, usize)] = &[
+    ("fcntl", 2),
+    ("ioctl", 2),
+    ("open", 2),
+    ("openat", 3),
+    ("printf", 1),
+    ("fprintf", 2),
+    ("dprintf", 2),
+    ("sprintf", 2),
+    ("snprintf", 3),
+    ("scanf", 1),
+    ("sscanf", 2),
+    ("fscanf", 2),
+    ("syslog", 2),
+    ("execl", 2),
+    ("execlp", 2),
+    ("execle", 2),
+];
+
+/// rayserial #460: una `extern fn` que declara con aridad fija una función variádica de libc
+/// (`fcntl(fd, cmd, arg)`, `ioctl(fd, request, arg)`). En Apple arm64 el argumento variádico viaja
+/// por la pila y `extern` lo pasa en un registro: la llamada devuelve 0 sin hacer nada o, en la VM,
+/// deja el descriptor con banderas basura. Compila y «funciona» en Linux, así que es un aviso y
+/// no un error. Solo el módulo de entrada, como el resto de avisos.
+pub fn variadic_externs(program: &Program) -> Vec<Warning> {
+    let mut out = Vec::new();
+    for e in program.externs.iter().filter(|e| !e.name.contains("::")) {
+        if let Some((_, fixed)) = VARIADIC.iter().find(|(n, _)| *n == e.symbol)
+            && e.params.len() > *fixed
+        {
+            out.push(Warning {
+                msg: format!(
+                    "`{}` is variadic in C after its first {fixed} parameter(s) and `extern` cannot pass variadic arguments: on Apple arm64 the call does nothing or corrupts the argument (wrap it in a fixed-arity C function)",
+                    e.symbol
+                ),
+                line: e.line,
+                col: e.col,
+                len: e.symbol.chars().count(),
+            });
+        }
+    }
+    out
+}
+
+/// Todos los avisos del programa, **antes** de `check`, en orden de posición.
+pub fn program_warnings(program: &Program) -> Vec<Warning> {
+    let mut out = discarded_results(program);
+    out.extend(variadic_externs(program));
+    out.sort_by_key(|w| (w.line, w.col));
+    out
+}
+
 /// Los avisos de resultado descartado del programa, **antes** de `check` (con solo las funciones
 /// del usuario en `program.functions`, sin el prelude inyectado ni las bajadas de UFCS).
 pub fn discarded_results(program: &Program) -> Vec<Warning> {

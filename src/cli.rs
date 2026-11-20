@@ -7079,7 +7079,7 @@ fn check_or_exit(program: &mut crate::ast::Program, locate: &Locate, multi: bool
 fn check_or_exit_mode(program: &mut crate::ast::Program, locate: &Locate, multi: bool, require_main: bool) {
     // M445 (pepa #321): los avisos se calculan ANTES del check (sobre el programa del usuario, sin
     // prelude ni bajadas) y se imprimen solo si compila — nunca cambian el código de salida.
-    let warnings = checker::discarded_results(program);
+    let warnings = checker::program_warnings(program);
     let print_warnings = || {
         for w in &warnings {
             let (source, name, local, col, len) = locate(w.line, w.col, w.len);

@@ -21515,3 +21515,25 @@ nativo. Los vectores de bsonspec.org siguen saliendo octeto a octeto.
 que inserta mongosh (`NumberDecimal`, `UUID`, `BinData`) se lee con los mismos dígitos, y lo que
 inserta raylang lo imprime mongosh igual que el texto de origen.
 
+## 470. `net/http` streaming con keep-alive y `db/mysql` de bajo nivel (raycrawl #370, raycdc #401, nov 2026)
+
+**`conn_stream` / `pool_stream`.** `stream_with` abría un socket por petición y `Conn` leía el
+cuerpo entero: no había forma de tener un tope de bytes y a la vez reutilizar la conexión (un
+crawler a 6000 páginas/s agotó los puertos efímeros). El `Stream` gana un dueño opcional: sobre
+una `Conn`, el socket pasa al stream mientras dura el cuerpo (la `Conn` queda cerrada, así que
+usarla a la vez abre otro socket en vez de corromper este) y vuelve a ella cuando el cuerpo
+termina limpio y delimitado (Content-Length o chunked, sin `Connection: close`). Cortar antes
+cierra el socket: saltarse un cuerpo sin leer exigiría leerlo, que es justo lo que el tope
+quiere evitar. Con el pool, el hueco se devuelve una sola vez, con la conexión viva o vacío. El
+coste asumido: quien no termina un `pool_stream` deja el hueco ocupado; va en la doc.
+
+**`db/mysql` de bajo nivel.** El hallazgo pedía dos cosas: una conexión cruda y
+`crypto.rsa_oaep_encrypt` en el núcleo. Solo se hizo la primera, porque hace innecesaria la
+segunda: raycdc necesitaba RSA-OAEP para repetir a mano la autenticación `caching_sha2_password`
+de su propia conexión de réplica. Con `command` / `next_packet` sobre la sesión que `db/mysql`
+ya autenticó (su vía RSA es privada y sigue siéndolo), la réplica reutiliza ese login. Se evita
+así meter en `std/crypto` un cifrado RSA que `ring` no ofrece y que habría que escribir sobre
+`std/bigint`. Verificado contra un `mysqld` 8.0.46 real con un usuario `caching_sha2_password`
+sin TLS: registro como réplica y volcado del binlog, con los tipos de evento en el orden que da
+`mysqlbinlog`.
+

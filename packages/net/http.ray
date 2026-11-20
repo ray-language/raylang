@@ -1337,6 +1337,14 @@ pub struct Stream {
     remaining: int,
     idle_ms: int,
     open: bool,
+    // raycrawl #370: un stream sobre una conexión persistente (`conn_stream` / `pool_stream`).
+    // `conn` es la dueña del socket: al terminar el cuerpo limpio se le devuelve; `slots` es el
+    // pool al que vuelve; `reusable` = la respuesta permite seguir (sin `Connection: close`);
+    // `settled` = el hueco del pool ya se devolvió (una sola vez).
+    conn: Option<Conn>,
+    slots: Option<pool.Pool<Conn>>,
+    reusable: bool,
+    settled: bool,
 }
 
 /// Opens a streaming request with a 30 s idle timeout per read (see `stream_with`).
@@ -1393,7 +1401,11 @@ pub fn stream_with(
                         mode: "eof",
                         remaining: 0,
                         idle_ms: idle_timeout_ms,
-                        open: true
+                        open: true,
+                        conn: Option.None,
+                        slots: Option.None,
+                        reusable: false,
+                        settled: false
                     };
                     let wire = match (build_request_conn(method, u, body, hs, "close")) {
                         Result.Ok(w) => w,
@@ -1442,6 +1454,14 @@ fn stream_head(s: Stream, method: string) -> Result<Stream, string> {
             s.headers = head.1;
             s.raw_headers = head.2;
             s.buf = s.buf.sub_bytes(sep + 4, s.buf.len());
+            match (get(s.headers, "connection")) {
+                Option.Some(v) => {
+                    if (v.to_lower().contains("close")) {
+                        s.reusable = false;
+                    }
+                },
+                Option.None => { },
+            }
             // Un cuerpo comprimido no se puede entregar a trozos (no hay gunzip incremental):
             // solo puede pasar si el servidor ignora nuestro Accept-Encoding: identity.
             match (get(s.headers, "content-encoding")) {
@@ -1456,7 +1476,7 @@ fn stream_head(s: Stream, method: string) -> Result<Stream, string> {
             // Delimitación (las mismas reglas que conn_leer_respuesta, RFC 9112): sin cuerpo →
             // hecho; chunked → framing incremental; Content-Length → cuenta atrás; si no → EOF.
             if (method == "HEAD" || s.status < 200 || s.status == 204 || s.status == 304) {
-                stream_close(s);
+                stream_finish(s);
                 s.mode = "done";
                 return Result.Ok(s);
             }
@@ -1485,7 +1505,7 @@ fn stream_head(s: Stream, method: string) -> Result<Stream, string> {
                             s.remaining = n;
                             s.mode = "length";
                             if (n == 0) {
-                                stream_close(s);
+                                stream_finish(s);
                                 s.mode = "done";
                             }
                         },
@@ -1541,7 +1561,7 @@ pub fn stream_read(s: Stream) -> Result<Option<bytes>, string> {
         }
         if (s.mode == "length") {
             if (s.remaining == 0) {
-                stream_close(s);
+                stream_finish(s);
                 s.mode = "done";
                 return Result.Ok(Option.None);
             }
@@ -1659,7 +1679,7 @@ pub fn stream_read(s: Stream) -> Result<Option<bytes>, string> {
                 let line_len: int = nl2;
                 s.buf = s.buf.sub_bytes(nl2 + 2, s.buf.len());
                 if (line_len == 0) {
-                    stream_close(s);
+                    stream_finish(s);
                     s.mode = "done";
                     return Result.Ok(Option.None);
                 }
@@ -1702,12 +1722,157 @@ fn stream_need(s: Stream, n: int) -> Result<bool, string> {
 }
 
 /// Closes a stream early (e.g. the consumer has seen enough). Safe to call twice; after a
-/// clean `Ok(None)` from `stream_read` it is already closed.
+/// clean `Ok(None)` from `stream_read` it is already closed. On a stream from `conn_stream` /
+/// `pool_stream` an early close drops the socket (the unread body cannot be skipped): the `Conn`
+/// reconnects on its next request and the pool slot goes back empty.
 pub fn stream_close(s: Stream) {
     if (s.open) {
         close(s.h);
     }
     s.open = false;
+    stream_settle(s, false);
+}
+
+// Fin LIMPIO del cuerpo (se leyó entero y está delimitado): sobre una conexión persistente el
+// socket vuelve a su `Conn` en vez de cerrarse. Si la `Conn` se usó mientras tanto (abrió otro
+// socket), el del stream sobra y se cierra.
+fn stream_finish(s: Stream) {
+    if (!s.open || !s.reusable) {
+        stream_close(s);
+        return;
+    }
+    match (s.conn) {
+        Option.Some(c) => {
+            if (c.open) {
+                stream_close(s);
+                return;
+            }
+            c.h = s.h;
+            c.buf = s.buf;
+            c.open = true;
+            s.open = false;
+            stream_settle(s, true);
+        },
+        Option.None => stream_close(s),
+    }
+}
+
+// Devuelve el hueco del pool, una sola vez: con la conexión si quedó viva, vacío si no.
+fn stream_settle(s: Stream, alive: bool) {
+    if (s.settled) {
+        return;
+    }
+    s.settled = true;
+    match (s.slots) {
+        Option.Some(slots) => match (s.conn) {
+            Option.Some(c) => {
+                if (alive) {
+                    pool.release(slots, c);
+                } else {
+                    pool.release_empty(slots);
+                }
+            },
+            Option.None => pool.release_empty(slots),
+        },
+        Option.None => { },
+    }
+}
+
+/// A streaming request over a persistent connection: like `stream_with`, but the socket is
+/// the `Conn`'s. When the body has been read to the end (`stream_read` returned `Ok(None)`) the
+/// connection is ready for the next request — no new socket, no TIME_WAIT pile-up when
+/// crawling one host. Closing early (`stream_close`) drops the socket and the `Conn`
+/// reconnects on its next use, so cap a download by reading up to your limit and then closing.
+/// `path` is relative to the Conn's server; `idle_timeout_ms` bounds each read (`<= 0` = none).
+/// The `Conn` must not be used for another request until the stream ends. A reused connection
+/// found dead before any response byte is reconnected and the request retried once.
+pub fn conn_stream(
+    c: Conn,
+    method: string,
+    path: string,
+    body: bytes,
+    headers: Map<string, string>,
+    idle_timeout_ms: int
+) -> Result<Stream, string> {
+    let reused: bool = c.open;
+    match (conn_stream_attempt(c, method, path, body, headers, idle_timeout_ms)) {
+        Result.Ok(s) => Result.Ok(s),
+        Result.Err(e) => {
+            if (reused && e == err_dropped()) {
+                conn_stream_attempt(c, method, path, body, headers, idle_timeout_ms)
+            } else {
+                Result.Err(e)
+            }
+        },
+    }
+}
+
+fn conn_stream_attempt(
+    c: Conn,
+    method: string,
+    path: string,
+    body: bytes,
+    headers: Map<string, string>,
+    idle_timeout_ms: int
+) -> Result<Stream, string> {
+    // Como `conn_attempt`: unos octetos recibidos antes de pedir no son la respuesta (raysec #244).
+    if (c.open && c.buf.len() > 0) {
+        conn_close(c);
+    }
+    if (!c.open) {
+        let _ = conn_reopen(c)?;
+    }
+    var hs: Map<string, string> = Map.new();
+    for name in headers.keys() {
+        hs.insert(name, headers.get_or(name, ""));
+    }
+    if (!has_header(hs, "accept-encoding")) {
+        hs.insert("Accept-Encoding", "identity");
+    }
+    let u = Url { host: c.host, port: c.port, path: path, tls: c.tls };
+    let wire = build_request_conn(method, u, body, hs, "keep-alive")?;
+    // El socket pasa al stream: la `Conn` queda cerrada hasta que el cuerpo termine limpio.
+    let s = Stream {
+        h: c.h,
+        buf: b"",
+        status: 0,
+        headers: Map.new(),
+        raw_headers: [],
+        mode: "eof",
+        remaining: 0,
+        idle_ms: idle_timeout_ms,
+        open: true,
+        conn: Option.Some(c),
+        slots: Option.None,
+        reusable: true,
+        settled: false
+    };
+    c.open = false;
+    match (net.socket_write_bytes(s.h, wire)) {
+        Result.Err(_) => {
+            stream_close(s);
+            Result.Err(err_dropped())
+        },
+        Result.Ok(_) => match (stream_head(s, method)) {
+            Result.Ok(ready) => {
+                // Un cuerpo delimitado por EOF consume la conexión.
+                if (ready.mode == "eof") {
+                    ready.reusable = false;
+                }
+                Result.Ok(ready)
+            },
+            Result.Err(e) => {
+                // Ni un octeto de respuesta: el servidor había cerrado la conexión en el ocio.
+                let dropped = s.buf.len() == 0 && s.status == 0;
+                stream_close(s);
+                if (dropped) {
+                    Result.Err(err_dropped())
+                } else {
+                    Result.Err(e)
+                }
+            },
+        },
+    }
 }
 
 // ── Pool keep-alive por host (M318, findings #69) ──────────────────────────────────────────
@@ -1792,6 +1957,67 @@ pub fn pool_request_bytes(
             // perezosamente en el siguiente uso.
             pool.release(p.slots, conn);
             Result.Ok(r)
+        },
+        Result.Err(e) => {
+            conn_close(conn);
+            pool.release_empty(p.slots);
+            Result.Err(e)
+        },
+    }
+}
+
+/// A streaming request through the pool (see `conn_stream`): the connection goes back to the
+/// pool when the body has been read to the end, and its slot is freed empty when the stream is
+/// closed early or fails. ALWAYS finish the stream — read until `Ok(None)` or call
+/// `stream_close` — or the slot stays taken. `idle_timeout_ms` bounds each read and the connect.
+pub fn pool_stream(
+    p: Pool,
+    method: string,
+    url: string,
+    body: bytes,
+    headers: Map<string, string>,
+    idle_timeout_ms: int
+) -> Result<Stream, string> {
+    let u = parse_url(url)?;
+    let base = if (u.tls) { "https://" } else { "http://" } + u.host + ":" + to_string(u.port);
+    let slot = pool.acquire(p.slots)?;
+    let conn: Conn = match (slot) {
+        pool.Slot.Ready(c) => {
+            if (c.host == u.host && c.port == u.port && c.tls == u.tls) {
+                c
+            } else {
+                conn_close(c);
+                match (connect_timeout(base, connect_ms(idle_timeout_ms))) {
+                    Result.Ok(c2) => c2,
+                    Result.Err(e) => {
+                        pool.release_empty(p.slots);
+                        return Result.Err(e);
+                    },
+                }
+            }
+        },
+        pool.Slot.Empty => match (connect_timeout(base, connect_ms(idle_timeout_ms))) {
+            Result.Ok(c2) => c2,
+            Result.Err(e) => {
+                pool.release_empty(p.slots);
+                return Result.Err(e);
+            },
+        },
+    };
+    match (conn_stream(conn, method, u.path, body, headers, idle_timeout_ms)) {
+        Result.Ok(s) => {
+            if (s.settled || !s.open) {
+                // Sin cuerpo (204, HEAD, Content-Length: 0): ya terminó; el hueco vuelve ahora.
+                if (conn.open) {
+                    pool.release(p.slots, conn);
+                } else {
+                    pool.release_empty(p.slots);
+                }
+            } else {
+                s.slots = Option.Some(p.slots);
+                s.settled = false;
+            }
+            Result.Ok(s)
         },
         Result.Err(e) => {
             conn_close(conn);

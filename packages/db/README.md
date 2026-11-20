@@ -25,6 +25,15 @@ Dentro del monorepo de raylang, los ejemplos y tests pueden usar la ruta (`db = 
 
 ### `db/mysql` (M53.1)
 
+0.10.0 (raycdc #401): **acceso de bajo nivel a la sesión** para los comandos que el cliente no
+envuelve (una réplica: `COM_REGISTER_SLAVE`, `COM_BINLOG_DUMP`). `command(c, payload)` envía un
+comando crudo (el octeto de comando y sus argumentos) sobre la sesión YA autenticada, sin leer
+la respuesta; `next_packet(c) -> Result<bytes, string>` lee el siguiente paquete (sin su
+cabecera), las veces que el comando responda; `packet_error(p) -> Option<string>` da el mensaje
+de un paquete ERR; `socket(c)` es el handle para `net.set_read_timeout`. Quien escribe una
+réplica ya no repite el handshake ni la autenticación (`caching_sha2_password` con RSA
+incluido): conecta con `mysql.connect` y sigue con `command`.
+
 Cliente del protocolo wire de MySQL (handshake v10 + `COM_QUERY` en protocolo de texto). Desde
 0.1.2 el búfer de lectura es `bytes` y se compacta: una conexión de larga vida (un pool) ya no
 retiene lo que leyó.

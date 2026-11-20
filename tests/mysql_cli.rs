@@ -138,6 +138,25 @@ fn command_phase<S: Read + Write>(s: &mut S) {
         s.read_exact(&mut payload).unwrap();
         match payload.first() {
             Some(1) => return, // COM_QUIT
+            Some(0x0e) => {
+                // COM_PING (raycdc #401, vía `mysql.command`): un OK.
+                s.write_all(&pkt(1, &[0x00, 0, 0, 0, 0, 0, 0])).unwrap();
+                let _ = s.flush();
+            }
+            Some(0x12) => {
+                // COM_BINLOG_DUMP de juguete: tres "eventos" (0x00 + un octeto) y un EOF.
+                for (seq, n) in [(1u8, 7u8), (2, 8), (3, 9)] {
+                    s.write_all(&pkt(seq, &[0x00, n])).unwrap();
+                }
+                s.write_all(&pkt(4, &EOF)).unwrap();
+                let _ = s.flush();
+            }
+            Some(0x7f) => {
+                let mut err = vec![0xffu8, 0x17, 0x04];
+                err.extend_from_slice(b"#08S01comando desconocido");
+                s.write_all(&pkt(1, &err)).unwrap();
+                let _ = s.flush();
+            }
             Some(0x16) => {
                 // COM_STMT_PREPARE: id fijo 7; nº de params = los '?' del SQL; 0 columnas en el
                 // prepare (las reales van en la respuesta al execute).
@@ -326,6 +345,23 @@ fn main() -> int {{
         Result.Ok(_) => {{ print("no debería"); }},
         Result.Err(e) => {{ print(e); }},
     }}
+    // raycdc #401: comandos crudos sobre la sesión autenticada.
+    let _ = mysql.command(c, b"\x0e");
+    let pong = mysql.next_packet(c).unwrap();
+    print("ping ${{pong[0]}} ${{mysql.packet_error(pong).is_none()}}");
+    let _ = mysql.command(c, b"\x12dump");
+    var events = "";
+    while (true) {{
+        let p = mysql.next_packet(c).unwrap();
+        if (p[0] == 254) {{ break; }}
+        events = events + to_string(p[1]) + " ";
+    }}
+    print("events " + events.trim());
+    let _ = mysql.command(c, b"\x7f");
+    print(mysql.packet_error(mysql.next_packet(c).unwrap()));
+    print(mysql.command(c, b""));
+    // La sesión sigue en su sitio tras los comandos crudos.
+    print(mysql.query(c, "SELECT", []).is_ok());
     // M77: una fila con un length-encoded truncado se rechaza como valor, sin reventar el cliente.
     match (mysql.query(c, "TRUNC", [])) {{
         Result.Ok(_) => {{ print("no debería (trunc)"); }},
@@ -353,7 +389,7 @@ fn run(app: &std::path::Path, flags: &[&str]) -> (String, i32) {
     (String::from_utf8_lossy(&out.stdout).into_owned(), out.status.code().unwrap_or(-1))
 }
 
-const EXPECTED: &str = "ada|36\ngrace|\nafectadas: 3\nmysql: la tabla no existe\ntrunc rechazado\n";
+const EXPECTED: &str = "ada|36\ngrace|\nafectadas: 3\nmysql: la tabla no existe\nping 0 true\nevents 7 8 9\nOption.Some(mysql: comando desconocido)\nResult.Err(mysql: a command needs at least its command byte)\ntrue\ntrunc rechazado\n";
 
 #[test]
 fn mysql_handshake_query_exec_y_error() {

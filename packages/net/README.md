@@ -89,6 +89,15 @@ fn main() -> int {
 ### HTTP y HTTP/2
 
 - **`net/http`** — cliente/servidor HTTP/1.1 en `bytes` (habla `https://` vía el TLS del runtime).
+  0.16.0 (raycrawl #370): **streaming sobre una conexión persistente** —
+  `conn_stream(c, method, path, body, headers, idle_ms)` y
+  `pool_stream(p, method, url, body, headers, idle_ms)` devuelven el mismo `Stream` de
+  `stream_with`, pero el socket es el de la `Conn`: al leer el cuerpo hasta el final
+  (`stream_read` → `Ok(None)`) la conexión queda lista para la siguiente petición (o vuelve al
+  pool). Cortar antes con `stream_close` descarta el socket —el cuerpo sin leer no se puede
+  saltar— y la `Conn` reconecta en su siguiente uso. Para un tope de bytes: leer hasta el tope
+  y cerrar. Con `pool_stream`, terminar SIEMPRE el stream (leerlo entero o `stream_close`), o
+  el hueco del pool queda ocupado.
   0.12.1: la respuesta de `request*` termina al completar su `Content-Length` (o el último chunk)
   aunque el servidor no cierre la conexión (rayreq #275; antes, «read timeout»); una cabecera
   `Host` o `Connection` del llamador SUSTITUYE a la del cliente, un `Content-Length` que no cuadra

@@ -6,6 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Paquete `net` 0.16.0 — streaming sobre una conexión persistente** (raycrawl #370):
+  `http.conn_stream` y `http.pool_stream` devuelven el `Stream` de siempre sobre una conexión
+  keep-alive. Leído el cuerpo hasta el final, la conexión se reutiliza; cortar antes la descarta.
+  Un crawler ya no abre un socket por página.
+- **Paquete `db` 0.10.0 — comandos crudos en `db/mysql`** (raycdc #401): `command`,
+  `next_packet`, `packet_error` y `socket` sobre la sesión ya autenticada. Una réplica de binlog
+  se escribe sin repetir el handshake ni la autenticación.
+
 - **`ray check` de un módulo suelto con una función de nombre de prelude**: `ray check
   packages/db/bson.ray` fallaba («argument 1 of 'get': expected [Field], got Map<…>») porque el
   `get` del módulo redefinía el del prelude para todo el archivo. Ahora da el mismo veredicto que

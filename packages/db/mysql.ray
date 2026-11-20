@@ -1191,6 +1191,51 @@ fn exec_prepared(c: Conn, sql: string, params: [Option<string>]) -> Result<int, 
     Result.Ok(af.0)
 }
 
+// ── Acceso de bajo nivel (raycdc #401, db 0.10.0) ───────────────────────────────────────
+// Los comandos que este cliente no envuelve (COM_REGISTER_SLAVE, COM_BINLOG_DUMP[_GTID], COM_PING,
+// COM_INIT_DB…) se envían sobre la sesión YA autenticada: quien escribe una réplica no tiene que
+// repetir el handshake ni la autenticación (caching_sha2 con RSA incluido).
+
+/// Sends a raw command packet on the authenticated session: `payload` is the command byte and
+/// its arguments (`[0x15, …]` is COM_REGISTER_SLAVE, `[0x12, …]` COM_BINLOG_DUMP). It starts a
+/// new command (the packet sequence restarts at 0) and does NOT read the reply: pull it with
+/// `next_packet`, as many times as the command answers (a binlog dump streams one packet per
+/// event until the connection ends). Do not mix it with a `query` in progress.
+pub fn command(c: Conn, payload: bytes) -> Result<int, string> {
+    if (payload.len() == 0) {
+        return Result.Err("mysql: a command needs at least its command byte");
+    }
+    if (payload.len() >= 16777215) {
+        return Result.Err("mysql: a command of 16 MiB or more is not supported");
+    }
+    c.seq = 0;
+    write_packet(c, bytes_to_ints(payload))
+}
+
+/// Reads the next packet of the session, without its 4-byte header: the first octet says what it
+/// is (`0x00` OK or a binlog event, `0xfe` EOF, `0xff` an error — see `packet_error`). Blocks the
+/// calling fiber until one arrives; honors `net.set_read_timeout` on the socket. A payload of
+/// 16 MiB - 1 continues in the next packet (the caller joins them).
+pub fn next_packet(c: Conn) -> Result<bytes, string> {
+    let p = read_packet(c)?;
+    Result.Ok(bytes_of(p))
+}
+
+/// The message of an ERR packet (`mysql: …`, as the rest of this module reports errors), or
+/// `None` when the packet is not an error.
+pub fn packet_error(packet: bytes) -> Option<string> {
+    if (packet.len() > 0 && packet[0] == 255) {
+        return Option.Some(err_msg(bytes_to_ints(packet)));
+    }
+    Option.None
+}
+
+/// The socket handle of the session, for `net.set_read_timeout(mysql.socket(c), ms)` around a
+/// long `next_packet` wait.
+pub fn socket(c: Conn) -> int {
+    c.sock
+}
+
 /// Ends the session (COM_QUIT) and closes the socket. (Not named `close` so it does not shadow,
 /// inside the module, the global builtin that closes the socket.)
 pub fn disconnect(c: Conn) {

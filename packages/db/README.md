@@ -219,12 +219,28 @@ match (bson.decode(b)) {
 
 `Int` codifica como int64 y decodifica int32 e int64 (el int de raylang es i64). `Double` usa los
 bits IEEE 754 (`math.float_bits`, M54.1a). `Date` (epoch-ms; `dump` = ISO 8601) y `Timestamp`
-(interno) soportados. Diferido: Regex/Decimal128 (error claro al decodificar).
+(interno) soportados. Diferido: Regex (error claro al decodificar).
+
+0.9.0 (raycdc #402):
+
+- **`Bson.Decimal128(bytes)`** — un `NumberDecimal`: sus 16 octetos tal cual (IEEE 754-2008 BID,
+  little-endian). `decimal128_to_string(b)` da el texto que imprime MongoDB (`12.50`, `1E+3`,
+  `-Infinity`) y `decimal128_from_string("12.50") -> Result<bytes, string>` lo construye, sin
+  redondear (`Err` con más de 34 dígitos o un exponente que no cabe). `dump` muestra
+  `decimal(12.50)`; `to_json` da el texto como string. Antes un `NumberDecimal` hacía fallar la
+  consulta entera (`unsupported BSON type: 19`).
+- **`Bson.BinSub(subtipo, bytes)`** — un binario con subtipo distinto de 0 (`BinSub(4, uuid)`).
+  `Bin(b)` sigue siendo el genérico. **Cambio**: al decodificar, un binario de otro subtipo llega
+  como `BinSub`; antes el subtipo se descartaba y todo volvía como `Bin`. Un `match` que esperaba
+  `Bin` para un UUID debe añadir el brazo `BinSub`.
+- El codificador escribe sobre `bytesbuilder`: 2000 documentos de 11 KB pasan de 2141 ms a 66 ms
+  en la VM (16 ms en nativo). Los octetos que produce son los mismos.
 
 **Puente JSON** (sobre `std/json`): `doc_from_json(s) -> Result<[Field], string>` — la ruta
 ergonómica para filtros (`mongo.find(c, coll, bson.doc_from_json("{\"nombre\": \"ada\"}")?)`) —,
 `from_json(Json) -> Bson` y `to_json(Bson) -> Json` (degradación documentada: `Int` → número JSON
-con pérdida > 2^53, `ObjectId`/`Bin` → hex, orden de campos perdido).
+con pérdida > 2^53, `ObjectId`/`Bin`/`BinSub` → hex, `Decimal128` → su texto, orden de campos
+perdido).
 
 ### `db/mongo` (M54)
 

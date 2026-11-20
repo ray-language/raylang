@@ -128,3 +128,27 @@ fn a_same_named_function_of_another_library_is_not_a_libc_variadic() {
     assert_eq!(code, 0, "{err}");
     assert!(!err.contains("variadic"), "{err}");
 }
+
+/// `ray check packages/db/bson.ray`: un módulo suelto con una función de nombre de PRELUDE
+/// (`fn get`) se comprobaba como raíz, su `get` redefinía la del prelude y `m.get(k)` sobre un
+/// `Map` ligaba a ella. Ahora da el mismo veredicto que dentro del proyecto, y la llamada directa
+/// `get(xs, …)` del propio módulo sigue yendo a la suya.
+#[test]
+fn a_loose_module_keeps_the_prelude_function_it_shares_a_name_with() {
+    let d = tmp("loose_prelude_name");
+    std::fs::create_dir_all(d.join("src")).unwrap();
+    std::fs::write(d.join("ray.toml"), "[package]\nname = \"loose\"\nversion = \"0.1.0\"\n").unwrap();
+    let module = "pub struct Field {\n    name: string,\n    value: int,\n}\n\npub fn get(fields: [Field], name: string) -> int {\n    for f in fields {\n        if (f.name == name) {\n            return f.value;\n        }\n    }\n    0\n}\n\npub fn total(m: Map<string, int>, fields: [Field]) -> int {\n    m.get(\"a\").unwrap_or(0) + get(fields, \"b\")\n}\n";
+    std::fs::write(d.join("src/store.ray"), module).unwrap();
+    std::fs::write(
+        d.join("src/main.ray"),
+        "import store;\n\nfn main() -> int {\n    let m: Map<string, int> = Map.new();\n    m.insert(\"a\", 40);\n    print(store.total(m, [store.Field { name: \"b\", value: 2 }]));\n    0\n}\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&d, &["check", "src/store.ray"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("compiles (module without main)"), "{out}{err}");
+    let (out, err, code) = ray(&d, &["run"]);
+    assert_eq!(code, 0, "{err}");
+    assert_eq!(out, "42\n");
+}

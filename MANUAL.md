@@ -884,8 +884,32 @@ Más allá de lo básico:
   implementar también `Ord` y `Show`, y sobre un `V: Version` puedes llamar los métodos de los
   tres (también desde un método por defecto del propio trait). Un trait object no los trae:
   si los necesitas, escribe `dyn Version + Show`.
-- **Traits genéricos**: `trait From<S>` (§7), `trait Iterator<T>` (§8). Un trait tuyo con
-  parámetros de tipo aún no puede usarse como bound (`S: Source<V>`) ni tras `dyn`.
+- **Traits genéricos**: `trait From<S>` (§7), `trait Iterator<T>` (§8), o uno tuyo. Sirven de
+  bound con sus argumentos, y el parámetro que solo aparece en el bound se saca del impl:
+
+  ```rust
+  trait Source<V> {
+      fn get(self) -> V;
+  }
+
+  struct Seven { }
+
+  impl Source<int> for Seven {
+      fn get(self) -> int { 7 }
+  }
+
+  fn first<V, S: Source<V>>(s: S) -> V { s.get() }
+
+  fn main() {
+      print(first(Seven { }) + 1);   // V = int, por el impl de Seven
+  }
+  ```
+
+  El argumento puede ser concreto (`S: Source<int>`) o compuesto (`S: Source<[V]>`), y el bound
+  vale igual en un struct (`struct Solver<V, S: Source<V>>`) o en un impl. Un tipo implementa
+  un trait una sola vez, así que no hay ambigüedad sobre qué `V` le toca. Dos límites: un trait
+  genérico no va tras `dyn`, y el binario nativo no admite acotar por un trait cuyos métodos
+  tienen parámetros de tipo propios (`I: Iterator<int>`, por `map<U>`); en la VM sí funciona.
 
 Traits derivables con `@derive` (struct/enum no genéricos):
 

@@ -364,7 +364,7 @@ pub fn transpile_entry(prog: &Program, exclude: &[String], fast: bool, fibers: b
     // raysolve #357: el diccionario de un método con parámetros de tipo PROPIOS (`map<U>` de
     // `Iterator<T>`) no tiene tipo en Rust (haría falta polimorfismo de rango 2), así que una
     // función acotada por ese trait no se puede emitir. Se dice aquí, con nombres; si no, la
-    // función se omitía y `rustc` fallaba en sus llamadas.
+    // firma salía con un tipo que no existe (`U`) y fallaba `rustc`.
     for f in prog.functions.iter().filter(|f| f.line < crate::prelude::LINE_BASE) {
         for p in &f.params {
             let parts: Vec<&str> = p.name.split('#').collect();

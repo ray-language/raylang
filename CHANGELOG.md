@@ -6,6 +6,17 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Bounds sobre traits genéricos** (raysolve #357): `fn first<V, S: Source<V>>(s: S) -> V`. Un
+  trait con parámetros de tipo ya se podía declarar e implementar, pero no acotar con él; había
+  que pasar las funciones a mano en un struct de closures. Ahora el bound lleva sus argumentos
+  (`S: Source<V>`, `S: Source<int>`, `S: Source<[V]>`) en funciones, structs, enums e impls, y
+  el parámetro que solo aparece en el bound se infiere del impl del tipo que se pasa. Si el
+  impl no casa, el error lo dice: `Seven implements 'Source<int>', but 'store' requires 'S:
+  Source<string>'`. Igual en la VM, el intérprete y nativo. Quedan fuera `dyn Source<V>` y, solo
+  en nativo, acotar por un trait con métodos genéricos propios (`I: Iterator<int>`), que da un
+  error de build con nombres en vez de fallar en `rustc`.
+- Un `impl` de un trait genérico sin sus argumentos (`impl Source for X`) es ahora error; antes
+  se aceptaba y dejaba el parámetro del trait sin resolver.
 - **`std/ffi`: punteros que se pueden usar** (rayserial #394): `ffi.null()`, `ffi.is_null(p)`,
   `ffi.offset(p, n)`, `ffi.addr(p) -> u64` y `ffi.read(p, n) -> bytes`, que copia lo que hay en
   la dirección (la `struct dirent` de `readdir`). Y un parámetro de `extern` puede declararse

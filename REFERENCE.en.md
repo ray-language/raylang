@@ -54,7 +54,13 @@ Reserved (cannot be used as identifiers):
 > Option.Some(x) = it.next() { … }`), without parentheses, like `if let`; it takes `break`,
 > `continue` and a label. **Supertraits**: `trait Version: Ord + Show { … }` — the `impl` of
 > `Version` requires those of `Ord` and `Show`, and a bound `V: Version` includes all three;
-> `dyn Version` does not carry them (write `dyn Version + Show`).
+> `dyn Version` does not carry them (write `dyn Version + Show`). **Bounds on generic traits**:
+> with `trait Source<V> { fn get(self) -> V; }`, `fn first<V, S: Source<V>>(s: S) -> V` bounds
+> `S` and takes `V` from the impl of the type passed (`first(Seven { })` is `int` if `impl
+> Source<int> for Seven`); the argument may be concrete (`S: Source<int>`) and it works on
+> functions, structs, enums and impls. A type implements a trait only once. There is no `dyn
+> Source<V>`, and a native build cannot bound by a trait with generic methods of its own
+> (`I: Iterator<int>`).
 
 ## 2. Symbols and operators
 
@@ -841,4 +847,4 @@ orientations) **replaces** it; the rest are added.
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:87e7fc4a60a6 -->
+<!-- sync: sha256:7e784a9b99ec -->

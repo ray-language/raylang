@@ -21324,3 +21324,52 @@ escribir en memoria de C ya se hace pasando un `bytes` como argumento.
 la necesidad de `null()` en las firmas que lo declaran, y deja a la vista cuáles lo admiten.
 Los helpers little-endian que pedía el hallazgo ya existen en `std/binary`.
 
+## 466. Bounds sobre traits genéricos (raysolve #357, nov 2026)
+
+`trait Source<V>` se podía declarar e implementar desde M40.2, pero no usar de forma genérica:
+`S: Source<V>` era error de sintaxis. raysolve lo rodeaba con un struct de dos closures y
+repetía el bound entero en veinte funciones. De #357 ya habían salido `while let` y los
+supertraits (§459); esto es lo que quedaba, salvo `dyn Source<V>`.
+
+**El sondeo decidió el alcance.** Antes de comprometer nada se hizo que el parser aceptara el
+bound descartando sus argumentos, sin tocar más. La VM y el nativo ejecutaron bien: los
+diccionarios ocultos (`S#Source#get`) ya existían, los genéricos se borran, y en nativo el
+diccionario es un genérico `Fn(S) -> V` donde `V` es un parámetro más de la función. Lo que
+fallaba era solo del checker, en tres sitios: el método se tipaba con el nombre del parámetro
+del TRAIT (funcionaba por coincidencia si la función llamaba igual al suyo), el argumento del
+bound no se comparaba con el del impl (`let a: string = first(Seven { })` pasaba y la VM
+imprimía un `int` tipado como `string`), y `V` no se infería desde `S`.
+
+**Un impl por tipo es lo que hace esto simple.** Un tipo no puede implementar `Source<int>` y
+`Source<string>` a la vez: los métodos se manglan `Tipo#metodo`, sin el argumento del trait, y
+el segundo impl es «method ambiguous». Esa regla ya existía y aquí se vuelve parte del diseño:
+el tipo DETERMINA los argumentos del trait, como un tipo asociado. Por eso inferir `V` no tiene
+ambigüedad: se casa el objetivo del impl con el tipo concreto, se sustituye en sus argumentos y
+se unifica con los del bound (`unify_bound_args`). Levantar la regla más adelante obligaría a
+cambiar el manglado y a elegir impl por el argumento.
+
+**Representación.** Los bounds siguen siendo pares `(parámetro, trait)`; los argumentos van en
+una lista aparte, `bound_args`, solo para los bounds que los llevan. Medio centenar de sitios
+(satisfacción de bounds, diccionarios, `MapKey`, el transpilador) solo preguntan «qué trait
+acota a qué parámetro» y no cambian. El espejo selfhost no se toca: no parsea la sintaxis
+nueva, como ya pasó con los supertraits.
+
+**La inferencia espera al bound.** `store(Fixed { v: [1] }, [])` necesita `V` para tipar el
+`[]`, y `V` sale del bound, no de los argumentos. Los argumentos que fallan con error de
+inferencia ya esperaban a los demás (§463); ahora también espera el último si la función tiene
+bounds genéricos, y los campos de un literal de struct hacen lo mismo
+(`Solver { src: Seven { }, seen: [] }`).
+
+**Lo que queda fuera.**
+- `dyn Source<V>`: un trait object se baja a un struct sintetizado `__dyn_Trait` sin
+  parámetros. Haría falta uno por instancia o un struct genérico. Nadie lo ha pedido.
+- En nativo, un bound sobre un trait cuyos métodos tienen parámetros de tipo propios
+  (`I: Iterator<int>`, por `map<U>`). El diccionario de `map` sería una función polimórfica
+  pasada como valor, que Rust no puede tipar. Antes la función se emitía con un tipo que no existe (`U`) y
+  fallaba `rustc`; ahora `ray build --native` lo dice con el nombre de la función, el
+  trait y el método. En la VM funciona. Esto no es nuevo del bound genérico: le pasaba a
+  cualquier trait con métodos genéricos.
+- Un parámetro de un `impl` que se llama como el del trait y vale otra cosa
+  (`trait Source<V>` con `impl<V: Show> Source<string> for Boxed<V>`) se confunde con él al
+  comparar firmas. Es anterior a este cambio; con otro nombre (`Boxed<T>`) funciona.
+

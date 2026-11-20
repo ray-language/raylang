@@ -54,7 +54,12 @@ Reservadas (no pueden usarse como identificadores):
 > Option.Some(x) = it.next() { … }`), sin paréntesis, como `if let`; admite `break`, `continue`
 > y etiqueta. **Supertraits**: `trait Version: Ord + Show { … }` — el `impl` de `Version` exige
 > los de `Ord` y `Show`, y un bound `V: Version` incluye los tres; `dyn Version` no los
-> arrastra (se escribe `dyn Version + Show`).
+> arrastra (se escribe `dyn Version + Show`). **Bounds sobre traits genéricos**: con
+> `trait Source<V> { fn get(self) -> V; }`, `fn first<V, S: Source<V>>(s: S) -> V` acota `S` y
+> saca `V` del impl del tipo que se pasa (`first(Seven { })` es `int` si `impl Source<int> for
+> Seven`); el argumento puede ser concreto (`S: Source<int>`) y vale en funciones, structs,
+> enums e impls. Un tipo implementa un trait una sola vez. No hay `dyn Source<V>`, y en nativo
+> no se puede acotar por un trait con métodos genéricos propios (`I: Iterator<int>`).
 
 ## 2. Símbolos y operadores
 

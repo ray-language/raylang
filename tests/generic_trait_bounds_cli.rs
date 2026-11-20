@@ -210,3 +210,29 @@ fn a_bound_on_a_trait_with_generic_methods_runs_on_the_vm_and_is_named_by_the_na
         assert!(err.contains("'total' is bounded by the trait 'Iterator', whose method 'map' has type parameters of its own"), "{err}");
     }
 }
+
+/// Un parámetro del impl que se llama como el del trait lo tapa: `impl<V: Show> Source<string>
+/// for Boxed<V>` (antes: «is Boxed<V>, but the trait requires Boxed<string>»). El método por
+/// defecto, escrito en términos del trait, recibe el argumento del impl aunque mencione ese
+/// mismo nombre (`Source<[V]>` → `twice` devuelve `[[V]]`).
+#[test]
+fn an_impl_type_parameter_may_share_the_name_of_the_trait_parameter() {
+    let d = tmp("shadow");
+    std::fs::write(
+        d.join("prog.ray"),
+        "trait Source<V> {\n    fn get(self) -> V;\n    fn twice(self) -> [V] { [self.get(), self.get()] }\n}\nstruct Boxed<V> { v: V }\nimpl<V: Show> Source<string> for Boxed<V> {\n    fn get(self) -> string {\n        let inner: V = self.v;\n        \"<\" + inner.show() + \">\"\n    }\n}\nstruct Pairs<V> { a: V }\nimpl<V> Source<[V]> for Pairs<V> { fn get(self) -> [V] { [self.a, self.a] } }\nstruct Same<V> { v: V }\nimpl<V> Source<V> for Same<V> { fn get(self) -> V { self.v } }\nfn first<V, S: Source<V>>(s: S) -> V { s.get() }\nfn main() {\n    print(Boxed { v: 4 }.get());\n    print(Boxed { v: 4 }.twice());\n    print(first(Boxed { v: 2.5 }));\n    print(first(Pairs { a: 1 }));\n    print(Pairs { a: \"x\" }.twice());\n    print(first(Same { v: 9 }));\n    print(Same { v: 9 }.twice());\n}\n",
+    )
+    .unwrap();
+    let expected = "<4>\n[<4>, <4>]\n<2.5>\n[1, 1]\n[[x, x], [x, x]]\n9\n[9, 9]\n";
+    for args in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let (out, err, code) = ray(&d, args);
+        assert_eq!(code, 0, "{args:?}: {err}");
+        assert_eq!(out, expected, "{args:?}");
+    }
+    if has_rustc() {
+        let bin = d.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let (_o, err, code) = ray(&d, &["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()]);
+        assert_eq!(code, 0, "build --native: {err}");
+        assert_eq!(String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout), expected);
+    }
+}

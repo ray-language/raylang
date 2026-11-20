@@ -21369,7 +21369,12 @@ bounds genéricos, y los campos de un literal de struct hacen lo mismo
   fallaba `rustc`; ahora `ray build --native` lo dice con el nombre de la función, el
   trait y el método. En la VM funciona. Esto no es nuevo del bound genérico: le pasaba a
   cualquier trait con métodos genéricos.
-- Un parámetro de un `impl` que se llama como el del trait y vale otra cosa
-  (`trait Source<V>` con `impl<V: Show> Source<string> for Boxed<V>`) se confunde con él al
-  comparar firmas. Es anterior a este cambio; con otro nombre (`Boxed<T>`) funciona.
+
+**Un parámetro del impl tapa al del trait.** `trait Source<V>` con `impl<V: Show> Source<string>
+for Boxed<V>` daba «the parameter 1 of method 'get' is Boxed<V>, but the trait requires
+Boxed<string>»: la σ del trait (`V → string`) se aplicaba DESPUÉS de sustituir `Self` por el
+objetivo, y pisaba el `V` del impl que el objetivo acababa de traer. Era anterior a los bounds
+genéricos, pero ellos lo vuelven fácil de pisar. Ahora la σ del trait se aplica antes que
+`Self` al comparar firmas y al bajar los métodos por defecto (escritos en términos del trait),
+y en los métodos que escribe el impl (en términos del impl) sus propios parámetros la tapan.
 

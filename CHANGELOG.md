@@ -15,6 +15,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   Source<string>'`. Igual en la VM, el intérprete y nativo. Quedan fuera `dyn Source<V>` y, solo
   en nativo, acotar por un trait con métodos genéricos propios (`I: Iterator<int>`), que da un
   error de build con nombres en vez de fallar en `rustc`.
+- Un parámetro de un `impl` puede llamarse como el del trait sin ser él: con `trait Source<V>`,
+  `impl<V: Show> Source<string> for Boxed<V>` daba un error de firmas («is Boxed<V>, but the
+  trait requires Boxed<string>») y ahora compila.
 - Un `impl` de un trait genérico sin sus argumentos (`impl Source for X`) es ahora error; antes
   se aceptaba y dejaba el parámetro del trait sin resolver.
 - **`std/ffi`: punteros que se pueden usar** (rayserial #394): `ffi.null()`, `ffi.is_null(p)`,

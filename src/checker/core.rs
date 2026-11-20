@@ -962,10 +962,11 @@ impl Checker {
                 m.name, m.params.len(), tm.params.len()
             )));
         }
-        // Los tipos del trait se sustituyen: `Self`→target y los parámetros de tipo del trait por los
-        // argumentos del impl (`T`→`int` para `impl Iterator<int>`, M40.2). Se resuelve ANTES de la σ
-        // del trait: `resolve_type` normaliza `T` (`Struct`) a `Var`, que es lo que `subst` sustituye.
-        let expected = |ty: &Type| subst(&self.resolve_type(&subst_self(ty, target)), trait_sigma);
+        // Los tipos del trait se sustituyen: los parámetros de tipo del trait por los argumentos del
+        // impl (`T`→`int` para `impl Iterator<int>`, M40.2) y `Self`→target, EN ESE ORDEN: el target
+        // menciona parámetros del impl, que pueden llamarse como los del trait sin ser ellos
+        // (`trait Source<V>` + `impl<V: Show> Source<string> for Boxed<V>`).
+        let expected = |ty: &Type| self.resolve_type(&subst_self(&subst_named(ty, trait_sigma), target));
         for (i, (tp, ip)) in tm.params.iter().zip(&m.params).enumerate() {
             let want = expected(&tp.ty);
             let got = self.resolve_type(&subst_self(&ip.ty, target));

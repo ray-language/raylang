@@ -168,6 +168,8 @@ fn protobuf_parse_is_total_on_malformed_input() {
     // #388: un varint o un fixed cortado abortaba el programa (índice fuera de rango), un
     // length-delimited cortado daba `Ok` con menos bytes, el campo 0 se aceptaba y un varint
     // de 11 octetos daba `Ok(-1)` en la VM y un panic en nativo. Todo es `Err` con el byte.
+    // #463: un varint de 10 octetos cuyo décimo octeto pasa de 1 no cabe en 64 bits (se
+    // aceptaba descartando los bits de más), y el error del tipo wire sigue el formato del resto.
     let (out, err) = same_on_both(
         "protobuf",
         r#"import std/protobuf;
@@ -187,6 +189,8 @@ fn main() -> int {
     show([0x0D, 0x01]);
     show([0x0A, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x41]);
     show([0x0B]);
+    show([0x08, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x02]);
+    show([0x08, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F]);
     show([0x80]);
     show([0x08, 0x96, 0x01]);
     show([0x0A, 0x02, 0x41, 0x42]);
@@ -203,7 +207,7 @@ fn main() -> int {
 "#,
     );
     assert_eq!(err, "");
-    assert_eq!(out, "protobuf: truncated varint of the value of field 1 at byte 1\nprotobuf: field 1 at byte 0 announces 5 bytes and 1 remain\nprotobuf: invalid field number 0 at byte 0\nprotobuf: the varint of the value of field 1 at byte 1 is longer than 10 bytes\nok 1 -1 0\nprotobuf: truncated fixed64 of field 1 at byte 1\nprotobuf: truncated fixed32 of field 1 at byte 1\nprotobuf: field 1 at byte 0 announces -1 bytes and 1 remain\nunsupported wire type: 3\nprotobuf: truncated varint of the tag at byte 0\nok 1 150 0\nok 1 0 2\nok 1 1 0\nok 1 2 0\nok 0 0 0\n300 hola\n");
+    assert_eq!(out, "protobuf: truncated varint of the value of field 1 at byte 1\nprotobuf: field 1 at byte 0 announces 5 bytes and 1 remain\nprotobuf: invalid field number 0 at byte 0\nprotobuf: the varint of the value of field 1 at byte 1 is longer than 10 bytes\nok 1 -1 0\nprotobuf: truncated fixed64 of field 1 at byte 1\nprotobuf: truncated fixed32 of field 1 at byte 1\nprotobuf: field 1 at byte 0 announces -1 bytes and 1 remain\nprotobuf: unsupported wire type 3 of field 1 at byte 0\nprotobuf: the varint of the value of field 1 at byte 1 does not fit in 64 bits\nprotobuf: the varint of the value of field 1 at byte 1 does not fit in 64 bits\nprotobuf: truncated varint of the tag at byte 0\nok 1 150 0\nok 1 0 2\nok 1 1 0\nok 1 2 0\nok 0 0 0\n300 hola\n");
 }
 
 #[test]

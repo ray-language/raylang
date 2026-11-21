@@ -41,6 +41,10 @@ pub(super) struct Fiber {
     /// otro) porque es una pila, y son POR FIBRA: un `spawn` dentro de un `try_call` no hereda el
     /// marcador (su fallo lo captura su `Task`, como siempre).
     pub(super) try_markers: Vec<TryMarker>,
+    /// IDEAS §131: el «suelo» del callback de la FFI en curso — la altura de marcos a la que el
+    /// bucle anidado termina y devuelve el valor a C. 0 = no hay callback (la fibra termina al
+    /// vaciarse sus marcos, como siempre).
+    pub(super) floor: usize,
     /// M240: pila de marcos perfilados (vacía y sin coste con el perfil apagado).
     pub(super) prof: super::profile::FiberProfile,
     /// M190: un error que la fibra debe LANZAR al reanudarse, en la posición de la instrucción que la
@@ -438,8 +442,14 @@ impl<'a> Vm<'a> {
     /// Empaqueta la fibra en ejecución (vaciando los campos de la VM) para aparcarla o descartarla. M12.3:
     /// además de `frames`/`stack`/`is_main`, lleva su `Task` y su pila de scopes.
     /// M38.3b: la fibra en curso ES `cur` → conmutar es un swap (deja una `Fiber` vacía).
-    pub(super) fn take_current_fiber(cur: &mut Fiber) -> Fiber {
-        std::mem::take(cur)
+    /// IDEAS §131: dentro de un callback de la FFI (`floor != 0`) la fibra NO se puede aparcar —
+    /// hay marcos de C en la pila del hilo, y el bucle anidado no puede ceder—: es un error de
+    /// ejecución, que desenrolla el callback y relanza la llamada `extern` que lo recibió.
+    pub(super) fn take_current_fiber(cur: &mut Fiber) -> Result<Fiber, &'static str> {
+        if cur.floor != 0 {
+            return Err(crate::ffi::BLOCKING_IN_CALLBACK);
+        }
+        Ok(std::mem::take(cur))
     }
 
     /// Cesión en `socket_write` (post-M19.4): la escritura llenó el buffer de envío y `remaining` no
@@ -451,7 +461,7 @@ impl<'a> Vm<'a> {
         let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
         {
             let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
-            let fiber = Self::take_current_fiber(&mut self.cur);
+            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(line, col, m))?;
             let deadline = crate::builtins::write_deadline(handle);
             sh.io_parked.push(IoParked { fd, fiber, pending_write: Some(PendingWrite { handle, remaining, deadline }), handle, deadline });
             sh.running -= 1; // esta fibra se aparcó → este worker queda ocioso
@@ -534,6 +544,19 @@ impl<'a> Vm<'a> {
             .try_markers
             .pop()
             .expect("the caller checks there is a marker");
+        self.unwind_to(m.frames_len, m.scopes_len, m.stack_len);
+        let arr = self
+            .cur
+            .heap
+            .allocate(crate::gc::Obj::Array(vec![HeapValue::Str(e.msg.into())]));
+        self.push(HeapValue::Obj(arr));
+    }
+
+    /// Desenrolla la fibra en curso hasta las alturas dadas (de un marcador de `try_call`, o de la
+    /// entrada a un callback de la FFI): descarta marcos, cierra scopes y recorta la pila.
+    pub(super) fn unwind_to(&mut self, frames_len: usize, scopes_len: usize, stack_len: usize) {
+        struct M { frames_len: usize, scopes_len: usize, stack_len: usize }
+        let m = M { frames_len, scopes_len, stack_len };
         // Los marcos del tramo abortado se descartan truncando sus ventanas de locales,
         // como hace `Return` (V12: el register file vuelve a la base del marcador).
         while self.cur.frames.len() > m.frames_len {
@@ -560,11 +583,6 @@ impl<'a> Vm<'a> {
             }
         }
         self.cur.stack.truncate(m.stack_len);
-        let arr = self
-            .cur
-            .heap
-            .allocate(crate::gc::Obj::Array(vec![HeapValue::Str(e.msg.into())]));
-        self.push(HeapValue::Obj(arr));
     }
 
     pub(super) fn fail_current_fiber(&mut self, e: RuntimeError) -> Result<(), RuntimeError> {

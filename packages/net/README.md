@@ -139,11 +139,11 @@ fn main() -> int {
   dinámica. Determinista. Hoja.
 - **`net/http2_client`** — cliente HTTP/2 sobre `net/http2` + `net/hpack`.
   0.17.1 (raycdc #468): `net/websocket` gana `is_upgrade(headers)` y `accept(headers, conn)` —
-  el upgrade de un handler crudo es `if (websocket.is_upgrade(req.headers)) { let ws =
-  websocket.accept(req.headers, conn)?; … }`. El ejemplo de `serve_raw_on` citaba un
-  `is_upgrade(req)` que no existía. 0.17.2: `is_upgrade` busca `websocket` como
-  token de `Upgrade` (no como subcadena) y `accept` contesta `426 Upgrade Required` con
-  `Sec-WebSocket-Version: 13` a una versión que no sea la 13 (RFC 6455 §4.4).
+  el upgrade de un handler crudo es `if (websocket.is_upgrade(req.headers)) { match
+  (websocket.accept(req.headers, conn)) { Result.Ok(ws) => { … }, Result.Err(_) => { } } }`. El
+  ejemplo de `serve_raw_on` citaba un `is_upgrade(req)` que no existía. 0.17.2: `is_upgrade`
+  busca `websocket` como token de `Upgrade`, no como subcadena (`Upgrade: websocket2` ya no
+  pasa). `accept` no valida `Connection` ni `Sec-WebSocket-Version`.
 - **`net/grpc_client`** — cliente gRPC de un solo disparo sobre TLS (`grpc_call`), sobre `net/http2` +
   `net/hpack` + `std/protobuf`.
 - **`net/grpc_server`** — **servidor gRPC unario** sobre HTTP/2 en claro con conocimiento previo (h2c:
@@ -234,8 +234,8 @@ fn main() -> int {
   0.15.1: **`serve_raw_on(listener, handler)`**, `serve_raw_on_limits` y `serve_raw_with_on`
   (raycdc #406) — el handler crudo (petición + conexión: un upgrade a WebSocket, SSE) sobre un
   listener ya abierto, para enlazar el puerto 0 y conocerlo antes de servir. El upgrade:
-  `net.socket_write(conn, websocket.handshake_response(req.headers.get_or("sec-websocket-key", "")))`
-  y después `websocket.server_conn(conn)` + `read_message`. Con **`quiet()`**, el cliente que
+  `websocket.accept(req.headers, conn)` (desde 0.17.1) y
+  después `read_message`. Con **`quiet()`**, el cliente que
   corta a mitad de la respuesta (EPIPE, ECONNRESET) ya no se anota en stderr (raycrawl #371): es
   el cliente que se va, como los 400 y 408. `net/scram` deriva la clave con
   `crypto.pbkdf2_hmac_sha256` (raycdc #408: 44 ms → 1 ms por conexión a mongod en la VM), y

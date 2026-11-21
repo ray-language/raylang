@@ -59,8 +59,8 @@ pub fn handshake_response(key: string) -> string {
 
 /// Whether a request asks to switch to WebSocket: `headers` are the request's headers (lower-case
 /// names, as `webserver.Request.headers` has them) and it needs `websocket` among the tokens of
-/// `Upgrade` and a `Sec-WebSocket-Key` (net 0.17.1, raycdc #468). It only DETECTS the request;
-/// `accept` validates the rest of the handshake and answers the client when it is not valid.
+/// `Upgrade` (a token, not a substring, since net 0.17.2) and a `Sec-WebSocket-Key` (net 0.17.1,
+/// raycdc #468).
 pub fn is_upgrade(headers: Map<string, string>) -> bool {
     has_token(headers.get_or("upgrade", ""), "websocket")
         && headers.get_or("sec-websocket-key", "") != ""
@@ -78,25 +78,12 @@ fn has_token(value: string, token: string) -> bool {
 
 /// Completes the server side of the handshake on `conn` for a request that `is_upgrade`: writes
 /// the `101 Switching Protocols` response and returns the connection ready for `read_message` and
-/// `encode_frame`. `Err` when the request is not an upgrade or the write fails; a request for a
-/// version other than 13 is answered with `426 Upgrade Required` and `Sec-WebSocket-Version: 13`
-/// (RFC 6455 §4.4) before the `Err` (net 0.17.2). In a raw handler:
-/// `if (websocket.is_upgrade(req.headers)) { let ws = websocket.accept(req.headers, conn)?; … }`.
+/// `encode_frame`. `Err` when the request is not an upgrade (nothing is written) or the write
+/// fails. In a raw handler:
+/// `match (websocket.accept(req.headers, conn)) { Result.Ok(ws) => { … }, Result.Err(_) => { } }`.
 pub fn accept(headers: Map<string, string>, conn: int) -> Result<WsConn, string> {
     if (!is_upgrade(headers)) {
         return Result.Err("websocket: the request is not an upgrade");
-    }
-    // `Connection: Upgrade` no se exige: el mapa de cabeceras guarda la ÚLTIMA línea de una
-    // cabecera repetida, y un `Connection: Upgrade` + `Connection: keep-alive` válido se rechazaría.
-    let version = headers.get_or("sec-websocket-version", "").trim();
-    if (version != "13") {
-        let _ = net.socket_write(
-            conn,
-            "HTTP/1.1 426 Upgrade Required\r\nSec-WebSocket-Version: 13\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        );
-        return Result.Err(
-            "websocket: unsupported Sec-WebSocket-Version '" + version + "' (only 13)"
-        );
     }
     net.socket_write(conn, handshake_response(headers.get_or("sec-websocket-key", "")))?;
     Result.Ok(server_conn(conn))

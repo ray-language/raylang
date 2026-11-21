@@ -4823,10 +4823,17 @@ con 101 una petición sin `Connection: Upgrade` o con una `Sec-WebSocket-Version
 y `webserver` guarda solo la última línea de una cabecera repetida (también el parser de
 respuestas de `net/http`). Las tres cosas van juntas:
 
-- Unir las líneas repetidas con comas (RFC 9110 §5.3) en los dos parsers; `Cookie` con `; `; dos
-  `Host` distintos, 400. **Impacto**: cambia lo que ve quien compara una cabecera de valor único
-  (`X-Forwarded-Proto == "https"` en `web`, `Authorization`, `X-Ray-Token`): hay que revisar cada
-  consumidor del monorepo, y es visible para los de fuera.
+- Tratar las líneas repetidas como manda RFC 9110 §5.3 en los dos parsers, que distingue dos
+  clases de cabecera. Las de **lista** (`Accept`, `Connection`, `Upgrade`, `Cache-Control`,
+  `Via`, `X-Forwarded-For`…) pueden repetirse y se unen con comas. Las de **valor único**
+  (`Host`, `Content-Length`, `Authorization`, `Content-Type`…) no pueden: repetidas, el mensaje
+  está mal formado — dos `Host`, o dos `Content-Length` distintos, 400; en las demás, decidir
+  entre 400 y quedarse con una, pero nunca unirlas. `Set-Cookie` (respuesta) es la excepción que
+  se repite y no se puede unir (ya está en `Response.raw_headers`); `Cookie` en HTTP/1.1 va en
+  una sola línea, y si llega partida (HTTP/2 lo permite) se une con `; `. Hace falta por tanto
+  la tabla de cabeceras de lista. **Impacto**: cambia lo que ve quien lee una cabecera de lista
+  repetida, y una petición con una de valor único repetida pasa a rechazarse; hay que revisar
+  cada consumidor del monorepo, y es visible para los de fuera.
 - `accept` valida el handshake entero (RFC 6455 §4.2.1) y devuelve un error tipado que diga si
   ya contestó (400, o 426 con `Upgrade: websocket` y `Sec-WebSocket-Version: 13`) o no escribió
   nada. **Impacto**: cambia el contrato de `accept`; versión menor.

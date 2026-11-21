@@ -1938,7 +1938,11 @@ impl Checker {
 
     pub(super) fn check_value_against(&mut self, value: &Expr, declared: &Type, sigma: &HashMap<String, Type>) -> Result<Type, TypeError> {
         let exp = subst(declared, sigma);
-        if type_has_var(&exp) {
+        // raysolve #358: lo que falta por inferir son los parámetros de `declared` que `σ` aún no
+        // liga. Uno ya ligado a un parámetro RÍGIDO del ámbito (`V` de `count` → `V` de `fn h<V>`)
+        // está resuelto aunque el tipo sustituido siga mencionando un `Var`, y da contexto:
+        // `count(a, empty())` con `a: [V]` tipa `empty()` contra `[V]`.
+        if !type_vars_bound(declared, sigma) {
             // M315 (findings #70): `xs.map(to_string)` — el parámetro es `fn(T) -> U` con `T` ya
             // inferido y `U` libre: el builtin como valor fija `U` con su regla de tipado.
             if let Type::Fn(params, _) = &exp
@@ -2036,7 +2040,7 @@ impl Checker {
             let body_ty = match (expected, &result_ty) {
                 (Some(exp), _) => self.check_expr_expected(&arm.body, exp),
                 // M204: sin tipo esperado, el que fijaron los brazos anteriores (si es concreto).
-                (None, Some(prev)) if !type_has_var(prev) => self.check_expr_expected(&arm.body, &prev.clone()),
+                (None, Some(prev)) if !type_has_var_outside(prev, &self.type_params) => self.check_expr_expected(&arm.body, &prev.clone()),
                 (None, _) => self.check_expr(&arm.body),
             };
             self.pop_scope();
@@ -2075,7 +2079,7 @@ impl Checker {
 
         // M204: segunda pasada sobre los brazos diferidos, ya con el tipo del match como esperado.
         for (arm, first_err) in deferred {
-            let Some(exp) = result_ty.clone().filter(|t| !type_has_var(t)) else { return Err(first_err) };
+            let Some(exp) = result_ty.clone().filter(|t| !type_has_var_outside(t, &self.type_params)) else { return Err(first_err) };
             let binds = self.check_subpattern(&arm.pattern, &scrut_ty)?;
             self.push_scope();
             for (name, ty) in binds {
@@ -3149,7 +3153,7 @@ impl Checker {
                 let (then_ty, else_ty) = match (then_first, else_branch) {
                     (Ok(then_ty), None) => (then_ty, None),
                     (Ok(then_ty), Some(else_e)) => {
-                        let else_ty = if type_has_var(&then_ty) {
+                        let else_ty = if type_has_var_outside(&then_ty, &self.type_params) {
                             self.check_expr(else_e)?
                         } else {
                             self.check_expr_expected(else_e, &then_ty)?
@@ -3159,7 +3163,7 @@ impl Checker {
                     (Err(e), Some(else_e)) if e.msg.starts_with("could not infer the type parameter") || e.msg.starts_with("cannot infer the type of [] here") => {
                         self.scopes.truncate(depth);
                         let else_ty = self.check_expr(else_e)?;
-                        if type_has_var(&else_ty) {
+                        if type_has_var_outside(&else_ty, &self.type_params) {
                             return Err(e);
                         }
                         let then_ty = self.check_block_expected(then_branch, &else_ty)?;
@@ -4061,7 +4065,7 @@ impl Checker {
                     .and_then(|t0| builtin_arg_expected(name, t0, i))
                     .or_else(|| builtin_fixed_param(name, i));
                 let ty = match expected_arg {
-                    Some(exp) if !type_has_var(&exp) => self.check_expr_expected(a, &exp)?,
+                    Some(exp) if !type_has_var_outside(&exp, &self.type_params) => self.check_expr_expected(a, &exp)?,
                     _ => self.check_expr(a)?,
                 };
                 arg_types.push(ty);

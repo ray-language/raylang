@@ -552,7 +552,9 @@ other systems raise it to their floor);
 without a ramp, so write your own fade before `flush` there; `RAY_AUDIO_TRACE=1` prints `flushes N`
 and `underruns N` (times the stream ran dry before the end); `audio.queued_ms(h)` = what you wrote
 and has NOT sounded yet (the sample sounding now is written − queued, also after a flush or a gap —
-`played_ms` is the device clock and on macOS/iOS also counts filler silence);
+`played_ms` is the device clock and on macOS/iOS also counts filler silence; under
+RAY_AUDIO_SINK=null it is a real-time clock that advances at wall-clock pace while audio is being
+written, so timing tests work without a device);
 `audio.duck_others(true)` lowers what OTHER apps play while your alarm or prompt sounds and
 `audio.duck_others(false)` gives it back (iOS session options, Android audio focus; no-op on desktop);
 a player also belongs in the system's Now Playing (lock screen, Control Center, headphone and

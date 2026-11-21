@@ -104,6 +104,20 @@ pub(super) fn type_has_var_outside(t: &Type, scope: &HashSet<String>) -> bool {
     }
 }
 
+/// ¿Todos los `Var` de `t` (el tipo de un parámetro, tal como lo declara la firma) están ya ligados
+/// en `sigma`? Es la pregunta correcta para «¿queda algo por inferir aquí?»: mirar el tipo ya
+/// sustituido no distingue una incógnita de un parámetro ligado a un `Var` rígido del llamador.
+pub(super) fn type_vars_bound(t: &Type, sigma: &HashMap<String, Type>) -> bool {
+    match t {
+        Type::Var(n) => sigma.contains_key(n),
+        Type::Array(e) | Type::Channel(e) | Type::Task(e) => type_vars_bound(e, sigma),
+        Type::Map(k, v) => type_vars_bound(k, sigma) && type_vars_bound(v, sigma),
+        Type::Fn(ps, r) => ps.iter().all(|p| type_vars_bound(p, sigma)) && type_vars_bound(r, sigma),
+        Type::Struct(_, args) | Type::Enum(_, args) | Type::Tuple(args) => args.iter().all(|a| type_vars_bound(a, sigma)),
+        _ => true,
+    }
+}
+
 /// Siembra `σ` a partir del tipo esperado (M6.2): si se espera `Nombre<a, b, ...>` con
 /// la aridad correcta, liga cada parámetro de tipo con su argumento esperado. Así
 /// `Caja.Vacia` con tipo esperado `Caja<int>` fija `T = int`.

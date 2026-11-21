@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Inferencia dentro de una función genérica** (raysolve #358): el parámetro de tipo del
+  llamador da contexto igual que un tipo concreto. `fn h<V>(a: [V]) { count(a, empty()) }`,
+  `sat(t, any(p))` con `t: T<P, V>` y `if (c) { full() } else { at_least(v) }` con `v: V` ya
+  compilan sin anotar el `let`; lo mismo entre los brazos de un `match` y en los builtins de
+  contenedor (`out.push(none())` con `out: [Option<V>]`). Un parámetro que ningún argumento
+  fija sigue siendo un error de inferencia.
+- `llms.txt` dice que `audio.played_ms` bajo `RAY_AUDIO_SINK=null` es un reloj de tiempo real.
 - **Paquete `net` 0.17.2, como se publica**: de lo anunciado en 1.27.111 queda solo que
   `websocket.is_upgrade` busca `websocket` como token de `Upgrade`. `websocket.accept` **no**
   contesta `426` ni valida la versión: sigue como en 0.17.1 (con `Err` por no ser un upgrade no

@@ -3484,6 +3484,32 @@ pub fn tls_connect_h2(host: &str, port: i64) -> Result<i64, String> {
 #[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
 pub fn tls_connect_h2(_host: &str, _port: i64) -> Result<i64, String> { Err(NET_TLS_UNAVAILABLE.to_string()) }
 
+/// raygrpc #387: conexión TLS de cliente con opciones POR CONEXIÓN — los protocolos ALPN
+/// (separados por comas; vacío = sin ALPN), una CA propia en PEM (se confía solo en ella) y el
+/// modo sin verificación. Completa el handshake; no exige ningún ALPN (se consulta con
+/// `tls_alpn`). Builtin `__tls_connect_opts`; la config la arma `ray_runtime::tls`, la misma que
+/// usa el binario nativo.
+#[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
+pub fn tls_connect_opts(host: &str, port: i64, protocols: &str, ca_pem: &str, insecure: bool) -> Result<i64, String> {
+    let cfg = ray_runtime::tls::client_config_opts(protocols, ca_pem, insecure)?;
+    let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
+        .map_err(|_| format!("invalid server name for TLS: {host}"))?;
+    let mut client = rustls::ClientConnection::new(cfg, server_name).map_err(|e| e.to_string())?;
+    let mut sock = std::net::TcpStream::connect((host, port as u16)).map_err(|e| e.to_string())?;
+    while client.is_handshaking() {
+        client.complete_io(&mut sock).map_err(|e| tls_io_err(&e, true))?;
+    }
+    let mut reg = registry().lock().unwrap();
+    let id = reg.next;
+    reg.next += 1;
+    reg.open.insert(id, OpenHandle::Tls(Box::new(TlsConn { conn: rustls::Connection::Client(client), sock })));
+    Ok(id)
+}
+#[cfg(any(not(feature = "net-tls"), target_arch = "wasm32"))]
+pub fn tls_connect_opts(_host: &str, _port: i64, _protocols: &str, _ca_pem: &str, _insecure: bool) -> Result<i64, String> {
+    Err(NET_TLS_UNAVAILABLE.to_string())
+}
+
 /// Construye una configuración de servidor TLS a partir de los PEM de la cadena de certificados y la
 /// clave privada (M19.4b). Cada servidor puede tener su propio certificado, así que NO se cachea.
 #[cfg(all(feature = "net-tls", not(target_arch = "wasm32")))]
@@ -6518,6 +6544,17 @@ static BUILTINS: &[Builtin] = &[
         arity(a, 2, "__tls_connect_h2", " (host, port)")?;
         if a[0] != Type::String { return Err((Some(0), format!("__tls_connect_h2 expects a string (the host), not {}", a[0]))); }
         if a[1] != Type::Int { return Err((Some(1), format!("__tls_connect_h2 expects an int (the port), not {}", a[1]))); }
+        Ok(Type::Array(Box::new(Type::String)))
+    } },
+    // raygrpc #387: __tls_connect_opts(host, puerto, protocolos, ca_pem, insecure) -> [string]: TLS de
+    // cliente con ALPN, CA propia y modo sin verificación por conexión. std/net → tls_connect_opts.
+    Builtin { name: "__tls_connect_opts", opcode: OpCode::TlsConnectOpts, check: |a| {
+        arity(a, 5, "__tls_connect_opts", " (host, port, protocols, ca_pem, insecure)")?;
+        if a[0] != Type::String { return Err((Some(0), format!("__tls_connect_opts expects a string (the host), not {}", a[0]))); }
+        if a[1] != Type::Int { return Err((Some(1), format!("__tls_connect_opts expects an int (the port), not {}", a[1]))); }
+        if a[2] != Type::String { return Err((Some(2), format!("__tls_connect_opts expects a string (the protocols), not {}", a[2]))); }
+        if a[3] != Type::String { return Err((Some(3), format!("__tls_connect_opts expects a string (the PEM of the CA), not {}", a[3]))); }
+        if a[4] != Type::Bool { return Err((Some(4), format!("__tls_connect_opts expects a bool (insecure), not {}", a[4]))); }
         Ok(Type::Array(Box::new(Type::String)))
     } },
     // __tls_accept(handle, cert, clave) -> [string] (M19.4b): envuelve un socket TCP ya aceptado en una

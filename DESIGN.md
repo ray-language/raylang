@@ -21537,3 +21537,83 @@ así meter en `std/crypto` un cifrado RSA que `ring` no ofrece y que habría que
 sin TLS: registro como réplica y volcado del binlog, con los tipos de evento en el orden que da
 `mysqlbinlog`.
 
+## 471. gRPC: streaming, metadatos de respuesta, TLS y reflexión (raygrpc #385–#387, nov 2026)
+
+`net/grpc_server` era unario: esperaba el END_STREAM, llamaba al handler y respondía. raygrpc
+tuvo que escribir su propio servidor y su propio cliente sobre `net/grpc_h2` para la reflexión
+y para devolver trailers.
+
+**Un handler de streaming corre en la fibra de la conexión.** No se le da una fibra propia: el
+`Router` lleva funciones, y en nativo un valor con funciones no cruza a otra fibra (por eso
+`build` se llama dentro de cada conexión). El handler `fn(ServerStream) -> Status` arranca al
+llegar las cabeceras; su stream sigue en la tabla y recibe los DATA mientras corre. `recv` lee
+de la conexión cuando no tiene un mensaje completo.
+
+**El problema que enseñó `grpcurl`.** La primera versión dejaba en cola las demás llamadas
+mientras un handler esperaba. `grpcurl` abre el stream de reflexión, lo deja abierto y hace su
+llamada por la misma conexión: se colgaba hasta el plazo. Ahora la atención de streams listos
+(`drain_ready`) es reentrante: un handler que espera en `recv` o en `idle` atiende las demás
+llamadas que van llegando, también otro handler de streaming, que corre hasta el final anidado.
+Es disciplina de pila, no concurrencia real: dos streams de larga vida intercalados en la misma
+conexión avanzan de uno en uno. Cubre el caso real (un stream abierto más llamadas cortas) sin
+mover funciones entre fibras. Un handler que espera algo propio (un canal de eventos) debe
+hacerlo con `idle(s, ms)`, no durmiendo.
+
+**Metadatos de respuesta.** `Call` gana `response_headers` y `response_trailers`, que el
+handler llena con `set_header` / `set_trailer`; el servidor los lee al volver el handler, con
+éxito o con un estado de error. Se descartó cambiar el tipo de retorno del handler
+(`Reply { message, headers, trailers }`): rompía todos los handlers existentes. Añadir campos a
+`Call` solo rompe a quien construye un `Call` a mano.
+
+**Reflexión.** La lista de servicios sale de las rutas del router, así que `grpcurl list`
+funciona sin dar nada. Para `describe` hacen falta los descriptores, que no se pueden derivar
+(no hay generador de `.proto`): se pasan serializados, como los escribe `protoc`.
+
+**Cliente.** `grpc_conn` lleva un stream a la vez por conexión; `Reply` separa cabeceras y
+trailers según el HEADERS en que llegaron.
+
+**Opciones TLS por conexión.** `std/net` solo tenía `tls_connect_h2(host, port)`: la CA se
+cambiaba con `SSL_CERT_FILE` para todo el proceso (raygrpc se relanzaba a sí mismo para su
+`-cacert`). Se añade el primitivo `__tls_connect_opts` y `net.tls_connect_opts(host, port,
+TlsOptions { alpn, ca_pem, insecure })`. Con `ca_pem`, la conexión confía SOLO en esa CA (lo que
+hace `grpcurl -cacert`): sumarla a las raíces del sistema, como hace `SSL_CERT_FILE`, no sirve
+para fijar una CA privada. `insecure` reutiliza el verificador de `tls_upgrade_insecure`. La
+config la arma `ray_runtime::tls::client_config_opts`, que comparten la VM y el nativo. Como
+`net/grpc_conn` la usa, el paquete pide raylang 1.27.110 y no se puede publicar antes de esa
+release.
+
+**Un fallo del nativo que destapó la prueba.** El primer test de gRPC sobre TLS definía una
+función propia `try_call` en `main.ray`. En la VM no pasa nada: los módulos llaman al alias
+`try_call#prelude`. En nativo, `x#prelude` se trataba siempre como el builtin interceptado `x`,
+quitándole el sufijo; pero `try_call` es raylang puro y su definición se emite, así que el
+nombre pelado resolvía a la función de la raíz, el tipo de la llamada salía `unit` y `respond`
+de `net/grpc_server` se emitía como stub. El síntoma era engañoso (el handler no corría y la
+llamada vencía por plazo; parecía un cuelgue de TLS). `split_prelude_alias` distingue ahora el
+alias de una función emitida del de un builtin interceptado.
+
+Verificado con `grpcurl` 1.9 real: `list`, `describe`, una llamada unaria con sus cabeceras y
+trailers, un stream bidireccional de tres mensajes y lo mismo sobre TLS con `-cacert`.
+
+**Revisión antes de 1.27.110.** La revisión del rango encontró, y se corrigió:
+
+- **Control de flujo de los streams.** Se devolvía la ventana del stream al llegar cada DATA, así
+  que un emisor rápido llenaba el búfer hasta un tope artificial (en el servidor,
+  RESOURCE_EXHAUSTED; en el cliente, «response message larger than…» con mensajes pequeños). Ahora
+  al llegar se devuelve solo la ventana de la conexión y la del stream se concede cuando el
+  lector pide más (`recv`, `stream_recv`): lo no leído lo frena HTTP/2.
+- **El plazo de `idle`.** Quedaba puesto en el `Link` al volver, y un `send` posterior que
+  esperase ventana vencía y tumbaba la conexión. El plazo es ahora solo de la espera.
+- **Un rechazo temprano con el cliente subiendo.** `stream_send` esperaba una ventana que ya no
+  iba a llegar (para siempre sin plazo; con plazo, tapando el estado real con
+  DEADLINE_EXCEEDED). El stream se cierra en el `Link` cuando el servidor termina.
+- **Anidamiento sin tope.** Cada stream abierto anida sobre el anterior: `MAX_NESTED_STREAMS`
+  (16) por conexión; uno más recibe RESOURCE_EXHAUSTED. La limitación de fondo sigue: dos
+  suscripciones largas en una conexión avanzan de una en una.
+- **`conn_stream` reintentaba de más.** Cualquier fallo sin octetos se tomaba por «conexión
+  caída» y repetía la petición, también tras un plazo vencido. Ahora solo un EOF limpio.
+- **El cargador (§469 bis).** Tratar como módulo a las funciones con nombre de prelude de una
+  entrada sin `main` renombraba también las pruebas `@test` de una suite (el runner las
+  saltaba: verde falso) y dejaba sin resolver el UFCS a la función propia. Las pruebas conservan
+  su nombre y la banda de la entrada lleva el prefijo de las renombradas.
+- `new_call` para construir un `Call` a mano; `tls_connect_opts` en el MANUAL.
+

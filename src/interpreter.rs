@@ -2966,6 +2966,19 @@ impl<'a> Interpreter<'a> {
                 };
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
+            // raygrpc #387: TLS de cliente con opciones por conexión.
+            "__tls_connect_opts" => {
+                let arr = match (&values[0], &values[1], &values[2], &values[3], &values[4]) {
+                    (Value::Str(host), Value::Int(port), Value::Str(protocols), Value::Str(ca_pem), Value::Bool(insecure)) => {
+                        match crate::builtins::tls_connect_opts(host, *port, protocols, ca_pem, *insecure) {
+                            Ok(h) => vec![Value::Str("ok".to_string()), Value::Str(h.to_string())],
+                            Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
+                        }
+                    }
+                    _ => unreachable!("the checker guarantees string, int, string, string, bool"),
+                };
+                Value::Array(Rc::new(RefCell::new(arr)))
+            }
             // M19.4b: envuelve un socket aceptado en una sesión TLS de servidor → ["ok", handle]/["err",…].
             "__tls_accept" => {
                 let arr = match (&values[0], &values[1], &values[2]) {

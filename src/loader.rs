@@ -436,14 +436,21 @@ fn load_impl(entry: &Path, dep_roots: &DepRoots, entry_source: Option<&str>, pro
         next_start = start + m.source.lines().count().max(1) + 1; // +1 de holgura entre bandas
         // Fix §52: publicar la banda → prefijo de funciones, para que el checker resuelva los
         // sitios UFCS a funciones PROPIAS del módulo por su posición (entrada = prefijo "").
-        merged.module_bands.push((start, prefix.clone().unwrap_or_default()));
-
-        // 6. Renombrar las definiciones de función a su nombre global y fusionar.
-        // raycdc #407: las funciones de un módulo suelto con nombre de builtin (ver
+        // raycdc #407: las funciones de un módulo suelto con nombre de builtin o de prelude (ver
         // `entry_shadow_name`); el mapa se calcula antes de vaciar `functions`.
         let shadowed: HashMap<String, String> = m.program.functions.iter()
-            .filter_map(|f| entry_shadow_name(&m, &f.name).map(|g| (f.name.clone(), g)))
+            .filter_map(|f| entry_shadow_name(&m, f).map(|g| (f.name.clone(), g)))
             .collect();
+        // La banda de una entrada con funciones renombradas lleva el prefijo que estas recibieron:
+        // así un `xs.get(k)` del propio módulo resuelve a SU `get` (`leaf::get`), como en el
+        // proyecto; las demás funciones de la entrada no existen con ese prefijo y siguen igual.
+        let band_prefix = match (&prefix, shadowed.values().next()) {
+            (None, Some(global)) => global.rsplit_once("::").map(|(p, _)| p.to_string()).unwrap_or_default(),
+            _ => prefix.clone().unwrap_or_default(),
+        };
+        merged.module_bands.push((start, band_prefix));
+
+        // 6. Renombrar las definiciones de función a su nombre global y fusionar.
         for mut f in std::mem::take(&mut m.program.functions) {
             f.name = shadowed.get(&f.name).cloned().unwrap_or_else(|| global_fn(&prefix, &f.name));
             merged.functions.push(f);
@@ -890,13 +897,21 @@ fn module_prefix(m: &Module) -> Option<String> {
 /// builtin dentro de su módulo; suelta, se quedaba con el nombre pelado y sus llamadas ligaban al
 /// builtin («send expects 2 arguments»). Aquí se le da el mismo nombre global que tendría
 /// importada, solo a esas funciones: el resto de la entrada sigue sin namespacing.
-fn entry_shadow_name(m: &Module, name: &str) -> Option<String> {
+fn entry_shadow_name(m: &Module, f: &Function) -> Option<String> {
+    let name = f.name.as_str();
+    if !m.is_entry || name.starts_with("__") || name == "main" {
+        return None;
+    }
+    // Un `@test` es una prueba de la suite, no una función que otro llame: conserva su nombre
+    // (el runner recoge las pruebas propias por el nombre sin `::`).
+    if f.annotations.iter().any(|a| a.name == "test") {
+        return None;
+    }
     // Lo mismo con una función del PRELUDE (`fn get` en `db/bson`): suelta, el módulo pasaba por
     // raíz y su `get` redefinía la del prelude para todo el archivo, así que `m.get(k)` sobre un
     // `Map` ligaba a la `get` del módulo («expected [Field], got Map<…>»). En el proyecto esa
     // función es `bson::get` y el `get` del prelude sigue visible.
-    let shadows = crate::builtins::is_builtin(name) || crate::prelude::functions().iter().any(|f| f.name == name);
-    if !m.is_entry || name.starts_with("__") || !shadows {
+    if !crate::builtins::is_builtin(name) && !prelude_function_names().contains(name) {
         return None;
     }
     if m.program.functions.iter().any(|f| f.name == "main") {
@@ -904,6 +919,13 @@ fn entry_shadow_name(m: &Module, name: &str) -> Option<String> {
     }
     let leaf = m.name.rsplit('/').next().unwrap_or(&m.name);
     Some(format!("{}::{}", ns_prefix(leaf), name))
+}
+
+/// Los nombres de las funciones del prelude, una sola vez (clonar su AST en cada consulta era
+/// caro: `entry_shadow_name` corre por cada función de cada módulo cargado).
+fn prelude_function_names() -> &'static std::collections::HashSet<String> {
+    static NAMES: std::sync::OnceLock<std::collections::HashSet<String>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| crate::prelude::functions().into_iter().map(|f| f.name).collect())
 }
 
 /// Mapa `nombre local → nombre global` de los **tipos** (struct/enum/trait) de un módulo (M11.3c).
@@ -1260,7 +1282,7 @@ impl<'a> Resolver<'a> {
         let prefix = module_prefix(m);
         let mut own = HashMap::new();
         for f in &m.program.functions {
-            let global = entry_shadow_name(m, &f.name).unwrap_or_else(|| global_fn(&prefix, &f.name));
+            let global = entry_shadow_name(m, f).unwrap_or_else(|| global_fn(&prefix, &f.name));
             own.insert(f.name.clone(), global);
         }
         for e in &m.program.externs {

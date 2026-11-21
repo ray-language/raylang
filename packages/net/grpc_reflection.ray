@@ -1,0 +1,219 @@
+// gRPC Server Reflection (net 0.17.0, raygrpc #385): el servicio que usan `grpcurl list` /
+// `describe`, Postman o Evans para descubrir lo que un servidor ofrece sin tener los `.proto`.
+//
+// Es un método bidireccional (`ServerReflectionInfo`) en dos versiones idénticas en el cable,
+// `grpc.reflection.v1` y `grpc.reflection.v1alpha`; se registran las dos. La lista de servicios
+// sale de las rutas del `Router`. Los descriptores (para `describe` y para llamar sin `.proto`)
+// son opcionales: se pasan ya serializados (`FileDescriptorProto`), tal cual los emite
+// `protoc --descriptor_set_out` (`files_of_set` trocea el conjunto).
+import std/protobuf;
+import net/grpc_server;
+import net/grpc_status;
+from net/grpc_status import Status;
+from net/grpc_server import Router, ServerStream;
+
+const V1: string = "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo";
+
+const V1ALPHA: string = "/grpc.reflection.v1alpha.ServerReflection/ServerReflectionInfo";
+
+// Un archivo de descriptores indexado: su nombre, sus octetos y los símbolos que declara.
+struct File {
+    name: string,
+    raw: bytes,
+    symbols: [string],
+}
+
+/// Adds the reflection service to a router: `grpcurl -plaintext host:port list` then shows the
+/// services of its routes (unary and streaming alike). `files` are serialized
+/// `FileDescriptorProto`s, for `describe` and for calling without `.proto` files; pass `[]` to
+/// offer only the list. Call it AFTER registering the routes or before: the list is computed on
+/// each request. Returns the router for chaining.
+pub fn enable(r: Router, files: [bytes]) -> Router {
+    var index: [File] = [];
+    for raw in files {
+        index.push(index_file(raw));
+    }
+    let handler = fn(s: ServerStream) -> Status { serve(s, r, index) };
+    grpc_server.route_stream(grpc_server.route_stream(r, V1, handler), V1ALPHA, handler)
+}
+
+/// Splits a `FileDescriptorSet` (what `protoc --descriptor_set_out=FILE --include_imports`
+/// writes) into its serialized `FileDescriptorProto`s, ready for `enable`.
+pub fn files_of_set(set: bytes) -> Result<[bytes], string> {
+    let fields = protobuf.parse(set)?;
+    var out: [bytes] = [];
+    for f in protobuf.get_all(fields, 1) {
+        out.push(f.bytes_val);
+    }
+    Result.Ok(out)
+}
+
+/// The service names of a router's routes ("/pkg.Service/Method" → "pkg.Service"), sorted and
+/// without repeats — what the reflection service lists.
+pub fn service_names(r: Router) -> [string] {
+    var names: [string] = [];
+    for path in r.routes.keys() + r.streams.keys() {
+        if (path.starts_with("/")) {
+            let rest = path.substring(1, path.len());
+            match (rest.index_of("/")) {
+                Option.Some(at) => {
+                    let name = rest.substring(0, at);
+                    if (!names.contains(name)) {
+                        names.push(name);
+                    }
+                },
+                Option.None => { },
+            }
+        }
+    }
+    sort(names)
+}
+
+// Los símbolos de un FileDescriptorProto: mensajes y enums (anidados incluidos), servicios y
+// sus métodos, todos calificados con el paquete.
+fn index_file(raw: bytes) -> File {
+    var symbols: [string] = [];
+    var name = "";
+    match (protobuf.parse(raw)) {
+        Result.Ok(fields) => {
+            name = protobuf.get_string(fields, 1);
+            let package = protobuf.get_string(fields, 2);
+            let prefix = if (package == "") { "" } else { package + "." };
+            for m in protobuf.get_all(fields, 4) {
+                add_message(symbols, prefix, m.bytes_val, 0);
+            }
+            for e in protobuf.get_all(fields, 5) {
+                add_named(symbols, prefix, e.bytes_val);
+            }
+            for svc in protobuf.get_all(fields, 6) {
+                match (protobuf.parse(svc.bytes_val)) {
+                    Result.Ok(sf) => {
+                        let service = prefix + protobuf.get_string(sf, 1);
+                        symbols.push(service);
+                        for method in protobuf.get_all(sf, 2) {
+                            add_named(symbols, service + ".", method.bytes_val);
+                        }
+                    },
+                    Result.Err(_) => { },
+                }
+            }
+        },
+        Result.Err(_) => { },
+    }
+    File { name: name, raw: raw, symbols: symbols }
+}
+
+// `prefix + nombre` de un mensaje con el nombre en el campo 1 (enum, método).
+fn add_named(symbols: [string], prefix: string, raw: bytes) {
+    match (protobuf.parse(raw)) {
+        Result.Ok(fields) => symbols.push(prefix + protobuf.get_string(fields, 1)),
+        Result.Err(_) => { },
+    }
+}
+
+// Un DescriptorProto: su nombre, sus mensajes anidados (campo 3) y sus enums (campo 4).
+fn add_message(symbols: [string], prefix: string, raw: bytes, depth: int) {
+    if (depth > 32) {
+        return;
+    }
+    match (protobuf.parse(raw)) {
+        Result.Ok(fields) => {
+            let full = prefix + protobuf.get_string(fields, 1);
+            symbols.push(full);
+            for nested in protobuf.get_all(fields, 3) {
+                add_message(symbols, full + ".", nested.bytes_val, depth + 1);
+            }
+            for e in protobuf.get_all(fields, 4) {
+                add_named(symbols, full + ".", e.bytes_val);
+            }
+        },
+        Result.Err(_) => { },
+    }
+}
+
+// El bucle del método: una respuesta por petición hasta que el cliente cierra su lado.
+fn serve(s: ServerStream, r: Router, index: [File]) -> Status {
+    while (true) {
+        match (grpc_server.recv(s)) {
+            Result.Ok(Option.Some(request)) => {
+                match (grpc_server.send(s, answer(request, r, index))) {
+                    Result.Ok(_) => { },
+                    Result.Err(st) => {
+                        return st;
+                    },
+                }
+            },
+            Result.Ok(Option.None) => {
+                break;
+            },
+            Result.Err(st) => {
+                return st;
+            },
+        }
+    }
+    grpc_status.new(grpc_status.OK, "")
+}
+
+// ServerReflectionResponse para una ServerReflectionRequest.
+fn answer(request: bytes, r: Router, index: [File]) -> bytes {
+    let w = protobuf.writer();
+    protobuf.write_bytes(w, 2, request);  // original_request
+    let fields = match (protobuf.parse(request)) {
+        Result.Ok(f) => f,
+        Result.Err(e) => {
+            write_error(w, grpc_status.INVALID_ARGUMENT, "malformed reflection request: " + e);
+            return protobuf.finish(w);
+        },
+    };
+    protobuf.write_string(w, 1, protobuf.get_string(fields, 1));  // valid_host
+    if (protobuf.get_all(fields, 7).len() > 0) {
+        // list_services
+        let list = protobuf.writer();
+        for name in service_names(r) {
+            let svc = protobuf.writer();
+            protobuf.write_string(svc, 1, name);
+            protobuf.write_message(list, 1, svc);
+        }
+        protobuf.write_message(w, 6, list);
+        return protobuf.finish(w);
+    }
+    if (protobuf.get_all(fields, 3).len() > 0) {
+        // file_by_filename
+        let wanted = protobuf.get_string(fields, 3);
+        for f in index {
+            if (f.name == wanted) {
+                write_file(w, f);
+                return protobuf.finish(w);
+            }
+        }
+        write_error(w, grpc_status.NOT_FOUND, "file not found: " + wanted);
+        return protobuf.finish(w);
+    }
+    if (protobuf.get_all(fields, 4).len() > 0) {
+        // file_containing_symbol
+        let symbol = protobuf.get_string(fields, 4);
+        for f in index {
+            if (f.symbols.contains(symbol)) {
+                write_file(w, f);
+                return protobuf.finish(w);
+            }
+        }
+        write_error(w, grpc_status.NOT_FOUND, "symbol not found: " + symbol);
+        return protobuf.finish(w);
+    }
+    write_error(w, grpc_status.UNIMPLEMENTED, "this reflection request is not supported");
+    protobuf.finish(w)
+}
+
+fn write_file(w: protobuf.PbWriter, f: File) {
+    let files = protobuf.writer();
+    protobuf.write_bytes(files, 1, f.raw);
+    protobuf.write_message(w, 4, files);  // file_descriptor_response
+}
+
+fn write_error(w: protobuf.PbWriter, code: int, message: string) {
+    let e = protobuf.writer();
+    protobuf.write_varint(e, 1, code);
+    protobuf.write_string(e, 2, message);
+    protobuf.write_message(w, 7, e);  // error_response
+}

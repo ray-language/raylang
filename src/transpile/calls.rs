@@ -1364,14 +1364,25 @@ impl Transpiler {
         Ok(())
     }
 
+    /// El alias `x#prelude` (la función del prelude `x` cuando la raíz define su propia `x`) y si
+    /// hay que tratarlo como el builtin/wrapper `x` INTERCEPTADO. Si la función del prelude es
+    /// raylang puro y su definición se emite (`try_call`, que solo envuelve a `__try_call`), el
+    /// alias es una función más con ese nombre: quitarle el sufijo la confundía con la `x` del
+    /// usuario — el tipo de `try_call#prelude(f)` salía el de la `try_call` de la raíz y la función
+    /// que la llamaba (un `respond` de `net/grpc_server`) se emitía como stub.
+    pub(super) fn split_prelude_alias<'n>(&self, name: &'n str) -> (&'n str, bool) {
+        match name.strip_suffix("#prelude") {
+            Some(_) if self.funcs.contains_key(name) && !super::names::is_handled_builtin(name) => (name, false),
+            Some(base) => (base, true),
+            None => (name, false),
+        }
+    }
+
     pub(super) fn as_builtin_call<'a>(&self, e: &'a Expr, want: &str) -> Option<Vec<&'a Expr>> {
         let ExprKind::Call { callee, args } = &e.kind else { return None };
         let (name, recv) = resolve_callee(callee).ok()?;
         // M270: el alias `x#prelude` es el builtin `x` aunque exista una `x` del usuario.
-        let (name, force_prelude) = match name.strip_suffix("#prelude") {
-            Some(base) => (base, true),
-            None => (name, false),
-        };
+        let (name, force_prelude) = self.split_prelude_alias(name);
         if !force_prelude && self.funcs.contains_key(name) {
             return None; // función de usuario homónima: sin fusión
         }
@@ -1433,10 +1444,7 @@ impl Transpiler {
         let (name, recv) = resolve_callee(callee)?;
         // M270 (raystream [1]): `x#prelude` llama a la función del PRELUDE `x` aunque la raíz haya
         // definido su propia `x`: se despacha por el nombre base saltando la del usuario.
-        let (name, force_prelude) = match name.strip_suffix("#prelude") {
-            Some(base) => (base, true),
-            None => (name, false),
-        };
+        let (name, force_prelude) = self.split_prelude_alias(name);
         // M274 (raystream [16]): el `show` de un ARREGLO (`impl<T: Show> Show for [T]` del prelude, al
         // que baja un `@derive(Show)` con campos `[T]`) es el `ray_show` nativo del Vec: misma salida
         // `[a, b]` que la VM (es lo que ya imprime `print`), sin emitir el cuerpo genérico del prelude.
@@ -3164,6 +3172,21 @@ impl Transpiler {
                 self.emit_expr(out, eff[1])?;
                 out.push(')');
             }
+            // raygrpc #387: TLS de cliente con opciones por conexión.
+            "tls_connect_opts" if name.starts_with("__") && !self.exclude.contains("tls") => {
+                self.needs_rt_tls = true;
+                out.push_str("__ray_tls_connect_opts(&");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[2])?;
+                out.push_str(", &");
+                self.emit_expr(out, eff[3])?;
+                out.push_str(", ");
+                self.emit_expr(out, eff[4])?;
+                out.push(')');
+            }
             // M124: el resumen del certificado del peer → arreglo etiquetado plano (el wrapper de
             // std/net construye el struct PeerCert, patrón stat).
             "tls_peer_cert" if name.starts_with("__") && !self.exclude.contains("tls") => {
@@ -3946,10 +3969,7 @@ impl Transpiler {
             ExprKind::Call { callee, args } => {
                 let (n, recv) = resolve_callee(callee)?;
                 // M270 (raystream [1]): `x#prelude` = el builtin/prelude `x`, aunque la raíz defina `x`.
-                let (n, force_prelude) = match n.strip_suffix("#prelude") {
-                    Some(base) => (base, true),
-                    None => (n, false),
-                };
+                let (n, force_prelude) = self.split_prelude_alias(n);
                 // Despacho dinámico: el tipo es el retorno del método del trait.
                 if let Some(r) = recv {
                     if matches!(self.type_of(r).ok(), Some(Type::Dyn(_))) {

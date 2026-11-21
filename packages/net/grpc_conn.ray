@@ -24,12 +24,16 @@ import net/grpc_status as status;
 from net/grpc_status import Status;
 
 /// The answer of a call: the response message (empty unless status is OK), the grpc-status,
-/// the decoded grpc-message and the response headers + trailers (lower-case names).
+/// the decoded grpc-message and the response metadata (lower-case names): `headers` is what the
+/// server sent before the message, `trailers` what came with the status (a trailers-only
+/// response has only trailers), and `metadata` both together, as before net 0.17.0.
 pub struct Reply {
     message: bytes,
     status: int,
     status_message: string,
     metadata: Map<string, string>,
+    headers: Map<string, string>,
+    trailers: Map<string, string>,
 }
 
 /// A client connection. Not shareable between fibers: open one per fiber (or pool them with
@@ -55,6 +59,30 @@ pub fn connect(host: string, port: int) -> Result<Conn, string> {
 /// HTTP/2 preface and SETTINGS.
 pub fn connect_tls(host: string, port: int) -> Result<Conn, string> {
     let handle = net.tls_connect_h2(host, port)?;
+    open_conn(handle, host, port, true)
+}
+
+/// Connects over TLS with per-connection options (net 0.17.0, raygrpc #387; needs raylang
+/// 1.27.110): `opts.ca_pem` trusts your own certificate authority for this connection only
+/// (what `grpcurl -cacert` does, instead of `SSL_CERT_FILE` for the whole process),
+/// `opts.insecure` skips the verification (development), and `opts.alpn` are the protocols to
+/// offer — `["h2"]` is what gRPC servers expect and the server must then pick it; `[]` offers
+/// none, for a server that speaks HTTP/2 over TLS without ALPN. Start from `net.tls_options()`.
+pub fn connect_tls_opts(host: string, port: int, opts: net.TlsOptions) -> Result<Conn, string> {
+    let handle = net.tls_connect_opts(host, port, opts)?;
+    if (opts.alpn.len() > 0) {
+        let picked = match (net.tls_alpn(handle)) {
+            Result.Ok(p) => p,
+            Result.Err(e) => {
+                close(handle);
+                return Result.Err(e);
+            },
+        };
+        if (picked != "h2") {
+            close(handle);
+            return Result.Err("the server did not negotiate HTTP/2 (ALPN 'h2')");
+        }
+    }
     open_conn(handle, host, port, true)
 }
 
@@ -105,9 +133,35 @@ struct Acc {
     has_status: bool,
     grpc_message: string,
     metadata: Map<string, string>,
+    headers: Map<string, string>,
+    trailers: Map<string, string>,
     parts: [bytes],
     size: int,
     done: bool,
+    // Un stream (`open_stream`): varios mensajes, leídos al ritmo de `stream_recv`. La ventana de
+    // recepción del stream se concede al leer (`owed`), no al llegar el DATA.
+    streaming: bool,
+    owed: int,
+}
+
+fn new_acc() -> Acc {
+    let metadata: Map<string, string> = Map.new();
+    let headers: Map<string, string> = Map.new();
+    let trailers: Map<string, string> = Map.new();
+    Acc {
+        http_status: 0,
+        grpc_status: 0,
+        has_status: false,
+        grpc_message: "",
+        metadata: metadata,
+        headers: headers,
+        trailers: trailers,
+        parts: [],
+        size: 0,
+        done: false,
+        streaming: false,
+        owed: 0
+    }
 }
 
 fn fail_conn(c: Conn, e: string) -> Result<Reply, string> {
@@ -116,8 +170,47 @@ fn fail_conn(c: Conn, e: string) -> Result<Reply, string> {
     Result.Err(e)
 }
 
-fn reply_of(code: int, message: string, metadata: Map<string, string>) -> Reply {
-    Reply { message: b"", status: code, status_message: message, metadata: metadata }
+fn reply_of(code: int, message: string, acc: Acc) -> Reply {
+    Reply {
+        message: b"",
+        status: code,
+        status_message: message,
+        metadata: acc.metadata,
+        headers: acc.headers,
+        trailers: acc.trailers
+    }
+}
+
+// Las cabeceras de una petición gRPC: las fijas, el plazo y los metadatos del llamador.
+fn request_headers(
+    c: Conn,
+    path: string,
+    metadata: Map<string, string>,
+    deadline_ms: int
+) -> [HEntry] {
+    var hs: [HEntry] = [
+        h2.hdr(":method", "POST"),
+        h2.hdr(":scheme", if (c.tls) { "https" } else { "http" }),
+        h2.hdr(":path", path),
+        h2.hdr(":authority", "${c.host}:${c.port}"),
+        h2.hdr("content-type", "application/grpc"),
+        h2.hdr("te", "trailers"),
+        h2.hdr("user-agent", "grpc-raylang/1")
+    ];
+    if (deadline_ms > 0) {
+        hs.push(h2.hdr("grpc-timeout", "${deadline_ms}m"));
+    }
+    for k in metadata.keys() {
+        let name = k.to_lower();
+        if (!name.starts_with(":")
+            && name != "content-type"
+            && name != "te"
+            && name != "grpc-timeout"
+            && name != "user-agent") {
+            hs.push(h2.hdr(name, metadata.get_or(k, "")));
+        }
+    }
+    hs
 }
 
 /// Performs a unary call on `path` ("/package.Service/Method") with the serialized request
@@ -142,29 +235,8 @@ pub fn call(
     let started = time.monotonic();
     h2.set_deadline(l, if (deadline_ms > 0) { started + deadline_ms } else { 0 });
 
-    var hs: [HEntry] = [
-        h2.hdr(":method", "POST"),
-        h2.hdr(":scheme", if (c.tls) { "https" } else { "http" }),
-        h2.hdr(":path", path),
-        h2.hdr(":authority", "${c.host}:${c.port}"),
-        h2.hdr("content-type", "application/grpc"),
-        h2.hdr("te", "trailers"),
-        h2.hdr("user-agent", "grpc-raylang/1")
-    ];
-    if (deadline_ms > 0) {
-        hs.push(h2.hdr("grpc-timeout", "${deadline_ms}m"));
-    }
-    for k in metadata.keys() {
-        let name = k.to_lower();
-        if (!name.starts_with(":")
-            && name != "content-type"
-            && name != "te"
-            && name != "grpc-timeout"
-            && name != "user-agent") {
-            hs.push(h2.hdr(name, metadata.get_or(k, "")));
-        }
-    }
-    let empty: Map<string, string> = Map.new();
+    let hs = request_headers(c, path, metadata, deadline_ms);
+    let acc = new_acc();
     let pending = Pending { frames: [] };
     h2.open_stream(l, id);
     let sent = send_request(l, id, hs, message, pending);
@@ -172,22 +244,12 @@ pub fn call(
         Result.Ok(_) => { },
         Result.Err(e) => {
             if (e == "deadline exceeded") {
-                return cancel(c, id, empty);
+                return cancel(c, id, acc);
             }
             return fail_conn(c, e);
         },
     }
 
-    let acc = Acc {
-        http_status: 0,
-        grpc_status: 0,
-        has_status: false,
-        grpc_message: "",
-        metadata: empty,
-        parts: [],
-        size: 0,
-        done: false
-    };
     var i = 0;
     while (!acc.done) {
         let next: Result<h2.Frame, string> = if (i < pending.frames.len()) {
@@ -200,7 +262,7 @@ pub fn call(
             Result.Ok(f) => f,
             Result.Err(e) => {
                 if (e == "deadline exceeded") {
-                    return cancel(c, id, acc.metadata);
+                    return cancel(c, id, acc);
                 }
                 return fail_conn(c, e);
             },
@@ -215,35 +277,35 @@ pub fn call(
 
     if (acc.http_status != 200) {
         let code = status.from_http(acc.http_status);
-        return Result.Ok(reply_of(code, "HTTP status ${acc.http_status}", acc.metadata));
+        return Result.Ok(reply_of(code, "HTTP status ${acc.http_status}", acc));
     }
     if (!acc.has_status) {
-        return Result.Ok(reply_of(status.INTERNAL, "response without grpc-status", acc.metadata));
+        return Result.Ok(reply_of(status.INTERNAL, "response without grpc-status", acc));
     }
     if (acc.grpc_status != status.OK) {
-        return Result.Ok(reply_of(acc.grpc_status, acc.grpc_message, acc.metadata));
+        return Result.Ok(reply_of(acc.grpc_status, acc.grpc_message, acc));
     }
     let body = h2.concat(acc.parts);
     if (body.len() == 0) {
-        return Result.Ok(reply_of(status.INTERNAL, "OK response without a message", acc.metadata));
+        return Result.Ok(reply_of(status.INTERNAL, "OK response without a message", acc));
     }
     if (body.len() < 5 || body[0] != 0) {
         return Result.Ok(
-            reply_of(status.INTERNAL, "malformed or compressed response message", acc.metadata)
+            reply_of(status.INTERNAL, "malformed or compressed response message", acc)
         );
     }
     let len = body[1] << 24 | body[2] << 16 | body[3] << 8 | body[4];
     if (len != body.len() - 5) {
-        return Result.Ok(
-            reply_of(status.INTERNAL, "response is not exactly one message", acc.metadata)
-        );
+        return Result.Ok(reply_of(status.INTERNAL, "response is not exactly one message", acc));
     }
     Result.Ok(
         Reply {
             message: body.sub_bytes(5, body.len()),
             status: status.OK,
             status_message: acc.grpc_message,
-            metadata: acc.metadata
+            metadata: acc.metadata,
+            headers: acc.headers,
+            trailers: acc.trailers
         }
     )
 }
@@ -270,7 +332,7 @@ fn send_request(
 
 // Venció el plazo: cancela el stream y responde DEADLINE_EXCEEDED. Los frames tardíos del
 // stream los drenan las llamadas siguientes (los HEADERS pasan igualmente por el HPACK).
-fn cancel(c: Conn, id: int, md: Map<string, string>) -> Result<Reply, string> {
+fn cancel(c: Conn, id: int, acc: Acc) -> Result<Reply, string> {
     let l = c.link;
     h2.close_stream(l, id);
     h2.set_deadline(l, 0);
@@ -278,7 +340,7 @@ fn cancel(c: Conn, id: int, md: Map<string, string>) -> Result<Reply, string> {
         Result.Ok(_) => { },
         Result.Err(e) => return fail_conn(c, e),
     }
-    Result.Ok(reply_of(status.DEADLINE_EXCEEDED, "deadline exceeded", md))
+    Result.Ok(reply_of(status.DEADLINE_EXCEEDED, "deadline exceeded", acc))
 }
 
 fn on_frame(c: Conn, id: int, acc: Acc, fr: h2.Frame) -> Result<int, string> {
@@ -306,16 +368,28 @@ fn on_frame(c: Conn, id: int, acc: Acc, fr: h2.Frame) -> Result<int, string> {
                 acc.grpc_message = status.percent_decode(e.value);
             } else if (!e.name.starts_with(":")) {
                 acc.metadata.insert(e.name, e.value);
+                // El HEADERS que cierra el stream son los trailers; el anterior, las cabeceras.
+                if (end) {
+                    acc.trailers.insert(e.name, e.value);
+                } else {
+                    acc.headers.insert(e.name, e.value);
+                }
             }
         }
         if (end) {
             acc.done = true;
         }
     } else if (fr.ftype == h2.DATA) {
-        h2.release(l, fr, mine && !end)?;
+        h2.release(l, fr, mine && !end && !acc.streaming)?;
         if (mine) {
             acc.size = acc.size + fr.payload.len();
-            if (acc.size > c.max_message + 5) {
+            if (acc.streaming) {
+                // El tope es por mensaje (lo comprueba `stream_recv`); lo pendiente lo acota la
+                // ventana del stream, que solo se concede al leer.
+                if (!end) {
+                    acc.owed = acc.owed + fr.flow;
+                }
+            } else if (acc.size > c.max_message + 5) {
                 return Result.Err("response message larger than ${c.max_message} octets");
             }
             acc.parts.push(fr.payload);
@@ -336,6 +410,248 @@ fn on_frame(c: Conn, id: int, acc: Acc, fr: h2.Frame) -> Result<int, string> {
     Result.Ok(0)
 }
 
+// ── Streams (net 0.17.0, raygrpc #387) ───────────────────────────────────────────────────
+/// An open call that carries several messages in either direction: server-streaming,
+/// client-streaming or bidirectional. One at a time per `Conn`: finish it (read until
+/// `stream_recv` returns `Ok(None)`, or `stream_cancel`) before the next call on that connection.
+pub struct ClientStream {
+    conn: Conn,
+    id: int,
+    acc: Acc,
+    buf: bytes,
+    send_closed: bool,
+    finished: bool,
+}
+
+/// Opens a stream on `path` and sends the request headers (`metadata` and the deadline as in
+/// `call`). Then `stream_send` the request messages, `stream_close_send` when there are no more,
+/// and pull the replies with `stream_recv`.
+pub fn open_stream(
+    c: Conn,
+    path: string,
+    metadata: Map<string, string>,
+    deadline_ms: int
+) -> Result<ClientStream, string> {
+    if (c.broken) {
+        return Result.Err("connection is closed");
+    }
+    let l = c.link;
+    if (l.goaway) {
+        c.broken = true;
+        close(l.h);
+        return Result.Err("the server sent GOAWAY");
+    }
+    let id = c.next_id;
+    c.next_id = c.next_id + 2;
+    h2.set_deadline(l, if (deadline_ms > 0) { time.monotonic() + deadline_ms } else { 0 });
+    h2.open_stream(l, id);
+    match (h2.send_headers(l, id, request_headers(c, path, metadata, deadline_ms), false)) {
+        Result.Ok(_) => { },
+        Result.Err(e) => {
+            c.broken = true;
+            close(l.h);
+            return Result.Err(e);
+        },
+    }
+    let acc = new_acc();
+    acc.streaming = true;
+    Result.Ok(
+        ClientStream { conn: c, id: id, acc: acc, buf: b"", send_closed: false, finished: false }
+    )
+}
+
+// Un frame que llega mientras el stream ENVÍA (esperando ventana). Si el servidor terminó el
+// stream antes de tiempo (trailers, quizá con un RST), se cierra en el `Link`: así `send_data`
+// deja de esperar una ventana que ya no va a llegar y el estado real del servidor se conserva.
+fn stream_frame(s: ClientStream, fr: h2.Frame) -> Result<int, string> {
+    on_frame(s.conn, s.id, s.acc, fr)?;
+    if (s.acc.done) {
+        h2.close_stream(s.conn.link, s.id);
+    }
+    Result.Ok(0)
+}
+
+// Un fallo de transporte dentro de un stream: la conexión deja de servir.
+fn stream_fail(s: ClientStream, e: string) -> string {
+    s.finished = true;
+    s.conn.broken = true;
+    close(s.conn.link.h);
+    e
+}
+
+// Venció el plazo: se cancela el stream y la respuesta queda como DEADLINE_EXCEEDED.
+fn stream_expire(s: ClientStream) {
+    let l = s.conn.link;
+    h2.close_stream(l, s.id);
+    h2.set_deadline(l, 0);
+    let _ = h2.send_reset(l, s.id, h2.CANCEL);
+    s.acc.http_status = 200;
+    s.acc.has_status = true;
+    s.acc.grpc_status = status.DEADLINE_EXCEEDED;
+    s.acc.grpc_message = "deadline exceeded";
+    s.acc.done = true;
+    s.finished = true;
+}
+
+/// Sends one request message on the stream. `Err` on a transport failure or when the stream
+/// has already ended (the server answered early: read its status with `stream_reply`).
+pub fn stream_send(s: ClientStream, message: bytes) -> Result<int, string> {
+    if (s.send_closed) {
+        return Result.Err("the stream is closed for sending");
+    }
+    if (s.finished || s.acc.done) {
+        return Result.Err("the stream has ended");
+    }
+    let c = s.conn;
+    let sent = h2.send_data(
+        c.link,
+        s.id,
+        grpc_frame(message),
+        false,
+        fn(fr: h2.Frame) -> Result<int, string> { stream_frame(s, fr) }
+    );
+    match (sent) {
+        Result.Ok(true) => Result.Ok(message.len()),
+        Result.Ok(false) => Result.Err("the stream has ended"),
+        Result.Err(e) => {
+            if (e == "deadline exceeded") {
+                stream_expire(s);
+                Result.Err(e)
+            } else {
+                Result.Err(stream_fail(s, e))
+            }
+        },
+    }
+}
+
+/// Tells the server there are no more request messages (half-closes the stream). Safe to call
+/// twice. The replies keep coming through `stream_recv`.
+pub fn stream_close_send(s: ClientStream) -> Result<int, string> {
+    if (s.send_closed || s.finished || s.acc.done) {
+        s.send_closed = true;
+        return Result.Ok(0);
+    }
+    s.send_closed = true;
+    let c = s.conn;
+    match (h2.send_data(
+        c.link,
+        s.id,
+        b"",
+        true,
+        fn(fr: h2.Frame) -> Result<int, string> { stream_frame(s, fr) }
+    )) {
+        Result.Ok(_) => Result.Ok(0),
+        Result.Err(e) => Result.Err(stream_fail(s, e)),
+    }
+}
+
+/// The next reply message: `Ok(Some(message))`, or `Ok(None)` when the server has finished —
+/// then `stream_reply` gives its status, headers and trailers. `Err` on a transport failure or
+/// a malformed message.
+pub fn stream_recv(s: ClientStream) -> Result<Option<bytes>, string> {
+    let c = s.conn;
+    let l = c.link;
+    while (true) {
+        if (s.acc.parts.len() > 0) {
+            s.buf = s.buf + h2.concat(s.acc.parts);
+            s.acc.parts = [];
+        }
+        if (s.buf.len() >= 5) {
+            if (s.buf[0] != 0) {
+                return Result.Err(stream_fail(s, "compressed response message"));
+            }
+            let len = s.buf[1] << 24 | s.buf[2] << 16 | s.buf[3] << 8 | s.buf[4];
+            if (len > c.max_message) {
+                return Result.Err(
+                    stream_fail(s, "response message larger than ${c.max_message} octets")
+                );
+            }
+            if (s.buf.len() >= 5 + len) {
+                let message = s.buf.sub_bytes(5, 5 + len);
+                s.buf = s.buf.sub_bytes(5 + len, s.buf.len());
+                s.acc.size = s.acc.size - 5 - len;
+                return Result.Ok(Option.Some(message));
+            }
+        }
+        if (s.finished) {
+            return Result.Ok(Option.None);
+        }
+        if (s.acc.done) {
+            s.finished = true;
+            h2.close_stream(l, s.id);
+            h2.set_deadline(l, 0);
+            if (!s.send_closed) {
+                // El servidor terminó antes de que cerráramos nuestro lado.
+                s.send_closed = true;
+                let _ = h2.send_reset(l, s.id, h2.NO_ERROR);
+            }
+            if (s.buf.len() > 0) {
+                return Result.Err("the response ended in the middle of a message");
+            }
+            return Result.Ok(Option.None);
+        }
+        // Hace falta más del servidor: se le devuelve la ventana de lo ya recibido.
+        if (s.acc.owed > 0) {
+            let owed = s.acc.owed;
+            s.acc.owed = 0;
+            match (h2.grant(l, s.id, owed)) {
+                Result.Ok(_) => { },
+                Result.Err(e) => return Result.Err(stream_fail(s, e)),
+            }
+        }
+        match (h2.read_frame(l)) {
+            Result.Ok(fr) => match (on_frame(c, s.id, s.acc, fr)) {
+                Result.Ok(_) => { },
+                Result.Err(e) => return Result.Err(stream_fail(s, e)),
+            },
+            Result.Err(e) => {
+                if (e == "deadline exceeded") {
+                    stream_expire(s);
+                } else {
+                    return Result.Err(stream_fail(s, e));
+                }
+            },
+        }
+    }
+    Result.Err("unreachable")
+}
+
+/// The outcome of a finished stream (after `stream_recv` returned `Ok(None)`): the grpc-status,
+/// its message, and the response `headers` and `trailers`. `message` is empty: the messages
+/// were delivered by `stream_recv`.
+pub fn stream_reply(s: ClientStream) -> Reply {
+    let acc = s.acc;
+    if (!acc.done) {
+        return reply_of(status.UNKNOWN, "the stream has not finished", acc);
+    }
+    if (acc.http_status != 200) {
+        return reply_of(status.from_http(acc.http_status), "HTTP status ${acc.http_status}", acc);
+    }
+    if (!acc.has_status) {
+        return reply_of(status.INTERNAL, "response without grpc-status", acc);
+    }
+    reply_of(acc.grpc_status, acc.grpc_message, acc)
+}
+
+/// Abandons a stream before its end (RST_STREAM CANCEL): the server's handler sees the call
+/// cancelled. The connection stays usable.
+pub fn stream_cancel(s: ClientStream) {
+    if (s.finished) {
+        return;
+    }
+    s.finished = true;
+    s.send_closed = true;
+    let l = s.conn.link;
+    h2.close_stream(l, s.id);
+    h2.set_deadline(l, 0);
+    let _ = h2.send_reset(l, s.id, h2.CANCEL);
+    s.acc.has_status = true;
+    s.acc.http_status = 200;
+    s.acc.grpc_status = status.CANCELLED;
+    s.acc.grpc_message = "cancelled by the client";
+    s.acc.done = true;
+}
+
 /// One-shot call: connect (h2c), call, disconnect.
 pub fn call_once(
     host: string,
@@ -346,6 +662,22 @@ pub fn call_once(
     deadline_ms: int
 ) -> Result<Reply, string> {
     let c = connect(host, port)?;
+    let r = call(c, path, message, metadata, deadline_ms);
+    disconnect(c);
+    r
+}
+
+/// One-shot call over TLS (ALPN `h2`, the certificate verified against `host`): connect, call,
+/// disconnect — with request metadata and a deadline, which `grpc_client.grpc_call` does not take.
+pub fn call_once_tls(
+    host: string,
+    port: int,
+    path: string,
+    message: bytes,
+    metadata: Map<string, string>,
+    deadline_ms: int
+) -> Result<Reply, string> {
+    let c = connect_tls(host, port)?;
     let r = call(c, path, message, metadata, deadline_ms);
     disconnect(c);
     r

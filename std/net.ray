@@ -175,6 +175,39 @@ pub fn tls_connect(host: string, port: int) -> Result<int, string> {
     }
 }
 
+// raygrpc #387: TLS de cliente con opciones POR CONEXIÓN.
+/// What `tls_connect_opts` can set for one connection. `alpn`: the protocols to offer, in
+/// order (`["h2"]`; `[]` = no ALPN) — the one the server picked is `tls_alpn(h)`. `ca_pem`: the
+/// PEM text of your own certificate authority; when given, ONLY it is trusted for this
+/// connection (a private CA without touching `SSL_CERT_FILE`, which is process-wide). `insecure`:
+/// do not verify the server certificate at all (development only: the connection is encrypted
+/// but you do not know with whom).
+pub struct TlsOptions {
+    alpn: [string],
+    ca_pem: string,
+    insecure: bool,
+}
+
+/// The default `TlsOptions`: no ALPN, the system's roots (plus `SSL_CERT_FILE`), verification on.
+pub fn tls_options() -> TlsOptions {
+    TlsOptions { alpn: [], ca_pem: "", insecure: false }
+}
+
+/// Opens a TLS connection with per-connection options (see `TlsOptions`) and completes the
+/// handshake; `Ok(handle)` or `Err(message)`. It does not require any ALPN protocol: check
+/// `tls_alpn(h)` if you need one.
+pub fn tls_connect_opts(host: string, port: int, opts: TlsOptions) -> Result<int, string> {
+    let r = __tls_connect_opts(host, port, opts.alpn.join(","), opts.ca_pem, opts.insecure);
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(h) => Result.Ok(h),
+            Option.None => Result.Err("invalid handle"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
 // M31.2a: conexión TLS con ALPN 'h2' (HTTP/2); error si el servidor no lo negocia.
 /// Opens a TLS connection negotiating ALPN "h2" (HTTP/2); `Ok(handle)`, or `Err(message)`
 /// if the connection fails or the server does not negotiate h2.

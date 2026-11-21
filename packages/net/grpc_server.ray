@@ -24,6 +24,11 @@ import net/grpc_h2 as h2;
 import net/grpc_status as status;
 from net/grpc_status import Status;
 
+/// How many streaming calls may be open at once on ONE connection: each waits nested on the
+/// previous one (see `recv`), so the limit bounds the stack. One more is answered
+/// RESOURCE_EXHAUSTED. Unary calls do not count.
+pub const MAX_NESTED_STREAMS: int = 16;
+
 /// The default maximum size of a request or response message: 4 MiB, like grpc-go.
 pub const DEFAULT_MAX_MESSAGE: int = 4194304;
 
@@ -41,12 +46,294 @@ pub struct Call {
     metadata: Map<string, string>,
     /// Absolute deadline in `time.monotonic()` ms from `grpc-timeout`; 0 = none.
     deadline: int,
+    /// Response headers the handler adds (`set_header`): sent before the message (net 0.17.0).
+    response_headers: Map<string, string>,
+    /// Response trailers the handler adds (`set_trailer`): sent with the `grpc-status`, also
+    /// when the handler returns an error status.
+    response_trailers: Map<string, string>,
+}
+
+/// Builds a `Call` by hand (net 0.17.0 added fields to the struct): for unit-testing a handler
+/// through `dispatch(r, new_call(path, message, metadata))`. No deadline; empty response
+/// headers and trailers, which the handler may fill.
+pub fn new_call(path: string, message: bytes, metadata: Map<string, string>) -> Call {
+    let headers: Map<string, string> = Map.new();
+    let trailers: Map<string, string> = Map.new();
+    Call {
+        path: path,
+        message: message,
+        metadata: metadata,
+        deadline: 0,
+        response_headers: headers,
+        response_trailers: trailers
+    }
+}
+
+/// Adds a response header to a call (a request id, a rate-limit hint): it travels in the
+/// initial HEADERS, before the message. Names are lower-cased; pseudo-headers and the ones
+/// gRPC owns (`content-type`, `grpc-status`, `grpc-message`) are ignored. A value for a `-bin`
+/// name must already be base64.
+pub fn set_header(c: Call, name: string, value: string) {
+    c.response_headers.insert(name.to_lower(), value);
+}
+
+/// Adds a response trailer to a call: it travels with the `grpc-status`, whether the handler
+/// answers a message or an error status (`grpc-status-details-bin`, custom `x-…` trailers).
+pub fn set_trailer(c: Call, name: string, value: string) {
+    c.response_trailers.insert(name.to_lower(), value);
+}
+
+/// A streaming method's implementation (server-streaming, client-streaming or bidirectional):
+/// it pulls request messages with `recv`, pushes replies with `send` and returns the final
+/// status (`grpc_status.new(grpc_status.OK, "")` when all went well). Register it with `route_stream`.
+pub type StreamHandler = fn(ServerStream) -> Status;
+
+/// One streaming call as its handler sees it. `path`, `metadata` and `deadline` as in `Call`;
+/// `response_headers` / `response_trailers` are filled with `stream_header` / `stream_trailer`.
+/// The rest is the server's bookkeeping.
+pub struct ServerStream {
+    path: string,
+    metadata: Map<string, string>,
+    deadline: int,
+    response_headers: Map<string, string>,
+    response_trailers: Map<string, string>,
+    link: h2.Link,
+    state: Stream,
+    max_message: int,
+    pump: fn(h2.Frame) -> Result<int, string>,
+    // Atiende las demás llamadas de la conexión que quedaron listas mientras este handler espera.
+    others: fn() -> Result<int, string>,
+    buf: bytes,
+    headers_sent: bool,
+    // Un fallo de la CONEXIÓN visto dentro del handler: tras él se corta la conexión entera.
+    failed: string,
+}
+
+/// Adds a response header to a streaming call; it must come before the first `send`.
+pub fn stream_header(s: ServerStream, name: string, value: string) {
+    s.response_headers.insert(name.to_lower(), value);
+}
+
+/// Adds a response trailer to a streaming call (sent with the final status).
+pub fn stream_trailer(s: ServerStream, name: string, value: string) {
+    s.response_trailers.insert(name.to_lower(), value);
+}
+
+/// The next request message of a streaming call: `Ok(Some(message))`, or `Ok(None)` when the
+/// client has finished sending (it half-closed the stream). `Err(status)` when the client reset
+/// the stream (CANCELLED), the deadline passed (DEADLINE_EXCEEDED), a message is larger than
+/// the server's limit (RESOURCE_EXHAUSTED) or the connection failed: return that status from
+/// the handler. While it waits, the other calls of the same connection are served (a unary
+/// call, another stream that runs to its end): a long-lived stream does not block the
+/// connection. A handler that waits for anything else should do it through `idle`. Streaming
+/// calls of one connection nest: while a second one runs, the first is paused until it returns,
+/// and at most `MAX_NESTED_STREAMS` may be open at once — give each long-lived subscription its
+/// own connection.
+pub fn recv(s: ServerStream) -> Result<Option<bytes>, Status> {
+    let st = s.state;
+    while (true) {
+        if (st.parts.len() > 0) {
+            s.buf = s.buf + h2.concat(st.parts);
+            st.parts = [];
+        }
+        if (s.buf.len() >= 5) {
+            if (s.buf[0] != 0) {
+                return Result.Err(
+                    status.new(status.UNIMPLEMENTED, "message compression is not supported")
+                );
+            }
+            let len = s.buf[1] << 24 | s.buf[2] << 16 | s.buf[3] << 8 | s.buf[4];
+            if (len > s.max_message) {
+                return Result.Err(
+                    status.new(
+                        status.RESOURCE_EXHAUSTED,
+                        "request message larger than ${s.max_message} octets"
+                    )
+                );
+            }
+            if (s.buf.len() >= 5 + len) {
+                let message = s.buf.sub_bytes(5, 5 + len);
+                s.buf = s.buf.sub_bytes(5 + len, s.buf.len());
+                st.size = st.size - 5 - len;
+                return Result.Ok(Option.Some(message));
+            }
+        }
+        if (st.too_big) {
+            return Result.Err(
+                status.new(
+                    status.RESOURCE_EXHAUSTED,
+                    "request messages arrive faster than the handler reads them"
+                )
+            );
+        }
+        if (st.reset) {
+            return Result.Err(status.new(status.CANCELLED, "the client cancelled the call"));
+        }
+        if (st.ended) {
+            if (s.buf.len() == 0) {
+                return Result.Ok(Option.None);
+            }
+            return Result.Err(
+                status.new(status.INTERNAL, "the request ended in the middle of a message")
+            );
+        }
+        if (s.failed != "") {
+            return Result.Err(status.new(status.UNAVAILABLE, s.failed));
+        }
+        if (s.deadline > 0 && time.monotonic() >= s.deadline) {
+            return Result.Err(status.new(status.DEADLINE_EXCEEDED, "deadline exceeded"));
+        }
+        // Hace falta más del cliente: se le devuelve la ventana de lo ya recibido.
+        if (st.owed > 0) {
+            let owed = st.owed;
+            st.owed = 0;
+            match (h2.grant(s.link, st.id, owed)) {
+                Result.Ok(_) => { },
+                Result.Err(e) => {
+                    s.failed = e;
+                    return Result.Err(status.new(status.UNAVAILABLE, e));
+                },
+            }
+        }
+        h2.set_deadline(s.link, s.deadline);
+        match (pump_once(s)) {
+            Result.Ok(_) => { },
+            Result.Err(e) => {
+                if (e == "deadline exceeded") {
+                    return Result.Err(status.new(status.DEADLINE_EXCEEDED, "deadline exceeded"));
+                }
+                s.failed = e;
+                return Result.Err(status.new(status.UNAVAILABLE, e));
+            },
+        }
+    }
+    Result.Err(status.new(status.INTERNAL, "unreachable"))
+}
+
+// Lee un frame de la conexión, lo despacha (control, o la tabla de streams) y atiende las otras
+// llamadas que ese frame haya dejado listas.
+fn pump_once(s: ServerStream) -> Result<int, string> {
+    let read = h2.read_frame(s.link);
+    // El plazo era solo de ESTA espera: lo que siga (un `send`, las otras llamadas que se atienden
+    // abajo) no debe heredarlo — un `send` que esperase ventana vencería y tumbaría la conexión.
+    h2.set_deadline(s.link, 0);
+    let fr = read?;
+    if (!h2.control(s.link, fr)?) {
+        let pump = s.pump;
+        pump(fr)?;
+    }
+    let others = s.others;
+    others()
+}
+
+/// Lets the connection work for up to `ms` while a streaming handler waits for something of its
+/// own (an event on a channel, a timer): the other calls of the same connection are served
+/// meanwhile, and a cancellation by the client is noticed. `Err(status)` when the call is over
+/// (CANCELLED, DEADLINE_EXCEEDED) or the connection failed: return it. A handler that pushes
+/// events calls it in its loop instead of sleeping — `match (try_recv(events)) { … }` then
+/// `idle(s, 50)?`.
+pub fn idle(s: ServerStream, ms: int) -> Result<int, Status> {
+    let until = time.monotonic() + ms;
+    while (true) {
+        if (s.state.reset) {
+            return Result.Err(status.new(status.CANCELLED, "the client cancelled the call"));
+        }
+        if (s.failed != "") {
+            return Result.Err(status.new(status.UNAVAILABLE, s.failed));
+        }
+        let now = time.monotonic();
+        if (s.deadline > 0 && now >= s.deadline) {
+            return Result.Err(status.new(status.DEADLINE_EXCEEDED, "deadline exceeded"));
+        }
+        if (now >= until) {
+            return Result.Ok(0);
+        }
+        h2.set_deadline(
+            s.link,
+            if (s.deadline > 0 && s.deadline < until) { s.deadline } else { until }
+        );
+        match (pump_once(s)) {
+            Result.Ok(_) => { },
+            Result.Err(e) => {
+                if (e != "deadline exceeded") {
+                    s.failed = e;
+                    return Result.Err(status.new(status.UNAVAILABLE, e));
+                }
+            },
+        }
+    }
+    Result.Ok(0)
+}
+
+/// Sends one reply message on a streaming call (the response headers go out with the first
+/// one). `Err(status)` when the client is gone (CANCELLED), the message exceeds the server's
+/// limit (RESOURCE_EXHAUSTED) or the connection failed: stop and return that status.
+pub fn send(s: ServerStream, message: bytes) -> Result<int, Status> {
+    if (message.len() > s.max_message) {
+        return Result.Err(
+            status.new(
+                status.RESOURCE_EXHAUSTED,
+                "response message larger than ${s.max_message} octets"
+            )
+        );
+    }
+    if (s.state.reset) {
+        return Result.Err(status.new(status.CANCELLED, "the client cancelled the call"));
+    }
+    if (s.failed != "") {
+        return Result.Err(status.new(status.UNAVAILABLE, s.failed));
+    }
+    let sent: Result<bool, string> = match (stream_begin(s)) {
+        Result.Err(e) => Result.Err(e),
+        Result.Ok(_) => h2.send_data(s.link, s.state.id, grpc_frame(message), false, s.pump),
+    };
+    match (sent) {
+        Result.Ok(true) => Result.Ok(message.len()),
+        Result.Ok(false) => Result.Err(status.new(status.CANCELLED, "the client cancelled the call")),
+        Result.Err(e) => {
+            s.failed = e;
+            Result.Err(status.new(status.UNAVAILABLE, e))
+        },
+    }
+}
+
+// Las cabeceras iniciales de la respuesta, una sola vez.
+fn stream_begin(s: ServerStream) -> Result<int, string> {
+    if (s.headers_sent) {
+        return Result.Ok(0);
+    }
+    s.headers_sent = true;
+    let hs = [
+        h2.hdr(":status", "200"),
+        h2.hdr("content-type", "application/grpc")
+    ] + extra_headers(s.response_headers);
+    h2.send_headers(s.link, s.state.id, hs, false)
+}
+
+// Las cabeceras/trailers que añadió el handler, sin las que son de gRPC o de HTTP/2.
+fn extra_headers(m: Map<string, string>) -> [HEntry] {
+    var out: [HEntry] = [];
+    for name in m.keys() {
+        let reserved = name.starts_with(":")
+            || name == "content-type"
+            || name == "grpc-status"
+            || name == "grpc-message"
+            || name == "te"
+            || name == "connection";
+        if (!reserved && name != "") {
+            out.push(h2.hdr(name, m.get_or(name, "")));
+        }
+    }
+    out
 }
 
 /// A bound listener and its actual port (useful with port 0).
 pub struct Listener {
     handle: int,
     port: int,
+    // net 0.17.0 (`bind_tls`): el certificado y la clave en PEM; vacíos = h2c en claro.
+    cert: string,
+    key: string,
 }
 
 /// Server knobs.
@@ -63,18 +350,28 @@ pub fn default_options() -> Options {
 /// Maps method paths to handlers; unknown paths answer UNIMPLEMENTED.
 pub struct Router {
     routes: Map<string, Handler>,
+    streams: Map<string, StreamHandler>,
 }
 
 /// An empty router.
 pub fn router() -> Router {
     let routes: Map<string, Handler> = Map.new();
-    Router { routes: routes }
+    let streams: Map<string, StreamHandler> = Map.new();
+    Router { routes: routes, streams: streams }
 }
 
 /// Registers the handler of a method path ("/package.Service/Method"). Returns the router
 /// for chaining.
 pub fn route(r: Router, path: string, f: Handler) -> Router {
     r.routes.insert(path, f);
+    r
+}
+
+/// Registers a STREAMING handler for a method path: server-streaming, client-streaming or
+/// bidirectional — the handler decides by how it uses `recv` and `send`. It starts as soon as
+/// the request headers arrive. Returns the router for chaining.
+pub fn route_stream(r: Router, path: string, f: StreamHandler) -> Router {
+    r.streams.insert(path, f);
     r
 }
 
@@ -100,7 +397,40 @@ pub fn dispatch(r: Router, c: Call) -> Result<bytes, Status> {
 /// Binds a TCP listener on host:port (port 0 picks a free one).
 pub fn bind(host: string, port: int) -> Result<Listener, string> {
     let handle = net.tcp_listen(host, port)?;
-    Result.Ok(Listener { handle: handle, port: net.local_port(handle) })
+    Result.Ok(Listener { handle: handle, port: net.local_port(handle), cert: "", key: "" })
+}
+
+/// Like `bind`, for gRPC over TLS: each accepted connection does the TLS handshake with
+/// `cert_pem` / `key_pem` (PEM text) and negotiates ALPN `h2`, which is what `grpcurl`, grpc-go
+/// and the browsers' gRPC clients require. The handshake runs in the connection's fiber. Serve
+/// the listener with `serve`, `serve_router` or their `_until` forms, as a plain one.
+pub fn bind_tls(
+    host: string,
+    port: int,
+    cert_pem: string,
+    key_pem: string
+) -> Result<Listener, string> {
+    if (cert_pem == "" || key_pem == "") {
+        return Result.Err("grpc: bind_tls needs the certificate and the key in PEM");
+    }
+    let handle = net.tcp_listen(host, port)?;
+    Result.Ok(
+        Listener { handle: handle, port: net.local_port(handle), cert: cert_pem, key: key_pem }
+    )
+}
+
+// La conexión lista para HTTP/2: tal cual en claro, o tras el handshake TLS con ALPN h2.
+fn secure(conn: int, cert: string, key: string) -> Result<int, string> {
+    if (cert == "") {
+        return Result.Ok(conn);
+    }
+    match (net.tls_accept_alpn(conn, cert, key, ["h2"])) {
+        Result.Ok(tls) => Result.Ok(tls),
+        Result.Err(e) => {
+            close(conn);
+            Result.Err(e)
+        },
+    }
 }
 
 /// Serves forever with the default options.
@@ -128,8 +458,13 @@ pub fn serve_router_until(
     while (true) {
         match (next_conn(l, stop)?) {
             Option.Some(conn) => {
+                let cert = l.cert;
+                let key = l.key;
                 spawn(fn() {
-                    serve_conn(conn, opts, build());
+                    match (secure(conn, cert, key)) {
+                        Result.Ok(ready) => serve_conn(ready, opts, build()),
+                        Result.Err(e) => eprint("grpc: TLS handshake: " + e),
+                    }
                 });
             },
             Option.None => return Result.Ok(0),
@@ -149,9 +484,16 @@ pub fn serve_until(
     while (true) {
         match (next_conn(l, stop)?) {
             Option.Some(conn) => {
+                let cert = l.cert;
+                let key = l.key;
                 spawn(fn() {
-                    let r = router().fallback(handler);
-                    serve_conn(conn, opts, r);
+                    match (secure(conn, cert, key)) {
+                        Result.Ok(ready) => {
+                            let r = router().fallback(handler);
+                            serve_conn(ready, opts, r);
+                        },
+                        Result.Err(e) => eprint("grpc: TLS handshake: " + e),
+                    }
                 });
             },
             Option.None => return Result.Ok(0),
@@ -197,6 +539,15 @@ struct Stream {
     parts: [bytes],
     size: int,
     too_big: bool,
+    // net 0.17.0: la ruta tiene un handler de STREAMING — se despacha al llegar las cabeceras y
+    // sigue recibiendo DATA mientras corre; `ended` = el cliente cerró su lado, `reset` = lo
+    // canceló. `size` cuenta entonces los octetos recibidos y aún sin consumir.
+    streaming: bool,
+    ended: bool,
+    reset: bool,
+    // Ventana de recepción del stream que se debe al cliente: se concede cuando el handler lee
+    // (`recv`), no al llegar el DATA — así lo que el handler no ha leído lo frena el control de flujo.
+    owed: int,
     // raygrpc #385: la ruta no tiene handler ni hay fallback: se responde UNIMPLEMENTED al ver
     // las cabeceras, sin esperar el END_STREAM (un stream bidireccional no lo envía nunca).
     unknown: bool,
@@ -207,6 +558,8 @@ struct Stream {
 struct Ready {
     ids: [int],
     head: int,
+    // Cuántos handlers de streaming hay anidados ahora mismo en esta conexión.
+    depth: int,
 }
 
 /// The milliseconds of a `grpc-timeout` header value (units H, M, S, m, u, n); -1 if malformed.
@@ -267,7 +620,7 @@ fn run_conn(l: h2.Link, opts: Options, r: Router) -> Result<int, string> {
     }
     h2.write(l, settings_empty())?;
     let streams: Map<int, Stream> = Map.new();
-    let ready = Ready { ids: [], head: 0 };
+    let ready = Ready { ids: [], head: 0, depth: 0 };
     let on_frame = fn(fr: h2.Frame) -> Result<int, string> {
         on_stream_frame(l, streams, ready, opts, r, fr)
     };
@@ -276,23 +629,68 @@ fn run_conn(l: h2.Link, opts: Options, r: Router) -> Result<int, string> {
         if (!h2.control(l, fr)?) {
             on_frame(fr)?;
         }
-        while (ready.head < ready.ids.len()) {
-            let id = ready.ids[ready.head];
-            ready.head = ready.head + 1;
-            match (streams.get(id)) {
-                Option.Some(s) => {
-                    streams.remove(id);
-                    respond(l, s, opts, r, on_frame)?;
-                },
-                Option.None => { },
-            }
-        }
+        drain_ready(l, streams, ready, opts, r, on_frame)?;
         ready.ids = [];
         ready.head = 0;
         if (l.goaway && streams.len() == 0) {
             return Result.Ok(0);
         }
     }
+}
+
+// Atiende los streams listos. Es REENTRANTE: un handler de streaming que espera su siguiente
+// mensaje (`recv`, `idle`) la vuelve a llamar para atender las demás llamadas de la conexión
+// mientras tanto — `grpcurl` deja abierto el stream de reflexión y hace su llamada por la misma
+// conexión. La cola avanza por `ready.head`, así que cada stream se atiende una vez; solo el
+// bucle de la conexión la vacía.
+fn drain_ready(
+    l: h2.Link,
+    streams: Map<int, Stream>,
+    ready: Ready,
+    opts: Options,
+    r: Router,
+    on_frame: fn(h2.Frame) -> Result<int, string>
+) -> Result<int, string> {
+    while (ready.head < ready.ids.len()) {
+        let id = ready.ids[ready.head];
+        ready.head = ready.head + 1;
+        match (streams.get(id)) {
+            Option.Some(s) => {
+                if (s.streaming && ready.depth >= MAX_NESTED_STREAMS) {
+                    // Cada handler de streaming abierto anida sobre el anterior: sin tope, un
+                    // cliente que abra miles agotaría la pila de la fibra.
+                    streams.remove(id);
+                    send_status(
+                        l,
+                        id,
+                        status.new(
+                            status.RESOURCE_EXHAUSTED,
+                            "too many streaming calls open on this connection (limit ${MAX_NESTED_STREAMS})"
+                        )
+                    )?;
+                    if (!s.ended) {
+                        h2.send_reset(l, id, h2.NO_ERROR)?;
+                    }
+                    h2.close_stream(l, id);
+                } else if (s.streaming) {
+                    // Sigue en la tabla mientras corre: sus DATA llegan por `on_frame`.
+                    let others = fn() -> Result<int, string> {
+                        drain_ready(l, streams, ready, opts, r, on_frame)
+                    };
+                    ready.depth = ready.depth + 1;
+                    let done = respond_stream(l, s, opts, r, on_frame, others);
+                    ready.depth = ready.depth - 1;
+                    streams.remove(id);
+                    done?;
+                } else {
+                    streams.remove(id);
+                    respond(l, s, opts, r, on_frame)?;
+                }
+            },
+            Option.None => { },
+        }
+    }
+    Result.Ok(0)
 }
 
 // Actualiza la tabla de streams con un HEADERS / DATA / RST_STREAM; los streams cuya petición
@@ -311,12 +709,19 @@ fn on_stream_frame(
         // Siempre se decodifica: la tabla HPACK debe ver todos los bloques, también los de
         // streams muertos.
         let hs = h2.decode_headers(l, fr.payload)?;
-        if (streams.contains_key(id)) {
-            // Trailers de la petición: nada que guardar, pero pueden cerrar el stream.
-            if (end) {
-                ready.ids.push(id);
-            }
-            return Result.Ok(0);
+        match (streams.get(id)) {
+            Option.Some(open) => {
+                // Trailers de la petición: nada que guardar, pero pueden cerrar el stream.
+                if (end) {
+                    if (open.streaming) {
+                        open.ended = true;
+                    } else {
+                        ready.ids.push(id);
+                    }
+                }
+                return Result.Ok(0);
+            },
+            Option.None => { },
         }
         if (id % 2 == 0 || id == 0) {
             return Result.Err("HEADERS on invalid stream id ${id}");
@@ -330,7 +735,9 @@ fn on_stream_frame(
             }
         }
         let parts: [bytes] = [];
-        let unknown = !r.routes.contains_key(h2.find(hs, ":path")) && !r.routes.contains_key("");
+        let path = h2.find(hs, ":path");
+        let streaming = r.streams.contains_key(path);
+        let unknown = !streaming && !r.routes.contains_key(path) && !r.routes.contains_key("");
         streams.insert(
             id,
             Stream {
@@ -339,12 +746,16 @@ fn on_stream_frame(
                 parts: parts,
                 size: 0,
                 too_big: false,
+                streaming: streaming,
+                ended: end,
+                reset: false,
+                owed: 0,
                 unknown: unknown,
                 deadline: deadline
             }
         );
         h2.open_stream(l, id);
-        if (end || unknown) {
+        if (end || unknown || streaming) {
             ready.ids.push(id);
         }
         return Result.Ok(0);
@@ -352,7 +763,26 @@ fn on_stream_frame(
     if (fr.ftype == h2.DATA) {
         match (streams.get(id)) {
             Option.Some(s) => {
-                h2.release(l, fr, !end)?;
+                // Un stream de streaming devuelve solo la ventana de la CONEXIÓN; la suya la
+                // concede `recv` al leer.
+                h2.release(l, fr, !end && !s.streaming)?;
+                if (s.streaming) {
+                    if (!end) {
+                        s.owed = s.owed + fr.flow;
+                    }
+                    // El handler consume a su ritmo; lo pendiente tiene tope (dos mensajes máximos).
+                    s.size = s.size + fr.payload.len();
+                    if (s.size > 2 * (opts.max_message + 5)) {
+                        s.too_big = true;
+                        s.parts = [];
+                    } else if (!s.too_big) {
+                        s.parts.push(fr.payload);
+                    }
+                    if (end) {
+                        s.ended = true;
+                    }
+                    return Result.Ok(0);
+                }
                 if (!s.too_big) {
                     s.size = s.size + fr.payload.len();
                     if (s.size > opts.max_message + 5) {
@@ -376,6 +806,12 @@ fn on_stream_frame(
         return Result.Ok(0);
     }
     if (fr.ftype == h2.RST_STREAM) {
+        match (streams.get(id)) {
+            Option.Some(s) => {
+                s.reset = true;
+            },
+            Option.None => { },
+        }
         streams.remove(id);
         h2.close_stream(l, id);
     }
@@ -444,11 +880,97 @@ fn trailers(code: int, message: string) -> [HEntry] {
 
 // Respuesta trailers-only: un HEADERS con :status, content-type y el grpc-status.
 fn send_status(l: h2.Link, id: int, st: Status) -> Result<int, string> {
+    send_status_with(l, id, st, [])
+}
+
+// Trailers-only con las cabeceras y trailers que añadió el handler (van en el mismo HEADERS).
+fn send_status_with(l: h2.Link, id: int, st: Status, extra: [HEntry]) -> Result<int, string> {
     let hs = [
         h2.hdr(":status", "200"),
         h2.hdr("content-type", "application/grpc")
-    ] + trailers(st.code, st.message);
+    ] + trailers(st.code, st.message) + extra;
     h2.send_headers(l, id, hs, true)
+}
+
+// Corre un handler de streaming sobre el stream `s` (que sigue en la tabla y recibe sus DATA por
+// `on_frame`) y cierra la respuesta con el estado que devuelve.
+fn respond_stream(
+    l: h2.Link,
+    s: Stream,
+    opts: Options,
+    r: Router,
+    on_frame: fn(h2.Frame) -> Result<int, string>,
+    others: fn() -> Result<int, string>
+) -> Result<int, string> {
+    let id = s.id;
+    let path = h2.find(s.headers, ":path");
+    let extra_h: Map<string, string> = Map.new();
+    let extra_t: Map<string, string> = Map.new();
+    let ss = ServerStream {
+        path: path,
+        metadata: metadata_of(s.headers),
+        deadline: s.deadline,
+        response_headers: extra_h,
+        response_trailers: extra_t,
+        link: l,
+        state: s,
+        max_message: opts.max_message,
+        pump: on_frame,
+        others: others,
+        buf: b"",
+        headers_sent: false,
+        failed: ""
+    };
+    let ct = h2.find(s.headers, "content-type");
+    var st: Status = if (!ct.starts_with("application/grpc")) {
+        status.new(status.INTERNAL, "unsupported content-type: ${ct}")
+    } else {
+        match (r.streams.get(path)) {
+            Option.Some(f) => match (try_call(fn() -> Status { f(ss) })) {
+                Result.Ok(done) => done,
+                Result.Err(e) => {
+                    eprint("grpc: handler ${path} panicked: ${e}");
+                    status.new(status.INTERNAL, "handler failed")
+                },
+            },
+            Option.None => status.new(status.UNIMPLEMENTED, "unknown method ${path}"),
+        }
+    };
+    h2.set_deadline(l, 0);
+    if (ss.failed != "") {
+        return Result.Err(ss.failed);
+    }
+    if (s.reset) {
+        // El cliente canceló: no hay a quién responder.
+        h2.close_stream(l, id);
+        return Result.Ok(0);
+    }
+    if (s.deadline > 0 && time.monotonic() >= s.deadline && st.code == status.OK) {
+        st = status.new(status.DEADLINE_EXCEEDED, "deadline exceeded");
+    }
+    let tail = trailers(st.code, st.message) + extra_headers(ss.response_trailers);
+    if (ss.headers_sent) {
+        h2.send_headers(l, id, tail, true)?;
+    } else {
+        let hs = [
+            h2.hdr(":status", "200"),
+            h2.hdr("content-type", "application/grpc")
+        ] + extra_headers(ss.response_headers);
+        if (st.code == status.OK) {
+            // Un OK sin mensajes: cabeceras y trailers en frames separados, como grpc-go.
+            h2.send_headers(l, id, hs, false)?;
+            h2.send_headers(l, id, tail, true)?;
+        } else {
+            // Trailers-only: todo en un HEADERS.
+            h2.send_headers(l, id, hs + tail, true)?;
+        }
+    }
+    if (!s.ended) {
+        // El cliente aún no cerró su lado: que deje de enviar.
+        h2.send_reset(l, id, h2.NO_ERROR)?;
+    }
+    h2.close_stream(l, id);
+    Result.Ok(0)
 }
 
 fn respond(
@@ -459,6 +981,8 @@ fn respond(
     on_frame: fn(h2.Frame) -> Result<int, string>
 ) -> Result<int, string> {
     let id = s.id;
+    // La llamada que vio el handler (si llegó a correr): de ella salen sus cabeceras y trailers.
+    var made: [Call] = [];
     let outcome: Result<bytes, Status> = match (request_message(s, opts)) {
         Result.Err(st) => Result.Err(st),
         Result.Ok(msg) => {
@@ -470,12 +994,17 @@ fn respond(
                     )
                 )
             } else {
+                let extra_h: Map<string, string> = Map.new();
+                let extra_t: Map<string, string> = Map.new();
                 let call = Call {
                     path: h2.find(s.headers, ":path"),
                     message: msg,
                     metadata: metadata_of(s.headers),
-                    deadline: s.deadline
+                    deadline: s.deadline,
+                    response_headers: extra_h,
+                    response_trailers: extra_t
                 };
+                made.push(call);
                 match (try_call(fn() -> Result<bytes, Status> { dispatch(r, call) })) {
                     Result.Ok(r) => r,
                     Result.Err(e) => {
@@ -491,9 +1020,15 @@ fn respond(
     } else {
         outcome
     };
+    var add_headers: [HEntry] = [];
+    var add_trailers: [HEntry] = [];
+    if (made.len() > 0) {
+        add_headers = extra_headers(made[0].response_headers);
+        add_trailers = extra_headers(made[0].response_trailers);
+    }
     match (final_outcome) {
         Result.Err(st) => {
-            send_status(l, id, st)?;
+            send_status_with(l, id, st, add_headers + add_trailers)?;
             if (s.too_big) {
                 // El cliente puede seguir enviando: que pare.
                 h2.send_reset(l, id, h2.NO_ERROR)?;
@@ -510,10 +1045,13 @@ fn respond(
                     )
                 )?;
             } else {
-                let hs = [h2.hdr(":status", "200"), h2.hdr("content-type", "application/grpc")];
+                let hs = [
+                    h2.hdr(":status", "200"),
+                    h2.hdr("content-type", "application/grpc")
+                ] + add_headers;
                 h2.send_headers(l, id, hs, false)?;
                 if (h2.send_data(l, id, grpc_frame(resp), false, on_frame)?) {
-                    h2.send_headers(l, id, trailers(status.OK, ""), true)?;
+                    h2.send_headers(l, id, trailers(status.OK, "") + add_trailers, true)?;
                 }
             }
         },

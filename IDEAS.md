@@ -4815,4 +4815,3 @@ campos contienen tuplas.
 para un struct o un enum sin `Show` cuando alguno de sus campos, transitivamente, contiene una
 tupla, y lo use en `print`/`to_string`/interpolación. **Impacto**: aditivo; cambia la salida de
 la VM solo en ese caso. Mientras tanto, `@derive(Show)` da la misma forma en los tres motores.
-

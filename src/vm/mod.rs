@@ -4755,6 +4755,29 @@ impl<'a> Vm<'a> {
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
+                // raygrpc #387: TLS de cliente con opciones por conexión; como `TlsConnectH2`, el
+                // handshake se completa bloqueante y el socket queda no bloqueante.
+                OpCode::TlsConnectOpts => {
+                    let insecure = self.pop();
+                    let ca_pem = self.pop();
+                    let protocols = self.pop();
+                    let port = self.pop();
+                    let host = self.pop();
+                    let (HeapValue::Str(host), HeapValue::Int(port), HeapValue::Str(protocols), HeapValue::Str(ca_pem), HeapValue::Bool(insecure)) =
+                        (host, port, protocols, ca_pem, insecure)
+                    else {
+                        unreachable!("the checker guarantees string, int, string, string, bool");
+                    };
+                    let elems = match crate::builtins::tls_connect_opts(&host, port, &protocols, &ca_pem, insecure) {
+                        Ok(h) => {
+                            let _ = crate::builtins::tls_set_nonblocking(h);
+                            vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(h.to_string().into())]
+                        }
+                        Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                    };
+                    let h = self.cur.heap.allocate(Obj::Array(elems));
+                    self.push(HeapValue::Obj(h));
+                }
                 // M19.4b: envuelve un socket aceptado (ya no bloqueante) en una sesión TLS de servidor.
                 // El handshake lo conduce el primer SocketReadBytes, cediendo la fibra si bloquea.
                 OpCode::TlsAccept => {

@@ -21671,14 +21671,6 @@ va en `accept`, que contesta 426 —una segunda revisión señaló que meterla e
 dejaba al cliente sin respuesta—, y `Connection: Upgrade` no se exige porque el mapa de
 cabeceras guarda la última línea de una cabecera repetida. El manifiesto de `db` declaraba
 raylang 1.27.81 y usa funciones de 1.27.86: ahora 1.27.110, que es lo que ya exige su `net`.
-
-Una tercera pasada, ya con la regla de revisar antes de publicar un paquete, deshizo ese
-rodeo: la causa era el parser de `webserver`, que se quedaba con la última línea de una
-cabecera repetida. Ahora las une con comas (RFC 9110 §5.3; `Cookie` con `; `; `Host` y
-`Content-Length` no se combinan), y `accept` vuelve a exigir `Connection: Upgrade`. Además
-`accept` contesta siempre que rechaza (400 o 426, con `Upgrade: websocket`), para que su `Err`
-signifique una sola cosa —«ya se respondió»— y el handler no tenga que distinguir. El valor de
-la versión, que pone el cliente, no va en el mensaje de error.
 `send_sections` copiaba el lote tres veces. La prueba del sumidero nulo reintenta: un hueco de
 más de 50 ms no cuenta como reproducido, y un runner cargado bajaba la razón.
 
@@ -21686,4 +21678,15 @@ Queda como estaba, a sabiendas: el aviso de variádicas también sale para un `e
 paquete de dependencia, que el usuario no puede editar. Ningún paquete del índice declara una
 hoy; si aparece, se filtra por la raíz del proyecto. Y `Bson.Raw` entró en una versión de parche
 (0.10.1, ya publicada): un `match` exhaustivo sobre `Bson` sin comodín deja de compilar.
+
+**Antes de publicar `net` 0.17.2.** Desde el 21 nov 2026 un paquete se revisa antes de ir al
+índice. Esa pasada pidió que `accept` exigiera `Connection: Upgrade` (sin él, un proxy que
+quita las cabeceras salto a salto dejaría al servidor hablando tramas con un intermediario que
+cree seguir en HTTP) y que el 426 nombrara el protocolo. Se probó a arreglar de raíz el parser
+de `webserver`, que guarda la última línea de una cabecera repetida, uniéndolas con comas (RFC
+9110 §5.3), y se descartó para un parche: cambia lo que ve todo el que compara una cabecera de
+valor único (`X-Forwarded-Proto == "https"` en `web`, `Authorization`), y el parser de
+respuestas de `net/http` seguiría distinto. Queda como está, y `accept` rechaza el caso raro de
+dos líneas `Connection`. `accept` solo contesta por su cuenta el 426; en los demás `Err` no
+escribe, como en 0.17.1.
 

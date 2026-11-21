@@ -1668,20 +1668,7 @@ fn read_request_mode(
                                 Option.None => { },
                             }
                         }
-                        // Una cabecera repetida vale lo mismo que una sola con los valores unidos
-                        // por comas (RFC 9110 §5.3): `Connection: Upgrade` + `Connection:
-                        // keep-alive` no pierde el `Upgrade`. `Cookie` se une con `; ` (RFC 6265
-                        // §5.4); `Host` y `Content-Length` no se combinan (se validan arriba).
-                        var joined = value;
-                        if (name != "host" && name != "content-length") {
-                            match (get(headers, name)) {
-                                Option.Some(prev) => {
-                                    joined = prev + if (name == "cookie") { "; " } else { ", " } + value;
-                                },
-                                Option.None => { },
-                            }
-                        }
-                        headers.insert(name, joined);
+                        headers.insert(name, value);
                     },
                     Option.None => { },
                 }
@@ -3239,8 +3226,7 @@ pub fn serve_on_limits(
 /// handler receives the request AND the connection, which is what a WebSocket upgrade or an SSE
 /// stream needs. Bind with port 0, read `net.local_port(listener)` and serve:
 /// `serve_raw_on(listener, fn(req: Request, conn: int) { if (websocket.is_upgrade(req.headers)) { … } })`
-/// — then `websocket.accept(req.headers, conn)` answers the `101` and gives the `WsConn` (or
-/// answers the refusal itself and gives `Err`).
+/// — then `websocket.accept(req.headers, conn)` answers the `101` and gives the `WsConn`.
 pub fn serve_raw_on(listener: int, handler: fn(Request, int)) -> Result<int, string> {
     serve_raw_on_limits(listener, default_limits(), handler)
 }

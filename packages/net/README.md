@@ -142,11 +142,9 @@ fn main() -> int {
   el upgrade de un handler crudo es `if (websocket.is_upgrade(req.headers)) { match
   (websocket.accept(req.headers, conn)) { Result.Ok(ws) => { … }, Result.Err(_) => { } } }`. El
   ejemplo de `serve_raw_on` citaba un `is_upgrade(req)` que no existía. 0.17.2: `is_upgrade`
-  busca `websocket` como token de `Upgrade` (no como subcadena) y `accept` valida el handshake
-  entero (RFC 6455 §4.2.1) y **contesta él** si no vale — `400` si falta `Connection: Upgrade`,
-  `426 Upgrade Required` con `Sec-WebSocket-Version: 13` a otra versión —, así que con `Err` el
-  handler solo tiene que volver. `webserver` une con comas las líneas repetidas de una cabecera
-  de la petición (RFC 9110 §5.3; antes se quedaba con la última).
+  busca `websocket` como token de `Upgrade` (no como subcadena); `accept` exige además
+  `Connection: Upgrade` y contesta `426 Upgrade Required` con `Sec-WebSocket-Version: 13` a una
+  versión que no sea la 13 (RFC 6455 §4.4). En los demás `Err` no ha escrito nada.
 - **`net/grpc_client`** — cliente gRPC de un solo disparo sobre TLS (`grpc_call`), sobre `net/http2` +
   `net/hpack` + `std/protobuf`.
 - **`net/grpc_server`** — **servidor gRPC unario** sobre HTTP/2 en claro con conocimiento previo (h2c:
@@ -237,7 +235,7 @@ fn main() -> int {
   0.15.1: **`serve_raw_on(listener, handler)`**, `serve_raw_on_limits` y `serve_raw_with_on`
   (raycdc #406) — el handler crudo (petición + conexión: un upgrade a WebSocket, SSE) sobre un
   listener ya abierto, para enlazar el puerto 0 y conocerlo antes de servir. El upgrade:
-  `websocket.accept(req.headers, conn)` (desde 0.17.1; valida el handshake y contesta) y
+  `websocket.accept(req.headers, conn)` (desde 0.17.1; valida el handshake) y
   después `read_message`. A mano —`handshake_response` + `server_conn`— no se valida nada. Con **`quiet()`**, el cliente que
   corta a mitad de la respuesta (EPIPE, ECONNRESET) ya no se anota en stderr (raycrawl #371): es
   el cliente que se va, como los 400 y 408. `net/scram` deriva la clave con

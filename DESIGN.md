@@ -21694,3 +21694,33 @@ respuestas de `net/http`, un error tipado en `accept`) queda para una versión m
 El árbol del tag v1.27.111 lleva un `websocket.ray` intermedio con el 426; el paquete que
 cuenta es el del índice.
 
+## 473. Un parámetro de tipo rígido da contexto como un tipo concreto (raysolve #358, nov 2026)
+
+La inferencia de 1.27.105–1.27.108 (el argumento hermano, la otra rama del `if`, los demás brazos
+del `match` fijan lo que una expresión no puede tipar sola) funcionaba con `int` o `string` y
+fallaba dentro de una función genérica, que es donde raysolve la necesitaba:
+`fn h<V>(a: [V]) -> int { count(a, empty()) }` seguía con «could not infer the type parameter 'V'».
+
+**Causa.** Los parámetros de tipo del llamado (incógnitas) y los del llamador (rígidos) son el
+mismo `Type::Var`, y varios sitios preguntaban «¿queda algo por inferir?» con `type_has_var` sobre
+el tipo ya sustituido. Tras ligar `V` de `count` con `V` de `h`, el tipo esperado `[V]` sigue
+mencionando un `Var` y se descartaba como si no aportara nada.
+
+**Decisión.** Hacer en cada sitio la pregunta que corresponde, sin cambiar la representación:
+
+- En `check_value_against` (argumentos de una llamada genérica, campos y payloads): lo pendiente
+  son los `Var` del tipo DECLARADO que `σ` aún no liga (`type_vars_bound`). Si están todos
+  ligados, el tipo sustituido es el esperado, mencione o no un parámetro rígido.
+- En el `if`, el `match` y los builtins de contenedor, el tipo viene de una expresión ya
+  comprobada del llamador: solo es incógnita un `Var` que no sea parámetro de tipo del ámbito
+  (`type_has_var_outside`, que ya usaba `check_ctor_value_against`).
+
+Se descartó renombrar los parámetros del llamado a nombres frescos en cada llamada (como hace la
+construcción con `$ctor$i`): arregla lo mismo pero toca los mensajes de error y los diccionarios
+de bounds, que usan los nombres originales. El cambio solo acepta programas que antes se
+rechazaban; un parámetro que nadie fija sigue siendo error.
+
+**Lo que no entra.** Los argumentos de tipo explícitos (`none::<int>()`) siguen sin existir: son
+sintaxis nueva y van por la SPEC. Con esto raysolve ya no los necesita para `pubgrub.dep_span` ni
+`resolve_conflict`; si otra app los pide, se clasifican en IDEAS. El checker auto-alojado no lleva
+esta inferencia (tampoco la de 1.27.105–1.27.108).

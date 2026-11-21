@@ -356,6 +356,21 @@ impl Checker {
             for p in &e.params {
                 self.ensure_type(&p.ty, p.line, p.col)?;
                 let pt = self.resolve_type(&p.ty);
+                // IDEAS §131: un parámetro de tipo función es un callback C→raylang.
+                if let Type::Fn(cb_params, cb_ret) = &pt {
+                    if let Err(reason) = crate::ffi::callback_sig(cb_params, cb_ret) {
+                        return Err(self.err(p.line, p.col, format!(
+                            "the callback parameter '{}' of 'extern fn {}': {}", p.name, e.name, reason)));
+                    }
+                    // Una `extern` de un bloque `blocking` corre en un hilo del pool: el callback
+                    // se llamaría desde un hilo que no es el de la fibra.
+                    if e.blocking {
+                        return Err(self.err(p.line, p.col, format!(
+                            "'extern fn {}' is declared in a 'blocking' block and cannot take a callback (it would be called from another thread)",
+                            e.name)));
+                    }
+                    continue;
+                }
                 if crate::ffi::ckind(&pt).is_none() || matches!(pt, Type::Unit) {
                     return Err(self.err(p.line, p.col, format!(
                         "the type {} of parameter '{}' of 'extern fn {}' is not FFI-marshalable (int, u64, float, bool, string, bytes, ptr, Option<ptr>)",

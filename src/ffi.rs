@@ -110,6 +110,161 @@ pub enum CKind {
     Ptr,
     /// **Retorno** `ptr` fallible → `Option<ptr>` (M41.4b): `NULL → None` (p. ej. `fopen`).
     OptPtr,
+    /// **Argumento** de tipo función (IDEAS §131): viaja como el puntero de un trampolín C que
+    /// despacha a la función de raylang. Su firma va aparte, en `ExternDesc::callbacks`.
+    Callback,
+}
+
+/// La firma C de un parámetro callback: las clases de sus argumentos y de su retorno.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallbackSig {
+    pub params: Vec<CKind>,
+    pub ret: CKind,
+}
+
+/// Un argumento que C pasó a un callback, ya interpretado según la firma declarada.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CallbackArg {
+    Int(i64),
+    U64(u64),
+    Float(f64),
+    Bool(bool),
+    Ptr(i64),
+    /// `Option<ptr>`: NULL → `None`.
+    OptPtr(Option<i64>),
+}
+
+/// El valor que un callback devuelve a C.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CallbackRet {
+    Int(i64),
+    Float(f64),
+    Unit,
+}
+
+/// La firma de callback de un tipo función, o el motivo por el que no vale. Argumentos: `int`,
+/// `u64`, `float`, `bool`, `ptr`, `Option<ptr>`; retorno: esos mismos o
+/// unit (un `Option<ptr>` devuelto como `None` es NULL). Hasta 6 enteros/punteros y 4 flotantes: lo que lee un trampolín.
+pub fn callback_sig(params: &[crate::ast::Type], ret: &crate::ast::Type) -> Result<CallbackSig, String> {
+    let mut kinds = Vec::with_capacity(params.len());
+    for p in params {
+        match ckind(p) {
+            Some(k @ (CKind::Int | CKind::U64 | CKind::Float | CKind::Bool | CKind::Ptr | CKind::OptPtr)) => kinds.push(k),
+            _ => return Err(format!("a callback parameter of type {p} is not supported (int, u64, float, bool, ptr, Option<ptr>)")),
+        }
+    }
+    let floats = kinds.iter().filter(|k| **k == CKind::Float).count();
+    if floats > ray_runtime::ffi_callback::MAX_FLOAT_ARGS || kinds.len() - floats > ray_runtime::ffi_callback::MAX_INT_ARGS {
+        return Err(format!(
+            "a callback takes at most {} integer/pointer parameters and {} float parameters",
+            ray_runtime::ffi_callback::MAX_INT_ARGS,
+            ray_runtime::ffi_callback::MAX_FLOAT_ARGS
+        ));
+    }
+    let ret = match ret_ckind(ret) {
+        Some(k @ (CKind::Int | CKind::U64 | CKind::Float | CKind::Bool | CKind::Ptr | CKind::OptPtr | CKind::Unit)) => k,
+        _ => return Err(format!("a callback returning {ret} is not supported (int, u64, float, bool, ptr, Option<ptr>, unit)")),
+    };
+    Ok(CallbackSig { params: kinds, ret })
+}
+
+/// Interpreta los registros que C pasó según la firma: cada argumento sale de su banco, en orden.
+/// De un `int` de C solo valen los 32 bits bajos (se extiende el signo); de un `bool`, los 8.
+pub fn callback_args(sig: &CallbackSig, regs: &ray_runtime::ffi_callback::Regs) -> Vec<CallbackArg> {
+    let (mut i, mut f) = (0, 0);
+    let mut next_int = || {
+        i += 1;
+        regs.ints[i - 1]
+    };
+    sig.params
+        .iter()
+        .map(|k| match k {
+            CKind::Float => {
+                f += 1;
+                CallbackArg::Float(regs.floats[f - 1])
+            }
+            CKind::Int => CallbackArg::Int(next_int() as i32 as i64),
+            CKind::U64 => CallbackArg::U64(next_int() as u64),
+            CKind::Bool => CallbackArg::Bool(next_int() as u8 != 0),
+            CKind::OptPtr => {
+                let p = next_int();
+                CallbackArg::OptPtr(if p == 0 { None } else { Some(p) })
+            }
+            _ => CallbackArg::Ptr(next_int()),
+        })
+        .collect()
+}
+
+/// Los bits que el trampolín devuelve a C (registro entero, o `f64::to_bits`).
+pub fn callback_ret_bits(ret: CallbackRet) -> u64 {
+    match ret {
+        CallbackRet::Int(n) => n as u64,
+        CallbackRet::Float(x) => x.to_bits(),
+        CallbackRet::Unit => 0,
+    }
+}
+
+thread_local! {
+    // El primer error de ejecución dentro de un callback: no puede cruzar los marcos de C, así
+    // que se guarda aquí, el trampolín devuelve cero y la llamada `extern` exterior lo relanza.
+    static CALLBACK_ERROR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    // Cuántos callbacks hay en curso en este hilo: dentro de uno no se puede aparcar la fibra.
+    static CALLBACK_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Guarda el error de un callback (solo el primero) para la llamada `extern` que lo recibió.
+pub fn set_callback_error(msg: String) {
+    CALLBACK_ERROR.with(|e| {
+        e.borrow_mut().get_or_insert(msg);
+    });
+}
+
+/// El error pendiente de un callback, si lo hubo; lo consume.
+pub fn take_callback_error() -> Option<String> {
+    CALLBACK_ERROR.with(|e| e.borrow_mut().take())
+}
+
+/// ¿Hay un callback de la FFI en curso en este hilo?
+pub fn in_callback() -> bool {
+    CALLBACK_DEPTH.with(|d| d.get() > 0)
+}
+
+/// Marca la entrada a un callback hasta que se suelta el valor devuelto.
+pub fn enter_callback() -> CallbackGuard {
+    CALLBACK_DEPTH.with(|d| d.set(d.get() + 1));
+    CallbackGuard
+}
+
+pub struct CallbackGuard;
+
+impl Drop for CallbackGuard {
+    fn drop(&mut self) {
+        CALLBACK_DEPTH.with(|d| d.set(d.get() - 1));
+    }
+}
+
+/// El mensaje del error de ejecución al intentar aparcar la fibra dentro de un callback.
+pub const BLOCKING_IN_CALLBACK: &str =
+    "cannot wait inside an FFI callback (channels, sleep, join and network I/O are not available while C code is on the stack)";
+
+/// Instala el trampolín de un callback: `handler` recibe los argumentos ya interpretados y
+/// devuelve el valor para C. En Windows x64 un callback con `float` no es alcanzable (los
+/// argumentos comparten posición entre bancos de registros).
+pub fn install_callback(
+    sig: &CallbackSig,
+    handler: impl Fn(Vec<CallbackArg>) -> CallbackRet + 'static,
+) -> Result<ray_runtime::ffi_callback::Callback, String> {
+    if cfg!(windows) && sig.params.contains(&CKind::Float) {
+        return Err("an FFI callback with float parameters is not supported on Windows yet".into());
+    }
+    let owned = sig.clone();
+    ray_runtime::ffi_callback::install(
+        sig.ret == CKind::Float,
+        std::rc::Rc::new(move |regs: &ray_runtime::ffi_callback::Regs| {
+            let _guard = enter_callback();
+            callback_ret_bits(handler(callback_args(&owned, regs)))
+        }),
+    )
 }
 
 /// Descriptor de una función externa listo para llamar: qué librería, qué símbolo, y las clases de
@@ -124,6 +279,8 @@ pub struct ExternDesc {
     /// Declarada en un bloque `extern "lib" blocking { … }`: la llamada es bloqueante de verdad.
     /// Solo scheduling (el backend nativo con fibras la descarga a un pool); los valores no cambian.
     pub blocking: bool,
+    /// La firma de cada parámetro callback (`None` en los demás), en paralelo con `arg_kinds`.
+    pub callbacks: Vec<Option<CallbackSig>>,
 }
 
 /// Clasifica un tipo de raylang para la frontera FFI (M41.1: solo primitivos). `None` si el tipo no
@@ -140,6 +297,9 @@ pub fn ckind(ty: &crate::ast::Type) -> Option<CKind> {
         Type::String => Some(CKind::Str),
         Type::Bytes => Some(CKind::Bytes),
         Type::Ptr => Some(CKind::Ptr),
+        // IDEAS §131: un parámetro de tipo función es un callback (solo como argumento de la
+        // `extern`; dentro de la firma de otro callback no vale: `callback_sig` lo rechaza).
+        Type::Fn(params, ret) if callback_sig(params, ret).is_ok() => Some(CKind::Callback),
         // rayserial #394: `Option<ptr>` como ARGUMENTO: `None` viaja como NULL.
         Type::Struct(n, args) | Type::Enum(n, args) if n == "Option" && args.len() == 1 && args[0] == Type::Ptr => {
             Some(CKind::OptPtr)
@@ -218,6 +378,14 @@ pub fn desc_of(ext: &crate::ast::ExternFn) -> Option<ExternDesc> {
         arg_kinds: arg_kinds?,
         ret_kind: ret_ckind(&ext.return_type)?,
         blocking: ext.blocking,
+        callbacks: ext
+            .params
+            .iter()
+            .map(|p| match &p.ty {
+                crate::ast::Type::Fn(params, ret) => callback_sig(params, ret).ok(),
+                _ => None,
+            })
+            .collect(),
     })
 }
 
@@ -318,7 +486,7 @@ fn ret_mold(k: CKind) -> RetMold {
         // 64 bits: `u64`/`long`/`size_t`, los punteros de retorno (`char*`, `ptr`, y sus `Option`).
         CKind::U64 | CKind::OptBytes | CKind::OptStr | CKind::Ptr | CKind::OptPtr => RetMold::I64,
         // `void`: el valor no se lee; la anchura da igual.
-        CKind::Unit | CKind::Str | CKind::Bytes => RetMold::I64,
+        CKind::Unit | CKind::Str | CKind::Bytes | CKind::Callback => RetMold::I64,
     }
 }
 
@@ -573,7 +741,7 @@ mod tests {
     use super::*;
 
     fn desc(name: &str, args: Vec<CKind>, ret: CKind) -> ExternDesc {
-        ExternDesc { name: name.into(), lib: "m".into(), arg_kinds: args, ret_kind: ret, blocking: false }
+        ExternDesc { name: name.into(), lib: "m".into(), arg_kinds: args, ret_kind: ret, blocking: false, callbacks: Vec::new() }
     }
 
     #[test]
@@ -636,6 +804,7 @@ mod tests {
             arg_kinds: vec![CKind::Str, CKind::Str],
             ret_kind: CKind::OptPtr,
             blocking: false,
+            callbacks: Vec::new(),
         };
         match call(&d, &[FfiVal::Str("/nonexistent_ray_dir/nope.txt"), FfiVal::Str("r")]).unwrap() {
             FfiRet::OptPtr(None) => {}
@@ -652,7 +821,7 @@ mod tests {
 
     #[test]
     fn strlen_marshala_string_a_char_ptr() {
-        let d = ExternDesc { name: "strlen".into(), lib: "c".into(), arg_kinds: vec![CKind::Str], ret_kind: CKind::Int, blocking: false };
+        let d = ExternDesc { name: "strlen".into(), lib: "c".into(), arg_kinds: vec![CKind::Str], ret_kind: CKind::Int, blocking: false, callbacks: Vec::new() };
         match call(&d, &[FfiVal::Str("hello mundo")]).unwrap() {
             FfiRet::Int(n) => assert_eq!(n, 11),
             other => panic!("expected int, {other:?}"),
@@ -661,7 +830,7 @@ mod tests {
 
     #[test]
     fn strlen_marshals_nul_terminated_bytes() {
-        let d = ExternDesc { name: "strlen".into(), lib: "c".into(), arg_kinds: vec![CKind::Bytes], ret_kind: CKind::Int, blocking: false };
+        let d = ExternDesc { name: "strlen".into(), lib: "c".into(), arg_kinds: vec![CKind::Bytes], ret_kind: CKind::Int, blocking: false, callbacks: Vec::new() };
         match call(&d, &[FfiVal::Bytes(b"abcde\x00")]).unwrap() {
             FfiRet::Int(n) => assert_eq!(n, 5),
             other => panic!("expected int, {other:?}"),
@@ -670,7 +839,7 @@ mod tests {
 
     #[test]
     fn strstr_returns_char_ptr_as_optbytes() {
-        let d = ExternDesc { name: "strstr".into(), lib: "c".into(), arg_kinds: vec![CKind::Str, CKind::Str], ret_kind: CKind::OptBytes, blocking: false };
+        let d = ExternDesc { name: "strstr".into(), lib: "c".into(), arg_kinds: vec![CKind::Str, CKind::Str], ret_kind: CKind::OptBytes, blocking: false, callbacks: Vec::new() };
         // Encontrado → Some(bytes desde la coincidencia).
         match call(&d, &[FfiVal::Str("hello world"), FfiVal::Str("world")]).unwrap() {
             FfiRet::OptBytes(Some(b)) => assert_eq!(b, b"world"),
@@ -686,7 +855,7 @@ mod tests {
     #[test]
     fn strstr_returns_option_ptr() {
         // M41.4b: el mismo char* como puntero OPACO. No se desreferencia: solo Some(dirección≠0)/None.
-        let d = ExternDesc { name: "strstr".into(), lib: "c".into(), arg_kinds: vec![CKind::Str, CKind::Str], ret_kind: CKind::OptPtr, blocking: false };
+        let d = ExternDesc { name: "strstr".into(), lib: "c".into(), arg_kinds: vec![CKind::Str, CKind::Str], ret_kind: CKind::OptPtr, blocking: false, callbacks: Vec::new() };
         match call(&d, &[FfiVal::Str("hello"), FfiVal::Str("ll")]).unwrap() {
             FfiRet::OptPtr(Some(p)) => assert_ne!(p, 0),
             other => panic!("expected Some, {other:?}"),

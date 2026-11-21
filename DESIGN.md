@@ -21679,3 +21679,18 @@ paquete de dependencia, que el usuario no puede editar. Ningún paquete del índ
 hoy; si aparece, se filtra por la raíz del proyecto. Y `Bson.Raw` entró en una versión de parche
 (0.10.1, ya publicada): un `match` exhaustivo sobre `Bson` sin comodín deja de compilar.
 
+**Antes de publicar `net` 0.17.2.** Desde el 21 nov 2026 un paquete se revisa antes de ir al
+índice. Cuatro pasadas sobre la validación del handshake en `websocket.accept` pidieron cosas
+contrarias: exigir `Connection: Upgrade` (sin él, un proxy que quita las cabeceras salto a salto
+deja al servidor hablando tramas con quien cree seguir en HTTP) choca con que `webserver`
+guarda la última línea de una cabecera repetida; arreglar eso uniendo las líneas (RFC 9110
+§5.3) cambia lo que ve quien compara una cabecera de valor único (`X-Forwarded-Proto ==
+"https"` en `web`, `Authorization`); y que `accept` conteste él los rechazos (400, 426) rompe
+al que lo usa de sonda y contesta por su cuenta, mientras que contestar solo algunos deja un
+`Err` con dos significados. Es una decisión de contrato, no un parche: 0.17.2 se publica con lo
+único que no admite discusión —`is_upgrade` compara `websocket` como token— y `accept` igual
+que en 0.17.1. La validación completa (cabeceras repetidas en el parser de peticiones y en el de
+respuestas de `net/http`, un error tipado en `accept`) queda para una versión menor de `net`.
+El árbol del tag v1.27.111 lleva un `websocket.ray` intermedio con el 426; el paquete que
+cuenta es el del índice.
+

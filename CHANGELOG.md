@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Paquete `net` 0.17.2, como se publica**: de lo anunciado en 1.27.111 queda solo que
+  `websocket.is_upgrade` busca `websocket` como token de `Upgrade`. `websocket.accept` **no**
+  contesta `426` ni valida la versión: sigue como en 0.17.1 (con `Err` por no ser un upgrade no
+  ha escrito nada). La validación completa del handshake queda para una versión menor. La doc
+  del handler crudo usa `match` (el `?` que mostraba no compila en un handler que devuelve unit).
+
 ## 1.27.111 — 2026-11-21
 
 - **`RAY_AUDIO_SINK=null` lleva tiempo real** (ray-daw #465): el sumidero nulo dormía la duración

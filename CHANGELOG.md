@@ -6,6 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Callbacks en la FFI** (ray-daw #425): un parámetro de tipo función en una `extern fn` pasa una
+  función de raylang —con nombre o closure— a C como puntero a función:
+  `fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int);`. Vale mientras dura la
+  llamada y en el mismo hilo (`qsort`, `bsearch`, `sqlite3_exec`, enumeradores); igual en la VM,
+  el intérprete y el binario nativo. Dentro del callback no se puede esperar (canal vacío,
+  `time.sleep`, `join`, red: error de ejecución), y un error dentro lo ve la llamada `extern` al
+  volver. Queda fuera el callback que C guarda y llama más tarde o desde un hilo suyo (el render
+  de CoreAudio, CoreMIDI): el programa aborta con el motivo. REFERENCE §13, MANUAL §16.
 - **Inferencia dentro de una función genérica** (raysolve #358): el parámetro de tipo del
   llamador da contexto igual que un tipo concreto. `fn h<V>(a: [V]) { count(a, empty()) }`,
   `sat(t, any(p))` con `t: T<P, V>` y `if (c) { full() } else { at_least(v) }` con `v: V` ya

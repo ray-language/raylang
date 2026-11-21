@@ -324,6 +324,16 @@ documentada:
   llamada (`__ray_ffi_lib_available`). `read_ptr` (rayserial #394, `std/ffi.read`) hace un
   `slice::from_raw_parts` sobre la dirección de un `ptr` no NULL y copia: la dirección viene de una
   `extern` y se confía como su firma; el nativo emite el mismo bloque en línea.
+- **`crates/ray-runtime/src/ffi_callback.rs`** — callbacks C→raylang (IDEAS §131). Sin `unsafe`
+  propio en producción: los trampolines son funciones `extern "C"` seguras cuyo puntero se entrega
+  a C. Lo que se confía es lo de siempre en la FFI: que C los llame con la firma declarada (el
+  trampolín lee 6 registros enteros y 4 de coma flotante; los que C no pasó son basura que nadie
+  lee). Un trampolín sin manejador en el hilo que lo llama (hilo ajeno, o puntero usado tras la
+  llamada) aborta el proceso en vez de ejecutar raylang sin heap. Los manejadores de la VM y del
+  intérprete (`install_callback` en `src/vm/mod.rs` y `src/interpreter.rs`) sí llevan un
+  `unsafe`: recuperan `&mut` del motor desde su dirección; la invariante es que el trampolín
+  solo corre en ese hilo y dentro de la llamada `extern` que lo instaló, con el motor detenido en
+  la llamada a C. El binario nativo pega este mismo archivo como módulo.
 - **`src/builtins.rs` (`read_file_arc_str`, M433) y el runtime emitido del nativo (`__ray_read_file`,
   `__ray_join`)** — un `Arc<[u8]>`/`Rc<[u8]>` nacido a cero (`new_zeroed_slice().assume_init()`: todo
   octeto a cero es un `u8` válido) y, tras validar UTF-8 con `str::from_utf8`, el cast

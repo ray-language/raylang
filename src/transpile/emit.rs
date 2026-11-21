@@ -207,15 +207,17 @@ impl Transpiler {
         // IDEAS §131: callbacks C→raylang. La reserva de trampolines es la MISMA fuente que usan la
         // VM y el intérprete (`ray-runtime/src/ffi_callback.rs`), pegada como módulo: vale también
         // en el `rustc` pelado. El error (panic) de un callback no puede desenrollar marcos de C:
-        // se guarda aquí y el wrapper de la `extern` lo relanza al volver.
+        // se intercepta con `__ray_try_call` (el de `try_call`: mismo silencio del hook y mismo
+        // mensaje), se guarda aquí y el wrapper de la `extern` lo relanza al volver como un error
+        // de ejecución más.
         let has_callbacks = prog.externs.iter().any(|e| e.params.iter().any(|p| matches!(normalize_type(&p.ty), Type::Fn(..))));
         if has_callbacks {
             out.push_str("#[allow(dead_code)]\nmod __ray_cb {\n");
             out.push_str(include_str!("../../crates/ray-runtime/src/ffi_callback.rs"));
             out.push_str("}\n");
-            out.push_str("thread_local! { static __RAY_CB_ERR: std::cell::RefCell<Option<Box<dyn std::any::Any + Send>>> = const { std::cell::RefCell::new(None) }; }\n");
-            out.push_str("fn __ray_cb_stash(e: Box<dyn std::any::Any + Send>) { __RAY_CB_ERR.with(|s| { s.borrow_mut().get_or_insert(e); }); }\n");
-            out.push_str("fn __ray_cb_rethrow() { if let Some(e) = __RAY_CB_ERR.with(|s| s.borrow_mut().take()) { std::panic::resume_unwind(e); } }\n");
+            out.push_str("thread_local! { static __RAY_CB_ERR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) }; }\n");
+            out.push_str("fn __ray_cb_stash(m: &str) { __RAY_CB_ERR.with(|s| { s.borrow_mut().get_or_insert_with(|| m.to_string()); }); }\n");
+            out.push_str("fn __ray_cb_rethrow() { if let Some(m) = __RAY_CB_ERR.with(|s| s.borrow_mut().take()) { __ray_rt_err(&m); } }\n");
         }
         // (1) Declaraciones `extern "C"`, agrupadas por librería (orden estable). M417: la clave
         // incluye los nombres por plataforma, que son parte de la identidad del bloque.
@@ -394,7 +396,7 @@ impl Transpiler {
 
     /// IDEAS §131: la expresión Rust que instala el parámetro `i` (un `Rc<dyn Fn>`) como callback C
     /// con la firma `sig`. El manejador lee los registros según la firma (como `ffi::callback_args`
-    /// en la VM), llama a la función y devuelve los bits del retorno; un panic se guarda para el
+    /// en la VM), llama a la función y devuelve los bits del retorno; un error se guarda para el
     /// wrapper. Con fibras, marca la fibra para que no pueda aparcarse mientras C está en la pila.
     fn callback_install(&self, i: usize, sig: &crate::ffi::CallbackSig) -> String {
         use crate::ffi::CKind;
@@ -433,7 +435,7 @@ impl Transpiler {
             ""
         };
         format!(
-            "{{ {windows}let __f = __p{i}.clone(); match __ray_cb::install({float_ret}, Rc::new(move |__r: &__ray_cb::Regs| -> u64 {{ {guard}match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| __f({args}))) {{ Ok(__v) => {encode}, Err(__e) => {{ __ray_cb_stash(__e); 0 }} }} }})) {{ Ok(__c) => __c, Err(__m) => __ray_rt_err(&__m) }} }}",
+            "{{ {windows}let __f = __p{i}.clone(); match __ray_cb::install({float_ret}, Rc::new(move |__r: &__ray_cb::Regs| -> u64 {{ {guard}let mut __out = 0u64; let __res = __ray_try_call(|| {{ let __v = __f({args}); __out = {encode}; }}); if let Some(__m) = __res.borrow().first() {{ __ray_cb_stash(__m); }} __out }})) {{ Ok(__c) => __c, Err(__m) => __ray_rt_err(&__m) }} }}",
             float_ret = sig.ret == CKind::Float,
             args = args.join(", "),
         )

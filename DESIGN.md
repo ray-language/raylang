@@ -21724,3 +21724,73 @@ rechazaban; un parámetro que nadie fija sigue siendo error.
 sintaxis nueva y van por la SPEC. Con esto raysolve ya no los necesita para `pubgrub.dep_span` ni
 `resolve_conflict`; si otra app los pide, se clasifican en IDEAS. El checker auto-alojado no lleva
 esta inferencia (tampoco la de 1.27.105–1.27.108).
+
+## 474. Callbacks C→raylang en la FFI (ray-daw #425, nov 2026)
+
+La FFI de M41 solo llamaba hacia C. Las APIs que piden un puntero a función (el comparador de
+`qsort`, la fila de `sqlite3_exec`, el callback de entrada de `AudioUnitRender`) quedaban fuera, y
+REFERENCE §13 lo decía. La propuesta y la clasificación están en IDEAS §131; aquí va lo decidido.
+
+**Alcance: solo el callback síncrono.** C llama al callback durante la llamada `extern` que lo
+recibió, en el mismo hilo. El que C guarda y llama desde un hilo suyo (el render de CoreAudio, el
+bloque de CoreMIDI) no tiene fibra ni heap donde correr, y en audio de tiempo real un GC no cabe:
+queda fuera, y si ocurre el programa aborta con el motivo en vez de ejecutar raylang sin heap.
+Esto no basta para que ray-daw aloje plugins AU/VST3 (faltan vtables de C++, bloques de
+Objective-C y la ventana del editor); eso sería un subsistema del runtime, no FFI.
+
+**Superficie.** Un parámetro de tipo función en una `extern fn`. No hay sintaxis nueva: el tipo
+`fn(…) -> R` ya existía. El argumento es cualquier valor función. Tipos del callback: los
+escalares que ya cruzaban la frontera más `Option<ptr>` en los dos sentidos (C pasa NULL como
+dato de usuario constantemente). `string`/`bytes` no: no hay longitud ni dueño que deducir de un
+`char*` entrante; se recibe `ptr` y se lee con `ffi.read`.
+
+**Mecanismo: una reserva fija de trampolines, sin libffi.** 64 funciones `extern "C"` generadas por
+macro (por clase de retorno: registro entero o de coma flotante), cada una con su índice a una
+tabla POR HILO de manejadores (`ray-runtime/src/ffi_callback.rs`). Un solo trampolín sirve a
+cualquier firma porque en SysV x86_64 y AAPCS64 los enteros y los flotantes viajan por bancos de
+registros independientes: declara 6 + 4 y lee los que la firma diga. Es el mismo espíritu que el
+catálogo de moldes de `ffi::call`. En Windows x64 los bancos comparten posición: allí solo
+enteros y punteros, y un callback con `float` es error de ejecución. Se descartó libffi por lo
+mismo que en M41 (una dependencia de C con build frágil en MSVC) y emitir un `extern "C"` por
+función en el nativo, que habría dado closures en un motor y no en los otros. La tabla es por hilo
+porque el manejador captura estado del motor que no es `Send`; de paso, un trampolín sin
+manejador en su hilo es exactamente el caso «hilo ajeno o puntero caducado».
+
+**VM: el bucle se hace reentrante con un «suelo» de marcos.** `run_loop` era un único bucle por
+fibra sin entrada desde Rust. Ahora la fibra lleva `floor`: la altura de marcos a la que el bucle
+termina y devuelve el valor. `run_callback` abre el marco del callback, fija `floor` y llama a
+`run_loop`; el `Return` que deja los marcos en esa altura sale del bucle anidado en vez de
+entregar el valor al llamador. No hay coste en el camino caliente: la comparación sustituye a la
+de «la fibra se quedó sin marcos» que `do_return` ya hacía (`floor` vale 0 fuera de un callback).
+Tres consecuencias:
+
+- *No se puede aparcar.* Con marcos de C en la pila del hilo la fibra no puede ceder:
+  `take_current_fiber` devuelve error si `floor != 0`, y los 22 sitios que aparcan lo propagan
+  como error de ejecución. Los sitios solo habían tocado la pila de la propia fibra, que el
+  desenrollado repone.
+- *Errores.* Un error dentro del callback no puede atravesar C. `dispatch_error` lo deja salir del
+  bucle anidado (salvo que haya un `try_call` abierto DENTRO del callback), `run_callback`
+  desenrolla hasta la entrada, el trampolín devuelve cero y la llamada `extern` lo relanza al
+  volver, donde sigue el camino normal (traza, `try_call`, fallo de la fibra).
+- *GC.* El valor función de cada callback queda en la pila de operandos durante la llamada: es
+  la raíz que lo mantiene vivo si el GC corre dentro del callback. Los `string`/`bytes` de la
+  llamada exterior no son objetos del heap (búfer propio contado por referencias), así que el
+  puntero que C tiene sigue valiendo.
+
+**Nativo.** El wrapper de la `extern` instala el trampolín con un manejador que decodifica los
+registros según la firma (el mismo criterio que `ffi::callback_args`), llama al `Rc<dyn Fn>` bajo
+el mismo `catch_unwind` de `try_call` y guarda el mensaje; al volver de C lo relanza como un error
+de ejecución más. La reserva es el mismo archivo,
+pegado como módulo, para que valga en el `rustc` pelado. Con fibras, «no se puede aparcar» se
+marca en el bit bajo de `CURRENT` (el `Yielder` está alineado) y lo comprueba `suspend`: un
+thread-local nuevo leído desde la fibra costó un 20 % en su día (M372). Sin fibras
+(`--without fibers`) no hay comprobación: esperar bloquea el hilo, que es lo que ese modo hace
+siempre.
+
+**Intérprete.** Reentrante por naturaleza: el trampolín llama a `call_index`. Como oráculo
+secuencial no tiene canales ni fibras, y `time.sleep` dentro de un callback duerme en vez de
+fallar: es la única divergencia y no se persigue.
+
+**Lo que queda.** `ffi.callback(f)` retenido (IDEAS §131, fase 3). Los structs por valor y las
+variádicas siguen fuera de contrato.
+

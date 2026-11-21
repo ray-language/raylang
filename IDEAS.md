@@ -4840,7 +4840,7 @@ respuestas de `net/http`). Las tres cosas van juntas:
 
 Sin demanda de ninguna app todavía.
 
-## 131. Callbacks C→raylang en la FFI (ray-daw #425) — 📌 PROPUESTA, sin decidir
+## 131. Callbacks C→raylang en la FFI (ray-daw #425) — 🟡 fases 1 y 2 EJECUTADAS (DESIGN §474); pendiente `ffi.callback` retenido
 
 **Qué se pide.** Que una función de raylang pueda pasarse a C como puntero a función. Hoy
 REFERENCE §13 lo deja fuera de contrato. Es la carencia grande de la FFI (§14 la anotó para
@@ -4906,6 +4906,11 @@ SECURITY.md.
 **Fases.** (1) SPEC + checker + intérprete + nativo con callbacks de alcance de llamada;
 (2) VM; (3) `ffi.callback` retenido; (4) docs y ejemplo (`qsort`, `sqlite3_exec`).
 
-**Por decidir (usuario):** si el objetivo es la FFI general (esta propuesta) o el alojamiento de
-plugins en el runtime; y si la clase 2 se queda fuera.
+**Decidido (usuario, 21 nov 2026):** el objetivo es la FFI general; la clase 2 queda fuera, con
+aborto claro; reserva fija de trampolines, sin libffi. Hechas las fases 1 y 2 (los tres motores y el
+nativo, callbacks de alcance de llamada) y la 4 (docs). Pendiente la fase 3, `ffi.callback(f)`
+retenido, para el patrón «registrar y luego arrancar el bucle de eventos»: hoy ese puntero deja de
+valer al volver de la llamada que lo pasó. En el nativo con fibras hay que resolver además que la
+fibra no cambie de hilo entre el registro y la llamada (las fibras están fijadas a su worker, así
+que en principio basta la tabla por hilo).
 

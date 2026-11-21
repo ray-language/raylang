@@ -287,6 +287,19 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   operadores ni `as`; `std/ffi` da `null()`, `is_null`, `offset`, `addr` y `read(p, n) -> bytes`, que
   confía en la dirección como una `extern` confía en su firma). Un argumento `Option<ptr>` pasa `None`
   como `NULL`.
+  Un parámetro de **tipo función** (`cmp: fn(ptr, ptr) -> int`) es un **callback**: el argumento —una
+  función con nombre o un closure— llega a C como un puntero a función, y C puede llamarlo
+  **mientras dura esa llamada `extern` y desde el mismo hilo**. Los parámetros del callback son
+  `int`/`u64`/`float`/`bool`/`ptr`/`Option<ptr>` (`NULL → None`) —hasta 6 enteros o punteros y 4
+  `float`— y su retorno, esos mismos o `unit` (`None → NULL`); otro tipo es error de compilación,
+  igual que un callback en un bloque `blocking`. Dentro del callback el programa corre normal, salvo
+  que **no puede esperar**: una operación que tendría que ceder (recibir de un canal vacío,
+  `time.sleep`, `join`, E/S de red) es error de ejecución. Un error de ejecución dentro del
+  callback no atraviesa C: C recibe cero de ese callback y, cuando la función C retorna, la llamada
+  `extern` falla con ese error (recuperable con `try_call`). Usar el puntero **después** de que la
+  llamada retorne, o desde otro hilo, no es recuperable: el programa escribe el motivo y aborta.
+  Hasta 64 callbacks vivos a la vez por hilo. En Windows un callback con parámetros `float` es
+  error de ejecución.
   El **retorno** admite `int`/`u64`/`float`/`bool`/`unit`, `ptr`/`Option<ptr>` (`NULL → None`, p. ej.
   `fopen`), y para un `char*`, **`Option<bytes>`** (`NULL → None`; la frontera copia los bytes hasta el NUL
   y no libera el puntero) o **`Option<string>`** (azúcar que valida UTF-8; bytes inválidos → error de

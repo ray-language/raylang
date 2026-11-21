@@ -665,14 +665,27 @@ del símbolo).
 | `ptr` | puntero opaco | puntero opaco |
 | `Option<string>` / `Option<bytes>` | ✗ | `char*`: NULL → `None`; si no, **copia** hasta el NUL (nunca libera) |
 | `Option<ptr>` | puntero: `None` → NULL | puntero: NULL → `None` |
+| `fn(…) -> R` | puntero a función C: un **callback** (abajo) | ✗ |
+
+**Callbacks.** Un parámetro de tipo función recibe una función de raylang —con nombre o closure— y
+C la llama de vuelta: `fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int);` y luego
+`qsort(data, n, 1 as u64, fn(a: ptr, b: ptr) -> int { … })`. Parámetros del callback: `int`, `u64`,
+`float`, `bool`, `ptr`, `Option<ptr>` (NULL → `None`), hasta 6 enteros/punteros y 4 `float`;
+retorno: esos mismos o `unit`. El puntero vale **mientras dura la llamada** y **en el mismo hilo**:
+sirve para `qsort`, `bsearch`, `sqlite3_exec`, enumeradores y todo lo que llama de vuelta antes de
+retornar; no para un callback que C guarda y llama más tarde o desde un hilo suyo (el programa
+aborta diciendo por qué), ni en un bloque `blocking` (error de compilación). Dentro del callback no
+se puede esperar: recibir de un canal vacío, `time.sleep`, `join` o E/S de red dan
+`cannot wait inside an FFI callback …`. Un error dentro del callback lo ve la llamada `extern`
+cuando C retorna (C recibe cero de ese callback); `try_call` lo recupera. Como mucho 64 callbacks
+vivos a la vez. En Windows un callback con parámetros `float` aún no se admite (error de ejecución).
 
 **Coste de una llamada** (medido en arm64, rayserial #396): ~0,5 µs en la VM y ~1 ns en nativo.
 `blocking` añade entre 4 y 8 µs en nativo (un salto de hilo) y nada en la VM, donde es inerte:
 decláralo solo para lo que de verdad puede esperar (un `read` de un dispositivo, un `poll` con plazo), nunca para un
 `poll(…, 0)` o un getter.
 
-Fuera de contrato: funciones **variádicas**, structs por valor, callbacks (anotados para un FFI
-v2). Variádicas no son solo `printf`: también `ioctl`, `fcntl` y `open` con `O_CREAT` (rayserial
+Fuera de contrato: funciones **variádicas** y structs por valor (anotados para un FFI v2). Variádicas no son solo `printf`: también `ioctl`, `fcntl` y `open` con `O_CREAT` (rayserial
 #393). En Apple arm64 el argumento variádico viaja por la pila y `extern` lo pasa en registro,
 así que la llamada falla o, peor, devuelve 0 sin hacer nada (`fcntl(fd, F_SETFL, O_NONBLOCK)`);
 en la VM además puede dejar el descriptor con banderas basura, y la VM y un binario nativo no se

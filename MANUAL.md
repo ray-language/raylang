@@ -3211,6 +3211,34 @@ La marca no cambia valores ni tipos; donde no hay fibras (VM, `--without fibers`
 `spawn`) es inerte. Para llamadas cortas de CPU (`sqrt`, `strlen`) no la uses: el viaje al pool cuesta
 más que la llamada.
 
+**¿C te llama de vuelta?** Muchas APIs C piden un puntero a función: el comparador de `qsort`, la
+fila de `sqlite3_exec`, el visitante de un enumerador. Declara el parámetro con tipo función y pasa
+una función de raylang, con nombre o closure:
+
+```rust
+import std/ffi;
+
+extern "c" {
+    fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int);
+}
+
+fn main() {
+    let data = bytes_of([5, 3, 9, 1, 7]);
+    var comparisons = 0;
+    qsort(data, 5 as u64, 1 as u64, fn(a: ptr, b: ptr) -> int {
+        comparisons = comparisons + 1;                       // el closure captura como siempre
+        (ffi.read(a, 1)[0] as int) - (ffi.read(b, 1)[0] as int)
+    });
+    print(data);                                             // 0103050709
+}
+```
+
+Tres reglas. El callback vale **mientras dura la llamada** y en el mismo hilo: si C guarda el
+puntero para llamarlo después, o lo llama desde un hilo suyo, el programa aborta diciendo por qué.
+Dentro del callback **no se puede esperar** (un canal vacío, `time.sleep`, `join`, la red): es un
+error de ejecución. Y un error dentro del callback no se pierde: C recibe cero de ese callback y
+la llamada `extern` falla con ese error cuando C retorna, así que `try_call` alrededor lo recupera.
+
 **¿La función C falló y quieres saber por qué?** Las APIs POSIX dejan el motivo en `errno`:
 
 ```rust

@@ -225,22 +225,30 @@ fn command_phase<S: Read + Write>(s: &mut S) {
                         d[at] = decimals;
                         d
                     };
-                    s.write_all(&pkt(1, &[5])).unwrap();
+                    s.write_all(&pkt(1, &[8])).unwrap();
                     s.write_all(&pkt(2, &with_decimals("d", 5, 31))).unwrap(); // DOUBLE
                     s.write_all(&pkt(3, &with_decimals("f", 4, 31))).unwrap(); // FLOAT
                     s.write_all(&pkt(4, &with_decimals("dt3", 12, 3))).unwrap(); // DATETIME(3)
                     s.write_all(&pkt(5, &with_decimals("t6", 11, 6))).unwrap(); // TIME(6)
                     s.write_all(&pkt(6, &with_decimals("d2", 5, 2))).unwrap(); // DOUBLE(10,2)
-                    s.write_all(&pkt(7, &EOF)).unwrap();
-                    let mut f = vec![0u8, 0];
+                    // Revisión de 1.27.111: un double >= 1e15 con fracción va en decimal, y el cero
+                    // negativo conserva el signo (DOUBLE y FLOAT).
+                    s.write_all(&pkt(7, &with_decimals("big", 5, 31))).unwrap();
+                    s.write_all(&pkt(8, &with_decimals("nz", 5, 31))).unwrap();
+                    s.write_all(&pkt(9, &with_decimals("nzf", 4, 31))).unwrap();
+                    s.write_all(&pkt(10, &EOF)).unwrap();
+                    let mut f = vec![0u8, 0, 0];
                     f.extend_from_slice(&2.5e-300f64.to_le_bytes());
                     f.extend_from_slice(&(-3.4e38f32).to_le_bytes());
                     f.extend_from_slice(&[11, 0xE8, 0x07, 2, 29, 12, 34, 56]);
                     f.extend_from_slice(&789_000u32.to_le_bytes());
                     f.extend_from_slice(&[8, 1, 0, 0, 0, 0, 12, 0, 0]); // -12:00:00, sin microsegundos
                     f.extend_from_slice(&1234.5f64.to_le_bytes());
-                    s.write_all(&pkt(8, &f)).unwrap();
-                    s.write_all(&pkt(9, &EOF)).unwrap();
+                    f.extend_from_slice(&1000000000000000.5f64.to_le_bytes());
+                    f.extend_from_slice(&(-0.0f64).to_le_bytes());
+                    f.extend_from_slice(&(-0.0f32).to_le_bytes());
+                    s.write_all(&pkt(11, &f)).unwrap();
+                    s.write_all(&pkt(12, &EOF)).unwrap();
                 } else if prep_sql.starts_with("NULLS") {
                     // OK con tantas filas afectadas como parámetros NULL llegaron.
                     let nulls = params.iter().filter(|p| *p == "<NULL>").count() as u8;
@@ -707,7 +715,7 @@ Result.Ok([[Option.Some(3138343436373434303733373039353531363135), Option.Some(f
 Result.Err(mysql: row 1, column 2 is not valid UTF-8 (a binary value); read it with query_bytes)\n\
 Result.Ok(2)\n\
 Result.Ok(0)\n\
-Result.Ok([[2.5e-300, -3.4e38, 2024-02-29 12:34:56.789, -12:00:00.000000, 1234.50]])\n";
+Result.Ok([[2.5e-300, -3.4e38, 2024-02-29 12:34:56.789, -12:00:00.000000, 1234.50, 1000000000000000.5, -0, -0]])\n";
 
 #[test]
 fn mysql_null_binary_and_unsigned_cells() {

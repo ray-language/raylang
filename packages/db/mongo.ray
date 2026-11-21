@@ -83,14 +83,8 @@ fn send_sections(
         + le32_of(0)
         + [0];
     c.req_id = c.req_id + 1;
-    var parts: [bytes] = [bytes_of(head), body];
-    if (seq_name != "") {
-        parts.push(seq_prefix);
-        for d in docs {
-            parts.push(d);
-        }
-    }
-    net.socket_write_bytes(c.handle, bytes_concat(parts))
+    let sequence: [bytes] = if (seq_name != "") { docs } else { [] };
+    net.socket_write_bytes(c.handle, bytes_concat([bytes_of(head), body, seq_prefix] + sequence))
 }
 
 // Tope de tamaño de un mensaje del servidor (anti-bomba de memoria). El `total` del header lo fija

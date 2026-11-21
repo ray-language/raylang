@@ -33,11 +33,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   por intento); con parámetros, un DOUBLE de 1e15 o más con parte fraccionaria sale en decimal
   (`1000000000000000.5`) y el cero negativo sale `-0`, como en el protocolo de texto —
   comprobado contra MySQL 8.0—; un DATETIME/TIME sin decimales declarados que trae
-  microsegundos ya no los pierde; `mongo.run_command_seq` arma el mensaje con una sola copia
+  microsegundos ya no los pierde; el manifiesto declara el mínimo real, raylang 1.27.110 (decía
+  1.27.81 y `db/mysql` usa `math.format_float`); `mongo.run_command_seq` arma el mensaje con una sola copia
   del lote.
-- **Paquete `net` 0.17.2** (revisión): `websocket.is_upgrade` exige lo que pide RFC 6455
-  §4.2.1 — `Upgrade: websocket` y `Connection: Upgrade` como tokens, y
-  `Sec-WebSocket-Version: 13` —, no solo que `Upgrade` contenga «websocket».
+- **Paquete `net` 0.17.2** (revisión): `websocket.is_upgrade` busca `websocket` como token de
+  `Upgrade`, no como subcadena, y `websocket.accept` contesta `426 Upgrade Required` con
+  `Sec-WebSocket-Version: 13` a una petición de otra versión (RFC 6455 §4.4).
 
 ## 1.27.110 — 2026-11-20
 

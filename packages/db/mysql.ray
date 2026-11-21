@@ -1135,14 +1135,18 @@ fn digits_and_exponent(text: string) -> (string, int) {
     (all, exp)
 }
 
+// El cero como lo escribe el servidor: el negativo, con su signo.
+fn zero_text(v: float) -> string {
+    if (to_string(v).starts_with("-")) { "-0" } else { "0" }
+}
+
 // DOUBLE: las cifras más cortas que lo identifican. Con decimales fijos (`DOUBLE(8,2)`), esos.
 fn double_text(v: float, decimals: int) -> string {
     if (decimals < 31) {
         return math.format_float(v, "f", decimals);
     }
     if (v == 0.0) {
-        // El servidor escribe el cero negativo con su signo.
-        return if (to_string(v).starts_with("-")) { "-0" } else { "0" };
+        return zero_text(v);
     }
     let negative = v < 0.0;
     let parts = digits_and_exponent(to_string(if (negative) { 0.0 - v } else { v }));
@@ -1156,8 +1160,7 @@ fn float_text(v: float, decimals: int) -> string {
         return math.format_float(v, "f", decimals);
     }
     if (v == 0.0) {
-        // El servidor escribe el cero negativo con su signo.
-        return if (to_string(v).starts_with("-")) { "-0" } else { "0" };
+        return zero_text(v);
     }
     let negative = v < 0.0;
     let sci = math.format_float(if (negative) { 0.0 - v } else { v }, "e", 5);

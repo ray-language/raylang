@@ -21666,7 +21666,11 @@ servidor solo la usa por encima de 1e15 cuando el número no tiene parte fraccio
 (`1000000000000000.5` va en decimal), y escribe el cero negativo como `-0` (el f32 lo perdía al
 reconstruirse con `0.0 - v`). Las dos se comprobaron contra el `mysqld` 8.0.46, comparando las
 dos vías. Una fecha sin decimales declarados que trae microsegundos los da enteros en vez de
-perderlos. `websocket.is_upgrade` pasa a exigir `Connection: Upgrade` y la versión 13.
+perderlos. `websocket.is_upgrade` compara `websocket` como token; la validación de la versión
+va en `accept`, que contesta 426 —una segunda revisión señaló que meterla en `is_upgrade`
+dejaba al cliente sin respuesta—, y `Connection: Upgrade` no se exige porque el mapa de
+cabeceras guarda la última línea de una cabecera repetida. El manifiesto de `db` declaraba
+raylang 1.27.81 y usa funciones de 1.27.86: ahora 1.27.110, que es lo que ya exige su `net`.
 `send_sections` copiaba el lote tres veces. La prueba del sumidero nulo reintenta: un hueco de
 más de 50 ms no cuenta como reproducido, y un runner cargado bajaba la razón.
 

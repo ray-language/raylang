@@ -204,6 +204,19 @@ impl Transpiler {
         if prog.externs.is_empty() {
             return Ok(());
         }
+        // IDEAS §131: callbacks C→raylang. La reserva de trampolines es la MISMA fuente que usan la
+        // VM y el intérprete (`ray-runtime/src/ffi_callback.rs`), pegada como módulo: vale también
+        // en el `rustc` pelado. El error (panic) de un callback no puede desenrollar marcos de C:
+        // se guarda aquí y el wrapper de la `extern` lo relanza al volver.
+        let has_callbacks = prog.externs.iter().any(|e| e.params.iter().any(|p| matches!(normalize_type(&p.ty), Type::Fn(..))));
+        if has_callbacks {
+            out.push_str("#[allow(dead_code)]\nmod __ray_cb {\n");
+            out.push_str(include_str!("../../crates/ray-runtime/src/ffi_callback.rs"));
+            out.push_str("}\n");
+            out.push_str("thread_local! { static __RAY_CB_ERR: std::cell::RefCell<Option<Box<dyn std::any::Any + Send>>> = const { std::cell::RefCell::new(None) }; }\n");
+            out.push_str("fn __ray_cb_stash(e: Box<dyn std::any::Any + Send>) { __RAY_CB_ERR.with(|s| { s.borrow_mut().get_or_insert(e); }); }\n");
+            out.push_str("fn __ray_cb_rethrow() { if let Some(e) = __RAY_CB_ERR.with(|s| s.borrow_mut().take()) { std::panic::resume_unwind(e); } }\n");
+        }
         // (1) Declaraciones `extern "C"`, agrupadas por librería (orden estable). M417: la clave
         // incluye los nombres por plataforma, que son parte de la identidad del bloque.
         let mut by_lib: std::collections::BTreeMap<String, Vec<&crate::ast::ExternFn>> =
@@ -303,6 +316,13 @@ impl Transpiler {
                         }
                     }
                     Type::Ptr => passes.push(format!("(__p{} as *mut std::ffi::c_void)", i)),
+                    // IDEAS §131: un argumento función se instala en un trampolín C mientras dura
+                    // la llamada (`__rt_cb{i}` lo retiene; se suelta al volver).
+                    Type::Fn(cb_params, cb_ret) => {
+                        let sig = crate::ffi::callback_sig(&cb_params, &cb_ret)?;
+                        writeln!(out, "    let __rt_cb{} = {};", i, self.callback_install(i, &sig)).unwrap();
+                        passes.push(format!("(__rt_cb{}.ptr() as *mut std::ffi::c_void)", i));
+                    }
                     // rayserial #394: `Option<ptr>` → la dirección, o NULL si es `None`.
                     Type::Enum(n, args) if n == "Option" && args.len() == 1 && normalize_type(&args[0]) == Type::Ptr => {
                         if blocking {
@@ -333,6 +353,14 @@ impl Transpiler {
             } else {
                 writeln!(out, "    let __rt_r = {};", raw_call).unwrap();
             }
+            // IDEAS §131: suelta los trampolines y relanza el error que hubiera dentro de un callback.
+            let callbacks: Vec<usize> = e.params.iter().enumerate().filter(|(_, p)| matches!(normalize_type(&p.ty), Type::Fn(..))).map(|(i, _)| i).collect();
+            if !callbacks.is_empty() {
+                for i in &callbacks {
+                    writeln!(out, "    drop(__rt_cb{});", i).unwrap();
+                }
+                out.push_str("    __ray_cb_rethrow();\n");
+            }
             // Marshalling del retorno C → valor raylang. En modo blocking los retornos-puntero ya
             // llegaron convertidos a tipos Send (i64 / Option<Vec<u8>> / Option<i64>) por el closure.
             let ret_expr = match normalize_type(&e.return_type) {
@@ -362,6 +390,53 @@ impl Transpiler {
             writeln!(out, "    {}\n}}", ret_expr).unwrap();
         }
         Ok(())
+    }
+
+    /// IDEAS §131: la expresión Rust que instala el parámetro `i` (un `Rc<dyn Fn>`) como callback C
+    /// con la firma `sig`. El manejador lee los registros según la firma (como `ffi::callback_args`
+    /// en la VM), llama a la función y devuelve los bits del retorno; un panic se guarda para el
+    /// wrapper. Con fibras, marca la fibra para que no pueda aparcarse mientras C está en la pila.
+    fn callback_install(&self, i: usize, sig: &crate::ffi::CallbackSig) -> String {
+        use crate::ffi::CKind;
+        let (mut ints, mut floats) = (0, 0);
+        let args: Vec<String> = sig
+            .params
+            .iter()
+            .map(|k| {
+                if *k == CKind::Float {
+                    floats += 1;
+                    return format!("__r.floats[{}]", floats - 1);
+                }
+                ints += 1;
+                let reg = format!("__r.ints[{}]", ints - 1);
+                match k {
+                    CKind::Int => format!("{reg} as i32 as i64"),
+                    CKind::U64 => format!("{reg} as u64"),
+                    CKind::Bool => format!("({reg} as u8) != 0"),
+                    CKind::OptPtr => format!("if {reg} == 0 {{ None }} else {{ Some({reg}) }}"),
+                    _ => reg,
+                }
+            })
+            .collect();
+        let encode = match sig.ret {
+            CKind::Float => "__v.to_bits()",
+            CKind::Unit => "{ let () = __v; 0u64 }",
+            CKind::OptPtr => "__v.unwrap_or(0) as u64",
+            _ => "__v as u64",
+        };
+        let guard = if self.fibers { "let __g = ray_runtime::fibers::enter_ffi_callback(); " } else { "" };
+        // En Windows x64 los argumentos comparten posición entre bancos de registros: un callback
+        // con `float` no es alcanzable (mismo texto que la VM, `ffi::install_callback`).
+        let windows = if sig.params.contains(&CKind::Float) {
+            "if cfg!(windows) { __ray_rt_err(\"an FFI callback with float parameters is not supported on Windows yet\"); } "
+        } else {
+            ""
+        };
+        format!(
+            "{{ {windows}let __f = __p{i}.clone(); match __ray_cb::install({float_ret}, Rc::new(move |__r: &__ray_cb::Regs| -> u64 {{ {guard}match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| __f({args}))) {{ Ok(__v) => {encode}, Err(__e) => {{ __ray_cb_stash(__e); 0 }} }} }})) {{ Ok(__c) => __c, Err(__m) => __ray_rt_err(&__m) }} }}",
+            float_ret = sig.ret == CKind::Float,
+            args = args.join(", "),
+        )
     }
 
     /// Normaliza + reclasifica RECURSIVAMENTE los `Struct(n)` que son enums del usuario (el parser

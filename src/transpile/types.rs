@@ -258,6 +258,7 @@ pub(super) fn ffi_c_arg_ty(t: &Type) -> Result<&'static str, String> {
         Type::String => "*const std::os::raw::c_char",   // char* (NUL-terminado)
         Type::Bytes => "*const u8",                      // buffer crudo
         Type::Ptr => "*mut std::ffi::c_void",            // void* opaco
+        Type::Fn(..) => "*mut std::ffi::c_void",         // IDEAS §131: el puntero del trampolín
         // rayserial #394: `Option<ptr>` (None = NULL).
         Type::Enum(n, args) if n == "Option" && args.len() == 1 && normalize_type(&args[0]) == Type::Ptr => "*mut std::ffi::c_void",
         other => return Err(format!("FFI argument is not marshalable: {:?}", other)),

@@ -599,11 +599,43 @@ pub fn in_fiber() -> bool {
     CURRENT.with(|c| !c.get().is_null())
 }
 
+// IDEAS §131: la marca «hay un callback de la FFI en curso» viaja en el bit bajo de `CURRENT` (el
+// `Yielder` está alineado, así que el bit queda libre). No es un thread-local nuevo: uno leído
+// desde la fibra costó un 20 % en actor_shard (ver `coop`), y `suspend` ya lee `CURRENT`.
+const IN_FFI_CALLBACK: usize = 1;
+
+/// Marca la fibra en curso como «dentro de un callback de la FFI» hasta que se suelte el valor
+/// devuelto: mientras tanto `suspend` falla en vez de ceder. Anida (un callback dentro de otro).
+/// Fuera de una fibra no hace nada.
+pub fn enter_ffi_callback() -> FfiCallbackGuard {
+    let before = CURRENT.with(|c| {
+        let y = c.get();
+        if !y.is_null() {
+            c.set((y as usize | IN_FFI_CALLBACK) as *const ());
+        }
+        y
+    });
+    FfiCallbackGuard(before)
+}
+
+pub struct FfiCallbackGuard(*const ());
+
+impl Drop for FfiCallbackGuard {
+    fn drop(&mut self) {
+        CURRENT.with(|c| c.set(self.0));
+    }
+}
+
 /// Cede el control del worker con el motivo dado. Solo dentro de una fibra. Devuelve `true` si el
 /// despertar fue por VENCIMIENTO del deadline del park (solo posible en parks de E/S con plazo).
 fn suspend(park: Park) -> bool {
     let y = CURRENT.with(|c| c.get());
     assert!(!y.is_null(), "fiber park outside of a fiber");
+    // IDEAS §131: dentro de un callback de la FFI hay marcos de C en la pila de la fibra: no se
+    // puede ceder (mismo texto que la VM, `ffi::BLOCKING_IN_CALLBACK`).
+    if y as usize & IN_FFI_CALLBACK != 0 {
+        panic!("cannot wait inside an FFI callback (channels, sleep, join and network I/O are not available while C code is on the stack)");
+    }
     // SAFETY: `y` apunta al `Yielder` de la corrutina EN EJECUCIÓN en este hilo: vive en la pila de
     // la corrutina (viva hasta que retorna) y solo lo usa la propia fibra. `suspend` devuelve el
     // control al `resume` del worker; cuando la fibra despierte, la ejecución sigue aquí.

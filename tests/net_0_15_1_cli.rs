@@ -70,59 +70,31 @@ fn main() -> int {
     assert!(out.contains("echo ping"), "{out}{err}");
 }
 
-/// Revisión de 1.27.111 (net 0.17.2): `is_upgrade` compara `websocket` como token de `Upgrade`, y
-/// `accept` contesta 426 con la versión admitida a una petición de otra versión.
+/// net 0.17.2: `is_upgrade` compara `websocket` como token de `Upgrade`, no como subcadena.
 #[test]
-fn a_websocket_upgrade_is_detected_by_token_and_a_wrong_version_gets_426() {
-    let main = r#"import std/net;
-import net/websocket;
+fn a_websocket_upgrade_is_detected_by_token() {
+    let main = r#"import net/websocket;
 
-fn headers(upgrade: string, version: string) -> Map<string, string> {
+fn headers(upgrade: string) -> Map<string, string> {
     var h: Map<string, string> = Map.new();
     h.insert("upgrade", upgrade);
-    h.insert("connection", "keep-alive, Upgrade");
     h.insert("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==");
-    h.insert("sec-websocket-version", version);
     h
 }
 
 fn main() -> int {
-    print(websocket.is_upgrade(headers("websocket", "13")));
-    print(websocket.is_upgrade(headers("h2c, WebSocket", "13")));
-    print(websocket.is_upgrade(headers("websocket2", "13")));
-    var no_key = headers("websocket", "13");
+    print(websocket.is_upgrade(headers("websocket")));
+    print(websocket.is_upgrade(headers("h2c, WebSocket")));
+    print(websocket.is_upgrade(headers("websocket2")));
+    var no_key = headers("websocket");
     no_key.remove("sec-websocket-key");
     print(websocket.is_upgrade(no_key));
-    let listener = net.tcp_listen("127.0.0.1", 0).unwrap();
-    let client = net.tcp_connect("127.0.0.1", net.local_port(listener)).unwrap();
-    let server = net.tcp_accept(listener).unwrap();
-    match (websocket.accept(headers("websocket", "8"), server)) {
-        Result.Ok(_) => print("accepted"),
-        Result.Err(e) => print(e),
-    }
-    close(server);
-    let answer = net.socket_read(client).unwrap_or("");
-    print(answer.starts_with("HTTP/1.1 426 "));
-    print(answer.contains("Sec-WebSocket-Version: 13\r\n"));
-    print(answer.contains("Upgrade: websocket\r\n"));
-    // Sin `Connection: Upgrade` no se acepta, y `accept` no escribe nada (lo hace el handler).
-    let client2 = net.tcp_connect("127.0.0.1", net.local_port(listener)).unwrap();
-    let server2 = net.tcp_accept(listener).unwrap();
-    var plain = headers("websocket", "13");
-    plain.insert("connection", "keep-alive");
-    print(websocket.accept(plain, server2).is_err());
-    close(server2);
-    print(net.socket_read(client2).unwrap_or("").len());
     0
 }
 "#;
     let (out, err, code) = run("ws_detect", main, &[]);
     assert_eq!(code, 0, "{out}{err}");
-    assert_eq!(
-        out,
-        "true\ntrue\nfalse\nfalse\nwebsocket: unsupported Sec-WebSocket-Version (only 13); answered with 426\ntrue\ntrue\ntrue\ntrue\n0\n",
-        "{err}"
-    );
+    assert_eq!(out, "true\ntrue\nfalse\nfalse\n", "{err}");
 }
 
 /// raycrawl #371: con `quiet()`, el cliente que corta la descarga a mitad del cuerpo no deja un

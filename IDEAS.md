@@ -4815,3 +4815,20 @@ campos contienen tuplas.
 para un struct o un enum sin `Show` cuando alguno de sus campos, transitivamente, contiene una
 tupla, y lo use en `print`/`to_string`/interpolación. **Impacto**: aditivo; cambia la salida de
 la VM solo en ese caso. Mientras tanto, `@derive(Show)` da la misma forma en los tres motores.
+
+## 130. `net`: validación completa del handshake de WebSocket y cabeceras repetidas
+
+Visto en las revisiones previas a publicar `net` 0.17.2 (DESIGN §472). `websocket.accept` acepta
+con 101 una petición sin `Connection: Upgrade` o con una `Sec-WebSocket-Version` distinta de 13,
+y `webserver` guarda solo la última línea de una cabecera repetida (también el parser de
+respuestas de `net/http`). Las tres cosas van juntas:
+
+- Unir las líneas repetidas con comas (RFC 9110 §5.3) en los dos parsers; `Cookie` con `; `; dos
+  `Host` distintos, 400. **Impacto**: cambia lo que ve quien compara una cabecera de valor único
+  (`X-Forwarded-Proto == "https"` en `web`, `Authorization`, `X-Ray-Token`): hay que revisar cada
+  consumidor del monorepo, y es visible para los de fuera.
+- `accept` valida el handshake entero (RFC 6455 §4.2.1) y devuelve un error tipado que diga si
+  ya contestó (400, o 426 con `Upgrade: websocket` y `Sec-WebSocket-Version: 13`) o no escribió
+  nada. **Impacto**: cambia el contrato de `accept`; versión menor.
+
+Sin demanda de ninguna app todavía.

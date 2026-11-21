@@ -21680,13 +21680,17 @@ hoy; si aparece, se filtra por la raíz del proyecto. Y `Bson.Raw` entró en una
 (0.10.1, ya publicada): un `match` exhaustivo sobre `Bson` sin comodín deja de compilar.
 
 **Antes de publicar `net` 0.17.2.** Desde el 21 nov 2026 un paquete se revisa antes de ir al
-índice. Esa pasada pidió que `accept` exigiera `Connection: Upgrade` (sin él, un proxy que
-quita las cabeceras salto a salto dejaría al servidor hablando tramas con un intermediario que
-cree seguir en HTTP) y que el 426 nombrara el protocolo. Se probó a arreglar de raíz el parser
-de `webserver`, que guarda la última línea de una cabecera repetida, uniéndolas con comas (RFC
-9110 §5.3), y se descartó para un parche: cambia lo que ve todo el que compara una cabecera de
-valor único (`X-Forwarded-Proto == "https"` en `web`, `Authorization`), y el parser de
-respuestas de `net/http` seguiría distinto. Queda como está, y `accept` rechaza el caso raro de
-dos líneas `Connection`. `accept` solo contesta por su cuenta el 426; en los demás `Err` no
-escribe, como en 0.17.1.
+índice. Cuatro pasadas sobre la validación del handshake en `websocket.accept` pidieron cosas
+contrarias: exigir `Connection: Upgrade` (sin él, un proxy que quita las cabeceras salto a salto
+deja al servidor hablando tramas con quien cree seguir en HTTP) choca con que `webserver`
+guarda la última línea de una cabecera repetida; arreglar eso uniendo las líneas (RFC 9110
+§5.3) cambia lo que ve quien compara una cabecera de valor único (`X-Forwarded-Proto ==
+"https"` en `web`, `Authorization`); y que `accept` conteste él los rechazos (400, 426) rompe
+al que lo usa de sonda y contesta por su cuenta, mientras que contestar solo algunos deja un
+`Err` con dos significados. Es una decisión de contrato, no un parche: 0.17.2 se publica con lo
+único que no admite discusión —`is_upgrade` compara `websocket` como token— y `accept` igual
+que en 0.17.1. La validación completa (cabeceras repetidas en el parser de peticiones y en el de
+respuestas de `net/http`, un error tipado en `accept`) queda para una versión menor de `net`.
+El árbol del tag v1.27.111 lleva un `websocket.ray` intermedio con el 426; el paquete que
+cuenta es el del índice.
 

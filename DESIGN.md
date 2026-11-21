@@ -21617,3 +21617,33 @@ trailers, un stream bidireccional de tres mensajes y lo mismo sobre TLS con `-ca
   su nombre y la banda de la entrada lleva el prefijo de las renombradas.
 - `new_call` para construir un `Call` a mano; `tls_connect_opts` en el MANUAL.
 
+## 472. Ronda sobre la re-medición de 1.27.110 (nov 2026)
+
+**`db/mysql`: el texto del protocolo binario (raycdc #467).** Una consulta con `?` va por el
+protocolo binario y el cliente convertía cada celda a texto por su cuenta, distinto de como lo
+escribe el servidor por el protocolo de texto. Quien compara o guarda el texto (un CDC que pagina:
+la primera página sin parámetros, las siguientes con ellos) veía valores distintos. Las reglas se
+midieron contra un `mysqld` 8.0.46, no se dedujeron: las cifras más cortas que identifican el
+double; notación científica (`1e15`, `2.5e-300`, sin `+`) cuando el exponente decimal pasa de 14 o
+baja de -15; FLOAT redondeado a 6 cifras significativas (`16777216` → `16777200`), que es por lo
+que `-3.4e38` salía como otro VALOR; decimales fijos si la columna los declara (`DOUBLE(10,2)`);
+y la fracción de segundo con los decimales declarados (`DATETIME(3)` → 3, `TIME(6)` → 6 aunque
+valgan cero). Los decimales viajan en la definición de columna, que el cliente ignoraba.
+Verificado comparando 339 celdas (33 filas de límites × 10 columnas, más decimales fijos) por
+las dos vías: ninguna difiere, en VM y nativo.
+
+**`url.escape_unsafe` (raycrawl #469).** La doc prometía «lo que hace un navegador con un
+`href`» y la función codificaba espacios y saltos de línea de los extremos; un `href` absoluto
+con sangría quedaba relativo. Se hace lo que hace el parser de WHATWG antes de parsear. Es un
+cambio de salida para entradas con espacios en los extremos; se prefirió a una función nueva
+porque el nombre y la doc ya decían eso.
+
+**El aviso de variádicas (rayserial #473).** Se había limitado al módulo de entrada por la regla
+de los avisos («un paquete que el usuario no puede editar no debe avisar»). Aquí pesa más lo
+contrario: los `extern` viven casi siempre en un módulo aparte, y el aviso no se veía nunca.
+Queda fuera solo la stdlib.
+
+**`Bson.Raw` y `run_command_seq` (raycdc #471).** `Raw` es solo de codificación, como `Int32`: al
+decodificar, un subdocumento sigue volviendo como `Doc`. La secuencia de documentos es la
+sección kind 1 de OP_MSG, que es como los drivers envían un lote.
+

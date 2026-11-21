@@ -25,6 +25,14 @@ Dentro del monorepo de raylang, los ejemplos y tests pueden usar la ruta (`db = 
 
 ### `db/mysql` (M53.1)
 
+0.10.1: **el mismo texto con y sin parámetros** (raycdc #467). Con `?` la consulta va por el
+protocolo binario, y DOUBLE, FLOAT, DATETIME(n) y TIME(n) salían con otro texto que por el de
+texto (`2.5e-300` como 300 decimales, un FLOAT con las 17 cifras del double, `DATETIME(3)` con
+6 decimales, `TIME(6)` sin ellos). Ahora se escriben como lo hace el servidor: las cifras más
+cortas (6 significativas en FLOAT), notación científica fuera de 1e-15..1e15, y la fracción de
+segundo con los decimales declarados de la columna. **`connect_timeout`** y
+**`connect_tls_timeout`** (raycdc #472) acotan el connect y el handshake.
+
 0.10.0 (raycdc #401): **acceso de bajo nivel a la sesión** para los comandos que el cliente no
 envuelve (una réplica: `COM_REGISTER_SLAVE`, `COM_BINLOG_DUMP`). `command(c, payload)` envía un
 comando crudo (el octeto de comando y sus argumentos) sobre la sesión YA autenticada, sin leer
@@ -229,6 +237,12 @@ match (bson.decode(b)) {
 `Int` codifica como int64 y decodifica int32 e int64 (el int de raylang es i64). `Double` usa los
 bits IEEE 754 (`math.float_bits`, M54.1a). `Date` (epoch-ms; `dump` = ISO 8601) y `Timestamp`
 (interno) soportados. Diferido: Regex (error claro al decodificar).
+
+0.10.1 (raycdc #470, #471): `decimal128_from_string` pasa al exponente los ceros finales que
+sobran (`1234…234000`, 34 cifras × 10³, ya no es `Err`). **`Bson.Raw(bytes)`** incrusta un
+documento ya codificado como subdocumento, sin decodificarlo; y **`mongo.run_command_seq(c, doc,
+seq_name, docs)`** envía parte del comando como secuencia de documentos de OP_MSG (los
+`documents` de un `insert`, los `updates` de un `update`), con los documentos ya codificados.
 
 0.9.0 (raycdc #402):
 

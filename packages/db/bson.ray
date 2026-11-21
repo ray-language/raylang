@@ -55,6 +55,11 @@ pub enum Bson {
     /// little-endian, as on the wire). `decimal128_to_string` gives its text (`"12.50"`) and
     /// `decimal128_from_string` builds one; `dump` shows `decimal(12.50)`.
     Decimal128(bytes),
+    /// A document that is ALREADY encoded (the bytes `encode` returns), for ENCODING only: it is
+    /// embedded as it is, as a sub-document (type 0x03), without decoding and encoding it again —
+    /// what a writer that encodes each row once and then batches them needs (db 0.10.1, raycdc
+    /// #471). Decoding never yields it: a sub-document comes back as `Doc`.
+    Raw(bytes),
 }
 
 /// One element of a document: a name and its value.
@@ -98,6 +103,7 @@ fn type_byte(v: Bson) -> int {
         Bson.Int32(_) => 16,
         Bson.BinSub(_, _) => 5,
         Bson.Decimal128(_) => 19,
+        Bson.Raw(_) => 3,
     };
 }
 
@@ -177,6 +183,22 @@ fn enc_value(out: BytesBuilder, v: Bson) {
         Bson.Decimal128(b) => {
             if (b.len() != 16) {
                 panic("Decimal128 must have 16 bytes, has " + to_string(b.len()));
+            }
+            bytesbuilder.push(out, b);
+        },
+        Bson.Raw(b) => {
+            // Un documento codificado lleva su longitud en los 4 primeros octetos y acaba en 0x00.
+            let declared = if (b.len() >= 5) {
+                b[0] | b[1] << 8 | b[2] << 16 | b[3] << 24
+            } else {
+                0 - 1
+            };
+            if (declared != b.len() || b[b.len() - 1] != 0) {
+                panic(
+                    "Bson.Raw must hold one encoded document ("
+                        + to_string(b.len())
+                        + " bytes given)"
+                );
             }
             bytesbuilder.push(out, b);
         },
@@ -751,6 +773,10 @@ pub fn to_json(v: Bson) -> Json {
         Bson.Int32(n) => Json.JNum(int_to_float(n)),
         Bson.BinSub(_, b) => Json.JStr(hex_of(b)),
         Bson.Decimal128(b) => Json.JStr(decimal128_to_string(b)),
+        Bson.Raw(b) => match (decode(b)) {
+            Result.Ok(fields) => Json.JObject(json_obj_of(fields)),
+            Result.Err(_) => Json.JNull,
+        },
     };
 }
 
@@ -804,6 +830,10 @@ pub fn dump(v: Bson) -> string {
         Bson.Int32(n) => to_string(n),
         Bson.BinSub(subtype, b) => "bin(" + to_string(subtype) + ":" + hex_of(b) + ")",
         Bson.Decimal128(b) => "decimal(" + decimal128_to_string(b) + ")",
+        Bson.Raw(b) => match (decode(b)) {
+            Result.Ok(fields) => dump_doc(fields),
+            Result.Err(_) => "raw(" + to_string(b.len()) + " bytes)",
+        },
     };
 }
 

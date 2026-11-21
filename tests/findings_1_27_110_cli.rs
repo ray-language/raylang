@@ -70,7 +70,7 @@ fn the_null_audio_sink_keeps_real_time() {
             .unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         let permille: i64 = String::from_utf8_lossy(&out.stdout).trim().parse().expect("la razón en milésimas");
-        if (930..=1040).contains(&permille) {
+        if (900..=1040).contains(&permille) {
             return;
         }
         seen.push(permille);

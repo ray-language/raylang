@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Paquete `net` 0.17.2** (tercera revisión, antes de publicarlo): `websocket.accept` valida el
+  handshake entero —también `Connection: Upgrade`— y **contesta él** cuando no vale (`400`, o
+  `426` con `Upgrade: websocket` y `Sec-WebSocket-Version: 13`), de modo que con `Err` el handler
+  solo vuelve; acepta `Upgrade: websocket/13`. `net/webserver` une con comas las líneas
+  repetidas de una cabecera de la petición (RFC 9110 §5.3) en vez de quedarse con la última.
+
 ## 1.27.111 — 2026-11-21
 
 - **`RAY_AUDIO_SINK=null` lleva tiempo real** (ray-daw #465): el sumidero nulo dormía la duración
@@ -39,6 +45,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 - **Paquete `net` 0.17.2** (revisión): `websocket.is_upgrade` busca `websocket` como token de
   `Upgrade`, no como subcadena, y `websocket.accept` contesta `426 Upgrade Required` con
   `Sec-WebSocket-Version: 13` a una petición de otra versión (RFC 6455 §4.4).
+  (Lo publicado como 0.17.2 lleva además lo de «Sin publicar».)
 
 ## 1.27.110 — 2026-11-20
 

@@ -66,37 +66,45 @@ pub fn is_upgrade(headers: Map<string, string>) -> bool {
         && headers.get_or("sec-websocket-key", "") != ""
 }
 
-// ¿Está `token` en la lista separada por comas de una cabecera? (`Upgrade: h2c, websocket`.)
+// ¿Está `token` en la lista separada por comas de una cabecera? (`Upgrade: h2c, websocket`.) Un
+// elemento puede llevar versión (`websocket/13`, RFC 9110 §7.8): se compara el nombre.
 fn has_token(value: string, token: string) -> bool {
     for part in value.to_lower().split(",") {
-        if (part.trim() == token) {
+        let name = match (part.index_of("/")) {
+            Option.Some(at) => part.substring(0, at),
+            Option.None => part,
+        };
+        if (name.trim() == token) {
             return true;
         }
     }
     false
 }
 
-/// Completes the server side of the handshake on `conn` for a request that `is_upgrade`: writes
-/// the `101 Switching Protocols` response and returns the connection ready for `read_message` and
-/// `encode_frame`. `Err` when the request is not an upgrade or the write fails; a request for a
-/// version other than 13 is answered with `426 Upgrade Required` and `Sec-WebSocket-Version: 13`
-/// (RFC 6455 §4.4) before the `Err` (net 0.17.2). In a raw handler:
-/// `if (websocket.is_upgrade(req.headers)) { let ws = websocket.accept(req.headers, conn)?; … }`.
+// La respuesta a un handshake que no se puede aceptar. Nombra el protocolo y la versión
+// admitidos, como pide un 426 (RFC 9110 §15.5.22, RFC 6455 §4.4).
+fn refusal(status: string) -> string {
+    "HTTP/1.1 "
+        + status
+        + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
+        + "Content-Length: 0\r\n\r\n"
+}
+
+/// Completes the server side of the handshake on `conn`: validates the request (RFC 6455
+/// §4.2.1: `Upgrade: websocket`, `Connection: Upgrade`, a key and version 13), writes the
+/// `101 Switching Protocols` response and returns the connection ready for `read_message` and
+/// `encode_frame`. On `Err` the client HAS ALREADY BEEN ANSWERED — `400 Bad Request` for a
+/// request that is not a valid upgrade, `426 Upgrade Required` for another version — so the
+/// handler only has to return (net 0.17.2). In a raw handler:
+/// `match (websocket.accept(req.headers, conn)) { Result.Ok(ws) => { … }, Result.Err(_) => { } }`.
 pub fn accept(headers: Map<string, string>, conn: int) -> Result<WsConn, string> {
-    if (!is_upgrade(headers)) {
-        return Result.Err("websocket: the request is not an upgrade");
+    if (!is_upgrade(headers) || !has_token(headers.get_or("connection", ""), "upgrade")) {
+        let _ = net.socket_write(conn, refusal("400 Bad Request"));
+        return Result.Err("websocket: the request is not a valid upgrade");
     }
-    // `Connection: Upgrade` no se exige: el mapa de cabeceras guarda la ÚLTIMA línea de una
-    // cabecera repetida, y un `Connection: Upgrade` + `Connection: keep-alive` válido se rechazaría.
-    let version = headers.get_or("sec-websocket-version", "").trim();
-    if (version != "13") {
-        let _ = net.socket_write(
-            conn,
-            "HTTP/1.1 426 Upgrade Required\r\nSec-WebSocket-Version: 13\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-        );
-        return Result.Err(
-            "websocket: unsupported Sec-WebSocket-Version '" + version + "' (only 13)"
-        );
+    if (headers.get_or("sec-websocket-version", "").trim() != "13") {
+        let _ = net.socket_write(conn, refusal("426 Upgrade Required"));
+        return Result.Err("websocket: unsupported Sec-WebSocket-Version (only 13)");
     }
     net.socket_write(conn, handshake_response(headers.get_or("sec-websocket-key", "")))?;
     Result.Ok(server_conn(conn))

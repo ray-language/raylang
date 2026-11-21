@@ -80,6 +80,7 @@ import net/websocket;
 fn headers(upgrade: string, version: string) -> Map<string, string> {
     var h: Map<string, string> = Map.new();
     h.insert("upgrade", upgrade);
+    h.insert("connection", "keep-alive, Upgrade");
     h.insert("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==");
     h.insert("sec-websocket-version", version);
     h
@@ -92,6 +93,7 @@ fn main() -> int {
     var no_key = headers("websocket", "13");
     no_key.remove("sec-websocket-key");
     print(websocket.is_upgrade(no_key));
+    print(websocket.is_upgrade(headers("websocket/13", "13")));
     let listener = net.tcp_listen("127.0.0.1", 0).unwrap();
     let client = net.tcp_connect("127.0.0.1", net.local_port(listener)).unwrap();
     let server = net.tcp_accept(listener).unwrap();
@@ -103,6 +105,15 @@ fn main() -> int {
     let answer = net.socket_read(client).unwrap_or("");
     print(answer.starts_with("HTTP/1.1 426 "));
     print(answer.contains("Sec-WebSocket-Version: 13\r\n"));
+    print(answer.contains("Upgrade: websocket\r\n"));
+    // Sin `Connection: Upgrade` no es un upgrade válido: 400, también contestado por `accept`.
+    let client2 = net.tcp_connect("127.0.0.1", net.local_port(listener)).unwrap();
+    let server2 = net.tcp_accept(listener).unwrap();
+    var plain = headers("websocket", "13");
+    plain.insert("connection", "keep-alive");
+    print(websocket.accept(plain, server2).is_err());
+    close(server2);
+    print(net.socket_read(client2).unwrap_or("").starts_with("HTTP/1.1 400 "));
     0
 }
 "#;
@@ -110,9 +121,53 @@ fn main() -> int {
     assert_eq!(code, 0, "{out}{err}");
     assert_eq!(
         out,
-        "true\ntrue\nfalse\nfalse\nwebsocket: unsupported Sec-WebSocket-Version '8' (only 13)\ntrue\ntrue\n",
+        "true\ntrue\nfalse\nfalse\ntrue\nwebsocket: unsupported Sec-WebSocket-Version (only 13)\ntrue\ntrue\ntrue\ntrue\ntrue\n",
         "{err}"
     );
+}
+
+/// Revisión de net 0.17.2: las líneas repetidas de una cabecera de la petición se unen con comas
+/// (RFC 9110 §5.3) en vez de quedarse con la última; `Cookie`, con `; `.
+#[test]
+fn repeated_request_header_lines_are_joined() {
+    let main = r#"import std/net;
+import net/webserver;
+from net/webserver import Request, Response;
+
+fn show(req: Request) -> Response {
+    webserver.text(200, req.headers.get_or("connection", "") + "|" + req.headers.get_or("cookie", ""))
+}
+
+fn main() -> int {
+    let listener = net.tcp_listen("127.0.0.1", 0).unwrap();
+    let port = net.local_port(listener);
+    let _ = spawn(fn() -> int {
+        let _ = webserver.serve_on(listener, show);
+        0
+    });
+    let c = net.tcp_connect("127.0.0.1", port).unwrap();
+    let _ = net.socket_write(
+        c,
+        "GET / HTTP/1.1\r\nHost: h\r\nConnection: Upgrade\r\nCookie: a=1\r\nConnection: close\r\nCookie: b=2\r\n\r\n"
+    );
+    var answer = "";
+    while (true) {
+        match (net.socket_read(c)) {
+            Result.Ok(part) => {
+                if (part == "") { break; }
+                answer = answer + part;
+            },
+            Result.Err(_) => { break; },
+        }
+    }
+    print(answer.ends_with("Upgrade, close|a=1; b=2"));
+    exit(0);
+    0
+}
+"#;
+    let (out, err, code) = run("joined_headers", main, &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.ends_with("true\n"), "{out}{err}");
 }
 
 /// raycrawl #371: con `quiet()`, el cliente que corta la descarga a mitad del cuerpo no deja un

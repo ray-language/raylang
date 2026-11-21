@@ -3225,7 +3225,8 @@ pub fn serve_on_limits(
 /// Like `serve_raw`, on an already-open listener (see `serve_on` for the bind/serve split): the
 /// handler receives the request AND the connection, which is what a WebSocket upgrade or an SSE
 /// stream needs. Bind with port 0, read `net.local_port(listener)` and serve:
-/// `serve_raw_on(listener, fn(req: Request, conn: int) { if (websocket.is_upgrade(req)) { … } })`.
+/// `serve_raw_on(listener, fn(req: Request, conn: int) { if (websocket.is_upgrade(req.headers)) { … } })`
+/// — then `websocket.accept(req.headers, conn)` answers the `101` and gives the `WsConn`.
 pub fn serve_raw_on(listener: int, handler: fn(Request, int)) -> Result<int, string> {
     serve_raw_on_limits(listener, default_limits(), handler)
 }

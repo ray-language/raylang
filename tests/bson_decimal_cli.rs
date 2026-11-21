@@ -28,7 +28,8 @@ fn show(text: string) {
 fn main() -> int {
     for t in ["1", "0.1", "12.50", "-0.001", "1E+3", "0", "0.000001", "1E-7", "1.5e-7", "100",
         "1234567890123456789012345678901234", "9.999999999999999999999999999999999E+6144", "1E-6176",
-        "Infinity", "-Infinity", "NaN", "1E+6112", "10E-6177", "+7", "007.50"] {
+        "Infinity", "-Infinity", "NaN", "1E+6112", "10E-6177", "+7", "007.50",
+        "1234567890123456789012345678901234000", "100000000000000000000000000000000000000.00"] {
         show(t);
     }
     for t in ["12345678901234567890123456789012345", "1E+6145", "1E-6177", "abc", "1.2.3", "1e"] {
@@ -54,6 +55,12 @@ fn main() -> int {
             match (bson.get(fields, "b")) {
                 Option.Some(bson.Bson.Bin(raw)) => print("generic len ${raw.len()}"),
                 _ => print("b is not Bin"),
+            }
+            // raycdc #471: un documento ya codificado se incrusta tal cual y vuelve como `Doc`.
+            let outer = bson.encode([bson.field("n", bson.Bson.Int32(1)), bson.field("inner", bson.Bson.Raw(enc))]);
+            match (bson.decode(outer)) {
+                Result.Ok(back) => print("raw: " + bson.dump_doc(back)),
+                Result.Err(e) => print("raw ERR " + e),
             }
         },
         Result.Err(e) => print("dec ERR " + e),
@@ -82,6 +89,8 @@ NaN => 0000000000000000000000000000007c => NaN\n\
 10E-6177 => 01000000000000000000000000000000 => 1E-6176\n\
 +7 => 07000000000000000000000000004030 => 7\n\
 007.50 => ee020000000000000000000000003c30 => 7.50\n\
+1234567890123456789012345678901234000 => f2af967ed05c82de3297ff6fde3c4630 => 1.234567890123456789012345678901234E+36\n\
+100000000000000000000000000000000000000.00 => 000000000a5bc138938d44c64d314a30 => 1.000000000000000000000000000000000E+38\n\
 12345678901234567890123456789012345 => ERR decimal128 holds 34 significant digits, '12345678901234567890123456789012345' has 35\n\
 1E+6145 => ERR decimal128 cannot hold '1E+6145' exactly: its exponent is out of range\n\
 1E-6177 => ERR decimal128 cannot hold '1E-6177' exactly: its exponent is out of range\n\
@@ -92,7 +101,8 @@ enc: 3f00000013707269636500e2040000000000000000000000003c30057500100000000400010
 dec: {price: decimal(12.50), u: bin(4:000102030405060708090a0b0c0d0e0f), b: bin(010203)}\n\
 rt: true\n\
 subtype 4 len 16\n\
-generic len 3\n";
+generic len 3\n\
+raw: {n: 1, inner: {price: decimal(12.50), u: bin(4:000102030405060708090a0b0c0d0e0f), b: bin(010203)}}\n";
 
 fn project(name: &str) -> std::path::PathBuf {
     let db = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/db");

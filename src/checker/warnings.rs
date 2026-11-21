@@ -77,11 +77,14 @@ const VARIADIC: &[(&str, usize)] = &[
 /// (`fcntl(fd, cmd, arg)`, `ioctl(fd, request, arg)`). En Apple arm64 el argumento variádico viaja
 /// por la pila y `extern` lo pasa en un registro: la llamada devuelve 0 sin hacer nada o, en la VM,
 /// deja el descriptor con banderas basura. Compila y «funciona» en Linux, así que es un aviso y
-/// no un error. Solo el módulo de entrada, como el resto de avisos.
+/// no un error.
 pub fn variadic_externs(program: &Program) -> Vec<Warning> {
     let mut out = Vec::new();
     // Solo libc (`extern "c"`): una función homónima de otra librería no es la variádica.
-    for e in program.externs.iter().filter(|e| !e.name.contains("::") && e.lib == "c") {
+    // rayserial #473: en TODOS los módulos del programa, no solo en la entrada — lo normal es
+    // agrupar los `extern` en un módulo aparte, y ahí el aviso no salía nunca. La stdlib queda
+    // fuera (no declara ninguna, y no es código del usuario).
+    for e in program.externs.iter().filter(|e| !e.name.starts_with("std::") && e.lib == "c") {
         if let Some((_, fixed)) = VARIADIC.iter().find(|(n, _)| *n == e.symbol)
             && e.params.len() > *fixed
         {

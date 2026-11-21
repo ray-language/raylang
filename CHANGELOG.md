@@ -6,6 +6,22 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **El aviso de `extern` variádico sale en todos los módulos** (rayserial #473): antes solo si la
+  declaración estaba en el archivo de entrada, y lo normal es tener los `extern` en un módulo
+  aparte.
+- **`url.escape_unsafe` limpia un `href` como el navegador** (raycrawl #469): quita espacios y
+  controles de los extremos y los tabuladores y saltos de línea de dentro, en vez de
+  codificarlos. Un `href` absoluto indentado en el HTML ya no se resuelve como relativo.
+  **Cambio**: `escape_unsafe("  /a b\n")` da `/a%20b`, no `%20%20/a%20b%0A`.
+- **Documentación**: `close(h)` de un `audio.open_input` es el del preludio, y su doc nombra las
+  entradas de audio (ray-daw #466).
+- **Paquete `db` 0.10.1**: `db/mysql` da el mismo texto con y sin parámetros para DOUBLE, FLOAT,
+  DATETIME(n) y TIME(n) (raycdc #467) y gana `connect_timeout` / `connect_tls_timeout` (#472);
+  `bson.decimal128_from_string` acepta 34 cifras seguidas de ceros (#470); `Bson.Raw` y
+  `mongo.run_command_seq` para lotes ya codificados (#471).
+- **Paquete `net` 0.17.1**: `websocket.is_upgrade(headers)` y `websocket.accept(headers, conn)`
+  (raycdc #468).
+
 ## 1.27.110 — 2026-11-20
 
 - **`net.tls_connect_opts(host, port, opts)`** (raygrpc #387): TLS de cliente con opciones por

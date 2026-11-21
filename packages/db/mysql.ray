@@ -428,6 +428,33 @@ pub fn connect_tls(
     connect_opts(host, port, user, password, database, true)
 }
 
+/// Like `connect`, with a deadline: `timeout_ms` bounds the TCP connect and every read of the
+/// handshake and the authentication, so an unreachable or silent server fails in that time
+/// instead of the system's connect timeout (db 0.10.1, raycdc #472). Once connected the socket
+/// has no read timeout; set one with `net.set_read_timeout(mysql.socket(c), ms)` if you need it.
+pub fn connect_timeout(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    timeout_ms: int
+) -> Result<Conn, string> {
+    connect_within(host, port, user, password, database, false, timeout_ms)
+}
+
+/// Like `connect_tls`, with the deadline of `connect_timeout`.
+pub fn connect_tls_timeout(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    timeout_ms: int
+) -> Result<Conn, string> {
+    connect_within(host, port, user, password, database, true, timeout_ms)
+}
+
 // La conexión real; `tls` decide si se intercala el SSLRequest + upgrade antes de la respuesta.
 fn connect_opts(
     host: string,
@@ -437,7 +464,49 @@ fn connect_opts(
     database: string,
     tls: bool
 ) -> Result<Conn, string> {
-    let sock = net.tcp_connect(host, port)?;
+    connect_within(host, port, user, password, database, tls, 0)
+}
+
+// raycdc #472: `timeout_ms` > 0 acota el connect TCP y cada lectura del handshake y la
+// autenticación (un origen que descarta los SYN, o que acepta y calla); al terminar, el socket
+// vuelve a quedar sin plazo.
+fn connect_within(
+    host: string,
+    port: int,
+    user: string,
+    password: string,
+    database: string,
+    tls: bool,
+    timeout_ms: int
+) -> Result<Conn, string> {
+    let sock = if (timeout_ms > 0) {
+        net.tcp_connect_timeout(host, port, timeout_ms)?
+    } else {
+        net.tcp_connect(host, port)?
+    };
+    if (timeout_ms > 0) {
+        net.set_read_timeout(sock, timeout_ms);
+    }
+    match (handshake(sock, host, user, password, database, tls)) {
+        Result.Ok(c) => {
+            if (timeout_ms > 0) {
+                net.set_read_timeout(c.sock, 0);
+            }
+            Result.Ok(c)
+        },
+        Result.Err(e) => Result.Err(e),
+    }
+}
+
+fn handshake(
+    sock0: int,
+    host: string,
+    user: string,
+    password: string,
+    database: string,
+    tls: bool
+) -> Result<Conn, string> {
+    let sock = sock0;
     let c = Conn { sock: sock, seq: 0, buf: b"", pos: 0 };
 
     // 1. Handshake inicial v10 del servidor.
@@ -889,7 +958,9 @@ fn col_type_flags(p: [int]) -> Result<(int, int), string> {
     }
     let fl = lenc_int(p, i)?;
     i = i + fl.1 + 2 + 4;  // bloque fijo + charset + longitud de columna
-    return Result.Ok((at(p, i)?, at(p, i + 1)? | at(p, i + 2)? << 8));
+    // raycdc #467: los decimales declarados de la columna (`DATETIME(3)`, `TIME(6)`, `DOUBLE(8,2)`;
+    // 31 = sin fijar) viajan en los bits altos de las banderas, que ocupan 16.
+    return Result.Ok((at(p, i)?, at(p, i + 1)? | at(p, i + 2)? << 8 | at(p, i + 3)? << 16));
 }
 
 // int → float (exacto hasta 2^53; los operandos aquí caben de sobra).
@@ -984,31 +1055,124 @@ fn dec_date(p: [int], i: int, ln: int) -> Result<string, string> {
 }
 
 // DATETIME/TIMESTAMP binarios: fecha + [hour][min][sec] (len>=7) + [micro:4] (len=11).
-fn dec_datetime(p: [int], i: int, ln: int) -> Result<string, string> {
+fn dec_datetime(p: [int], i: int, ln: int, decimals: int) -> Result<string, string> {
     var s = dec_date(p, i, ln)? + " ";
     if (ln >= 7) {
         s = s + pad2(at(p, i + 4)?) + ":" + pad2(at(p, i + 5)?) + ":" + pad2(at(p, i + 6)?);
     } else {
         s = s + "00:00:00";
     }
-    if (ln >= 11) {
-        s = s + "." + pad6(int_le(p, i + 7, 4)?);
+    let micro = if (ln >= 11) { int_le(p, i + 7, 4)? } else { 0 };
+    Result.Ok(s + fraction(micro, decimals))
+}
+
+// La fracción de segundo con los decimales DECLARADOS de la columna, como la escribe el
+// protocolo de texto: `DATETIME(3)` → `.789`, `TIME(6)` → `.000000`, sin decimales → nada. El
+// protocolo binario omite los microsegundos cuando valen 0 y los da siempre con 6 cifras.
+fn fraction(micro: int, decimals: int) -> string {
+    if (decimals <= 0 || decimals > 6) {
+        return "";
     }
-    Result.Ok(s)
+    "." + pad6(micro).substring(0, decimals)
+}
+
+// Un número en coma flotante como lo escribe el servidor en el protocolo de texto: las cifras
+// más cortas, en notación científica (`1e15`, `2.5e-300`) cuando el exponente decimal pasa de 14 o
+// baja de -15, y en decimal corriente si no. `digits` son las cifras significativas (sin ceros a
+// los lados) y `exp` el exponente de la primera.
+fn float_notation(digits: string, exp: int, negative: bool) -> string {
+    let sign = if (negative) { "-" } else { "" };
+    if (exp > 14 || exp < 0 - 15) {
+        var out = sign + digits.substring(0, 1);
+        if (digits.len() > 1) {
+            out = out + "." + digits.substring(1, digits.len());
+        }
+        return out + "e" + to_string(exp);
+    }
+    if (exp >= 0) {
+        if (digits.len() <= exp + 1) {
+            return sign + digits + "0".repeat(exp + 1 - digits.len());
+        }
+        return sign + digits.substring(0, exp + 1) + "." + digits.substring(exp + 1, digits.len());
+    }
+    sign + "0." + "0".repeat(0 - exp - 1) + digits
+}
+
+// Las cifras y el exponente de un texto decimal corriente sin signo (`123456.789`, `0.000015`).
+fn digits_and_exponent(text: string) -> (string, int) {
+    var whole = text;
+    var frac = "";
+    match (text.index_of(".")) {
+        Option.Some(at) => {
+            whole = text.substring(0, at);
+            frac = text.substring(at + 1, text.len());
+        },
+        Option.None => { },
+    }
+    var all = whole + frac;
+    var exp = whole.len() - 1;
+    var lead = 0;
+    while (lead < all.len() - 1 && all[lead] == '0') {
+        lead = lead + 1;
+    }
+    exp = exp - lead;
+    all = all.substring(lead, all.len());
+    while (all.len() > 1 && all.ends_with("0")) {
+        all = all.substring(0, all.len() - 1);
+    }
+    (all, exp)
+}
+
+// DOUBLE: las cifras más cortas que lo identifican. Con decimales fijos (`DOUBLE(8,2)`), esos.
+fn double_text(v: float, decimals: int) -> string {
+    if (decimals < 31) {
+        return math.format_float(v, "f", decimals);
+    }
+    if (v == 0.0) {
+        return "0";
+    }
+    let negative = v < 0.0;
+    let parts = digits_and_exponent(to_string(if (negative) { 0.0 - v } else { v }));
+    float_notation(parts.0, parts.1, negative)
+}
+
+// FLOAT: el servidor lo escribe con 6 cifras significativas (FLT_DIG), no con las 17 del f32
+// ensanchado a double (`-3.4e38`, no `-339999995214436420000…`).
+fn float_text(v: float, decimals: int) -> string {
+    if (decimals < 31) {
+        return math.format_float(v, "f", decimals);
+    }
+    if (v == 0.0) {
+        return "0";
+    }
+    let negative = v < 0.0;
+    let sci = math.format_float(if (negative) { 0.0 - v } else { v }, "e", 5);
+    match (sci.index_of("e")) {
+        Option.Some(at) => {
+            var digits = sci.substring(0, at).replace(".", "");
+            while (digits.len() > 1 && digits.ends_with("0")) {
+                digits = digits.substring(0, digits.len() - 1);
+            }
+            var exp_text = sci.substring(at + 1, sci.len());
+            if (exp_text.starts_with("+")) {
+                exp_text = exp_text.substring(1, exp_text.len());
+            }
+            float_notation(digits, parse_int(exp_text).unwrap_or(0), negative)
+        },
+        Option.None => sci,
+    }
 }
 
 // TIME binario: [len][neg][days:4][hour][min][sec] (+ [micro:4]); las horas acumulan los días.
-fn dec_time(p: [int], i: int, ln: int) -> Result<string, string> {
+fn dec_time(p: [int], i: int, ln: int, decimals: int) -> Result<string, string> {
     if (ln == 0) {
-        return Result.Ok("00:00:00");
+        return Result.Ok("00:00:00" + fraction(0, decimals));
     }
     let sign = if (at(p, i)? == 1) { "-" } else { "" };
     let hours = int_le(p, i + 1, 4)? * 24 + at(p, i + 5)?;
-    var s = sign + pad2(hours) + ":" + pad2(at(p, i + 6)?) + ":" + pad2(at(p, i + 7)?);
-    if (ln >= 12) {
-        s = s + "." + pad6(int_le(p, i + 8, 4)?);
-    }
-    Result.Ok(s)
+    let s = sign + pad2(hours) + ":" + pad2(at(p, i + 6)?) + ":" + pad2(at(p, i + 7)?);
+    let micro = if (ln >= 12) { int_le(p, i + 8, 4)? } else { 0 };
+    Result.Ok(s + fraction(micro, decimals))
 }
 
 // El texto decimal del entero SIN signo de 64 bits `hi * 2^32 + lo` (mitades de 32 bits), por
@@ -1058,6 +1222,7 @@ fn bin_value(p: [int], i: int, t: int, flags: int) -> Result<(bytes, int), strin
 // ante un paquete truncado (toda lectura pasa por `at`/`int_le`/`lenc_int`, que chequean límites).
 fn bin_cell(p: [int], i: int, t: int, flags: int) -> Result<(string, int), string> {
     let unsigned = (flags & 32) != 0;
+    let decimals = flags >> 16 & 255;
     if (t == 1) {
         return int_cell(p, i, 1, unsigned);  // TINY
     }
@@ -1083,7 +1248,7 @@ fn bin_cell(p: [int], i: int, t: int, flags: int) -> Result<(string, int), strin
     }
     if (t == 4) {
         // FLOAT (f32)
-        return Result.Ok((to_string(f32_of(int_le(p, i, 4)?)), i + 4));
+        return Result.Ok((float_text(f32_of(int_le(p, i, 4)?), decimals), i + 4));
     }
     if (t == 5) {
         // DOUBLE (f64): por mitades → bits → float.
@@ -1092,7 +1257,9 @@ fn bin_cell(p: [int], i: int, t: int, flags: int) -> Result<(string, int), strin
         if (hi >= 2147483648) {
             hi = hi - 4294967296;
         }
-        return Result.Ok((to_string(math.float_from_bits(hi * 4294967296 + lo)), i + 8));
+        return Result.Ok(
+            (double_text(math.float_from_bits(hi * 4294967296 + lo), decimals), i + 8)
+        );
     }
     if (t == 10) {
         let ln = at(p, i)?;
@@ -1101,11 +1268,11 @@ fn bin_cell(p: [int], i: int, t: int, flags: int) -> Result<(string, int), strin
     if (t == 7 || t == 12) {
         // TIMESTAMP / DATETIME
         let ln = at(p, i)?;
-        return Result.Ok((dec_datetime(p, i + 1, ln)?, i + 1 + ln));
+        return Result.Ok((dec_datetime(p, i + 1, ln, decimals)?, i + 1 + ln));
     }
     if (t == 11) {
         let ln = at(p, i)?;
-        return Result.Ok((dec_time(p, i + 1, ln)?, i + 1 + ln));
+        return Result.Ok((dec_time(p, i + 1, ln, decimals)?, i + 1 + ln));
     }
     Result.Err("mysql: column type ${t} is not a fixed-length type")
 }

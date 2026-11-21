@@ -57,6 +57,26 @@ pub fn handshake_response(key: string) -> string {
         + "\r\n\r\n"
 }
 
+/// Whether a request asks to switch to WebSocket: `headers` are the request's headers (lower-case
+/// names, as `webserver.Request.headers` has them) and it needs `Upgrade: websocket` and a
+/// `Sec-WebSocket-Key` (net 0.17.1, raycdc #468).
+pub fn is_upgrade(headers: Map<string, string>) -> bool {
+    headers.get_or("upgrade", "").to_lower().contains("websocket")
+        && headers.get_or("sec-websocket-key", "") != ""
+}
+
+/// Completes the server side of the handshake on `conn` for a request that `is_upgrade`: writes
+/// the `101 Switching Protocols` response and returns the connection ready for `read_message` and
+/// `encode_frame`. `Err` when the request is not an upgrade or the write fails. In a raw handler:
+/// `if (websocket.is_upgrade(req.headers)) { let ws = websocket.accept(req.headers, conn)?; … }`.
+pub fn accept(headers: Map<string, string>, conn: int) -> Result<WsConn, string> {
+    if (!is_upgrade(headers)) {
+        return Result.Err("websocket: the request is not an upgrade");
+    }
+    net.socket_write(conn, handshake_response(headers.get_or("sec-websocket-key", "")))?;
+    Result.Ok(server_conn(conn))
+}
+
 // --- Framing ---
 // Opcodes de trama (RFC 6455 §5.2).
 /// Frame opcode for a text message (RFC 6455 §5.2): 1.

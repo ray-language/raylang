@@ -35,9 +35,14 @@ import net/websocket_client;
 from net/webserver import Request;
 
 fn on_conn(req: Request, conn: int) {
-    let key = req.headers.get_or("sec-websocket-key", "");
-    let _ = net.socket_write(conn, websocket.handshake_response(key));
-    let ws = websocket.server_conn(conn);
+    // raycdc #468: `is_upgrade` + `accept` (lo que cita la doc de `serve_raw_on`).
+    if (!websocket.is_upgrade(req.headers)) {
+        return;
+    }
+    let ws = match (websocket.accept(req.headers, conn)) {
+        Result.Ok(w) => w,
+        Result.Err(_) => { return; },
+    };
     match (websocket.read_message(ws)) {
         Result.Ok(f) => {
             let _ = net.socket_write_bytes(conn, websocket.encode_frame(websocket.op_text(), f.payload));

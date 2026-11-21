@@ -523,10 +523,31 @@ pub fn normalize(s: string) -> Result<string, string> {
 /// `/ ? # & = %` included: what a browser does with an `href` written by hand
 /// (`/a b/é?q=x y` → `/a%20b/%C3%A9?q=x%20y`). The result is accepted by `parse` and
 /// `resolve`. It is not `url_encode`, which escapes a single component (`/` too).
+///
+/// As the browser's URL parser does before anything else, spaces and control characters at
+/// both ENDS are dropped, and tabs and line breaks are removed wherever they are: an `href`
+/// indented in the HTML (`"\n   /a b\n"`) gives `/a%20b`, not a relative path that starts with
+/// `%20`.
 pub fn escape_unsafe(s: string) -> string {
+    // raycrawl #469: el limpiado previo del parser de URL de WHATWG.
+    let chars = s.chars();
+    var from = 0;
+    var to = chars.len();
+    while (from < to && char_code(chars[from]) <= 32) {
+        from = from + 1;
+    }
+    while (to > from && char_code(chars[to - 1]) <= 32) {
+        to = to - 1;
+    }
     var out: [string] = [];
-    for c in s {
+    var i = from;
+    while (i < to) {
+        let c = chars[i];
+        i = i + 1;
         let n = char_code(c);
+        if (n == 9 || n == 10 || n == 13) {
+            continue;
+        }
         if (n <= 32 || n >= 127 || "\"<>\\^`{|}".contains(to_string(c))) {
             let b = to_string(c).to_bytes();
             var j = 0;

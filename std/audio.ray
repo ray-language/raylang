@@ -96,7 +96,10 @@ pub fn flush(h: int) -> Result<int, string> {
 /// The REAL playback position in ms (M158): what the device confirms as played
 /// (AudioQueueGetCurrentTime / snd_pcm_delay / AAudioStream_getFramesRead), refreshed as
 /// audio is fed (about latency/4 granularity) — for syncing visuals to the audio. 0 until
-/// something has actually sounded.
+/// something has actually sounded. Under `RAY_AUDIO_SINK=null` the null sink keeps its own
+/// real-time clock: `played_ms` advances at the pace of the wall clock while audio is being
+/// written (within a fraction of a percent; a gap with nothing to play does not count), so tests
+/// can align against it as against a device.
 pub fn played_ms(h: int) -> Result<int, string> {
     let r = __audio_played(h);
     if (r[0] == "ok") {

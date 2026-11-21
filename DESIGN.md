@@ -21647,3 +21647,15 @@ Queda fuera solo la stdlib.
 decodificar, un subdocumento sigue volviendo como `Doc`. La secuencia de documentos es la
 sección kind 1 de OP_MSG, que es como los drivers envían un lote.
 
+**`RAY_AUDIO_SINK=null` (ray-daw #465).** El sumidero nulo «consumía a tiempo real» durmiendo la
+duración de cada trozo: la duración se truncaba a milisegundos enteros y cada `sleep` se pasa un
+poco, así que su reloj iba a 0,82–0,85× el de pared, y más o menos según el tamaño de los
+trozos y la carga. Ahora guarda un ancla (instante, frame) y duerme hasta el instante en que el
+trozo debe haber terminado: el exceso de un `sleep` lo recupera el siguiente. Si pasan más de
+50 ms sin nada que consumir, es que nadie escribía (un dispositivo real habría sonado en
+silencio) y el reloj se reancla, sin contar el hueco. Medido con el repro del hallazgo: 0,999.
+
+No se pudo comprobar si esto quita el desfase de ray-daw #464 (una toma desplazada 70–90 ms):
+su smoke test da `ok=false` con el árbol actual de la app también con el binario oficial de
+1.27.110, así que la medida queda para ray-daw.
+

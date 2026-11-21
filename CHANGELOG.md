@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`RAY_AUDIO_SINK=null` lleva tiempo real** (ray-daw #465): el sumidero nulo dormía la duración
+  de cada trozo y `played_ms` avanzaba a 0,82–0,85× el reloj; ahora se acompasa contra un reloj
+  absoluto y va a 0,999×. Las pruebas que alinean contra `played_ms` con la salida nula dejan de
+  derivar.
+
 - **El aviso de `extern` variádico sale en todos los módulos** (rayserial #473): antes solo si la
   declaración estaba en el archivo de entrada, y lo normal es tener los `extern` en un módulo
   aparte.

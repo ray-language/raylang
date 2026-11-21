@@ -2474,6 +2474,10 @@ TLS: `net.tls_connect(host, 443)` (verifica el certificado; CAs extra vía `SSL_
 `net.tls_upgrade(h, host)` (STARTTLS sobre un socket ya abierto), `net.tls_accept` (lado servidor;
 `net.tls_accept_alpn(h, cert, key, ["h2"])` anuncia ALPN, que es lo que exige un cliente gRPC, y
 `net.tls_alpn(h)` dice qué protocolo se negoció),
+`net.tls_connect_opts(host, port, opts)` (opciones POR CONEXIÓN, desde `net.tls_options()`:
+`opts.ca_pem` = el PEM de tu propia CA, y entonces solo se confía en ella para esa conexión;
+`opts.alpn` = los protocolos a ofrecer; `opts.insecure = true` no verifica el certificado, solo
+para desarrollo),
 `net.tcp_listen`/`net.tcp_accept` para servir.
 
 **Los plazos y la identidad del otro extremo** (lo que un servicio real necesita el

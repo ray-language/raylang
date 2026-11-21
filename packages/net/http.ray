@@ -1862,8 +1862,12 @@ fn conn_stream_attempt(
                 Result.Ok(ready)
             },
             Result.Err(e) => {
-                // Ni un octeto de respuesta: el servidor había cerrado la conexión en el ocio.
-                let dropped = s.buf.len() == 0 && s.status == 0;
+                // Un EOF limpio sin un solo octeto de respuesta: el servidor había cerrado la
+                // conexión en el ocio. Un plazo vencido o un reset NO lo son (como en
+                // `conn_attempt`): reintentar ahí repetiría la petición.
+                let dropped = s.buf.len() == 0
+                    && s.status == 0
+                    && e == "malformed HTTP response (no header separator)";
                 stream_close(s);
                 if (dropped) {
                     Result.Err(err_dropped())

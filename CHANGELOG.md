@@ -6,6 +6,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.110 — 2026-11-20
+
 - **`net.tls_connect_opts(host, port, opts)`** (raygrpc #387): TLS de cliente con opciones por
   conexión. `TlsOptions { alpn, ca_pem, insecure }` (se parte de `net.tls_options()`): los
   protocolos ALPN a ofrecer, una CA propia en PEM —solo se confía en ella para esa conexión, sin

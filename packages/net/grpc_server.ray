@@ -24,6 +24,11 @@ import net/grpc_h2 as h2;
 import net/grpc_status as status;
 from net/grpc_status import Status;
 
+/// How many streaming calls may be open at once on ONE connection: each waits nested on the
+/// previous one (see `recv`), so the limit bounds the stack. One more is answered
+/// RESOURCE_EXHAUSTED. Unary calls do not count.
+pub const MAX_NESTED_STREAMS: int = 16;
+
 /// The default maximum size of a request or response message: 4 MiB, like grpc-go.
 pub const DEFAULT_MAX_MESSAGE: int = 4194304;
 
@@ -46,6 +51,22 @@ pub struct Call {
     /// Response trailers the handler adds (`set_trailer`): sent with the `grpc-status`, also
     /// when the handler returns an error status.
     response_trailers: Map<string, string>,
+}
+
+/// Builds a `Call` by hand (net 0.17.0 added fields to the struct): for unit-testing a handler
+/// through `dispatch(r, new_call(path, message, metadata))`. No deadline; empty response
+/// headers and trailers, which the handler may fill.
+pub fn new_call(path: string, message: bytes, metadata: Map<string, string>) -> Call {
+    let headers: Map<string, string> = Map.new();
+    let trailers: Map<string, string> = Map.new();
+    Call {
+        path: path,
+        message: message,
+        metadata: metadata,
+        deadline: 0,
+        response_headers: headers,
+        response_trailers: trailers
+    }
 }
 
 /// Adds a response header to a call (a request id, a rate-limit hint): it travels in the
@@ -104,7 +125,10 @@ pub fn stream_trailer(s: ServerStream, name: string, value: string) {
 /// the server's limit (RESOURCE_EXHAUSTED) or the connection failed: return that status from
 /// the handler. While it waits, the other calls of the same connection are served (a unary
 /// call, another stream that runs to its end): a long-lived stream does not block the
-/// connection. A handler that waits for anything else should do it through `idle`.
+/// connection. A handler that waits for anything else should do it through `idle`. Streaming
+/// calls of one connection nest: while a second one runs, the first is paused until it returns,
+/// and at most `MAX_NESTED_STREAMS` may be open at once — give each long-lived subscription its
+/// own connection.
 pub fn recv(s: ServerStream) -> Result<Option<bytes>, Status> {
     let st = s.state;
     while (true) {
@@ -159,6 +183,18 @@ pub fn recv(s: ServerStream) -> Result<Option<bytes>, Status> {
         if (s.deadline > 0 && time.monotonic() >= s.deadline) {
             return Result.Err(status.new(status.DEADLINE_EXCEEDED, "deadline exceeded"));
         }
+        // Hace falta más del cliente: se le devuelve la ventana de lo ya recibido.
+        if (st.owed > 0) {
+            let owed = st.owed;
+            st.owed = 0;
+            match (h2.grant(s.link, st.id, owed)) {
+                Result.Ok(_) => { },
+                Result.Err(e) => {
+                    s.failed = e;
+                    return Result.Err(status.new(status.UNAVAILABLE, e));
+                },
+            }
+        }
         h2.set_deadline(s.link, s.deadline);
         match (pump_once(s)) {
             Result.Ok(_) => { },
@@ -177,7 +213,11 @@ pub fn recv(s: ServerStream) -> Result<Option<bytes>, Status> {
 // Lee un frame de la conexión, lo despacha (control, o la tabla de streams) y atiende las otras
 // llamadas que ese frame haya dejado listas.
 fn pump_once(s: ServerStream) -> Result<int, string> {
-    let fr = h2.read_frame(s.link)?;
+    let read = h2.read_frame(s.link);
+    // El plazo era solo de ESTA espera: lo que siga (un `send`, las otras llamadas que se atienden
+    // abajo) no debe heredarlo — un `send` que esperase ventana vencería y tumbaría la conexión.
+    h2.set_deadline(s.link, 0);
+    let fr = read?;
     if (!h2.control(s.link, fr)?) {
         let pump = s.pump;
         pump(fr)?;
@@ -505,6 +545,9 @@ struct Stream {
     streaming: bool,
     ended: bool,
     reset: bool,
+    // Ventana de recepción del stream que se debe al cliente: se concede cuando el handler lee
+    // (`recv`), no al llegar el DATA — así lo que el handler no ha leído lo frena el control de flujo.
+    owed: int,
     // raygrpc #385: la ruta no tiene handler ni hay fallback: se responde UNIMPLEMENTED al ver
     // las cabeceras, sin esperar el END_STREAM (un stream bidireccional no lo envía nunca).
     unknown: bool,
@@ -515,6 +558,8 @@ struct Stream {
 struct Ready {
     ids: [int],
     head: int,
+    // Cuántos handlers de streaming hay anidados ahora mismo en esta conexión.
+    depth: int,
 }
 
 /// The milliseconds of a `grpc-timeout` header value (units H, M, S, m, u, n); -1 if malformed.
@@ -575,7 +620,7 @@ fn run_conn(l: h2.Link, opts: Options, r: Router) -> Result<int, string> {
     }
     h2.write(l, settings_empty())?;
     let streams: Map<int, Stream> = Map.new();
-    let ready = Ready { ids: [], head: 0 };
+    let ready = Ready { ids: [], head: 0, depth: 0 };
     let on_frame = fn(fr: h2.Frame) -> Result<int, string> {
         on_stream_frame(l, streams, ready, opts, r, fr)
     };
@@ -611,12 +656,30 @@ fn drain_ready(
         ready.head = ready.head + 1;
         match (streams.get(id)) {
             Option.Some(s) => {
-                if (s.streaming) {
+                if (s.streaming && ready.depth >= MAX_NESTED_STREAMS) {
+                    // Cada handler de streaming abierto anida sobre el anterior: sin tope, un
+                    // cliente que abra miles agotaría la pila de la fibra.
+                    streams.remove(id);
+                    send_status(
+                        l,
+                        id,
+                        status.new(
+                            status.RESOURCE_EXHAUSTED,
+                            "too many streaming calls open on this connection (limit ${MAX_NESTED_STREAMS})"
+                        )
+                    )?;
+                    if (!s.ended) {
+                        h2.send_reset(l, id, h2.NO_ERROR)?;
+                    }
+                    h2.close_stream(l, id);
+                } else if (s.streaming) {
                     // Sigue en la tabla mientras corre: sus DATA llegan por `on_frame`.
                     let others = fn() -> Result<int, string> {
                         drain_ready(l, streams, ready, opts, r, on_frame)
                     };
+                    ready.depth = ready.depth + 1;
                     let done = respond_stream(l, s, opts, r, on_frame, others);
+                    ready.depth = ready.depth - 1;
                     streams.remove(id);
                     done?;
                 } else {
@@ -686,6 +749,7 @@ fn on_stream_frame(
                 streaming: streaming,
                 ended: end,
                 reset: false,
+                owed: 0,
                 unknown: unknown,
                 deadline: deadline
             }
@@ -699,8 +763,13 @@ fn on_stream_frame(
     if (fr.ftype == h2.DATA) {
         match (streams.get(id)) {
             Option.Some(s) => {
-                h2.release(l, fr, !end)?;
+                // Un stream de streaming devuelve solo la ventana de la CONEXIÓN; la suya la
+                // concede `recv` al leer.
+                h2.release(l, fr, !end && !s.streaming)?;
                 if (s.streaming) {
+                    if (!end) {
+                        s.owed = s.owed + fr.flow;
+                    }
                     // El handler consume a su ritmo; lo pendiente tiene tope (dos mensajes máximos).
                     s.size = s.size + fr.payload.len();
                     if (s.size > 2 * (opts.max_message + 5)) {

@@ -80,9 +80,55 @@ fn echo(s: ServerStream) -> Status {
     grpc_status.new(grpc_status.OK, "")
 }
 
+// Server-streaming grande: espera con `idle` y luego envía un mensaje de N KiB (más que la
+// ventana inicial de 65 535 octetos: el envío tiene que esperar WINDOW_UPDATE).
+fn big(s: ServerStream) -> Status {
+    let kib = match (grpc_server.recv(s)) {
+        Result.Ok(Option.Some(m)) => num(m),
+        Result.Ok(Option.None) => 0,
+        Result.Err(st) => { return st; },
+    };
+    match (grpc_server.idle(s, 20)) {
+        Result.Ok(_) => { },
+        Result.Err(st) => { return st; },
+    }
+    var chunk = "";
+    for _ in 0..64 { chunk = chunk + "0123456789abcdef"; }
+    var body = "";
+    for _ in 0..kib { body = body + chunk; }
+    match (grpc_server.send(s, body.to_bytes())) {
+        Result.Ok(_) => grpc_status.new(grpc_status.OK, ""),
+        Result.Err(st) => st,
+    }
+}
+
+// Client-streaming: cuenta los octetos de todo lo que llega.
+fn size(s: ServerStream) -> Status {
+    var total = 0;
+    while (true) {
+        match (grpc_server.recv(s)) {
+            Result.Ok(Option.Some(m)) => { total = total + m.len(); },
+            Result.Ok(Option.None) => { break; },
+            Result.Err(st) => { return st; },
+        }
+    }
+    match (grpc_server.send(s, to_string(total).to_bytes())) {
+        Result.Ok(_) => grpc_status.new(grpc_status.OK, ""),
+        Result.Err(st) => st,
+    }
+}
+
+// Rechaza sin leer nada: el cliente que está subiendo debe enterarse y no quedarse esperando.
+fn reject(s: ServerStream) -> Status {
+    grpc_status.new(grpc_status.INVALID_ARGUMENT, "not accepted")
+}
+
 fn build() -> grpc_server.Router {
     let r = grpc_server.router()
         .route("/t.S/Say", say)
+        .route_stream("/t.S/Big", big)
+        .route_stream("/t.S/Size", size)
+        .route_stream("/t.S/Reject", reject)
         .route_stream("/t.S/Count", count)
         .route_stream("/t.S/Sum", sum)
         .route_stream("/t.S/Echo", echo);
@@ -167,6 +213,46 @@ fn main() -> int {
     let last = grpc_conn.call(c, "/t.S/Say", b"fin", none, 2000).unwrap();
     print("last ${last.status} ${from_utf8(last.message).unwrap_or("?")}");
 
+    // 9. Control de flujo (revisión de 1.27.110): mensajes mayores que la ventana en los dos
+    // sentidos, y un `send` grande tras un `idle`.
+    let sb = grpc_conn.open_stream(c, "/t.S/Big", none, 5000).unwrap();
+    let _ = grpc_conn.stream_send(sb, b"300");
+    let _ = grpc_conn.stream_close_send(sb);
+    let got_big = match (grpc_conn.stream_recv(sb)) {
+        Result.Ok(Option.Some(m)) => m.len(),
+        _ => 0 - 1,
+    };
+    print("big ${got_big} ${text(grpc_conn.stream_recv(sb))} status=${grpc_conn.stream_reply(sb).status}");
+    var block = "";
+    for _ in 0..6400 { block = block + "0123456789abcdef"; }
+    let ss = grpc_conn.open_stream(c, "/t.S/Size", none, 5000).unwrap();
+    for _ in 0..5 {
+        let _ = grpc_conn.stream_send(ss, block.to_bytes());
+    }
+    let _ = grpc_conn.stream_close_send(ss);
+    print("size ${text(grpc_conn.stream_recv(ss))} ${text(grpc_conn.stream_recv(ss))} status=${grpc_conn.stream_reply(ss).status}");
+
+    // 10. El servidor rechaza mientras el cliente sube más que la ventana: el envío termina (no
+    // se queda esperando) y el estado es el del servidor, no un plazo vencido.
+    let sr = grpc_conn.open_stream(c, "/t.S/Reject", none, 5000).unwrap();
+    var sends = "";
+    for _ in 0..4 {
+        match (grpc_conn.stream_send(sr, block.to_bytes())) {
+            Result.Ok(_) => { sends = sends + "ok "; },
+            Result.Err(e) => { sends = sends + "ended"; break; },
+        }
+    }
+    let _ = grpc_conn.stream_close_send(sr);
+    let tail = text(grpc_conn.stream_recv(sr));
+    let rr = grpc_conn.stream_reply(sr);
+    print("reject ended=${sends.ends_with("ended")} ${tail} ${grpc_status.code_name(rr.status)} ${rr.status_message}");
+    let ok_after = grpc_conn.call(c, "/t.S/Say", b"vivo", none, 2000).unwrap();
+    print("after ${ok_after.status} ${from_utf8(ok_after.message).unwrap_or("?")}");
+
+    // 11. `new_call` + `dispatch`: probar un handler sin servidor.
+    let direct = grpc_server.dispatch(build(), grpc_server.new_call("/t.S/Say", b"directo", none));
+    print("dispatch ${from_utf8(direct.unwrap_or(b"?")).unwrap_or("?")}");
+
     // 8. Reflexión: la lista de servicios sale de las rutas; sin descriptores, describe da NOT_FOUND.
     let rf = grpc_conn.open_stream(c, "/grpc.reflection.v1.ServerReflection/ServerReflectionInfo", none, 2000).unwrap();
     let ask = protobuf.writer();
@@ -211,6 +297,11 @@ again 0 otra usable=true\n\
 unary-on-stream 0 7\n\
 deadline <end> DEADLINE_EXCEEDED\n\
 last 0 fin\n\
+big 307200 <end> status=0\n\
+size 512000 <end> status=0\n\
+reject ended=true <end> INVALID_ARGUMENT not accepted\n\
+after 0 vivo\n\
+dispatch directo\n\
 reflection grpc.reflection.v1.ServerReflection grpc.reflection.v1alpha.ServerReflection t.S | symbol error 5 | <end> 0\n";
 
 fn run(flags: &[&str], name: &str) -> (String, String, i32) {

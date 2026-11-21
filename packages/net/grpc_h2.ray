@@ -358,6 +358,16 @@ pub fn release(l: Link, fr: Frame, stream_too: bool) -> Result<int, string> {
     write(l, out)
 }
 
+/// Grants `n` more octets of receive window on stream `id`: what a reader that consumes DATA at
+/// its own pace sends as it drains its buffer (`release` with `stream_too = false` returned only
+/// the connection's share when the frame arrived).
+pub fn grant(l: Link, id: int, n: int) -> Result<int, string> {
+    if (n <= 0) {
+        return Result.Ok(0);
+    }
+    write(l, window_update_frame(id, n))
+}
+
 /// Decodes a header block into a list, keeping the HPACK decoder in sync.
 pub fn decode_headers(l: Link, block: bytes) -> Result<[HEntry], string> {
     match (decode(l.dec, block)) {

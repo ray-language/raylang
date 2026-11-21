@@ -138,6 +138,10 @@ struct Acc {
     parts: [bytes],
     size: int,
     done: bool,
+    // Un stream (`open_stream`): varios mensajes, leídos al ritmo de `stream_recv`. La ventana de
+    // recepción del stream se concede al leer (`owed`), no al llegar el DATA.
+    streaming: bool,
+    owed: int,
 }
 
 fn new_acc() -> Acc {
@@ -154,7 +158,9 @@ fn new_acc() -> Acc {
         trailers: trailers,
         parts: [],
         size: 0,
-        done: false
+        done: false,
+        streaming: false,
+        owed: 0
     }
 }
 
@@ -374,10 +380,16 @@ fn on_frame(c: Conn, id: int, acc: Acc, fr: h2.Frame) -> Result<int, string> {
             acc.done = true;
         }
     } else if (fr.ftype == h2.DATA) {
-        h2.release(l, fr, mine && !end)?;
+        h2.release(l, fr, mine && !end && !acc.streaming)?;
         if (mine) {
             acc.size = acc.size + fr.payload.len();
-            if (acc.size > c.max_message + 5) {
+            if (acc.streaming) {
+                // El tope es por mensaje (lo comprueba `stream_recv`); lo pendiente lo acota la
+                // ventana del stream, que solo se concede al leer.
+                if (!end) {
+                    acc.owed = acc.owed + fr.flow;
+                }
+            } else if (acc.size > c.max_message + 5) {
                 return Result.Err("response message larger than ${c.max_message} octets");
             }
             acc.parts.push(fr.payload);
@@ -441,16 +453,22 @@ pub fn open_stream(
             return Result.Err(e);
         },
     }
+    let acc = new_acc();
+    acc.streaming = true;
     Result.Ok(
-        ClientStream {
-            conn: c,
-            id: id,
-            acc: new_acc(),
-            buf: b"",
-            send_closed: false,
-            finished: false
-        }
+        ClientStream { conn: c, id: id, acc: acc, buf: b"", send_closed: false, finished: false }
     )
+}
+
+// Un frame que llega mientras el stream ENVÍA (esperando ventana). Si el servidor terminó el
+// stream antes de tiempo (trailers, quizá con un RST), se cierra en el `Link`: así `send_data`
+// deja de esperar una ventana que ya no va a llegar y el estado real del servidor se conserva.
+fn stream_frame(s: ClientStream, fr: h2.Frame) -> Result<int, string> {
+    on_frame(s.conn, s.id, s.acc, fr)?;
+    if (s.acc.done) {
+        h2.close_stream(s.conn.link, s.id);
+    }
+    Result.Ok(0)
 }
 
 // Un fallo de transporte dentro de un stream: la conexión deja de servir.
@@ -490,9 +508,7 @@ pub fn stream_send(s: ClientStream, message: bytes) -> Result<int, string> {
         s.id,
         grpc_frame(message),
         false,
-        fn(fr: h2.Frame) -> Result<int, string> {
-            on_frame(c, s.id, s.acc, fr)
-        }
+        fn(fr: h2.Frame) -> Result<int, string> { stream_frame(s, fr) }
     );
     match (sent) {
         Result.Ok(true) => Result.Ok(message.len()),
@@ -522,7 +538,7 @@ pub fn stream_close_send(s: ClientStream) -> Result<int, string> {
         s.id,
         b"",
         true,
-        fn(fr: h2.Frame) -> Result<int, string> { on_frame(c, s.id, s.acc, fr) }
+        fn(fr: h2.Frame) -> Result<int, string> { stream_frame(s, fr) }
     )) {
         Result.Ok(_) => Result.Ok(0),
         Result.Err(e) => Result.Err(stream_fail(s, e)),
@@ -573,6 +589,15 @@ pub fn stream_recv(s: ClientStream) -> Result<Option<bytes>, string> {
                 return Result.Err("the response ended in the middle of a message");
             }
             return Result.Ok(Option.None);
+        }
+        // Hace falta más del servidor: se le devuelve la ventana de lo ya recibido.
+        if (s.acc.owed > 0) {
+            let owed = s.acc.owed;
+            s.acc.owed = 0;
+            match (h2.grant(l, s.id, owed)) {
+                Result.Ok(_) => { },
+                Result.Err(e) => return Result.Err(stream_fail(s, e)),
+            }
         }
         match (h2.read_frame(l)) {
             Result.Ok(fr) => match (on_frame(c, s.id, s.acc, fr)) {

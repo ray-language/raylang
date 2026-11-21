@@ -138,7 +138,7 @@ fn a_loose_module_keeps_the_prelude_function_it_shares_a_name_with() {
     let d = tmp("loose_prelude_name");
     std::fs::create_dir_all(d.join("src")).unwrap();
     std::fs::write(d.join("ray.toml"), "[package]\nname = \"loose\"\nversion = \"0.1.0\"\n").unwrap();
-    let module = "pub struct Field {\n    name: string,\n    value: int,\n}\n\npub fn get(fields: [Field], name: string) -> int {\n    for f in fields {\n        if (f.name == name) {\n            return f.value;\n        }\n    }\n    0\n}\n\npub fn total(m: Map<string, int>, fields: [Field]) -> int {\n    m.get(\"a\").unwrap_or(0) + get(fields, \"b\")\n}\n";
+    let module = "pub struct Field {\n    name: string,\n    value: int,\n}\n\npub fn get(fields: [Field], name: string) -> int {\n    for f in fields {\n        if (f.name == name) {\n            return f.value;\n        }\n    }\n    0\n}\n\npub fn total(m: Map<string, int>, fields: [Field]) -> int {\n    m.get(\"a\").unwrap_or(0) + get(fields, \"b\") + fields.get(\"b\") - 2\n}\n";
     std::fs::write(d.join("src/store.ray"), module).unwrap();
     std::fs::write(
         d.join("src/main.ray"),
@@ -151,6 +151,17 @@ fn a_loose_module_keeps_the_prelude_function_it_shares_a_name_with() {
     let (out, err, code) = ray(&d, &["run"]);
     assert_eq!(code, 0, "{err}");
     assert_eq!(out, "42\n");
+    // Revisión de 1.27.110: una suite (entrada sin `main`) con pruebas de nombre de prelude las
+    // sigue corriendo todas; el renombrado de arriba no las toca.
+    std::fs::create_dir_all(d.join("tests")).unwrap();
+    std::fs::write(
+        d.join("tests/names_test.ray"),
+        "@test\nfn filter() {\n    assert(false);\n}\n\n@test\nfn sort() {\n    assert(true);\n}\n\n@test\nfn plain() {\n    assert(true);\n}\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&d, &["test"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(out.contains("1 of 3 test(s) failed"), "{out}{err}");
 }
 
 /// Una función de la raíz con el nombre de una del prelude que es raylang puro (`try_call`): los

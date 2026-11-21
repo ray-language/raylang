@@ -21594,3 +21594,26 @@ alias de una función emitida del de un builtin interceptado.
 Verificado con `grpcurl` 1.9 real: `list`, `describe`, una llamada unaria con sus cabeceras y
 trailers, un stream bidireccional de tres mensajes y lo mismo sobre TLS con `-cacert`.
 
+**Revisión antes de 1.27.110.** La revisión del rango encontró, y se corrigió:
+
+- **Control de flujo de los streams.** Se devolvía la ventana del stream al llegar cada DATA, así
+  que un emisor rápido llenaba el búfer hasta un tope artificial (en el servidor,
+  RESOURCE_EXHAUSTED; en el cliente, «response message larger than…» con mensajes pequeños). Ahora
+  al llegar se devuelve solo la ventana de la conexión y la del stream se concede cuando el
+  lector pide más (`recv`, `stream_recv`): lo no leído lo frena HTTP/2.
+- **El plazo de `idle`.** Quedaba puesto en el `Link` al volver, y un `send` posterior que
+  esperase ventana vencía y tumbaba la conexión. El plazo es ahora solo de la espera.
+- **Un rechazo temprano con el cliente subiendo.** `stream_send` esperaba una ventana que ya no
+  iba a llegar (para siempre sin plazo; con plazo, tapando el estado real con
+  DEADLINE_EXCEEDED). El stream se cierra en el `Link` cuando el servidor termina.
+- **Anidamiento sin tope.** Cada stream abierto anida sobre el anterior: `MAX_NESTED_STREAMS`
+  (16) por conexión; uno más recibe RESOURCE_EXHAUSTED. La limitación de fondo sigue: dos
+  suscripciones largas en una conexión avanzan de una en una.
+- **`conn_stream` reintentaba de más.** Cualquier fallo sin octetos se tomaba por «conexión
+  caída» y repetía la petición, también tras un plazo vencido. Ahora solo un EOF limpio.
+- **El cargador (§469 bis).** Tratar como módulo a las funciones con nombre de prelude de una
+  entrada sin `main` renombraba también las pruebas `@test` de una suite (el runner las
+  saltaba: verde falso) y dejaba sin resolver el UFCS a la función propia. Las pruebas conservan
+  su nombre y la banda de la entrada lleva el prefijo de las renombradas.
+- `new_call` para construir un `Call` a mano; `tls_connect_opts` en el MANUAL.
+

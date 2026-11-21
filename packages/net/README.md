@@ -162,7 +162,10 @@ fn main() -> int {
   en **`net/grpc_reflection`**: `enable(r, files)` añade `grpc.reflection.v1` y `v1alpha` (la
   lista de servicios sale de las rutas; `files` son `FileDescriptorProto` serializados para
   `describe`, `[]` si no los hay) y `files_of_set(bytes)` trocea lo que escribe
-  `protoc --descriptor_set_out --include_imports`.
+  `protoc --descriptor_set_out --include_imports`. Los streams de una conexión se anidan: mientras
+  corre un segundo, el primero espera, y como mucho hay `MAX_NESTED_STREAMS` (16) abiertos a la
+  vez — una suscripción de larga vida, mejor en su propia conexión. `new_call(path, message,
+  metadata)` construye un `Call` para probar un handler con `dispatch` sin levantar el servidor.
 - **`net/grpc_conn`** — cliente gRPC unario sobre una **conexión persistente**: `connect(host, port)`
   (h2c) o `connect_tls(host, port)` (ALPN `h2`), `call(c, path, message, metadata, deadline_ms) ->
   Result<Reply, string>` (`Err` = transporte; un estado no-OK es `Ok(Reply)` con `status` y

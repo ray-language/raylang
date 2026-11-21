@@ -696,6 +696,7 @@ fn follow_device(sink: &mut Box<dyn Sink>, ctl: &Ctl, key: i64, follower: &mut F
                     consumed_frames: 0,
                     played: ctl.played_frames.clone(),
                     unplug: None,
+                    anchor: None,
                 };
                 replace(sink, Box::new(silent));
                 if trace {
@@ -1636,6 +1637,7 @@ fn make_sink(
             consumed_frames: 0,
             played,
             unplug: test_unplug(device),
+            anchor: None,
         }));
     }
     #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -1719,7 +1721,14 @@ struct NullSink {
     played: Arc<AtomicI64>,
     /// Cuándo «se desenchufa» este sumidero de pruebas y qué responde entonces.
     unplug: Option<(std::time::Instant, DeviceState)>,
+    /// El reloj del sumidero: en qué instante se debía haber consumido qué frame. El consumo se
+    /// acompasa contra él (ver `play`).
+    anchor: Option<(std::time::Instant, i64)>,
 }
+
+/// Cuánto retraso absorbe el sumidero nulo recuperándolo (consumiendo el siguiente trozo antes)
+/// en vez de darlo por un hueco. Un hueco mayor es que nadie escribía: el reloj se reancla.
+const NULL_SINK_CATCH_UP: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// ray-daw #450: `RAY_AUDIO_TEST_UNPLUG_MS=n` desenchufa el dispositivo del PRIMER sumidero de
 /// pruebas a los `n` ms de abrirlo: con dispositivo elegido la salida termina; sin él, se
@@ -1736,10 +1745,31 @@ fn test_unplug(device: &str) -> Option<(std::time::Instant, DeviceState)> {
 
 impl Sink for NullSink {
     fn play(&mut self, data: &[u8]) {
-        let ms = data.len() as i64 * 1000 / self.bytes_per_sec;
-        std::thread::sleep(std::time::Duration::from_millis(ms.max(1) as u64));
+        // ray-daw #465: se dormía la duración de CADA trozo (truncada a ms enteros, y `sleep`
+        // siempre se pasa), así que el reloj del sumidero iba a 0,82–0,85× el tiempo real y
+        // `played_ms` con él. Ahora se acompasa contra un reloj absoluto: se duerme hasta el
+        // instante en que este trozo debe haber terminado, y el retraso de un `sleep` lo recupera
+        // el siguiente.
+        let frames = (data.len() / self.frame_bytes.max(1)) as i64;
+        let rate = (self.bytes_per_sec / self.frame_bytes.max(1) as i64).max(1);
+        let due_at = |anchor: (std::time::Instant, i64), frame: i64| {
+            anchor.0 + std::time::Duration::from_nanos(((frame - anchor.1).max(0) as u128 * 1_000_000_000 / rate as u128) as u64)
+        };
+        let now = std::time::Instant::now();
+        let anchor = match self.anchor {
+            // Sigue al ritmo (o con un retraso recuperable): el mismo reloj.
+            Some(a) if now <= due_at(a, self.consumed_frames) + NULL_SINK_CATCH_UP => a,
+            // Primer trozo, o un hueco sin datos (un dispositivo habría sonado en silencio): el
+            // reloj arranca ahora.
+            _ => (now, self.consumed_frames),
+        };
+        self.anchor = Some(anchor);
+        let end = due_at(anchor, self.consumed_frames + frames);
+        if end > now {
+            std::thread::sleep(end - now);
+        }
         // El sumidero de tiempo real ES el dispositivo: lo consumido ya "sonó" (exacto).
-        self.consumed_frames += (data.len() / self.frame_bytes) as i64;
+        self.consumed_frames += frames;
         self.played.store(self.consumed_frames, Ordering::SeqCst);
     }
     fn finish(&mut self) {}

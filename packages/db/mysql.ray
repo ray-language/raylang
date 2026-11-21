@@ -494,7 +494,12 @@ fn connect_within(
             }
             Result.Ok(c)
         },
-        Result.Err(e) => Result.Err(e),
+        // Un handshake fallido (o vencido) no deja el descriptor abierto: un bucle de reconexión
+        // contra un origen que acepta y calla agotaría los descriptores del proceso.
+        Result.Err(e) => {
+            close(sock);
+            Result.Err(e)
+        },
     }
 }
 
@@ -581,8 +586,8 @@ fn handshake(
         let _ = write_packet(c, pre)?;
         let _ = match (net.tls_upgrade(sock, host)) {
             Result.Ok(h) => h,
+            // El socket lo cierra `connect_within`, como en cualquier otro fallo del handshake.
             Result.Err(e) => {
-                close(sock);
                 return Result.Err("mysql: " + e);
             },
         };
@@ -1016,7 +1021,8 @@ fn f32_of(bits: int) -> float {
             v = (to_f(m) + 8388608.0) * math.pow(2.0, to_f(e - 150));
         }
     }
-    if (neg) { 0.0 - v } else { v }
+    // Por producto y no `0.0 - v`: así el cero negativo conserva su signo.
+    if (neg) { v * (0.0 - 1.0) } else { v }
 }
 
 fn pad2(n: int) -> string {
@@ -1071,18 +1077,24 @@ fn dec_datetime(p: [int], i: int, ln: int, decimals: int) -> Result<string, stri
 // protocolo binario omite los microsegundos cuando valen 0 y los da siempre con 6 cifras.
 fn fraction(micro: int, decimals: int) -> string {
     if (decimals <= 0 || decimals > 6) {
+        // Sin decimales declarados utilizables (0, o el 31/39 de una expresión): si el valor trae
+        // microsegundos se dan enteros, que perderlos en silencio es peor.
+        if (micro != 0) {
+            return "." + pad6(micro);
+        }
         return "";
     }
     "." + pad6(micro).substring(0, decimals)
 }
 
 // Un número en coma flotante como lo escribe el servidor en el protocolo de texto: las cifras
-// más cortas, en notación científica (`1e15`, `2.5e-300`) cuando el exponente decimal pasa de 14 o
-// baja de -15, y en decimal corriente si no. `digits` son las cifras significativas (sin ceros a
+// más cortas, en notación científica (`1e15`, `2.5e-300`) cuando el exponente decimal baja de -15 o
+// pasa de 14 SIN parte fraccionaria (`1000000000000000.5` sigue en decimal, como en `my_gcvt`), y
+// en decimal corriente si no. `digits` son las cifras significativas (sin ceros a
 // los lados) y `exp` el exponente de la primera.
 fn float_notation(digits: string, exp: int, negative: bool) -> string {
     let sign = if (negative) { "-" } else { "" };
-    if (exp > 14 || exp < 0 - 15) {
+    if ((exp > 14 && digits.len() <= exp + 1) || exp < 0 - 15) {
         var out = sign + digits.substring(0, 1);
         if (digits.len() > 1) {
             out = out + "." + digits.substring(1, digits.len());
@@ -1123,13 +1135,18 @@ fn digits_and_exponent(text: string) -> (string, int) {
     (all, exp)
 }
 
+// El cero como lo escribe el servidor: el negativo, con su signo.
+fn zero_text(v: float) -> string {
+    if (to_string(v).starts_with("-")) { "-0" } else { "0" }
+}
+
 // DOUBLE: las cifras más cortas que lo identifican. Con decimales fijos (`DOUBLE(8,2)`), esos.
 fn double_text(v: float, decimals: int) -> string {
     if (decimals < 31) {
         return math.format_float(v, "f", decimals);
     }
     if (v == 0.0) {
-        return "0";
+        return zero_text(v);
     }
     let negative = v < 0.0;
     let parts = digits_and_exponent(to_string(if (negative) { 0.0 - v } else { v }));
@@ -1143,7 +1160,7 @@ fn float_text(v: float, decimals: int) -> string {
         return math.format_float(v, "f", decimals);
     }
     if (v == 0.0) {
-        return "0";
+        return zero_text(v);
     }
     let negative = v < 0.0;
     let sci = math.format_float(if (negative) { 0.0 - v } else { v }, "e", 5);

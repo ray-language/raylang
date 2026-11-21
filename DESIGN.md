@@ -21647,3 +21647,35 @@ Queda fuera solo la stdlib.
 decodificar, un subdocumento sigue volviendo como `Doc`. La secuencia de documentos es la
 sección kind 1 de OP_MSG, que es como los drivers envían un lote.
 
+**`RAY_AUDIO_SINK=null` (ray-daw #465).** El sumidero nulo «consumía a tiempo real» durmiendo la
+duración de cada trozo: la duración se truncaba a milisegundos enteros y cada `sleep` se pasa un
+poco, así que su reloj iba a 0,82–0,85× el de pared, y más o menos según el tamaño de los
+trozos y la carga. Ahora guarda un ancla (instante, frame) y duerme hasta el instante en que el
+trozo debe haber terminado: el exceso de un `sleep` lo recupera el siguiente. Si pasan más de
+50 ms sin nada que consumir, es que nadie escribía (un dispositivo real habría sonado en
+silencio) y el reloj se reancla, sin contar el hueco. Medido con el repro del hallazgo: 0,999.
+
+No se pudo comprobar si esto quita el desfase de ray-daw #464 (una toma desplazada 70–90 ms):
+su smoke test da `ok=false` con el árbol actual de la app también con el binario oficial de
+1.27.110, así que la medida queda para ray-daw.
+
+**Revisión previa a 1.27.111 (db 0.10.2, net 0.17.2).** La revisión del rango encontró, y se
+corrigió: `connect_within` no cerraba el socket si el handshake fallaba o vencía —justo el caso
+para el que nació `connect_timeout`—; la regla de la notación científica era incompleta: el
+servidor solo la usa por encima de 1e15 cuando el número no tiene parte fraccionaria
+(`1000000000000000.5` va en decimal), y escribe el cero negativo como `-0` (el f32 lo perdía al
+reconstruirse con `0.0 - v`). Las dos se comprobaron contra el `mysqld` 8.0.46, comparando las
+dos vías. Una fecha sin decimales declarados que trae microsegundos los da enteros en vez de
+perderlos. `websocket.is_upgrade` compara `websocket` como token; la validación de la versión
+va en `accept`, que contesta 426 —una segunda revisión señaló que meterla en `is_upgrade`
+dejaba al cliente sin respuesta—, y `Connection: Upgrade` no se exige porque el mapa de
+cabeceras guarda la última línea de una cabecera repetida. El manifiesto de `db` declaraba
+raylang 1.27.81 y usa funciones de 1.27.86: ahora 1.27.110, que es lo que ya exige su `net`.
+`send_sections` copiaba el lote tres veces. La prueba del sumidero nulo reintenta: un hueco de
+más de 50 ms no cuenta como reproducido, y un runner cargado bajaba la razón.
+
+Queda como estaba, a sabiendas: el aviso de variádicas también sale para un `extern` de un
+paquete de dependencia, que el usuario no puede editar. Ningún paquete del índice declara una
+hoy; si aparece, se filtra por la raíz del proyecto. Y `Bson.Raw` entró en una versión de parche
+(0.10.1, ya publicada): un `match` exhaustivo sobre `Bson` sin comodín deja de compilar.
+

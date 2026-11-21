@@ -141,7 +141,9 @@ fn main() -> int {
   0.17.1 (raycdc #468): `net/websocket` gana `is_upgrade(headers)` y `accept(headers, conn)` —
   el upgrade de un handler crudo es `if (websocket.is_upgrade(req.headers)) { let ws =
   websocket.accept(req.headers, conn)?; … }`. El ejemplo de `serve_raw_on` citaba un
-  `is_upgrade(req)` que no existía.
+  `is_upgrade(req)` que no existía. 0.17.2: `is_upgrade` busca `websocket` como
+  token de `Upgrade` (no como subcadena) y `accept` contesta `426 Upgrade Required` con
+  `Sec-WebSocket-Version: 13` a una versión que no sea la 13 (RFC 6455 §4.4).
 - **`net/grpc_client`** — cliente gRPC de un solo disparo sobre TLS (`grpc_call`), sobre `net/http2` +
   `net/hpack` + `std/protobuf`.
 - **`net/grpc_server`** — **servidor gRPC unario** sobre HTTP/2 en claro con conocimiento previo (h2c:

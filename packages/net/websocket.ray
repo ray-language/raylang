@@ -58,11 +58,24 @@ pub fn handshake_response(key: string) -> string {
 }
 
 /// Whether a request asks to switch to WebSocket: `headers` are the request's headers (lower-case
-/// names, as `webserver.Request.headers` has them) and it needs `Upgrade: websocket` and a
-/// `Sec-WebSocket-Key` (net 0.17.1, raycdc #468).
+/// names, as `webserver.Request.headers` has them) and it needs what RFC 6455 §4.2.1 asks for:
+/// `Upgrade: websocket`, `Connection: Upgrade`, `Sec-WebSocket-Version: 13` and a
+/// `Sec-WebSocket-Key` (net 0.17.1, raycdc #468; the full check since 0.17.2).
 pub fn is_upgrade(headers: Map<string, string>) -> bool {
-    headers.get_or("upgrade", "").to_lower().contains("websocket")
+    has_token(headers.get_or("upgrade", ""), "websocket")
+        && has_token(headers.get_or("connection", ""), "upgrade")
+        && headers.get_or("sec-websocket-version", "").trim() == "13"
         && headers.get_or("sec-websocket-key", "") != ""
+}
+
+// ¿Está `token` en la lista separada por comas de una cabecera? (`Connection: keep-alive, Upgrade`.)
+fn has_token(value: string, token: string) -> bool {
+    for part in value.to_lower().split(",") {
+        if (part.trim() == token) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Completes the server side of the handshake on `conn` for a request that `is_upgrade`: writes

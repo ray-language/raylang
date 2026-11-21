@@ -6,6 +6,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.111 — 2026-11-21
+
 - **`RAY_AUDIO_SINK=null` lleva tiempo real** (ray-daw #465): el sumidero nulo dormía la duración
   de cada trozo y `played_ms` avanzaba a 0,82–0,85× el reloj; ahora se acompasa contra un reloj
   absoluto y va a 0,999×. Las pruebas que alinean contra `played_ms` con la salida nula dejan de
@@ -26,6 +28,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   `mongo.run_command_seq` para lotes ya codificados (#471).
 - **Paquete `net` 0.17.1**: `websocket.is_upgrade(headers)` y `websocket.accept(headers, conn)`
   (raycdc #468).
+- **Paquete `db` 0.10.2** (revisión previa a la release): un `connect` de `db/mysql` cuyo
+  handshake falla o vence cierra el socket (antes un bucle de reconexión perdía un descriptor
+  por intento); con parámetros, un DOUBLE de 1e15 o más con parte fraccionaria sale en decimal
+  (`1000000000000000.5`) y el cero negativo sale `-0`, como en el protocolo de texto —
+  comprobado contra MySQL 8.0—; un DATETIME/TIME sin decimales declarados que trae
+  microsegundos ya no los pierde; `mongo.run_command_seq` arma el mensaje con una sola copia
+  del lote.
+- **Paquete `net` 0.17.2** (revisión): `websocket.is_upgrade` exige lo que pide RFC 6455
+  §4.2.1 — `Upgrade: websocket` y `Connection: Upgrade` como tokens, y
+  `Sec-WebSocket-Version: 13` —, no solo que `Upgrade` contenga «websocket».
 
 ## 1.27.110 — 2026-11-20
 

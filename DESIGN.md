@@ -21659,3 +21659,19 @@ No se pudo comprobar si esto quita el desfase de ray-daw #464 (una toma desplaza
 su smoke test da `ok=false` con el árbol actual de la app también con el binario oficial de
 1.27.110, así que la medida queda para ray-daw.
 
+**Revisión previa a 1.27.111 (db 0.10.2, net 0.17.2).** La revisión del rango encontró, y se
+corrigió: `connect_within` no cerraba el socket si el handshake fallaba o vencía —justo el caso
+para el que nació `connect_timeout`—; la regla de la notación científica era incompleta: el
+servidor solo la usa por encima de 1e15 cuando el número no tiene parte fraccionaria
+(`1000000000000000.5` va en decimal), y escribe el cero negativo como `-0` (el f32 lo perdía al
+reconstruirse con `0.0 - v`). Las dos se comprobaron contra el `mysqld` 8.0.46, comparando las
+dos vías. Una fecha sin decimales declarados que trae microsegundos los da enteros en vez de
+perderlos. `websocket.is_upgrade` pasa a exigir `Connection: Upgrade` y la versión 13.
+`send_sections` copiaba el lote tres veces. La prueba del sumidero nulo reintenta: un hueco de
+más de 50 ms no cuenta como reproducido, y un runner cargado bajaba la razón.
+
+Queda como estaba, a sabiendas: el aviso de variádicas también sale para un `extern` de un
+paquete de dependencia, que el usuario no puede editar. Ningún paquete del índice declara una
+hoy; si aparece, se filtra por la raíz del proyecto. Y `Bson.Raw` entró en una versión de parche
+(0.10.1, ya publicada): un `match` exhaustivo sobre `Bson` sin comodín deja de compilar.
+

@@ -90,7 +90,8 @@ fn col_def_flags(name: &str, ty: u8, flags: u16) -> Vec<u8> {
     p.extend_from_slice(&[255, 0, 0, 0]); // longitud de columna
     p.push(ty);
     p.extend_from_slice(&flags.to_le_bytes()); // flags (32 = UNSIGNED)
-    p.push(0); // decimales
+    // Decimales: 31 (sin fijar) en FLOAT/DOUBLE, como un servidor real; 0 en el resto.
+    p.push(if ty == 4 || ty == 5 { 31 } else { 0 });
     p.extend_from_slice(&[0, 0]); // relleno
     p
 }
@@ -215,6 +216,31 @@ fn command_phase<S: Read + Write>(s: &mut S) {
                     f.extend_from_slice(&[2, 0xff, 0x00]);
                     s.write_all(&pkt(6, &f)).unwrap();
                     s.write_all(&pkt(7, &EOF)).unwrap();
+                } else if prep_sql.starts_with("FRAC") {
+                    // raycdc #467: el texto de DOUBLE/FLOAT y la fracción de DATETIME(n)/TIME(n)
+                    // deben salir como en el protocolo de texto.
+                    let with_decimals = |name: &str, ty: u8, decimals: u8| {
+                        let mut d = col_def_ty(name, ty);
+                        let at = d.len() - 3;
+                        d[at] = decimals;
+                        d
+                    };
+                    s.write_all(&pkt(1, &[5])).unwrap();
+                    s.write_all(&pkt(2, &with_decimals("d", 5, 31))).unwrap(); // DOUBLE
+                    s.write_all(&pkt(3, &with_decimals("f", 4, 31))).unwrap(); // FLOAT
+                    s.write_all(&pkt(4, &with_decimals("dt3", 12, 3))).unwrap(); // DATETIME(3)
+                    s.write_all(&pkt(5, &with_decimals("t6", 11, 6))).unwrap(); // TIME(6)
+                    s.write_all(&pkt(6, &with_decimals("d2", 5, 2))).unwrap(); // DOUBLE(10,2)
+                    s.write_all(&pkt(7, &EOF)).unwrap();
+                    let mut f = vec![0u8, 0];
+                    f.extend_from_slice(&2.5e-300f64.to_le_bytes());
+                    f.extend_from_slice(&(-3.4e38f32).to_le_bytes());
+                    f.extend_from_slice(&[11, 0xE8, 0x07, 2, 29, 12, 34, 56]);
+                    f.extend_from_slice(&789_000u32.to_le_bytes());
+                    f.extend_from_slice(&[8, 1, 0, 0, 0, 0, 12, 0, 0]); // -12:00:00, sin microsegundos
+                    f.extend_from_slice(&1234.5f64.to_le_bytes());
+                    s.write_all(&pkt(8, &f)).unwrap();
+                    s.write_all(&pkt(9, &EOF)).unwrap();
                 } else if prep_sql.starts_with("NULLS") {
                     // OK con tantas filas afectadas como parámetros NULL llegaron.
                     let nulls = params.iter().filter(|p| *p == "<NULL>").count() as u8;
@@ -664,6 +690,7 @@ fn main() -> int {{
     print(mysql.query(c, "WIDE ?", ["x"]));
     print(mysql.exec_opt(c, "NULLS ? ? ?", [Option.None, Option.Some("a"), Option.None]));
     print(mysql.exec(c, "NULLS ? ?", ["a", ""]));
+    print(mysql.query(c, "FRAC ?", ["x"]));
     mysql.disconnect(c);
     0
 }}
@@ -679,7 +706,8 @@ Result.Err(mysql: row 1, column 3 is not valid UTF-8 (a binary value); read it w
 Result.Ok([[Option.Some(3138343436373434303733373039353531363135), Option.Some(ff00), Option.None]])\n\
 Result.Err(mysql: row 1, column 2 is not valid UTF-8 (a binary value); read it with query_bytes)\n\
 Result.Ok(2)\n\
-Result.Ok(0)\n";
+Result.Ok(0)\n\
+Result.Ok([[2.5e-300, -3.4e38, 2024-02-29 12:34:56.789, -12:00:00.000000, 1234.50]])\n";
 
 #[test]
 fn mysql_null_binary_and_unsigned_cells() {

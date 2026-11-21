@@ -607,6 +607,12 @@ pub fn decimal128_from_string(text: string) -> Result<bytes, string> {
     if (!seen_digit) {
         return Result.Err(invalid);
     }
+    // raycdc #470: los ceros finales no son cifras significativas — pasan al exponente
+    // (`1234…234000` son 34 cifras × 10³, como lo guarda MongoDB). Solo si aún sobran, es `Err`.
+    while (digits.len() > DECIMAL_DIGITS && digits.ends_with("0")) {
+        digits = digits.substring(0, digits.len() - 1);
+        exponent = exponent + 1;
+    }
     if (digits.len() > DECIMAL_DIGITS) {
         return Result.Err(
             "decimal128 holds 34 significant digits, '" + text + "' has " + to_string(digits.len())

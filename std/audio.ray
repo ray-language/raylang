@@ -260,7 +260,8 @@ pub fn open_input_device(
 /// `sample_rate` Hz, `channels` interleaved channels, samples in `format` (`"s16le"`, `"s24le"`,
 /// `"s32le"` or `"f32le"`). `latency_ms` (3–1000, or 0 for the default of 100; below 20 the
 /// blocks are small and, on macOS, so is the device's I/O buffer) sizes the blocks
-/// the capture arrives in. Returns a handle for `read`; `close(h)` stops recording.
+/// the capture arrives in. Returns a handle for `read`; the prelude's `close(h)` stops recording
+/// (there is no `audio.close`: `close` is the global one that also closes files and sockets).
 ///
 /// Available on macOS, iOS, Linux (ALSA), Android and Windows. The first time, the system asks
 /// for microphone permission: on iOS the app needs `[ios] audio_session = "play_and_record"`

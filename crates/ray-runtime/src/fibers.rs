@@ -605,8 +605,7 @@ pub fn in_fiber() -> bool {
 const IN_FFI_CALLBACK: usize = 1;
 
 /// El error de intentar esperar dentro de un callback de la FFI (el texto de la VM).
-pub const FFI_CALLBACK_WAIT: &str =
-    "cannot wait inside an FFI callback (channels, sleep, join and network I/O are not available while C code is on the stack)";
+pub const FFI_CALLBACK_WAIT: &str = crate::ffi_callback::WAIT_MESSAGE;
 
 /// ¿Corre esta fibra dentro de un callback de la FFI? Quien vaya a esperar y tenga algo que
 /// deshacer (un contador, un trabajo ya encargado) lo pregunta ANTES de empezar: `suspend` falla
@@ -790,6 +789,11 @@ pub fn with_local<R>(f: impl FnOnce(&mut Option<Box<dyn std::any::Any>>) -> R) -
 
 /// Duerme la fibra (no el worker) `ms` milisegundos.
 pub fn fiber_sleep(ms: i64) {
+    // IDEAS §131: un `sleep(0)` es una cesión de turno, no una espera; dentro de un callback de
+    // la FFI no se cede y no hay nada que esperar (la VM solo aparca con `ms > 0`).
+    if ms <= 0 && in_ffi_callback() {
+        return;
+    }
     suspend(Park::SleepUntil(Instant::now() + Duration::from_millis(ms.max(0) as u64)));
 }
 
@@ -956,14 +960,11 @@ unsafe extern "C" {
 /// modo que `std/ffi.errno()` tras una extern `blocking` lee lo que dejó ESA llamada (misma
 /// semántica que la llamada directa).
 pub fn run_blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    if !in_fiber() {
+    // IDEAS §131: dentro de un callback de la FFI la fibra no puede aparcarse a esperar al pool
+    // (hay marcos de C en su pila), así que el trabajo corre aquí mismo y bloquea al worker lo
+    // que dure. Es lo que hace la VM, donde estas operaciones no descargan a ningún pool.
+    if !in_fiber() || in_ffi_callback() {
         return f();
-    }
-    // IDEAS §131: dentro de un callback de la FFI no se puede aparcar. Se comprueba ANTES de
-    // encargar el trabajo: si fallara el park, el llamador se desenrollaría con el hilo del pool
-    // todavía usando los punteros de su marco.
-    if in_ffi_callback() {
-        panic!("{FFI_CALLBACK_WAIT}");
     }
     // El slot del resultado (+ el errno del hilo del pool) + su lista de esperas (el protocolo
     // anti despertar-perdido de F3).

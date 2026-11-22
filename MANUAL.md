@@ -3186,7 +3186,8 @@ Reglas (tabla completa en [`REFERENCE.md` §13](REFERENCE.md#13-ffi-tipos-marsha
 - Aridad 0 a 6 (el checker rechaza más parámetros); tipos: `int` (C `int`), `u64` (C `long`/`size_t`), `float`, `bool`, `string`/`bytes`
   (solo argumento), `ptr`, `unit`; retornos falibles como `Option<string>`/`Option<bytes>`/`Option<ptr>`.
 - Los `bytes` que pases NUL-termínalos tú si el C lo espera (`b"texto\x00"`).
-- Fuera de contrato: variádicas (`printf`), structs por valor, callbacks.
+- Fuera de contrato: variádicas (`printf`) y structs por valor. Los callbacks valen mientras dura
+  la llamada (abajo).
 - No disponible en el playground web (wasm).
 
 **¿La biblioteca se llama distinto en cada sistema?** Nómbrala por plataforma tras el nombre general:

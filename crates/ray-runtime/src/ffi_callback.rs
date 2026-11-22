@@ -34,6 +34,13 @@ pub const MAX_INT_ARGS: usize = 6;
 /// Argumentos de coma flotante que lee un trampolín.
 pub const MAX_FLOAT_ARGS: usize = 4;
 
+/// El error de intentar esperar dentro de un callback. Una sola copia del texto: la usan la VM,
+/// el intérprete, el runtime de fibras y el binario nativo.
+pub const WAIT_MESSAGE: &str =
+    "cannot wait inside an FFI callback (channels, sleep, join and network I/O are not available while C code is on the stack)";
+/// El error de instalar en Windows x64 un callback con parámetros de coma flotante.
+pub const WINDOWS_FLOAT_MESSAGE: &str = "an FFI callback with float parameters is not supported on Windows x64 yet";
+
 /// Lo que C pasó al callback: los registros de cada banco, en orden. Los enteros llegan como los
 /// dejó el llamador: de un `int` de C solo valen los 32 bits bajos, de un `bool` los 8 bajos.
 #[derive(Clone, Copy, Debug, Default)]
@@ -62,6 +69,9 @@ pub struct Callback {
     slot: usize,
     float_ret: bool,
     ptr: usize,
+    // Ni `Send` ni `Sync`: la casilla es de la tabla del hilo que lo instaló, y soltarlo en otro
+    // hilo liberaría la casilla equivocada.
+    _thread_bound: std::marker::PhantomData<*const ()>,
 }
 
 impl Callback {
@@ -92,7 +102,7 @@ pub fn install(float_ret: bool, handler: Handler) -> Result<Callback, String> {
         NEXT_SLOT.with(|n| n.set((slot + 1) % SLOTS));
         t[slot] = Some(handler);
         let ptr = if float_ret { FLOAT_TRAMPOLINES[slot] as usize } else { INT_TRAMPOLINES[slot] as usize };
-        Ok(Callback { slot, float_ret, ptr })
+        Ok(Callback { slot, float_ret, ptr, _thread_bound: std::marker::PhantomData })
     })
 }
 
@@ -144,6 +154,7 @@ mod tests {
 
     // Llama al puntero como lo haría C, con la firma REAL del callback (no la del trampolín).
     #[test]
+    #[cfg(not(all(windows, target_arch = "x86_64")))] // allí los bancos comparten posición
     fn a_trampoline_reads_integer_and_float_arguments_in_any_mix() {
         let cb = install(false, Rc::new(|r: &Regs| (r.ints[0] as i32 as i64 + r.ints[1] + r.floats[0] as i64 + r.floats[1] as i64) as u64)).unwrap();
         let f: extern "C" fn(i32, f64, i64, f64) -> i64 = unsafe { std::mem::transmute(cb.ptr() as usize) };
@@ -151,6 +162,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(all(windows, target_arch = "x86_64")))] // allí los bancos comparten posición
     fn a_float_returning_callback_uses_the_float_register() {
         let cb = install(true, Rc::new(|r: &Regs| (r.floats[0] * 2.0 + r.ints[0] as f64).to_bits())).unwrap();
         let f: extern "C" fn(f64, i64) -> f64 = unsafe { std::mem::transmute(cb.ptr() as usize) };

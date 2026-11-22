@@ -940,6 +940,8 @@ struct Checker {
     index: SemanticIndex,
     /// Posición de declaración de cada función de nivel superior (M10.2b: ir-a-definición).
     fn_defs: HashMap<String, (usize, usize)>,
+    /// Los nombres de las `extern fn`: se llaman como funciones, pero no son valores.
+    extern_fns: HashSet<String>,
     /// Posición de declaración de cada tipo (struct/enum/trait) — hover/def de tipos (M10.2f).
     type_defs: HashMap<String, (usize, usize)>,
     /// Posición de declaración de cada constante de nivel superior — hover/def de consts.

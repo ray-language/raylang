@@ -187,18 +187,19 @@ fn main() {
         });
         1
     }));
-    // El error de una invocación es de SU llamada: una extern anidada posterior no se lo lleva.
-    var calls = 0;
+    // El error de un callback es de SU llamada: el de una extern interna, recuperado dentro del
+    // callback de otra, no hace fallar a la exterior.
     var inner = "";
     print(try_call(fn() -> int {
         qsort(bytes_of([3, 2, 1]), 3 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int {
-            calls = calls + 1;
-            if (calls == 1) {
-                let z: [int] = [];
-                return z[3];
-            }
-            inner = to_string(try_call(fn() -> bytes { sorted([2, 1]) }).is_ok());
-            0
+            inner = to_string(try_call(fn() -> int {
+                qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(p: ptr, q: ptr) -> int {
+                    let z: [int] = [];
+                    z[3]
+                });
+                1
+            }).is_err());
+            b(x) - b(y)
         });
         1
     }));
@@ -231,7 +232,7 @@ fn main() {
 }
 "#;
 
-const AFTERMATH_OUT: &str = "Result.Ok(1)\nResult.Err(index 3 out of range (length 0))\ntrue\ntrue\ntrue\ntrue\ntrue\nOption.Some(7)\nOption.Some(9)\n";
+const AFTERMATH_OUT: &str = "Result.Ok(1)\nResult.Ok(1)\ntrue\ntrue\ntrue\ntrue\ntrue\nOption.Some(7)\nOption.Some(9)\n";
 
 #[test]
 fn a_failed_wait_or_callback_leaves_nothing_behind() {
@@ -250,6 +251,254 @@ fn a_failed_wait_or_callback_leaves_nothing_behind() {
     .unwrap();
     let (out, err, code) = ray(&d, &["run", "--interp", "nap.ray"]);
     assert_eq!((out.as_str(), code), (WAIT_ERR, 0), "{err}");
+}
+
+// De la segunda revisión: los dos motores dicen lo mismo en los bordes de «no se puede esperar».
+const EDGES: &str = r#"import std/ffi;
+import std/time;
+extern "c" {
+    fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int);
+}
+fn b(p: ptr) -> int { ffi.read(p, 1)[0] as int }
+fn main() {
+    // Un envío a un canal sin búfer es error dentro de un callback aunque haya un receptor esperando.
+    let ch: Channel<int> = Channel.bounded(0);
+    let got: Channel<int> = Channel.new();
+    spawn(fn() { got.send(ch.recv().unwrap_or(-1)); });
+    time.sleep(50);
+    print(try_call(fn() -> int {
+        qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int {
+            ch.send(7);
+            0
+        });
+        1
+    }).is_err());
+    ch.close();
+    print(got.recv());
+    // `time.sleep(0)` no espera: vale.
+    print(try_call(fn() -> int {
+        qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int {
+            time.sleep(0);
+            b(x) - b(y)
+        });
+        1
+    }));
+    // Un select que tendría que esperar falla, y después los canales siguen sirviendo.
+    let never: Channel<int> = Channel.new();
+    print(try_call(fn() -> int {
+        qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int { select([never]) });
+        1
+    }).is_err());
+    never.send(5);
+    print(select([never]));
+}
+"#;
+
+const EDGES_OUT: &str = "true\nOption.Some(-1)\nResult.Ok(1)\ntrue\n0\n";
+
+#[test]
+fn the_vm_and_the_native_binary_agree_on_what_counts_as_waiting() {
+    let d = tmp("edges");
+    std::fs::write(d.join("prog.ray"), EDGES).unwrap();
+    let (out, err, code) = ray(&d, &["run", "prog.ray"]);
+    assert_eq!((out.as_str(), code), (EDGES_OUT, 0), "{err}");
+    if let Some(out) = native(&d, "prog.ray", &[]) {
+        assert_eq!(out, EDGES_OUT);
+    }
+}
+
+/// Un error dentro de un callback llega con la posición y la traza de donde ocurrió, no solo con
+/// la de la `extern` que lo recibió.
+#[test]
+fn an_error_inside_a_callback_keeps_its_own_position() {
+    let d = tmp("position");
+    std::fs::write(
+        d.join("prog.ray"),
+        "extern \"c\" { fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int); }\nfn main() {\n    qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int {\n        let z: [int] = [];\n        z[3]\n    });\n}\n",
+    )
+    .unwrap();
+    for args in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let (_out, err, code) = ray(&d, args);
+        assert_eq!(code, 70, "{args:?}: {err}");
+        // (La columna del índice difiere entre motores desde antes: se compara la línea.)
+        assert!(err.contains("runtime error at 5:") && err.contains("index 3 out of range (length 0)"), "{args:?}: {err}");
+    }
+    let (_out, err, _code) = ray(&d, &["run", "prog.ray"]);
+    assert!(err.contains("from main (prog:3:5)"), "{err}");
+}
+
+// De la tercera revisión: un proyecto con la `extern` en un módulo importado y su firma tras un
+// alias; lo que el runtime nativo descarga a su pool corre en línea dentro de un callback; un
+// `join` que tendría que esperar no consume la tarea.
+const PROJECT_MAIN: &str = r#"import std/ffi;
+import std/process;
+import std/time;
+import sorter;
+
+extern "c" blocking {
+    fn getpid() -> int;
+}
+
+fn main() {
+    // El alias de un módulo importado en la firma de su extern.
+    print(sorter.sorted([3, 1, 2]));
+    // Lo que el runtime descarga a su pool (un proceso, una extern `blocking`) corre en línea.
+    print(try_call(fn() -> int {
+        sorter.sort_with(bytes_of([2, 1]), fn(x: ptr, y: ptr) -> int {
+            let r = process.run("true", []);
+            if (r.is_ok() && getpid() > 0) { sorter.byte_at(x) - sorter.byte_at(y) } else { 0 }
+        });
+        1
+    }));
+    // Un `join` que tendría que esperar falla sin consumir la tarea.
+    let gate: Channel<int> = Channel.new();
+    let t = spawn(fn() -> int { gate.recv().unwrap_or(0) + 40 });
+    print(try_call(fn() -> int {
+        sorter.sort_with(bytes_of([2, 1]), fn(x: ptr, y: ptr) -> int { join(t) });
+        1
+    }).is_err());
+    gate.send(2);
+    print(join(t));
+}
+"#;
+
+const PROJECT_SORTER: &str = r#"import std/ffi;
+
+pub type Cmp = fn(ptr, ptr) -> int;
+
+extern "c" {
+    fn qsort(base: bytes, n: u64, size: u64, cmp: Cmp);
+}
+
+pub fn byte_at(p: ptr) -> int { ffi.read(p, 1)[0] as int }
+
+pub fn sort_with(data: bytes, cmp: Cmp) {
+    qsort(data, data.len() as u64, 1 as u64, cmp);
+}
+
+pub fn sorted(xs: [int]) -> bytes {
+    let d = bytes_of(xs);
+    sort_with(d, fn(x: ptr, y: ptr) -> int { byte_at(x) - byte_at(y) });
+    d
+}
+"#;
+
+#[test]
+fn a_module_wraps_a_c_callback_api_behind_an_alias() {
+    let d = tmp("project");
+    std::fs::create_dir_all(d.join("src")).unwrap();
+    std::fs::write(d.join("ray.toml"), "[package]\nname = \"cbproject\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::write(d.join("src/main.ray"), PROJECT_MAIN).unwrap();
+    std::fs::write(d.join("src/sorter.ray"), PROJECT_SORTER).unwrap();
+    let expected = "010203\nResult.Ok(1)\ntrue\n42\n";
+    let (out, err, code) = ray(&d, &["run"]);
+    assert_eq!((out.as_str(), code), (expected, 0), "{err}");
+    if have("rustc") {
+        let bin = d.join("prog_bin");
+        let (_o, err, code) = ray(&d, &["build", "--native", "--no-stubs", "-o", bin.to_str().unwrap()]);
+        assert_eq!(code, 0, "build --native: {err}");
+        assert_eq!(String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout), expected);
+    }
+    // Una extern de otro módulo tampoco es un valor, y el diagnóstico la nombra como se escribe.
+    std::fs::write(
+        d.join("src/main.ray"),
+        "import sorter;\nextern \"c\" { fn strcmp(a: ptr, b: ptr) -> int; }\nfn main() { sorter.sort_with(b\"ba\", strcmp); }\n",
+    )
+    .unwrap();
+    let (_out, err, code) = ray(&d, &["check"]);
+    assert_eq!(code, 65);
+    assert!(err.contains("cannot use the extern function 'strcmp' as a value"), "{err}");
+}
+
+// De la cuarta revisión: un error fatal de la VM (el tope de memoria) no se vuelve recuperable
+// por ocurrir dentro de un callback.
+const FATAL: &str = r#"extern "c" {
+    fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int);
+}
+fn hog() -> int {
+    var keep: [[int]] = [];
+    var i = 0;
+    while (i < 200000) {
+        keep.push([i, i, i, i]);
+        i = i + 1;
+    }
+    keep.len()
+}
+fn main() {
+    print("start");
+    print(try_call(fn() -> int {
+        qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int { hog() });
+        1
+    }));
+    print("survived");
+}
+"#;
+
+#[test]
+fn a_fatal_limit_inside_a_callback_is_still_fatal() {
+    let d = tmp("fatal");
+    std::fs::write(d.join("prog.ray"), FATAL).unwrap();
+    let (out, err, code) = ray(&d, &["run", "--heap", "50000", "prog.ray"]);
+    assert_eq!((out.as_str(), code), ("start\n", 70), "{err}");
+    assert!(err.contains("memory limit exhausted (heap cap)"), "{err}");
+}
+
+// De la quinta revisión: tras su primer error el callback no vuelve a ejecutarse, y quedarse sin
+// pila al entrar a uno es un error ordinario (no de los que nada recupera).
+const ONCE: &str = r#"extern "c" {
+    fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int);
+}
+fn deep(k: int) -> int {
+    if (k == 0) {
+        qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int { 0 });
+        return 0;
+    }
+    1 + deep(k - 1)
+}
+fn main() {
+    // Tras el primer error el callback no vuelve a ejecutarse, aunque C lo siga llamando.
+    var calls = 0;
+    print(try_call(fn() -> int {
+        qsort(bytes_of([5, 4, 3, 2, 1, 0]), 6 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int {
+            calls = calls + 1;
+            let z: [int] = [];
+            z[3]
+        });
+        1
+    }));
+    print(calls);
+    // Quedarse sin pila al entrar a un callback es un error ordinario: `try_call` lo recupera.
+    print(try_call(fn() -> int { deep(100000) }).is_err());
+    print("alive");
+}
+"#;
+
+#[test]
+fn a_failed_callback_does_not_run_again_and_ordinary_errors_stay_recoverable() {
+    let d = tmp("once");
+    std::fs::write(d.join("prog.ray"), ONCE).unwrap();
+    let expected = "Result.Err(index 3 out of range (length 0))\n1\ntrue\nalive\n";
+    for args in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(args).env("RAYLANG_MAX_DEPTH", "64").current_dir(&d).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), expected, "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(out.status.code(), Some(0), "{args:?}");
+    }
+}
+
+/// De la sexta revisión: una `extern` en posición de cola (sin `;`) vale en los dos motores; en
+/// el intérprete daba un error interno.
+#[test]
+fn an_extern_call_in_tail_position_works_in_both_engines() {
+    let d = tmp("tail");
+    std::fs::write(
+        d.join("prog.ray"),
+        "import std/ffi;\nextern \"c\" { fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int); }\nfn b(p: ptr) -> int { ffi.read(p, 1)[0] as int }\nfn sort_with(d: bytes, cmp: fn(ptr, ptr) -> int) { qsort(d, d.len() as u64, 1 as u64, cmp) }\nfn main() {\n    let d = bytes_of([3, 1, 2]);\n    sort_with(d, fn(x: ptr, y: ptr) -> int { b(x) - b(y) });\n    print(d);\n}\n",
+    )
+    .unwrap();
+    for args in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let (out, err, code) = ray(&d, args);
+        assert_eq!((out.as_str(), code), ("010203\n", 0), "{args:?}: {err}");
+    }
 }
 
 // Las formas que libc no ejercita: flotantes mezclados con enteros, `bool`, `u64` anchos,
@@ -365,6 +614,11 @@ fn the_checker_rejects_callbacks_it_cannot_marshal() {
         (
             "extern \"c\" { fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int); }\nfn main() { qsort(b\"ba\", 2 as u64, 1 as u64, fn(x: ptr) -> int { 0 }); }\n",
             "argument 4 of 'qsort'",
+        ),
+        // Una `extern fn` no es un valor (antes: error interno del compilador).
+        (
+            "extern \"c\" { fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int); fn strcmp(a: ptr, b: ptr) -> int; }\nfn main() { qsort(b\"ba\", 2 as u64, 1 as u64, strcmp); }\n",
+            "cannot use the extern function 'strcmp' as a value; wrap it in a function: fn(…) { strcmp(…) }",
         ),
     ];
     for (src, expected) in cases {

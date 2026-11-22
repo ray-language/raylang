@@ -73,6 +73,7 @@ impl Checker {
             type_name_sites: Vec::new(),
             index: SemanticIndex::default(),
             fn_defs: HashMap::new(),
+            extern_fns: HashSet::new(),
             ufcs_aliases: HashMap::new(),
             module_bands: Vec::new(),
             shadowed_free_fns: HashSet::new(),
@@ -391,6 +392,7 @@ impl Checker {
                 bound_args: Vec::new(),
             };
             self.functions.insert(e.name.clone(), sig);
+            self.extern_fns.insert(e.name.clone());
         }
 
         // 'main' es obligatoria (DESIGN.md §11): sin parámetros y con retorno int o unit. El LSP
@@ -2955,6 +2957,15 @@ impl Checker {
                     if !sig.type_params.is_empty() {
                         return Err(self.err(expr.line, expr.col, format!(
                             "cannot use the generic function '{}' as a value; call it directly", name
+                        )));
+                    }
+                    // Una `extern fn` no tiene cuerpo que los motores puedan tomar como valor
+                    // (antes: ICE del compilador). Vale también para pasarla como callback.
+                    if self.extern_fns.contains(name) {
+                        // El nombre como lo escribe el usuario: `mod.f`, no el interno `mod::f`.
+                        let shown = name.replace("::", ".");
+                        return Err(self.err(expr.line, expr.col, format!(
+                            "cannot use the extern function '{0}' as a value; wrap it in a function: fn(…) {{ {0}(…) }}", shown
                         )));
                     }
                     let ty = Type::Fn(sig.params.clone(), Box::new(sig.ret.clone()));

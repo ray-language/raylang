@@ -21802,8 +21802,8 @@ bastaba donde quien espera deja rastro ANTES de llegar ahí. Corregido:
   espere; dentro de un callback fallaba un `send` que no bloqueaba. Ahora `coop()` no cede ahí.
 - *Nativo, `run_blocking`.* Encargaba el trabajo al pool y luego aparcaba: con el fallo del park
   el llamador se desenrollaba y el hilo del pool seguía usando punteros de su marco. Se comprueba
-  antes de encargar. Efecto visible: una `extern` de un bloque `blocking` llamada desde un
-  callback es error en el nativo con fibras (en la VM `blocking` es inerte y la llamada pasa).
+  antes de encargar. (La tercera pasada cambió el remedio: dentro de un callback el trabajo
+  corre en línea, ver abajo.)
 - *Nativo, canales.* `send` contaba al emisor (y en un canal sin búfer encolaba el valor) antes
   de esperar. Ahora pregunta primero, y `__ray_cv_wait` falla con la guarda soltada y sin apuntar
   la lista de espera. Un envío a un canal sin búfer es siempre error dentro de un callback en el
@@ -21822,4 +21822,104 @@ bastaba donde quien espera deja rastro ANTES de llegar ahí. Corregido:
 Sin hacer: cada invocación aloca dos `Vec` de argumentos y busca la variante de `Option` por
 nombre; es coste por llamada en un comparador de `qsort` y se puede quitar decodificando los
 registros directamente a valores del motor.
+
+**Segunda pasada, antes de la 1.27.112.** Sobre todo el rango desde la 1.27.111:
+
+- *Una `extern fn` como valor.* `qsort(d, n, 1, strcmp)` pasaba el checker y rompía el compilador
+  con un error interno (igual que `let g = labs;`, desde antes). Ahora es un error de tipos que
+  dice cómo envolverla. Un módulo que la nombre calificada (`mod.f`) como valor no se revisó.
+- *Qué cuenta como esperar, igual en los dos motores.* En la VM un envío a un canal sin búfer con
+  un receptor ya aparcado pasaba dentro de un callback, y en el nativo `time.sleep(0)` fallaba:
+  justo al revés que el otro motor. La regla es la de la SPEC: sin búfer, siempre error; plazo
+  cero, nunca.
+- *Nativo, `select`.* `__ray_wait_activity` se contaba como esperante antes de fallar y el
+  contador quedaba subido para siempre, encareciendo cada operación de canal posterior.
+- *Posición del error.* El error de un callback se relanzaba solo con su mensaje, en la posición
+  de la `extern`. Ahora viaja entero (`RuntimeError`): posición y traza de donde falló, con los
+  marcos del callback y el de la llamada.
+- *Textos.* El mensaje de «no se puede esperar» y el de Windows tenían tres y dos copias que
+  debían coincidir byte a byte; ahora salen de `ffi_callback.rs` y el transpilador los interpola.
+- *SPEC.* «No deja efecto» no vale para una escritura de red, que puede haber enviado una parte.
+
+Descartado con motivo: reflejar raysolve #358 en `selfhost/checker.ray`. El espejo no acepta
+tampoco el caso con tipos concretos (`count(a, empty())` con `int`) que Rust admite desde
+1.27.103: va por detrás en toda la inferencia hacia argumentos genéricos, y este cambio no abre
+una clase nueva de divergencia. Sigue sin hacer el coste por invocación (dos `Vec` y el clon de
+los upvalues por llamada).
+
+**Tercera pasada.**
+
+- *Nativo, lo que va al pool.* `run_blocking` fallaba dentro de un callback, y con él todo lo que
+  el runtime descarga: `process.run`, `fs.sync`, `net.tcp_connect`, el handshake TLS. En la VM
+  esas operaciones corren y bloquean al worker. Ahora el nativo hace lo mismo dentro de un
+  callback: el trabajo corre en línea. De paso desaparece la divergencia de las `extern` de un
+  bloque `blocking`. La regla queda nítida: *tardar* vale, *esperar a otra fibra* no.
+- *Nativo, `join`.* Marcaba la tarea como consumida antes de esperar; un `join` fallido dentro de
+  un callback la dejaba inservible. Pregunta antes.
+- *Alias en un módulo importado.* El arreglo de la primera pasada solo valía en el módulo de
+  entrada: el cargador no reescribía los tipos de las firmas `extern`, y `cmp: Cmp` en un módulo
+  importado daba «unknown type». Es justo donde se usa (un paquete que envuelve una librería C).
+- *Posición.* El desbordamiento de pila al entrar a un callback salía en `0:0`; ahora en la
+  llamada `extern`. El diagnóstico de «extern como valor» nombra `mod.f`, no el interno `mod::f`.
+- *Coste.* Una `extern` sin callbacks ya no aloja nada por ellos; los argumentos de una
+  invocación se decodifican en la pila y van directos a la pila de operandos de la VM (sin los
+  dos `Vec` por llamada); el nativo con fibras usa la reserva de `ray-runtime` en vez de pegar
+  una segunda copia.
+
+Sin tocar: `xs.map(to_string)` con `xs: [V]` dentro de una función genérica sigue sin compilar
+(el builtin como valor aún trata un parámetro rígido como incógnita; igual que en 1.27.111).
+
+**Cuarta pasada.**
+
+- *Un error fatal seguía siendo fatal.* El tope de memoria (`--heap`) y el de instrucciones
+  (`--fuel`) salen del bucle sin pasar por `dispatch_error`, para que ni `try_call` ni el fallo de
+  una fibra los recuperen. Dentro de un callback se guardaban y relanzaban como un error
+  ordinario, y `try_call` los recuperaba. Ahora la VM distingue los dos casos (`cb_catchable` lo
+  marca `dispatch_error`), el callback deja de ejecutarse tras uno fatal y la llamada `extern` lo
+  saca del bucle sin despacharlo.
+- *Nativo, sesión TLS.* Una lectura o escritura TLS que tenía que esperar dentro de un callback
+  fallaba con el mutex de la sesión tomado y lo dejaba envenenado: la conexión quedaba inservible.
+  El fallo ocurre en la espera, no dentro de rustls, así que el estado es bueno: esos dos sitios
+  toman el mutex aunque esté envenenado.
+- *Reentrada.* El manejador reconstruía el `&mut` del motor desde una dirección tomada al
+  instalar el callback, y el motor seguía usando su `&mut self` entre medias. Ahora la dirección
+  se publica justo antes de la llamada a C y `self` no se toca hasta que retorna.
+- *Coste en el nativo.* Cada invocación pasaba por `__ray_try_call`, que aloja un arreglo solo
+  para decir si falló; ahora usa un interceptor que no aloja en el camino bueno. Y
+  `__ray_in_ffi_callback()` es una constante `false` en los programas que no declaran ningún
+  callback, así que `send`, `join` y las esperas no pagan la lectura.
+
+Queda como está, a sabiendas: las reglas de decodificación de registros están escritas dos veces
+(en `ffi::callback_args` y, como texto generado, en `callback_install` del transpilador). Las
+cubre el test de formas (`every_callback_signature_shape_reaches_raylang_intact`) en los tres
+motores. Fuera del rango, anotado: `ray build --native` falla con E0525 cuando un lambda anidado
+en otro contiene `spawn`/`scope` (pasa en 1.27.111 sin FFI de por medio).
+
+**Quinta pasada.** El arreglo del error fatal de la cuarta deducía «fatal» del camino que tomaba
+el error (tres banderas en la VM), y eso clasificaba mal dos casos: quedarse sin pila al entrar a
+un callback pasaba a ser fatal, y un error ordinario seguido de uno fatal salía como fatal con el
+mensaje del ordinario. Rehecho:
+
+- *`RuntimeError.fatal`.* Lo marca quien crea el error (el tope de memoria, el de instrucciones)
+  y lo respeta el bucle; atraviesa un callback sin perderse y sin banderas.
+- *Un callback que falla no vuelve a ejecutarse.* C puede seguir llamándolo hasta que su función
+  retorne (un comparador de `qsort`, miles de veces): recibe ceros y no corre más raylang. Antes
+  seguían ocurriendo sus efectos —prints, envíos— después de que la llamada ya había fallado.
+  Vale en los tres motores, y deja un solo error posible por llamada.
+- *Nativo, TLS.* `tls.alpn`, `peer_cert` y `peer_chain` tomaban el mismo mutex de la sesión sin
+  tolerar el envenenamiento.
+- *Documentado.* En un callback `int` es el `int` de C, de 32 bits (un `long` o `size_t` va
+  como `u64`). Y el nativo no comprueba «no se puede esperar» fuera de una fibra: sin fibras, o
+  en el hilo principal de una app `std/ui` o de una librería `--lib`.
+
+**Sexta pasada: ya sin fallos graves en los callbacks.** Corregido lo barato: una `extern` en
+posición de cola daba un error interno en el intérprete (desde antes de este arco; los tests
+usaban siempre `;`); en el nativo el error de un callback perdía su posición (ahora viaja el
+`__RayErr` entero y se relanza con `resume_unwind`); la restricción de `float` es de Windows
+**x64**, no de Windows (en ARM64 los bancos son independientes); y `Callback` deja de ser `Send`
+para que el compilador rechace soltarlo en otro hilo. Aceptado como está: la sesión TLS tolera el
+envenenamiento venga de donde venga (más ancho que el caso del callback); `--fuel` y `--heap`
+solo rigen en el worker de `main` cuando el programa lanza tareas (así era en 1.27.111); los 22
+sitios que aparcan repiten el mismo adaptador; el camino de Windows no tiene test de integración
+(los tests son de unix, y el CI de Windows no corre los unitarios de `ray-runtime`).
 

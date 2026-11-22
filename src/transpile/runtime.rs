@@ -270,12 +270,7 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // IDEAS §131: ¿hay un callback de la FFI en curso? (solo con fibras: sin ellas esperar bloquea
     // el hilo, que es lo que ese modo hace siempre). Lo preguntan los sitios que dejan rastro
     // antes de esperar.
-    out.push_str("#[allow(dead_code)]\nconst __RAY_FFI_CALLBACK_WAIT: &str = \"cannot wait inside an FFI callback (channels, sleep, join and network I/O are not available while C code is on the stack)\";\n");
-    if fibers {
-        out.push_str("#[allow(dead_code)]\nfn __ray_in_ffi_callback() -> bool { ray_runtime::fibers::in_ffi_callback() }\n");
-    } else {
-        out.push_str("#[allow(dead_code)]\nfn __ray_in_ffi_callback() -> bool { false }\n");
-    }
+    out.push_str(&format!("#[allow(dead_code)]\nconst __RAY_FFI_CALLBACK_WAIT: &str = {:?};\n", crate::ffi::BLOCKING_IN_CALLBACK));
     if fibers {
         out.push_str("fn __ray_in_try() -> bool { __ray_ctx(|c| c.in_try > 0) }\n");
         out.push_str("fn __ray_try_call<F: FnOnce()>(f: F) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n");
@@ -307,6 +302,15 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     out.push_str("        }\n");
     out.push_str("    }))\n");
     out.push_str("}\n");
+    // IDEAS §131: como `__ray_try_call` (mismo silencio del hook), sin alojar nada cuando no
+    // falla: lo usa cada invocación de un callback de la FFI.
+    out.push_str("#[allow(dead_code)]\nfn __ray_try_quiet<F: FnOnce()>(f: F) -> Option<Box<dyn std::any::Any + Send>> {\n");
+    if fibers {
+        out.push_str("    __ray_ctx(|c| c.in_try += 1);\n    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));\n    __ray_ctx(|c| c.in_try -= 1);\n");
+    } else {
+        out.push_str("    __RAY_IN_TRY.with(|d| d.set(d.get() + 1));\n    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));\n    __RAY_IN_TRY.with(|d| d.set(d.get() - 1));\n");
+    }
+    out.push_str("    r.err()\n}\n");
     out.push_str("fn __ray_panic_msg(e: &(dyn std::any::Any + Send)) -> String {\n");
     out.push_str("    if let Some(r) = e.downcast_ref::<__RayErr>() { r.0.clone() }\n");
     out.push_str("    else if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }\n");
@@ -1591,8 +1595,8 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // es fiber-privada (solo su dueña la toca). Timeout M56.4 del handle (__ray_rd_to);
             // vencido → "read timeout", byte-idéntico a la VM.
             (
-                "if let Some(__t) = __ray_tls_get(h) { let to = __ray_rd_to(h); let mut buf = __ray_ctx(|c| std::mem::take(&mut c.tls_buf)); if buf.len() < 65536 { buf.resize(65536, 0); } let mut __g = __t.lock().unwrap(); let r = __g.read_wait(&mut buf[..], to); drop(__g); let out = match r { Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"read timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }; __ray_ctx(|c| c.tls_buf = buf); return out; } ",
-                "if let Some(__t) = __ray_tls_get(h) { let to = __ray_wr_to(h); let mut __g = __t.lock().unwrap(); return match __g.write_all_wait_timeout(bytes, to) { Ok(()) => Ok(bytes.len() as i64), Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"write timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }; } ",
+                "if let Some(__t) = __ray_tls_get(h) { let to = __ray_rd_to(h); let mut buf = __ray_ctx(|c| std::mem::take(&mut c.tls_buf)); if buf.len() < 65536 { buf.resize(65536, 0); } let mut __g = __t.lock().unwrap_or_else(|e| e.into_inner()); let r = __g.read_wait(&mut buf[..], to); drop(__g); let out = match r { Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"read timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }; __ray_ctx(|c| c.tls_buf = buf); return out; } ",
+                "if let Some(__t) = __ray_tls_get(h) { let to = __ray_wr_to(h); let mut __g = __t.lock().unwrap_or_else(|e| e.into_inner()); return match __g.write_all_wait_timeout(bytes, to) { Ok(()) => Ok(bytes.len() as i64), Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"write timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }; } ",
             )
         } else if t.needs_rt_tls {
             (
@@ -1964,13 +1968,13 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // raygrpc #384: el protocolo ALPN negociado → ["ok", proto] / ["err", msg].
             "#[allow(dead_code)] fn __ray_tls_alpn(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    match __ray_tls_get(h) {\n",
-            "        Some(t) => match t.lock().unwrap().alpn() {\n",
+            "        Some(t) => match t.lock().unwrap_or_else(|e| e.into_inner()).alpn() {\n",
             "            Ok(p) => Rc::new(std::cell::RefCell::new(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(p)])),\n",
             "            Err(e) => __ray_tls_tag_err(e) }\n",
             "        None => __ray_tls_tag_err(format!(\"handle {} is not a TLS connection\", h)) } }\n",
             "fn __ray_tls_peer_cert(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    match __ray_tls_get(h) {\n",
-            "        Some(t) => match t.lock().unwrap().peer_cert_summary() {\n",
+            "        Some(t) => match t.lock().unwrap_or_else(|e| e.into_inner()).peer_cert_summary() {\n",
             "            Ok(s) => { let mut v: Vec<Rc<str>> = vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(s.subject), Rc::<str>::from(s.issuer), Rc::<str>::from(s.not_before_ms.to_string()), Rc::<str>::from(s.not_after_ms.to_string())];\n",
             "                v.extend(s.san.into_iter().map(Rc::<str>::from)); Rc::new(std::cell::RefCell::new(v)) }\n",
             "            Err(e) => __ray_tls_tag_err(e) }\n",
@@ -1978,7 +1982,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // raycert #379: la cadena del peer en DER → [b\"ok\", der…] / [b\"err\", msg].
             "fn __ray_tls_peer_chain(h: i64) -> Rc<std::cell::RefCell<Vec<Rc<[u8]>>>> {\n",
             "    let r = match __ray_tls_get(h) {\n",
-            "        Some(t) => t.lock().unwrap().peer_chain_der(),\n",
+            "        Some(t) => t.lock().unwrap_or_else(|e| e.into_inner()).peer_chain_der(),\n",
             "        None => Err(format!(\"handle {} is not a TLS connection\", h)) };\n",
             "    Rc::new(std::cell::RefCell::new(match r {\n",
             "        Ok(chain) => std::iter::once(Rc::<[u8]>::from(&b\"ok\"[..])).chain(chain.into_iter().map(Rc::<[u8]>::from)).collect(),\n",
@@ -2377,7 +2381,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    if ray_runtime::fibers::in_fiber() {\n",
                 // IDEAS §131: dentro de un callback de la FFI no se espera. Se falla aquí, con la
                 // guarda soltada y sin haber apuntado la lista de espera.
-                "        if ray_runtime::fibers::in_ffi_callback() { drop(g); __ray_rt_err(ray_runtime::fibers::FFI_CALLBACK_WAIT); }\n",
+                "        if __ray_in_ffi_callback() { drop(g); __ray_rt_err(__RAY_FFI_CALLBACK_WAIT); }\n",
                 "        __ray_parked_set(Some(inner.2.clone()));\n",
                 "        let seen = inner.2.prepare();\n",
                 "        if __ray_cancelled() { __ray_parked_set(None); return g; }\n",
@@ -2463,6 +2467,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         }
         out.push_str(concat!(
             "fn __ray_wait_activity(act: u64) {\n",
+            // IDEAS §131: dentro de un callback de la FFI no se espera; se falla ANTES de contarse
+            // como esperante (el contador no se desharía y encarecería cada operación de canal).
+            "    if __ray_in_ffi_callback() { __ray_rt_err(__RAY_FFI_CALLBACK_WAIT); }\n",
             "    __RAY_ACT_WAITERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
             "    let mut g = __RAY_ACT_M.lock().unwrap();\n",
             "    while __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst) == act {\n",
@@ -2494,6 +2501,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // aunque no haya ninguna actividad de canales que despierte. `d` = min(restante, 10 ms)
             // (raylb L21: con un pulso FIJO de 10 ms, un plazo de 2 ms duraba 10 y uno de 11, 20).
             "fn __ray_wait_activity_once(act: u64, d: std::time::Duration) {\n",
+            "    if __ray_in_ffi_callback() { __ray_rt_err(__RAY_FFI_CALLBACK_WAIT); }\n",
             "    __RAY_ACT_WAITERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
             "    let g = __RAY_ACT_M.lock().unwrap();\n",
             "    if __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst) == act {\n",
@@ -2543,7 +2551,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        st.result.clone().unwrap()\n",
             "    }\n",
             // try_join: consume la tarea entera (Ok y Err) — es la observación + la unión en una.
+            // IDEAS §131: dentro de un callback de la FFI no se espera; se falla ANTES de marcar
+            // la tarea como consumida, para que un `join` posterior siga valiendo.
+            "    fn no_wait_in_callback(&self) { if __ray_in_ffi_callback() && self.inner.0.lock().unwrap().result.is_none() { __ray_rt_err(__RAY_FFI_CALLBACK_WAIT); } }\n",
             "    fn wait_consume(&self) -> Result<T, String> {\n",
+            "        self.no_wait_in_callback();\n",
             "        if self.consumed.swap(true, std::sync::atomic::Ordering::SeqCst) { __ray_rt_err(__RAY_TASK_CONSUMED); }\n",
             "        self.wait()\n",
             "    }\n",
@@ -2553,7 +2565,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        if self.consumed.load(std::sync::atomic::Ordering::SeqCst) { __ray_rt_err(__RAY_TASK_CONSUMED); }\n",
             "        match self.wait() { Ok(_) => None, Err(m) => { self.consumed.store(true, std::sync::atomic::Ordering::SeqCst); Some(m) } }\n",
             "    }\n",
-            "    fn join(&self) -> T { if self.consumed.swap(true, std::sync::atomic::Ordering::SeqCst) { __ray_rt_err(__RAY_TASK_CONSUMED); } match self.wait() { Ok(v) => v, Err(m) => __ray_rt_err(&m) } }\n",
+            "    fn join(&self) -> T { self.no_wait_in_callback(); if self.consumed.swap(true, std::sync::atomic::Ordering::SeqCst) { __ray_rt_err(__RAY_TASK_CONSUMED); } match self.wait() { Ok(v) => v, Err(m) => __ray_rt_err(&m) } }\n",
             "}\n",
             // La cara borrada-de-tipo que un scope guarda de cada hija: sondear su estado SIN bloquear
             // (el hilo hijo escribe su resultado al terminar) y cancelarla.

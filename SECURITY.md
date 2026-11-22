@@ -333,9 +333,10 @@ documentada:
   ocuparse despacha al callback que la tiene ahora (uso fuera de contrato, como una firma
   `extern` equivocada; las casillas rotan para que sea raro). Los manejadores de la VM y del
   intérprete (`install_callback` en `src/vm/mod.rs` y `src/interpreter.rs`) sí llevan un
-  `unsafe`: recuperan `&mut` del motor desde su dirección; la invariante es que el trampolín
-  solo corre en ese hilo y dentro de la llamada `extern` que lo instaló, con el motor detenido en
-  la llamada a C. El binario nativo pega este mismo archivo como módulo.
+  `unsafe`: recuperan `&mut` del motor desde su dirección. El motor la publica (`ffi::set_engine`)
+  justo antes de la llamada a C y no vuelve a usar su propio `&mut self` hasta que C retorna; el
+  trampolín solo corre en ese hilo y dentro de esa llamada, así que el `&mut` reconstruido es el
+  único en uso mientras corre el callback. El binario nativo pega este mismo archivo como módulo.
 - **`src/builtins.rs` (`read_file_arc_str`, M433) y el runtime emitido del nativo (`__ray_read_file`,
   `__ray_join`)** — un `Arc<[u8]>`/`Rc<[u8]>` nacido a cero (`new_zeroed_slice().assume_init()`: todo
   octeto a cero es un `u8` válido) y, tras validar UTF-8 con `str::from_utf8`, el cast

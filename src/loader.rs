@@ -1641,6 +1641,16 @@ impl<'a> TypeRewriter<'a> {
     }
 
     fn rewrite_program(&mut self, program: &mut Program) {
+        // Las firmas `extern` son posiciones de tipo como las de una `fn` (sin parámetros de
+        // tipo): un alias del módulo (`cmp: Cmp`) lleva el nombre del módulo como los demás.
+        for e in &mut program.externs {
+            self.tparams.push(HashSet::new());
+            for p in &mut e.params {
+                self.rewrite_type(&mut p.ty);
+            }
+            self.rewrite_type(&mut e.return_type);
+            self.tparams.pop();
+        }
         // M311: el destino de un alias es una posición de tipo más (con sus parámetros en ámbito).
         for a in &mut program.type_aliases {
             self.tparams.push(a.type_params.iter().cloned().collect());

@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.111** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.112** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -294,16 +294,21 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   `float`— y su retorno, esos mismos o `unit` (`None → NULL`); otro tipo es error de compilación,
   igual que un callback en un bloque `blocking`. Dentro del callback el programa corre normal, salvo
   que **no puede esperar**: una operación que tendría que ceder (recibir de un canal vacío, enviar
-  a uno lleno o sin búfer, `time.sleep`, `join`, E/S de red) es error de ejecución y no deja
-  efecto; la que no necesita esperar funciona. (El binario nativo sin fibras, `--without fibers`,
-  no lo comprueba: ahí esperar bloquea el hilo. En el nativo con fibras, llamar a una `extern`
-  de un bloque `blocking` desde un callback también es este error.) Un error de ejecución dentro
-  del callback no atraviesa C: C recibe cero de ese callback y, cuando la función C retorna, la
-  llamada `extern` falla con ese error (recuperable con `try_call`). Usar el puntero **después**
+  a uno lleno o sin búfer, `time.sleep` con plazo, `join`, E/S de red) es error de ejecución; la
+  que no necesita esperar funciona. El intento fallido no deja efecto en canales ni tareas; una
+  escritura de red sí puede haber enviado ya una parte. (El binario nativo no lo comprueba fuera de una
+  fibra —`--without fibers`, o el hilo principal de una app `std/ui` o de una librería `--lib`—:
+  ahí esperar bloquea el hilo.) Lo que solo tarda —un proceso, `fs.sync`, una
+  `extern` de un bloque `blocking`— no es esperar: corre hasta terminar. Un error de ejecución dentro
+  del callback no atraviesa C: C recibe cero de ese callback **y de las invocaciones siguientes,
+  que ya no ejecutan nada**, y cuando la función C retorna la llamada `extern` falla con ese error
+  (recuperable con `try_call`, salvo que sea de los que nada recupera, como el tope de memoria).
+  Un parámetro `int` de un callback es el `int` de C (32 bits, con signo); un `long`/`size_t`
+  se declara `u64`. Usar el puntero **después**
   de que la llamada retorne, o desde otro hilo, está **fuera de contrato**: lo habitual es que el
   programa escriba el motivo y aborte, pero no se garantiza detectarlo.
-  Hasta 64 callbacks vivos a la vez por hilo. En Windows un callback con parámetros `float` es
-  error de ejecución.
+  Hasta 64 callbacks vivos a la vez por hilo. En Windows x64 un callback con parámetros `float`
+  es error de ejecución.
   El **retorno** admite `int`/`u64`/`float`/`bool`/`unit`, `ptr`/`Option<ptr>` (`NULL → None`, p. ej.
   `fopen`), y para un `char*`, **`Option<bytes>`** (`NULL → None`; la frontera copia los bytes hasta el NUL
   y no libera el puntero) o **`Option<string>`** (azúcar que valida UTF-8; bytes inválidos → error de

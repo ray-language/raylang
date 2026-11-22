@@ -675,16 +675,19 @@ is called anyway fails on the VM with `library 'x' not found (tried libx.dylib, 
 calls it back: `fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int);` and then
 `qsort(data, n, 1 as u64, fn(a: ptr, b: ptr) -> int { … })`. Callback parameters: `int`, `u64`,
 `float`, `bool`, `ptr`, `Option<ptr>` (NULL → `None`), up to 6 integers/pointers and 4 `float`;
-return: those same types or `unit`. The pointer is valid **for the duration of the call** and **on
+return: those same types or `unit`. Note: in a callback `int` is the C `int` (32 bits, signed);
+for a `long` or a `size_t` declare `u64`. The pointer is valid **for the duration of the call** and **on
 the same thread**: it serves `qsort`, `bsearch`, `sqlite3_exec`, enumerators and anything that
 calls back before returning; not a callback that C stores and calls later or from a thread of its
 own (out of contract: the program usually aborts saying why, but detection is not guaranteed),
 nor in a `blocking` block (compile error). A callback cannot wait: receiving from an empty
 channel, sending to a full one, `time.sleep`, `join` or network I/O give
-`cannot wait inside an FFI callback …` and leave no effect; what does not wait works. A native
-`--without fibers` build does not check it (waiting blocks the thread there). An error inside the callback is seen by the `extern` call
-when C returns (C gets zero from that callback); `try_call` recovers it. At most 64 live callbacks
-at a time. On Windows a callback with `float` parameters is not supported yet (runtime error).
+`cannot wait inside an FFI callback …` and leave no effect; what does not wait works. A native build
+does not check it outside a fiber (`--without fibers`, or the main thread of a `std/ui` app):
+waiting blocks the thread there. An error inside the callback is seen by the `extern` call
+when C returns (C gets zero from that callback and from the following ones, which no longer
+run); `try_call` recovers it. At most 64 live callbacks
+at a time. On Windows x64 a callback with `float` parameters is not supported yet (runtime error).
 
 **Cost of a call** (measured on arm64, rayserial #396): ~0.5 µs on the VM and ~1 ns natively.
 `blocking` adds 4 to 8 µs natively (a thread hop) and nothing on the VM, where it is inert:
@@ -870,4 +873,4 @@ orientations) **replaces** it; the rest are added.
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:0bbc03397954 -->
+<!-- sync: sha256:34c72ad414c7 -->

@@ -379,6 +379,10 @@ pub struct RuntimeError {
     pub line: usize,
     pub col: usize,
     pub trace: Vec<TraceFrame>,
+    /// Un error que nada recupera (el tope de memoria, el de instrucciones): ni `try_call` ni el
+    /// fallo de una fibra. Es una propiedad del error, no del camino por el que sale: así lo
+    /// sigue siendo cuando atraviesa un callback de la FFI.
+    pub fatal: bool,
 }
 
 impl RuntimeError {

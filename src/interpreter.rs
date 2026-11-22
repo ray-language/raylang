@@ -209,7 +209,7 @@ impl<'a> Interpreter<'a> {
     /// IDEAS §131: instala `f` (una función o un closure) como callback C con la firma `sig`.
     /// El trampolín vuelve a entrar en este intérprete desde los marcos de C de la llamada
     /// `extern` en curso; un error de ejecución se guarda para esa llamada y C recibe cero.
-    fn install_callback(&mut self, sig: &crate::ffi::CallbackSig, f: Value, line: usize, col: usize) -> Result<ray_runtime::ffi_callback::Callback, String> {
+    fn install_callback(&mut self, sig: &crate::ffi::CallbackSig, f: Value, line: usize, col: usize) -> Result<crate::ffi::callback_pool::Callback, String> {
         use crate::ffi::{CKind, CallbackArg, CallbackRet};
         // La dirección como entero: el manejador debe ser `'static` y el intérprete lleva la
         // vida del programa. Vale mientras dura la llamada `extern`, que corre dentro de un
@@ -1168,7 +1168,7 @@ impl<'a> Interpreter<'a> {
                     }
                     // IDEAS §131: cada argumento función se instala en un trampolín C mientras
                     // dura la llamada; `live` los retiene y los libera al salir.
-                    let mut live: Vec<Option<ray_runtime::ffi_callback::Callback>> = Vec::with_capacity(vals.len());
+                    let mut live: Vec<Option<crate::ffi::callback_pool::Callback>> = Vec::with_capacity(vals.len());
                     for (i, v) in vals.iter().enumerate() {
                         live.push(match desc.callbacks.get(i).and_then(|c| c.as_ref()) {
                             Some(sig) => Some(

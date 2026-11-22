@@ -593,7 +593,7 @@ impl<'a> Vm<'a> {
     /// IDEAS §131: instala `f` como callback C con la firma `sig`. El trampolín vuelve a entrar
     /// en ESTA VM (`run_callback`) desde los marcos de C de la llamada `extern` en curso; un error
     /// de ejecución se guarda para esa llamada y C recibe cero.
-    fn install_callback(&mut self, sig: &crate::ffi::CallbackSig, f: HeapValue) -> Result<ray_runtime::ffi_callback::Callback, String> {
+    fn install_callback(&mut self, sig: &crate::ffi::CallbackSig, f: HeapValue) -> Result<crate::ffi::callback_pool::Callback, String> {
         use crate::ffi::{CKind, CallbackArg, CallbackRet};
         // La dirección como entero: el manejador debe ser `'static`. Vale mientras dura la
         // llamada `extern`, que corre dentro de un método de `self` y suelta el callback antes
@@ -1211,7 +1211,7 @@ impl<'a> Vm<'a> {
                     // dura la llamada. Su valor queda además en la pila de operandos: es la raíz
                     // que lo mantiene vivo si el GC corre dentro del callback.
                     let root_base = self.cur.stack.len();
-                    let mut live: Vec<Option<ray_runtime::ffi_callback::Callback>> = Vec::with_capacity(*argc);
+                    let mut live: Vec<Option<crate::ffi::callback_pool::Callback>> = Vec::with_capacity(*argc);
                     for (i, v) in fargs.iter().enumerate() {
                         live.push(match desc.callbacks.get(i).and_then(|c| c.as_ref()) {
                             Some(sig) => {

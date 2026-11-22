@@ -30,6 +30,16 @@ use std::os::raw::c_char;
 #[cfg(all(feature = "ffi", not(target_arch = "wasm32")))]
 use std::sync::Mutex;
 
+// IDEAS §131: la reserva de trampolines de los callbacks. Una sola fuente
+// (`ray-runtime/src/ffi_callback.rs`): fuera de wasm llega por el crate; en wasm, donde
+// `ray-runtime` no es dependencia, el archivo entra como módulo (como `float_fmt`). Allí
+// ninguna `extern` se llega a llamar, pero los tipos compilan igual.
+#[cfg(not(target_arch = "wasm32"))]
+pub use ray_runtime::ffi_callback as callback_pool;
+#[cfg(target_arch = "wasm32")]
+#[path = "../crates/ray-runtime/src/ffi_callback.rs"]
+pub mod callback_pool;
+
 /// Aridad máxima de una `extern fn`. Es el **contrato entre motores**: el catálogo de moldes de la
 /// VM se genera hasta esta profundidad (`catalog!` en `call`, con una unidad `()` por nivel), y el
 /// checker rechaza en compilación cualquier extern que la exceda — así el nativo (que podría emitir
@@ -154,11 +164,11 @@ pub fn callback_sig(params: &[crate::ast::Type], ret: &crate::ast::Type) -> Resu
         }
     }
     let floats = kinds.iter().filter(|k| **k == CKind::Float).count();
-    if floats > ray_runtime::ffi_callback::MAX_FLOAT_ARGS || kinds.len() - floats > ray_runtime::ffi_callback::MAX_INT_ARGS {
+    if floats > crate::ffi::callback_pool::MAX_FLOAT_ARGS || kinds.len() - floats > crate::ffi::callback_pool::MAX_INT_ARGS {
         return Err(format!(
             "a callback takes at most {} integer/pointer parameters and {} float parameters",
-            ray_runtime::ffi_callback::MAX_INT_ARGS,
-            ray_runtime::ffi_callback::MAX_FLOAT_ARGS
+            crate::ffi::callback_pool::MAX_INT_ARGS,
+            crate::ffi::callback_pool::MAX_FLOAT_ARGS
         ));
     }
     let ret = match ret_ckind(ret) {
@@ -170,7 +180,7 @@ pub fn callback_sig(params: &[crate::ast::Type], ret: &crate::ast::Type) -> Resu
 
 /// Interpreta los registros que C pasó según la firma: cada argumento sale de su banco, en orden.
 /// De un `int` de C solo valen los 32 bits bajos (se extiende el signo); de un `bool`, los 8.
-pub fn callback_args(sig: &CallbackSig, regs: &ray_runtime::ffi_callback::Regs) -> Vec<CallbackArg> {
+pub fn callback_args(sig: &CallbackSig, regs: &crate::ffi::callback_pool::Regs) -> Vec<CallbackArg> {
     let (mut i, mut f) = (0, 0);
     let mut next_int = || {
         i += 1;
@@ -253,14 +263,14 @@ pub const BLOCKING_IN_CALLBACK: &str =
 pub fn install_callback(
     sig: &CallbackSig,
     handler: impl Fn(Vec<CallbackArg>) -> CallbackRet + 'static,
-) -> Result<ray_runtime::ffi_callback::Callback, String> {
+) -> Result<crate::ffi::callback_pool::Callback, String> {
     if cfg!(windows) && sig.params.contains(&CKind::Float) {
         return Err("an FFI callback with float parameters is not supported on Windows yet".into());
     }
     let owned = sig.clone();
-    ray_runtime::ffi_callback::install(
+    crate::ffi::callback_pool::install(
         sig.ret == CKind::Float,
-        std::rc::Rc::new(move |regs: &ray_runtime::ffi_callback::Regs| {
+        std::rc::Rc::new(move |regs: &crate::ffi::callback_pool::Regs| {
             let _guard = enter_callback();
             callback_ret_bits(handler(callback_args(&owned, regs)))
         }),

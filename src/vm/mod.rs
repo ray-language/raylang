@@ -303,6 +303,13 @@ struct Vm<'a> {
     /// comparación por instrucción, sin escritura) — el campo no sirve entonces para contar
     /// instrucciones ejecutadas.
     fuel: u64,
+    /// IDEAS §131: el error que acaba de salir del bucle anidado de un callback pasó por
+    /// `dispatch_error` (es ordinario, recuperable). Si no, salió directo: es fatal.
+    cb_catchable: bool,
+    /// Un callback de la llamada `extern` en curso terminó con un error fatal.
+    cb_fatal: bool,
+    /// El `Err` que devuelve la instrucción en curso es fatal: `run_loop` lo saca sin despacharlo.
+    fatal_pending: bool,
     /// M330 D1: cuenta atrás de **saltos hacia atrás** (bucles) hasta la próxima consulta de la parada
     /// cooperativa (`stop::requested`). Se toca SOLO en el brazo de `Jump` cuando salta hacia atrás — el
     /// despacho por instrucción queda intacto: tocarlo ahí (máscara sobre el fuel, o fuel por trozos
@@ -349,6 +356,9 @@ impl<'a> Vm<'a> {
             },
             shared: Arc::new(Mutex::new(Shared::default())),
             fuel: u64::MAX, // sin límite por defecto
+            cb_catchable: false,
+            cb_fatal: false,
+            fatal_pending: false,
             backedges: STOP_CHECK_BACKEDGES,
             gc_count: 0,
             gc_max_pause_ns: 0,
@@ -368,6 +378,9 @@ impl<'a> Vm<'a> {
             cur: Fiber::default(), // sin fibra aún; `poll_next` cargará la primera de `ready`
             shared,
             fuel: u64::MAX,
+            cb_catchable: false,
+            cb_fatal: false,
+            fatal_pending: false,
             backedges: STOP_CHECK_BACKEDGES,
             gc_count: 0,
             gc_max_pause_ns: 0,
@@ -554,6 +567,9 @@ impl<'a> Vm<'a> {
             match outcome {
                 Ok(Some(v)) => return Ok(v),
                 Ok(None) => {}
+                // Un error fatal que salió de un callback de la FFI (tope de memoria, fuel) sale
+                // del bucle sin pasar por `try_call` ni por el fallo de la fibra, como fuera de uno.
+                Err(e) if std::mem::take(&mut self.fatal_pending) => return Err(e),
                 Err(e) => self.dispatch_error(e)?,
             }
         }
@@ -575,6 +591,7 @@ impl<'a> Vm<'a> {
         // del callback; si no, el error sale del bucle anidado (`run_callback` desenrolla) y lo
         // relanza la llamada `extern` exterior, donde sigue este mismo camino.
         if self.cur.floor != 0 && !self.cur.try_markers.last().is_some_and(|m| m.frames_len >= self.cur.floor) {
+            self.cb_catchable = true; // un error ordinario: la llamada `extern` lo relanza recuperable
             return Err(e);
         }
         if !self.cur.try_markers.is_empty() {
@@ -595,16 +612,19 @@ impl<'a> Vm<'a> {
     /// de ejecución se guarda para esa llamada y C recibe cero.
     fn install_callback(&mut self, sig: &crate::ffi::CallbackSig, f: HeapValue, line: usize, col: usize) -> Result<crate::ffi::callback_pool::Callback, String> {
         use crate::ffi::{CKind, CallbackArg, CallbackRet};
-        // La dirección como entero: el manejador debe ser `'static`. Vale mientras dura la
-        // llamada `extern`, que corre dentro de un método de `self` y suelta el callback antes
-        // de volver.
-        let me = self as *mut Self as usize;
         let ret = sig.ret;
         crate::ffi::install_callback(sig, move |args| {
-            // SAFETY: el trampolín solo se llama en este hilo y durante la llamada `extern` que
-            // instaló el callback: esta VM está viva, y detenida dentro de la llamada a C.
-            let vm = unsafe { &mut *(me as *mut Self) };
+            // SAFETY: `ffi::engine()` es la dirección que esta VM publicó justo antes de la
+            // llamada a C en curso (`set_engine`), y desde entonces no usa su `&mut self`: el
+            // trampolín solo corre en este hilo y dentro de esa llamada, así que este `&mut` es
+            // el único en uso hasta que el callback retorna.
+            let vm = unsafe { &mut *(crate::ffi::engine() as *mut Self) };
             let zero = if ret == CKind::Float { CallbackRet::Float(0.0) } else { CallbackRet::Int(0) };
+            // Tras un error fatal (tope de memoria, fuel) no se ejecuta nada más: C puede seguir
+            // llamando al callback hasta que su función retorne, y recibe ceros.
+            if vm.cb_fatal {
+                return zero;
+            }
             // Los argumentos van directos a la pila de operandos (sin `Vec` por invocación):
             // `run_callback` los pasa de ahí a los locales del marco. Un `Option<ptr>` aloja su
             // enum; el handle ya está en la pila —raíz— cuando llega el siguiente.
@@ -647,6 +667,11 @@ impl<'a> Vm<'a> {
                 },
                 Ok(_) => CallbackRet::Unit,
                 Err(e) => {
+                    // Un error que NO pasó por `dispatch_error` salió directo del bucle: es de
+                    // los que nadie recupera (tope de memoria, fuel). Sigue siéndolo al cruzar C.
+                    if !std::mem::take(&mut vm.cb_catchable) {
+                        vm.cb_fatal = true;
+                    }
                     crate::ffi::set_callback_error(e);
                     zero
                 }
@@ -1262,13 +1287,19 @@ impl<'a> Vm<'a> {
                         });
                     }
                     let outer = if has_callbacks { crate::ffi::begin_callback_errors() } else { None };
+                    // Desde aquí y hasta que C retorne no se usa `self`: lo usa el trampolín.
+                    let prev_engine = if has_callbacks { crate::ffi::set_engine(self as *mut Self as usize) } else { 0 };
                     let r = crate::ffi::call(desc, &cargs);
+                    if has_callbacks {
+                        crate::ffi::set_engine(prev_engine);
+                    }
                     drop(live);
                     self.cur.stack.truncate(root_base);
                     // Un error dentro de un callback no cruzó los marcos de C: se relanza aquí.
                     // Conserva su posición y su traza (compuesta con los marcos del callback aún
                     // vivos): el usuario ve dónde falló, no solo qué `extern` lo recibió.
                     if has_callbacks && let Some(e) = crate::ffi::end_callback_errors(outer) {
+                        self.fatal_pending = std::mem::take(&mut self.cb_fatal);
                         return Err(e);
                     }
                     let r = r.map_err(|m| runtime_error(pos!().0, pos!().1, &m))?;

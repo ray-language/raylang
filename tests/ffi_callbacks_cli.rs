@@ -409,6 +409,39 @@ fn a_module_wraps_a_c_callback_api_behind_an_alias() {
     assert!(err.contains("cannot use the extern function 'strcmp' as a value"), "{err}");
 }
 
+// De la cuarta revisión: un error fatal de la VM (el tope de memoria) no se vuelve recuperable
+// por ocurrir dentro de un callback.
+const FATAL: &str = r#"extern "c" {
+    fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int);
+}
+fn hog() -> int {
+    var keep: [[int]] = [];
+    var i = 0;
+    while (i < 200000) {
+        keep.push([i, i, i, i]);
+        i = i + 1;
+    }
+    keep.len()
+}
+fn main() {
+    print("start");
+    print(try_call(fn() -> int {
+        qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int { hog() });
+        1
+    }));
+    print("survived");
+}
+"#;
+
+#[test]
+fn a_fatal_limit_inside_a_callback_is_still_fatal() {
+    let d = tmp("fatal");
+    std::fs::write(d.join("prog.ray"), FATAL).unwrap();
+    let (out, err, code) = ray(&d, &["run", "--heap", "50000", "prog.ray"]);
+    assert_eq!((out.as_str(), code), ("start\n", 70), "{err}");
+    assert!(err.contains("memory limit exhausted (heap cap)"), "{err}");
+}
+
 // Las formas que libc no ejercita: flotantes mezclados con enteros, `bool`, `u64` anchos,
 // `Option<ptr>` en los dos sentidos y un callback sin retorno.
 const SHAPES_C: &str = r#"#include <stdbool.h>

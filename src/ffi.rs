@@ -228,8 +228,12 @@ thread_local! {
     // El primer error de ejecución dentro de un callback: no puede cruzar los marcos de C, así
     // que se guarda aquí, el trampolín devuelve cero y la llamada `extern` exterior lo relanza.
     static CALLBACK_ERROR: std::cell::RefCell<Option<crate::runtime::RuntimeError>> = const { std::cell::RefCell::new(None) };
-    // Cuántos callbacks hay en curso en este hilo: dentro de uno no se puede aparcar la fibra.
+    // Cuántos callbacks hay en curso en este hilo. Solo lo lleva el intérprete, que no tiene
+    // otra marca (la VM usa `Fiber.floor`; el nativo, un bit de `CURRENT`).
     static CALLBACK_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    // La dirección del motor (VM o intérprete) que hizo la llamada `extern` en curso en este
+    // hilo: de ahí la recupera el trampolín para volver a entrar.
+    static ENGINE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Guarda el error de un callback (solo el primero) para la llamada `extern` que lo recibió.
@@ -253,7 +257,20 @@ pub fn end_callback_errors(outer: Option<crate::runtime::RuntimeError>) -> Optio
     CALLBACK_ERROR.with(|e| std::mem::replace(&mut *e.borrow_mut(), outer))
 }
 
-/// ¿Hay un callback de la FFI en curso en este hilo?
+/// Publica la dirección del motor para los callbacks de la llamada `extern` que va a hacerse, y
+/// devuelve la anterior (una llamada anidada la repone al volver). El motor la toma JUSTO antes
+/// de `call` y no vuelve a usar su `&mut self` hasta que C retorna: así el `&mut` que el
+/// trampolín reconstruye desde esta dirección es el único en uso mientras corre el callback.
+pub fn set_engine(addr: usize) -> usize {
+    ENGINE.with(|e| e.replace(addr))
+}
+
+/// La dirección del motor de la llamada `extern` en curso (0 si no hay ninguna).
+pub fn engine() -> usize {
+    ENGINE.with(|e| e.get())
+}
+
+/// ¿Hay un callback de la FFI en curso en este hilo? (Solo lo marca el intérprete.)
 pub fn in_callback() -> bool {
     CALLBACK_DEPTH.with(|d| d.get() > 0)
 }
@@ -289,7 +306,6 @@ pub fn install_callback(
     crate::ffi::callback_pool::install(
         sig.ret == CKind::Float,
         std::rc::Rc::new(move |regs: &crate::ffi::callback_pool::Regs| {
-            let _guard = enter_callback();
             callback_ret_bits(handler(callback_args(&owned, regs).as_slice()))
         }),
     )

@@ -21869,3 +21869,29 @@ los upvalues por llamada).
 Sin tocar: `xs.map(to_string)` con `xs: [V]` dentro de una función genérica sigue sin compilar
 (el builtin como valor aún trata un parámetro rígido como incógnita; igual que en 1.27.111).
 
+**Cuarta pasada.**
+
+- *Un error fatal seguía siendo fatal.* El tope de memoria (`--heap`) y el de instrucciones
+  (`--fuel`) salen del bucle sin pasar por `dispatch_error`, para que ni `try_call` ni el fallo de
+  una fibra los recuperen. Dentro de un callback se guardaban y relanzaban como un error
+  ordinario, y `try_call` los recuperaba. Ahora la VM distingue los dos casos (`cb_catchable` lo
+  marca `dispatch_error`), el callback deja de ejecutarse tras uno fatal y la llamada `extern` lo
+  saca del bucle sin despacharlo.
+- *Nativo, sesión TLS.* Una lectura o escritura TLS que tenía que esperar dentro de un callback
+  fallaba con el mutex de la sesión tomado y lo dejaba envenenado: la conexión quedaba inservible.
+  El fallo ocurre en la espera, no dentro de rustls, así que el estado es bueno: esos dos sitios
+  toman el mutex aunque esté envenenado.
+- *Reentrada.* El manejador reconstruía el `&mut` del motor desde una dirección tomada al
+  instalar el callback, y el motor seguía usando su `&mut self` entre medias. Ahora la dirección
+  se publica justo antes de la llamada a C y `self` no se toca hasta que retorna.
+- *Coste en el nativo.* Cada invocación pasaba por `__ray_try_call`, que aloja un arreglo solo
+  para decir si falló; ahora usa un interceptor que no aloja en el camino bueno. Y
+  `__ray_in_ffi_callback()` es una constante `false` en los programas que no declaran ningún
+  callback, así que `send`, `join` y las esperas no pagan la lectura.
+
+Queda como está, a sabiendas: las reglas de decodificación de registros están escritas dos veces
+(en `ffi::callback_args` y, como texto generado, en `callback_install` del transpilador). Las
+cubre el test de formas (`every_callback_signature_shape_reaches_raylang_intact`) en los tres
+motores. Fuera del rango, anotado: `ray build --native` falla con E0525 cuando un lambda anidado
+en otro contiene `spawn`/`scope` (pasa en 1.27.111 sin FFI de por medio).
+

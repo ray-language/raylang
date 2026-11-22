@@ -211,16 +211,14 @@ impl<'a> Interpreter<'a> {
     /// `extern` en curso; un error de ejecución se guarda para esa llamada y C recibe cero.
     fn install_callback(&mut self, sig: &crate::ffi::CallbackSig, f: Value, line: usize, col: usize) -> Result<crate::ffi::callback_pool::Callback, String> {
         use crate::ffi::{CKind, CallbackArg, CallbackRet};
-        // La dirección como entero: el manejador debe ser `'static` y el intérprete lleva la
-        // vida del programa. Vale mientras dura la llamada `extern`, que corre dentro de un
-        // método de `self` y suelta el callback antes de volver.
-        let me = self as *mut Self as usize;
         let ret = sig.ret;
         crate::ffi::install_callback(sig, move |args| {
-            // SAFETY: el trampolín solo se llama en este hilo y durante la llamada `extern` que
-            // instaló el callback, con `self` vivo y sin otro uso en curso (la llamada a C lo
-            // tiene detenido).
-            let interp = unsafe { &mut *(me as *mut Self) };
+            let _depth = crate::ffi::enter_callback();
+            // SAFETY: `ffi::engine()` es la dirección que este intérprete publicó justo antes de
+            // la llamada a C en curso (`set_engine`), y desde entonces no usa su `&mut self`: el
+            // trampolín solo corre en este hilo y dentro de esa llamada, así que este `&mut` es
+            // el único en uso hasta que el callback retorna.
+            let interp = unsafe { &mut *(crate::ffi::engine() as *mut Self) };
             let values: Vec<Value> = args
                 .iter()
                 .map(|a| match *a {
@@ -1195,7 +1193,12 @@ impl<'a> Interpreter<'a> {
                         })
                         .collect();
                     let outer = if has_callbacks { crate::ffi::begin_callback_errors() } else { None };
+                    // Desde aquí y hasta que C retorne no se usa `self`: lo usa el trampolín.
+                    let prev_engine = if has_callbacks { crate::ffi::set_engine(self as *mut Self as usize) } else { 0 };
                     let result = crate::ffi::call(&desc, &fargs);
+                    if has_callbacks {
+                        crate::ffi::set_engine(prev_engine);
+                    }
                     drop(live);
                     // Un error dentro de un callback no cruzó los marcos de C: se relanza aquí.
                     if has_callbacks && let Some(e) = crate::ffi::end_callback_errors(outer) {

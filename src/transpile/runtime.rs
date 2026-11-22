@@ -272,11 +272,6 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // antes de esperar.
     out.push_str(&format!("#[allow(dead_code)]\nconst __RAY_FFI_CALLBACK_WAIT: &str = {:?};\n", crate::ffi::BLOCKING_IN_CALLBACK));
     if fibers {
-        out.push_str("#[allow(dead_code)]\nfn __ray_in_ffi_callback() -> bool { ray_runtime::fibers::in_ffi_callback() }\n");
-    } else {
-        out.push_str("#[allow(dead_code)]\nfn __ray_in_ffi_callback() -> bool { false }\n");
-    }
-    if fibers {
         out.push_str("fn __ray_in_try() -> bool { __ray_ctx(|c| c.in_try > 0) }\n");
         out.push_str("fn __ray_try_call<F: FnOnce()>(f: F) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n");
         out.push_str("    __ray_ctx(|c| c.in_try += 1);\n");
@@ -307,6 +302,15 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     out.push_str("        }\n");
     out.push_str("    }))\n");
     out.push_str("}\n");
+    // IDEAS §131: como `__ray_try_call` (mismo silencio del hook), sin alojar nada cuando no
+    // falla: lo usa cada invocación de un callback de la FFI.
+    out.push_str("#[allow(dead_code)]\nfn __ray_try_quiet<F: FnOnce()>(f: F) -> Option<String> {\n");
+    if fibers {
+        out.push_str("    __ray_ctx(|c| c.in_try += 1);\n    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));\n    __ray_ctx(|c| c.in_try -= 1);\n");
+    } else {
+        out.push_str("    __RAY_IN_TRY.with(|d| d.set(d.get() + 1));\n    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));\n    __RAY_IN_TRY.with(|d| d.set(d.get() - 1));\n");
+    }
+    out.push_str("    r.err().map(|e| __ray_panic_msg(&*e))\n}\n");
     out.push_str("fn __ray_panic_msg(e: &(dyn std::any::Any + Send)) -> String {\n");
     out.push_str("    if let Some(r) = e.downcast_ref::<__RayErr>() { r.0.clone() }\n");
     out.push_str("    else if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }\n");
@@ -1591,8 +1595,8 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // es fiber-privada (solo su dueña la toca). Timeout M56.4 del handle (__ray_rd_to);
             // vencido → "read timeout", byte-idéntico a la VM.
             (
-                "if let Some(__t) = __ray_tls_get(h) { let to = __ray_rd_to(h); let mut buf = __ray_ctx(|c| std::mem::take(&mut c.tls_buf)); if buf.len() < 65536 { buf.resize(65536, 0); } let mut __g = __t.lock().unwrap(); let r = __g.read_wait(&mut buf[..], to); drop(__g); let out = match r { Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"read timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }; __ray_ctx(|c| c.tls_buf = buf); return out; } ",
-                "if let Some(__t) = __ray_tls_get(h) { let to = __ray_wr_to(h); let mut __g = __t.lock().unwrap(); return match __g.write_all_wait_timeout(bytes, to) { Ok(()) => Ok(bytes.len() as i64), Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"write timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }; } ",
+                "if let Some(__t) = __ray_tls_get(h) { let to = __ray_rd_to(h); let mut buf = __ray_ctx(|c| std::mem::take(&mut c.tls_buf)); if buf.len() < 65536 { buf.resize(65536, 0); } let mut __g = __t.lock().unwrap_or_else(|e| e.into_inner()); let r = __g.read_wait(&mut buf[..], to); drop(__g); let out = match r { Ok(n) => Ok(Rc::<[u8]>::from(&buf[..n])), Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"read timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }; __ray_ctx(|c| c.tls_buf = buf); return out; } ",
+                "if let Some(__t) = __ray_tls_get(h) { let to = __ray_wr_to(h); let mut __g = __t.lock().unwrap_or_else(|e| e.into_inner()); return match __g.write_all_wait_timeout(bytes, to) { Ok(()) => Ok(bytes.len() as i64), Err(e) if e.kind() == std::io::ErrorKind::TimedOut => Err(Rc::<str>::from(\"write timeout\")), Err(e) => Err(Rc::<str>::from(e.to_string())) }; } ",
             )
         } else if t.needs_rt_tls {
             (
@@ -2377,7 +2381,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    if ray_runtime::fibers::in_fiber() {\n",
                 // IDEAS §131: dentro de un callback de la FFI no se espera. Se falla aquí, con la
                 // guarda soltada y sin haber apuntado la lista de espera.
-                "        if ray_runtime::fibers::in_ffi_callback() { drop(g); __ray_rt_err(ray_runtime::fibers::FFI_CALLBACK_WAIT); }\n",
+                "        if __ray_in_ffi_callback() { drop(g); __ray_rt_err(__RAY_FFI_CALLBACK_WAIT); }\n",
                 "        __ray_parked_set(Some(inner.2.clone()));\n",
                 "        let seen = inner.2.prepare();\n",
                 "        if __ray_cancelled() { __ray_parked_set(None); return g; }\n",

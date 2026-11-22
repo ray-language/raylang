@@ -202,6 +202,8 @@ impl Transpiler {
             name.to_string()
         }
         if prog.externs.is_empty() {
+            // Sin externs no hay callbacks: la pregunta de los sitios de espera es constante.
+            out.push_str("#[allow(dead_code)]\n#[inline(always)]\nfn __ray_in_ffi_callback() -> bool { false }\n");
             return Ok(());
         }
         // IDEAS §131: callbacks C→raylang. La reserva de trampolines es la MISMA fuente que usan la
@@ -211,6 +213,13 @@ impl Transpiler {
         // mensaje), se guarda aquí y el wrapper de la `extern` lo relanza al volver como un error
         // de ejecución más.
         let has_callbacks = prog.externs.iter().any(|e| e.params.iter().any(|p| matches!(normalize_type(&p.ty), Type::Fn(..))));
+        // ¿Hay un callback de la FFI en curso? Solo puede haberlo si el programa declara alguno
+        // (y solo se comprueba con fibras): los demás no pagan la lectura en `send`/`join`.
+        if has_callbacks && self.fibers {
+            out.push_str("#[allow(dead_code)]\nfn __ray_in_ffi_callback() -> bool { ray_runtime::fibers::in_ffi_callback() }\n");
+        } else {
+            out.push_str("#[allow(dead_code)]\n#[inline(always)]\nfn __ray_in_ffi_callback() -> bool { false }\n");
+        }
         if has_callbacks {
             if self.fibers {
                 // Con fibras el binario ya enlaza `ray-runtime`: la reserva es la suya.
@@ -446,7 +455,7 @@ impl Transpiler {
             String::new()
         };
         format!(
-            "{{ {windows}let __f = __p{i}.clone(); match __ray_cb::install({float_ret}, Rc::new(move |__r: &__ray_cb::Regs| -> u64 {{ {guard}let mut __out = 0u64; let __res = __ray_try_call(|| {{ let __v = __f({args}); __out = {encode}; }}); if let Some(__m) = __res.borrow().first() {{ __ray_cb_stash(__m); }} __out }})) {{ Ok(__c) => __c, Err(__m) => __ray_rt_err(&__m) }} }}",
+            "{{ {windows}let __f = __p{i}.clone(); match __ray_cb::install({float_ret}, Rc::new(move |__r: &__ray_cb::Regs| -> u64 {{ {guard}let mut __out = 0u64; if let Some(__m) = __ray_try_quiet(|| {{ let __v = __f({args}); __out = {encode}; }}) {{ __ray_cb_stash(&__m); }} __out }})) {{ Ok(__c) => __c, Err(__m) => __ray_rt_err(&__m) }} }}",
             float_ret = sig.ret == CKind::Float,
             args = args.join(", "),
         )

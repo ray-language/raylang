@@ -4839,3 +4839,78 @@ respuestas de `net/http`). Las tres cosas van juntas:
   nada. **Impacto**: cambia el contrato de `accept`; versión menor.
 
 Sin demanda de ninguna app todavía.
+
+## 131. Callbacks C→raylang en la FFI (ray-daw #425) — 🟡 fases 1 y 2 EJECUTADAS (DESIGN §474); pendiente `ffi.callback` retenido
+
+**Qué se pide.** Que una función de raylang pueda pasarse a C como puntero a función. Hoy
+REFERENCE §13 lo deja fuera de contrato. Es la carencia grande de la FFI (§14 la anotó para
+una «FFI v2 con libffi») y el gatillo ya llegó: ray-daw quiere alojar plugins AU/VST3 y usar
+CoreMIDI.
+
+**Estado de los tres motores (medido en el código, nov 2026).**
+
+| Motor | Qué hay | Qué cuesta un callback |
+|---|---|---|
+| Nativo | cada `extern` es un wrapper Rust sobre `extern "C"` | poco: emitir un `extern "C" fn` por función usada como callback |
+| Intérprete | tree-walking, reentrante por naturaleza | poco: evaluar el cuerpo desde el trampolín |
+| VM | `ffi::call` transmuta el símbolo a un molde del catálogo; `run_loop` es un único bucle por fibra, sin reentrada desde Rust | **el coste real**: entrar al bucle desde un marco de C, con el heap de la fibra prestado a la llamada exterior |
+
+**Dos clases de callback, con costes muy distintos.**
+
+1. **Síncrono, mismo hilo**: C llama al callback DURANTE la llamada `extern` que lo recibió, o
+   durante otra llamada posterior hecha desde raylang en el mismo hilo (`qsort`, `sqlite3_exec`,
+   enumeradores, un bucle de eventos que raylang arranca, el callback de entrada de
+   `AudioUnitRender`). El estado del programa está a mano: es una llamada anidada.
+2. **Desde un hilo ajeno**: C guarda el puntero y lo llama cuando quiere desde un hilo suyo (el
+   hilo de render de CoreAudio, el bloque de lectura de CoreMIDI, un manejador de señal). Ahí no
+   hay fibra ni heap: habría que ejecutar el cuerpo en un heap aislado como un actor, sin poder
+   aparcar, y en el caso del audio dentro de un hilo de tiempo real donde un GC no cabe.
+
+**Propuesta: hacer la clase 1 y rechazar la clase 2 con un error claro.**
+
+- **Superficie.** Un parámetro de una `extern fn` puede tener tipo función:
+  `fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int);`. Los tipos del callback
+  son los marshalables que ya existen (`int`, `u64`, `float`, `bool`, `ptr`; retorno también
+  unit). El argumento es cualquier valor función, también un closure. El puntero vale mientras
+  dura la llamada. Para el que C guarda (registro + bucle de eventos), un valor explícito:
+  `let cb = ffi.callback(f); … cb.ptr() … close(cb);`.
+- **Mecanismo, sin libffi.** Una reserva fija de trampolines `extern "C"` (64, por macro), cada
+  uno con su índice a una tabla donde vive el valor función. En SysV x86_64 y AAPCS64 los
+  registros enteros y los de coma flotante son bancos independientes, así que UN trampolín que
+  declara 6 enteros + 4 flotantes lee cualquier combinación; el retorno pide dos variantes
+  (entero, flotante). Es el mismo espíritu que el catálogo de moldes de `ffi::call`. En Windows
+  x64 los argumentos comparten posición entre bancos: ahí, solo argumentos enteros/puntero en la
+  primera versión. El nativo usa la misma reserva (vive en `ray-runtime`), no un `extern "C"` por
+  función, para que closures y límites sean idénticos en los dos motores.
+- **Reentrada.** Dentro de un callback no se puede aparcar la fibra (canales, E/S de red, `sleep`,
+  `join`): hay marcos de C en la pila. Error de ejecución con ese texto, igual en los tres
+  motores. Un panic dentro del callback no cruza C: se guarda, el trampolín devuelve cero y la
+  llamada `extern` exterior lo relanza al volver.
+- **Hilo ajeno.** El trampolín comprueba que corre en el hilo que creó el callback; si no, escribe
+  el motivo en stderr y aborta (no hay a quién devolver un error y seguir sería corromper el heap).
+
+**Lo que esto NO da a ray-daw.** Con la clase 1 se alcanza `AudioUnitRender` con su callback de
+entrada, pero alojar un plugin pide además: structs por puntero armados a mano en `bytes`,
+vtables COM para VST3 (C++), el bloque de CoreMIDI (clase 2, y es un bloque de Objective-C, no un
+puntero a función) y la ventana del editor. La otra salida del hallazgo, que el runtime aloje los
+plugins y exponga `plugin.load(path)` / `process(h, in) -> bytes` / parámetros / editor, es un
+subsistema como `std/audio`, no FFI, y se clasifica aparte si se quiere.
+
+**Impacto.** ALTO en la VM (reentrada del bucle, raíces del GC para los argumentos `bytes` de la
+llamada exterior mientras corre el callback); MEDIO en checker/SPEC (tipo función en firmas
+`extern`, superficie nueva y estable desde que se publique); BAJO en nativo e intérprete. Aditivo:
+ningún programa actual cambia. No cierra el camino a libffi ni a la clase 2 (el valor
+`ffi.callback` podría crecer una variante «de hilo ajeno» con heap propio). `unsafe` nuevo →
+SECURITY.md.
+
+**Fases.** (1) SPEC + checker + intérprete + nativo con callbacks de alcance de llamada;
+(2) VM; (3) `ffi.callback` retenido; (4) docs y ejemplo (`qsort`, `sqlite3_exec`).
+
+**Decidido (usuario, 21 nov 2026):** el objetivo es la FFI general; la clase 2 queda fuera, con
+aborto claro; reserva fija de trampolines, sin libffi. Hechas las fases 1 y 2 (los tres motores y el
+nativo, callbacks de alcance de llamada) y la 4 (docs). Pendiente la fase 3, `ffi.callback(f)`
+retenido, para el patrón «registrar y luego arrancar el bucle de eventos»: hoy ese puntero deja de
+valer al volver de la llamada que lo pasó. En el nativo con fibras hay que resolver además que la
+fibra no cambie de hilo entre el registro y la llamada (las fibras están fijadas a su worker, así
+que en principio basta la tabla por hilo).
+

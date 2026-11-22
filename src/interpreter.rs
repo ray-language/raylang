@@ -206,6 +206,62 @@ impl<'a> Interpreter<'a> {
         self.call_body(&func.params, &func.body, args, &[], &func.name, call_line, call_col)
     }
 
+    /// IDEAS §131: instala `f` (una función o un closure) como callback C con la firma `sig`.
+    /// El trampolín vuelve a entrar en este intérprete desde los marcos de C de la llamada
+    /// `extern` en curso; un error de ejecución se guarda para esa llamada y C recibe cero.
+    fn install_callback(&mut self, sig: &crate::ffi::CallbackSig, f: Value, line: usize, col: usize) -> Result<crate::ffi::callback_pool::Callback, String> {
+        use crate::ffi::{CKind, CallbackArg, CallbackRet};
+        // La dirección como entero: el manejador debe ser `'static` y el intérprete lleva la
+        // vida del programa. Vale mientras dura la llamada `extern`, que corre dentro de un
+        // método de `self` y suelta el callback antes de volver.
+        let me = self as *mut Self as usize;
+        let ret = sig.ret;
+        crate::ffi::install_callback(sig, move |args| {
+            // SAFETY: el trampolín solo se llama en este hilo y durante la llamada `extern` que
+            // instaló el callback, con `self` vivo y sin otro uso en curso (la llamada a C lo
+            // tiene detenido).
+            let interp = unsafe { &mut *(me as *mut Self) };
+            let values: Vec<Value> = args
+                .into_iter()
+                .map(|a| match a {
+                    CallbackArg::Int(n) => Value::Int(n),
+                    CallbackArg::U64(n) => Value::UInt(n, 64),
+                    CallbackArg::Float(x) => Value::Float(x),
+                    CallbackArg::Bool(b) => Value::Bool(b),
+                    CallbackArg::Ptr(p) => Value::Ptr(p),
+                    CallbackArg::OptPtr(None) => opt_value("None", vec![]),
+                    CallbackArg::OptPtr(Some(p)) => opt_value("Some", vec![Value::Ptr(p)]),
+                })
+                .collect();
+            let out = match &f {
+                Value::Function(idx) => interp.call_index(*idx, values, &[], line, col),
+                Value::Closure(c) => {
+                    let captured = c.upvalues.clone();
+                    interp.call_index(c.index, values, &captured, line, col)
+                }
+                _ => unreachable!("the checker guarantees a function"),
+            };
+            let zero = if ret == CKind::Float { CallbackRet::Float(0.0) } else { CallbackRet::Int(0) };
+            match out {
+                Ok(Value::Int(n)) => CallbackRet::Int(n),
+                Ok(Value::UInt(n, _)) => CallbackRet::Int(n as i64),
+                Ok(Value::Float(x)) => CallbackRet::Float(x),
+                Ok(Value::Bool(b)) => CallbackRet::Int(b as i64),
+                Ok(Value::Ptr(p)) => CallbackRet::Int(p),
+                Ok(Value::Enum(e)) => match e.payload.first() {
+                    Some(Value::Ptr(p)) => CallbackRet::Int(*p),
+                    _ => CallbackRet::Int(0),
+                },
+                Ok(_) => CallbackRet::Unit,
+                Err(Flow::Error(e)) => {
+                    crate::ffi::set_callback_error(e.msg);
+                    zero
+                }
+                Err(_) => zero,
+            }
+        })
+    }
+
     /// Despacha una llamada a través de un índice de la tabla de funciones: `idx`
     /// menor que el número de funciones nombradas es una nombrada; el resto, una
     /// anónima (`idx - N`). `captured` es el entorno de la closure (vacío si es una
@@ -1098,6 +1154,11 @@ impl<'a> Interpreter<'a> {
                     {
                         return Err(runtime_error(callee.line, callee.col, &e));
                     }
+                    // IDEAS §131: dentro de un callback de la FFI no se puede esperar. El
+                    // intérprete es secuencial: su única espera es `sleep`.
+                    if name == "__sleep" && crate::ffi::in_callback() && matches!(values.first(), Some(Value::Int(ms)) if *ms > 0) {
+                        return Err(runtime_error(callee.line, callee.col, crate::ffi::BLOCKING_IN_CALLBACK));
+                    }
                     return Ok(self.eval_builtin(name, values));
                 }
                 // M41: función externa (FFI). Se despacha a la librería C vía `ffi::call`. La frontera
@@ -1110,8 +1171,35 @@ impl<'a> Interpreter<'a> {
                     for arg in args {
                         vals.push(self.eval_expr(arg)?);
                     }
-                    let fargs: Vec<_> = vals.iter().map(value_to_ffi).collect();
-                    return match crate::ffi::call(&desc, &fargs) {
+                    // IDEAS §131: cada argumento función se instala en un trampolín C mientras
+                    // dura la llamada; `live` los retiene y los libera al salir.
+                    let mut live: Vec<Option<crate::ffi::callback_pool::Callback>> = Vec::with_capacity(vals.len());
+                    for (i, v) in vals.iter().enumerate() {
+                        live.push(match desc.callbacks.get(i).and_then(|c| c.as_ref()) {
+                            Some(sig) => Some(
+                                self.install_callback(sig, v.clone(), callee.line, callee.col)
+                                    .map_err(|msg| runtime_error(callee.line, callee.col, &msg))?,
+                            ),
+                            None => None,
+                        });
+                    }
+                    let fargs: Vec<_> = vals
+                        .iter()
+                        .zip(&live)
+                        .map(|(v, cb)| match cb {
+                            Some(cb) => crate::ffi::FfiVal::Int(cb.ptr()),
+                            None => value_to_ffi(v),
+                        })
+                        .collect();
+                    let has_callbacks = live.iter().any(|cb| cb.is_some());
+                    let outer = if has_callbacks { crate::ffi::begin_callback_errors() } else { None };
+                    let result = crate::ffi::call(&desc, &fargs);
+                    drop(live);
+                    // Un error dentro de un callback no cruzó los marcos de C: se relanza aquí.
+                    if has_callbacks && let Some(msg) = crate::ffi::end_callback_errors(outer) {
+                        return Err(runtime_error(callee.line, callee.col, &msg));
+                    }
+                    return match result {
                         Ok(r) => ffi_to_value(r, desc.ret_kind, callee.line, callee.col),
                         Err(msg) => Err(runtime_error(callee.line, callee.col, &msg)),
                     };

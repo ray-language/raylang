@@ -599,11 +599,54 @@ pub fn in_fiber() -> bool {
     CURRENT.with(|c| !c.get().is_null())
 }
 
+// IDEAS §131: la marca «hay un callback de la FFI en curso» viaja en el bit bajo de `CURRENT` (el
+// `Yielder` está alineado, así que el bit queda libre). No es un thread-local nuevo: uno leído
+// desde la fibra costó un 20 % en actor_shard (ver `coop`), y `suspend` ya lee `CURRENT`.
+const IN_FFI_CALLBACK: usize = 1;
+
+/// El error de intentar esperar dentro de un callback de la FFI (el texto de la VM).
+pub const FFI_CALLBACK_WAIT: &str =
+    "cannot wait inside an FFI callback (channels, sleep, join and network I/O are not available while C code is on the stack)";
+
+/// ¿Corre esta fibra dentro de un callback de la FFI? Quien vaya a esperar y tenga algo que
+/// deshacer (un contador, un trabajo ya encargado) lo pregunta ANTES de empezar: `suspend` falla
+/// igual, pero para entonces el rastro ya está puesto.
+pub fn in_ffi_callback() -> bool {
+    CURRENT.with(|c| c.get() as usize & IN_FFI_CALLBACK != 0)
+}
+
+/// Marca la fibra en curso como «dentro de un callback de la FFI» hasta que se suelte el valor
+/// devuelto: mientras tanto `suspend` falla en vez de ceder. Anida (un callback dentro de otro).
+/// Fuera de una fibra no hace nada.
+pub fn enter_ffi_callback() -> FfiCallbackGuard {
+    let before = CURRENT.with(|c| {
+        let y = c.get();
+        if !y.is_null() {
+            c.set((y as usize | IN_FFI_CALLBACK) as *const ());
+        }
+        y
+    });
+    FfiCallbackGuard(before)
+}
+
+pub struct FfiCallbackGuard(*const ());
+
+impl Drop for FfiCallbackGuard {
+    fn drop(&mut self) {
+        CURRENT.with(|c| c.set(self.0));
+    }
+}
+
 /// Cede el control del worker con el motivo dado. Solo dentro de una fibra. Devuelve `true` si el
 /// despertar fue por VENCIMIENTO del deadline del park (solo posible en parks de E/S con plazo).
 fn suspend(park: Park) -> bool {
     let y = CURRENT.with(|c| c.get());
     assert!(!y.is_null(), "fiber park outside of a fiber");
+    // IDEAS §131: dentro de un callback de la FFI hay marcos de C en la pila de la fibra: no se
+    // puede ceder (mismo texto que la VM, `ffi::BLOCKING_IN_CALLBACK`).
+    if y as usize & IN_FFI_CALLBACK != 0 {
+        panic!("{FFI_CALLBACK_WAIT}");
+    }
     // SAFETY: `y` apunta al `Yielder` de la corrutina EN EJECUCIÓN en este hilo: vive en la pila de
     // la corrutina (viva hasta que retorna) y solo lo usa la propia fibra. `suspend` devuelve el
     // control al `resume` del worker; cuando la fibra despierte, la ejecución sigue aquí.
@@ -787,7 +830,10 @@ fn coop_enabled_from_env() -> bool {
 #[inline(never)]
 pub fn coop() {
     let me = WORKER.with(|w| w.get());
-    if me < 0 || !in_fiber() {
+    // Dentro de un callback de la FFI no se cede el turno (hay marcos de C en la pila): la
+    // operación que llamó aquí ya terminó sin esperar, y así debe quedar.
+    let y = CURRENT.with(|c| c.get());
+    if me < 0 || y.is_null() || y as usize & IN_FFI_CALLBACK != 0 {
         return;
     }
     let wq = &sched().queues[me as usize];
@@ -912,6 +958,12 @@ unsafe extern "C" {
 pub fn run_blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     if !in_fiber() {
         return f();
+    }
+    // IDEAS §131: dentro de un callback de la FFI no se puede aparcar. Se comprueba ANTES de
+    // encargar el trabajo: si fallara el park, el llamador se desenrollaría con el hilo del pool
+    // todavía usando los punteros de su marco.
+    if in_ffi_callback() {
+        panic!("{FFI_CALLBACK_WAIT}");
     }
     // El slot del resultado (+ el errno del hilo del pool) + su lista de esperas (el protocolo
     // anti despertar-perdido de F3).

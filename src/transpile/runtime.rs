@@ -267,6 +267,15 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // (E/S de socket) y reanudarse en OTRO worker; el contador por-hilo se quedaría en el anterior
     // (hook mal silenciado allí, silencio de más aquí). `__ray_ctx`/`__FiberCtx` se emiten en
     // emit_runtime_features (el orden de items no importa en Rust).
+    // IDEAS §131: ¿hay un callback de la FFI en curso? (solo con fibras: sin ellas esperar bloquea
+    // el hilo, que es lo que ese modo hace siempre). Lo preguntan los sitios que dejan rastro
+    // antes de esperar.
+    out.push_str("#[allow(dead_code)]\nconst __RAY_FFI_CALLBACK_WAIT: &str = \"cannot wait inside an FFI callback (channels, sleep, join and network I/O are not available while C code is on the stack)\";\n");
+    if fibers {
+        out.push_str("#[allow(dead_code)]\nfn __ray_in_ffi_callback() -> bool { ray_runtime::fibers::in_ffi_callback() }\n");
+    } else {
+        out.push_str("#[allow(dead_code)]\nfn __ray_in_ffi_callback() -> bool { false }\n");
+    }
     if fibers {
         out.push_str("fn __ray_in_try() -> bool { __ray_ctx(|c| c.in_try > 0) }\n");
         out.push_str("fn __ray_try_call<F: FnOnce()>(f: F) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n");
@@ -2285,6 +2294,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // ≥2 emisores, A podía despertar con el valor de B en cola y re-dormirse para siempre aunque el
             // suyo ya se consumió. `my` = el ordinal que consumirá su valor; A retorna cuando `taken >= my`.
             "        if st.cap == Some(0) {\n",
+            "            if __ray_in_ffi_callback() { drop(st); __ray_rt_err(__RAY_FFI_CALLBACK_WAIT); }\n",
             "            st.senders += 1;\n",
             "            while !st.closed && !st.q.is_empty() { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "            if st.closed { st.senders -= 1; drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
@@ -2295,6 +2305,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "            if st.taken < my { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             "            return;\n",
             "        }\n",
+            "        if st.cap.map_or(false, |c| st.q.len() >= c) && __ray_in_ffi_callback() { drop(st); __ray_rt_err(__RAY_FFI_CALLBACK_WAIT); }\n",
             "        st.senders += 1;\n",
             "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
             "        st.senders -= 1;\n",
@@ -2364,6 +2375,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "fn __ray_parked_set(wl: Option<ray_runtime::fibers::WaitList>) { let p = __ray_ctx(|c| c.parked.clone()); if let Some(p) = p { *p.lock().unwrap() = wl; } }\n",
                 "fn __ray_cv_wait<'a, T>(inner: &'a __RaySync<T>, g: std::sync::MutexGuard<'a, T>) -> std::sync::MutexGuard<'a, T> {\n",
                 "    if ray_runtime::fibers::in_fiber() {\n",
+                // IDEAS §131: dentro de un callback de la FFI no se espera. Se falla aquí, con la
+                // guarda soltada y sin haber apuntado la lista de espera.
+                "        if ray_runtime::fibers::in_ffi_callback() { drop(g); __ray_rt_err(ray_runtime::fibers::FFI_CALLBACK_WAIT); }\n",
                 "        __ray_parked_set(Some(inner.2.clone()));\n",
                 "        let seen = inner.2.prepare();\n",
                 "        if __ray_cancelled() { __ray_parked_set(None); return g; }\n",

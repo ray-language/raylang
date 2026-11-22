@@ -330,6 +330,7 @@ impl<'a> Vm<'a> {
             program,
             key_shapes: Default::default(),
             cur: Fiber {
+                floor: 0,
                 frames: Vec::new(),
                 stack: Vec::new(),
                 locals: Vec::new(),
@@ -522,7 +523,10 @@ impl<'a> Vm<'a> {
                     self.cur.stack.truncate(frame.stack_base);
                     self.cur.locals.truncate(frame.locals_base); // V12
                 }
-                if self.cur.frames.is_empty() {
+                if self.cur.frames.len() == self.cur.floor {
+                    if self.cur.floor != 0 {
+                        return Ok(HeapValue::Unit); // el callback de la FFI terminó sin `Return`
+                    }
                     match self.on_fiber_done(HeapValue::Unit)? {
                         Some(v) => return Ok(v),
                         None => continue, // era una fibra spawn: el scheduler ya cargó la siguiente (o `stop`)
@@ -567,6 +571,12 @@ impl<'a> Vm<'a> {
         // M97.2: si hay un `try_call` en vuelo, el fallo NO tumba la fibra — se desenrolla hasta su
         // marcador y se entrega `[msg]` como valor. Va ANTES del reparto main/hija a propósito: un
         // `try_call` en `main` también recupera, y para eso tiene que ganarle al `return Err(e)`.
+        // IDEAS §131: dentro de un callback de la FFI solo recupera un `try_call` abierto DENTRO
+        // del callback; si no, el error sale del bucle anidado (`run_callback` desenrolla) y lo
+        // relanza la llamada `extern` exterior, donde sigue este mismo camino.
+        if self.cur.floor != 0 && !self.cur.try_markers.last().is_some_and(|m| m.frames_len >= self.cur.floor) {
+            return Err(e);
+        }
         if !self.cur.try_markers.is_empty() {
             self.unwind_to_try_marker(e);
             return Ok(());
@@ -578,6 +588,112 @@ impl<'a> Vm<'a> {
             return Err(e);
         }
         self.fail_current_fiber(e)
+    }
+
+    /// IDEAS §131: instala `f` como callback C con la firma `sig`. El trampolín vuelve a entrar
+    /// en ESTA VM (`run_callback`) desde los marcos de C de la llamada `extern` en curso; un error
+    /// de ejecución se guarda para esa llamada y C recibe cero.
+    fn install_callback(&mut self, sig: &crate::ffi::CallbackSig, f: HeapValue) -> Result<crate::ffi::callback_pool::Callback, String> {
+        use crate::ffi::{CKind, CallbackArg, CallbackRet};
+        // La dirección como entero: el manejador debe ser `'static`. Vale mientras dura la
+        // llamada `extern`, que corre dentro de un método de `self` y suelta el callback antes
+        // de volver.
+        let me = self as *mut Self as usize;
+        let ret = sig.ret;
+        crate::ffi::install_callback(sig, move |args| {
+            // SAFETY: el trampolín solo se llama en este hilo y durante la llamada `extern` que
+            // instaló el callback: esta VM está viva, y detenida dentro de la llamada a C.
+            let vm = unsafe { &mut *(me as *mut Self) };
+            let zero = if ret == CKind::Float { CallbackRet::Float(0.0) } else { CallbackRet::Int(0) };
+            let mut values = Vec::with_capacity(args.len());
+            for a in args {
+                values.push(match a {
+                    CallbackArg::Int(n) => HeapValue::Int(n),
+                    CallbackArg::U64(n) => HeapValue::UInt(n, 64),
+                    CallbackArg::Float(x) => HeapValue::Float(x),
+                    CallbackArg::Bool(b) => HeapValue::Bool(b),
+                    CallbackArg::Ptr(p) => HeapValue::Ptr(p),
+                    CallbackArg::OptPtr(opt) => {
+                        let (variant, payload) = match opt {
+                            None => ("None", vec![]),
+                            Some(p) => ("Some", vec![HeapValue::Ptr(p)]),
+                        };
+                        let Some((eid, tag)) = option_variant(&vm.program.enums, variant) else {
+                            crate::ffi::set_callback_error("the prelude Option enum is not available for the FFI callback".into());
+                            return zero;
+                        };
+                        // El handle queda sin raíz hasta que `run_callback` lo pasa a los locales
+                        // del marco; no hay punto seguro del GC en medio.
+                        HeapValue::Obj(vm.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: eid as u32, tag: tag as u32, payload })))
+                    }
+                });
+            }
+            match vm.run_callback(&f, values) {
+                Ok(HeapValue::Int(n)) => CallbackRet::Int(n),
+                Ok(HeapValue::UInt(n, _)) => CallbackRet::Int(n as i64),
+                Ok(HeapValue::Float(x)) => CallbackRet::Float(x),
+                Ok(HeapValue::Bool(b)) => CallbackRet::Int(b as i64),
+                Ok(HeapValue::Ptr(p)) => CallbackRet::Int(p),
+                // `Option<ptr>`: la dirección, o NULL si es `None`.
+                Ok(HeapValue::Obj(h)) => match vm.cur.heap.get(h) {
+                    Obj::Enum(e) => match e.payload.first() {
+                        Some(HeapValue::Ptr(p)) => CallbackRet::Int(*p),
+                        _ => CallbackRet::Int(0),
+                    },
+                    _ => CallbackRet::Unit,
+                },
+                Ok(_) => CallbackRet::Unit,
+                Err(e) => {
+                    crate::ffi::set_callback_error(e.msg);
+                    zero
+                }
+            }
+        })
+    }
+
+    /// IDEAS §131: ejecuta `f` (una función o un closure) con `args` desde un trampolín de la FFI,
+    /// es decir, con marcos de C entre este punto y el `run_loop` que hizo la llamada `extern`.
+    /// Abre el marco y entra en un bucle ANIDADO que termina cuando ese marco retorna (`floor`).
+    /// La fibra no puede aparcarse mientras tanto (`take_current_fiber`). Con error, la fibra
+    /// queda como estaba antes de entrar.
+    fn run_callback(&mut self, f: &HeapValue, args: Vec<HeapValue>) -> Result<HeapValue, RuntimeError> {
+        if self.cur.frames.len() >= max_frames() {
+            return Err(runtime_error(0, 0, &crate::runtime::stack_overflow_message()));
+        }
+        let (fn_idx, upvalues) = match f {
+            HeapValue::Function(i) => (*i, Vec::new()),
+            HeapValue::Obj(h) => match self.cur.heap.get(*h) {
+                Obj::Closure(c) => (c.index, c.upvalues.clone()),
+                _ => unreachable!("the checker guarantees a function"),
+            },
+            _ => unreachable!("the checker guarantees a function"),
+        };
+        let saved_floor = self.cur.floor;
+        let (frames_len, scopes_len, stack_len) = (self.cur.frames.len(), self.cur.scopes.len(), self.cur.stack.len());
+        let markers_len = self.cur.try_markers.len();
+        let argc = args.len();
+        for a in args {
+            self.cur.stack.push(a);
+        }
+        let base = self.open_frame_locals(fn_idx, argc);
+        self.cur.frames.push(CallFrame { function: fn_idx, ip: 0, locals_base: base, upvalues, stack_base: self.cur.stack.len() });
+        if profile::enabled() {
+            self.cur.prof.enter(fn_idx, self.cur.frames.len());
+        }
+        self.cur.floor = frames_len;
+        let out = self.run_loop();
+        self.cur.floor = saved_floor;
+        // Con error (o con el programa apagándose) los marcos del callback siguen ahí.
+        if self.cur.frames.len() > frames_len {
+            if profile::enabled() {
+                for depth in (frames_len + 1..=self.cur.frames.len()).rev() {
+                    self.cur.prof.leave(depth);
+                }
+            }
+            self.cur.try_markers.truncate(markers_len);
+            self.unwind_to(frames_len, scopes_len, stack_len);
+        }
+        out
     }
 
     /// V10: ejecuta UNA instrucción del bytecode. Es el antiguo cuerpo de la closure de
@@ -1091,8 +1207,32 @@ impl<'a> Vm<'a> {
                     fargs.reverse(); // se sacaron en orden inverso
                     // Los `HeapValue` retenidos en `fargs` viven durante la llamada; los `FfiVal` de
                     // string/bytes toman prestado su buffer inline (M41.2).
+                    // IDEAS §131: cada argumento función se instala en un trampolín C mientras
+                    // dura la llamada. Su valor queda además en la pila de operandos: es la raíz
+                    // que lo mantiene vivo si el GC corre dentro del callback.
+                    let root_base = self.cur.stack.len();
+                    let mut live: Vec<Option<crate::ffi::callback_pool::Callback>> = Vec::with_capacity(*argc);
+                    for (i, v) in fargs.iter().enumerate() {
+                        live.push(match desc.callbacks.get(i).and_then(|c| c.as_ref()) {
+                            Some(sig) => {
+                                self.cur.stack.push(v.clone());
+                                match self.install_callback(sig, v.clone()) {
+                                    Ok(cb) => Some(cb),
+                                    Err(m) => {
+                                        self.cur.stack.truncate(root_base);
+                                        return Err(runtime_error(pos!().0, pos!().1, &m));
+                                    }
+                                }
+                            }
+                            None => None,
+                        });
+                    }
                     let mut cargs = Vec::with_capacity(*argc);
-                    for v in &fargs {
+                    for (v, cb) in fargs.iter().zip(&live) {
+                        if let Some(cb) = cb {
+                            cargs.push(crate::ffi::FfiVal::Int(cb.ptr()));
+                            continue;
+                        }
                         cargs.push(match v {
                             HeapValue::Int(n) => crate::ffi::FfiVal::Int(*n),
                             HeapValue::UInt(v, _) => crate::ffi::FfiVal::Int(*v as i64), // M41.4: u64 → 64 bits
@@ -1114,8 +1254,16 @@ impl<'a> Vm<'a> {
                                 "non-marshalable argument at the FFI boundary")),
                         });
                     }
-                    let r = crate::ffi::call(desc, &cargs)
-                        .map_err(|m| runtime_error(pos!().0, pos!().1, &m))?;
+                    let has_callbacks = live.iter().any(|cb| cb.is_some());
+                    let outer = if has_callbacks { crate::ffi::begin_callback_errors() } else { None };
+                    let r = crate::ffi::call(desc, &cargs);
+                    drop(live);
+                    self.cur.stack.truncate(root_base);
+                    // Un error dentro de un callback no cruzó los marcos de C: se relanza aquí.
+                    if has_callbacks && let Some(m) = crate::ffi::end_callback_errors(outer) {
+                        return Err(runtime_error(pos!().0, pos!().1, &m));
+                    }
+                    let r = r.map_err(|m| runtime_error(pos!().0, pos!().1, &m))?;
                     let val = match r {
                         crate::ffi::FfiRet::Int(n) if desc.ret_kind == crate::ffi::CKind::Bool => HeapValue::Bool(n != 0),
                         crate::ffi::FfiRet::Int(n) if desc.ret_kind == crate::ffi::CKind::U64 => HeapValue::UInt(n as u64, 64),
@@ -1440,6 +1588,7 @@ impl<'a> Vm<'a> {
                             None
                         };
                         sh.ready.push_back(Fiber {
+                            floor: 0,
                             frames: vec![frame], stack: Vec::new(), locals: child_locals, heap: new_heap, is_main: false,
                             task, scopes: Vec::new(), unit_enums: Default::default(), const_cache: Vec::new(),
                             try_markers: Vec::new(), pending_error: None, prof: Default::default(), domain,
@@ -1551,7 +1700,7 @@ impl<'a> Vm<'a> {
                         // (3) Cola llena (acotado) → BLOQUEAR al emisor (backpressure, M12.2). Guarda la
                         // fibra con el valor pendiente; al despertarla, `wake_sender` le deja unit (el
                         // resultado de `send`) en la pila y continúa tras el ChanSend.
-                        let fiber = Self::take_current_fiber(&mut self.cur);
+                        let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                         sh.parked.push(Parked { on: h, fiber, waiting: Waiting::Send(v) });
                         // M12.4: un emisor bloqueado vuelve al canal "listo" para un select (un recv lo
                         // tomaría); despierta a los selectores que lo esperan.
@@ -1627,7 +1776,7 @@ impl<'a> Vm<'a> {
                     } else {
                         // Bloquear: guardar la fibra actual (ip ya apunta tras el ChanRecv → al
                         // despertarla, el `wake_recv` le deja el `[T]` en la pila y continúa) y conmutar.
-                        let fiber = Self::take_current_fiber(&mut self.cur);
+                        let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                         sh.parked.push(Parked { on: h, fiber, waiting: Waiting::Recv });
                         sh.running -= 1; // este receptor se bloqueó → worker ocioso
                         drop(sh);
@@ -1770,7 +1919,7 @@ impl<'a> Vm<'a> {
                             // TaskJoin, para que al despertar (con la tarea ya Done/Failed) lo re-ejecute.
                             self.cur.stack.push(HeapValue::Task(t)); // no `self.push` (guard sostenido)
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur);
+                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                             sh.parked.push(Parked { on: t, fiber, waiting: Waiting::Join });
                             sh.running -= 1;
                             drop(sh);
@@ -1818,7 +1967,7 @@ impl<'a> Vm<'a> {
                             // Bloquear hasta que termine, como TaskJoin (re-empuja el handle y rebobina).
                             self.cur.stack.push(HeapValue::Task(t)); // no `self.push` (guard sostenido)
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur);
+                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                             sh.parked.push(Parked { on: t, fiber, waiting: Waiting::Join });
                             sh.running -= 1;
                             drop(sh);
@@ -1880,7 +2029,7 @@ impl<'a> Vm<'a> {
                         matches!(sh.task(c).map(|vt| &vt.state), Some(TaskState::Pending)));
                     if let Some(c) = pending {
                         self.cur.frames.last_mut().unwrap().ip -= 1;
-                        let fiber = Self::take_current_fiber(&mut self.cur);
+                        let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                         sh.parked.push(Parked { on: c, fiber, waiting: Waiting::Join });
                         sh.running -= 1;
                         drop(sh);
@@ -1947,7 +2096,7 @@ impl<'a> Vm<'a> {
                             // Select y aparca esperando al conjunto (el handle del arreglo va en `on`).
                             self.cur.stack.push(HeapValue::Obj(arr)); // no `self.push` (guard sostenido)
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur);
+                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                             sh.parked.push(Parked { on: arr, fiber, waiting: Waiting::Select });
                             sh.running -= 1;
                             drop(sh);
@@ -2009,14 +2158,18 @@ impl<'a> Vm<'a> {
                                         self.push(HeapValue::Obj(h));
                                         return Ok(None);
                                     }
-                                    let d = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);
-                                    self.cur.select_deadline = Some(d);
+                                    // Dentro de un callback de la FFI el aparcado de abajo falla:
+                                    // el plazo no se guarda, o lo heredaría el siguiente select.
+                                    if self.cur.floor == 0 {
+                                        let d = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);
+                                        self.cur.select_deadline = Some(d);
+                                    }
                                 }
                                 // Aparca: re-empuja arr y ms, rebobina el ip al SelectTimeout.
                                 self.cur.stack.push(HeapValue::Obj(arr));
                                 self.cur.stack.push(HeapValue::Int(ms));
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
-                                let fiber = Self::take_current_fiber(&mut self.cur);
+                                let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                                 sh.parked.push(Parked { on: arr, fiber, waiting: Waiting::Select });
                                 sh.running -= 1;
                                 drop(sh);
@@ -2637,7 +2790,7 @@ impl<'a> Vm<'a> {
                             Ok(None) => {
                                 self.push(HeapValue::Int(handle));
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
-                                let fiber = Self::take_current_fiber(&mut self.cur);
+                                let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                                 let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                                 {
                                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
@@ -2664,7 +2817,7 @@ impl<'a> Vm<'a> {
                         Ok(None) => {
                             self.push(HeapValue::Int(handle));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur);
+                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
@@ -3728,7 +3881,7 @@ impl<'a> Vm<'a> {
                                 self.push(HeapValue::Int(handle));
                                 self.push(HeapValue::Int(ms));
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
-                                let fiber = Self::take_current_fiber(&mut self.cur);
+                                let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                                 let deadline = if ms > 0 {
                                     Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64))
                                 } else {
@@ -3816,7 +3969,7 @@ impl<'a> Vm<'a> {
                     } else {
                         self.push(HeapValue::Int(max));
                         self.cur.frames.last_mut().unwrap().ip -= 1;
-                        let fiber = Self::take_current_fiber(&mut self.cur);
+                        let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                         {
                             let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                             sh.io_parked.push(IoParked { fd: 0, fiber, pending_write: None, handle: crate::builtins::STDIN_PSEUDO_HANDLE, deadline: None });
@@ -3855,7 +4008,7 @@ impl<'a> Vm<'a> {
                         self.push(HeapValue::Int(max));
                         self.push(HeapValue::Int(ms));
                         self.cur.frames.last_mut().unwrap().ip -= 1;
-                        let fiber = Self::take_current_fiber(&mut self.cur);
+                        let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                         let deadline = Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64));
                         {
                             let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
@@ -4421,7 +4574,7 @@ impl<'a> Vm<'a> {
                             Ok(fd) => {
                                 self.push(HeapValue::Int(ms));
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
-                                let fiber = Self::take_current_fiber(&mut self.cur);
+                                let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                                 let deadline = if ms > 0 {
                                     Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64))
                                 } else {
@@ -4490,7 +4643,7 @@ impl<'a> Vm<'a> {
                                 self.push(HeapValue::Int(wh));
                                 self.push(HeapValue::Int(port));
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
-                                let fiber = Self::take_current_fiber(&mut self.cur);
+                                let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                                 let fd = crate::builtins::raw_fd(wh).unwrap_or(-1);
                                 {
                                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
@@ -4544,7 +4697,7 @@ impl<'a> Vm<'a> {
                                 self.push(HeapValue::Int(port));
                                 self.push(HeapValue::Int(ms));
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
-                                let fiber = Self::take_current_fiber(&mut self.cur);
+                                let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                                 let fd = crate::builtins::raw_fd(wh).unwrap_or(-1);
                                 {
                                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
@@ -4677,7 +4830,7 @@ impl<'a> Vm<'a> {
                             // No hay datagrama: re-ejecuta el opcode al despertar (re-empuja el handle).
                             self.push(HeapValue::Int(handle));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur);
+                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
                                 let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
@@ -4715,7 +4868,7 @@ impl<'a> Vm<'a> {
                                 self.push(HeapValue::Int(wh));
                                 self.push(HeapValue::Int(port));
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
-                                let fiber = Self::take_current_fiber(&mut self.cur);
+                                let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                                 let fd = crate::builtins::raw_fd(wh).unwrap_or(-1);
                                 {
                                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
@@ -4843,7 +4996,7 @@ impl<'a> Vm<'a> {
                         None => {
                             self.push(HeapValue::Int(handle));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur);
+                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
                                 let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
@@ -4890,7 +5043,7 @@ impl<'a> Vm<'a> {
                             // Re-empuja el handle y rebobina al SocketRead: al despertar lo re-ejecuta.
                             self.push(HeapValue::Int(handle));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur);
+                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
@@ -4978,7 +5131,7 @@ impl<'a> Vm<'a> {
                         Ok(None) => {
                             self.push(HeapValue::Int(handle));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur);
+                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
@@ -5167,7 +5320,7 @@ impl<'a> Vm<'a> {
                         self.push(HeapValue::Unit);
                         if ms > 0 {
                             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);
-                            let fiber = Self::take_current_fiber(&mut self.cur);
+                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
                             {
                                 let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                                 sh.io_parked.push(IoParked { fd: -1, fiber, pending_write: None, handle: -1, deadline: Some(deadline) });
@@ -5556,7 +5709,12 @@ impl<'a> Vm<'a> {
             let h = self.cur.heap.allocate(Obj::Array(Vec::new()));
             result = HeapValue::Obj(h);
         }
-        if self.cur.frames.is_empty() {
+        if self.cur.frames.len() == self.cur.floor {
+            // IDEAS §131: el marco que acaba de cerrarse era el de un callback de la FFI: el
+            // bucle anidado termina y entrega el valor al trampolín.
+            if self.cur.floor != 0 {
+                return Ok(Some(result));
+            }
             // La fibra terminó: si es main → fin del programa; si es spawn → siguiente fibra.
             match self.on_fiber_done(result)? {
                 Some(v) => return Ok(Some(v)),

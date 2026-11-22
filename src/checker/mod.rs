@@ -342,6 +342,14 @@ fn lower_type_aliases(program: &mut Program, aliases: &HashMap<String, (Vec<Stri
     for func in &mut program.functions {
         expand_fn(func);
     }
+    // Las `extern fn` también: los motores clasifican sus tipos desde el AST (`ffi::desc_of`), y
+    // un alias sin expandir (`type Cmp = fn(ptr, ptr) -> int`) no es marshalable para ellos.
+    for e in &mut program.externs {
+        for p in &mut e.params {
+            p.ty = f(&p.ty);
+        }
+        e.return_type = f(&e.return_type);
+    }
     program.type_aliases.clear();
 }
 

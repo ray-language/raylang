@@ -297,8 +297,8 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   a uno lleno o sin búfer, `time.sleep` con plazo, `join`, E/S de red) es error de ejecución; la
   que no necesita esperar funciona. El intento fallido no deja efecto en canales ni tareas; una
   escritura de red sí puede haber enviado ya una parte. (El binario nativo sin fibras, `--without fibers`,
-  no lo comprueba: ahí esperar bloquea el hilo. En el nativo con fibras, llamar a una `extern`
-  de un bloque `blocking` desde un callback también es este error.) Un error de ejecución dentro
+  no lo comprueba: ahí esperar bloquea el hilo.) Lo que solo tarda —un proceso, `fs.sync`, una
+  `extern` de un bloque `blocking`— no es esperar: corre hasta terminar. Un error de ejecución dentro
   del callback no atraviesa C: C recibe cero de ese callback y, cuando la función C retorna, la
   llamada `extern` falla con ese error (recuperable con `try_call`). Usar el puntero **después**
   de que la llamada retorne, o desde otro hilo, está **fuera de contrato**: lo habitual es que el

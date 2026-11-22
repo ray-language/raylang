@@ -222,8 +222,8 @@ impl<'a> Interpreter<'a> {
             // tiene detenido).
             let interp = unsafe { &mut *(me as *mut Self) };
             let values: Vec<Value> = args
-                .into_iter()
-                .map(|a| match a {
+                .iter()
+                .map(|a| match *a {
                     CallbackArg::Int(n) => Value::Int(n),
                     CallbackArg::U64(n) => Value::UInt(n, 64),
                     CallbackArg::Float(x) => Value::Float(x),
@@ -1173,25 +1173,27 @@ impl<'a> Interpreter<'a> {
                     }
                     // IDEAS §131: cada argumento función se instala en un trampolín C mientras
                     // dura la llamada; `live` los retiene y los libera al salir.
-                    let mut live: Vec<Option<crate::ffi::callback_pool::Callback>> = Vec::with_capacity(vals.len());
-                    for (i, v) in vals.iter().enumerate() {
-                        live.push(match desc.callbacks.get(i).and_then(|c| c.as_ref()) {
-                            Some(sig) => Some(
-                                self.install_callback(sig, v.clone(), callee.line, callee.col)
-                                    .map_err(|msg| runtime_error(callee.line, callee.col, &msg))?,
-                            ),
-                            None => None,
-                        });
+                    let has_callbacks = desc.has_callbacks();
+                    let mut live: Vec<Option<crate::ffi::callback_pool::Callback>> = Vec::new();
+                    if has_callbacks {
+                        for (i, v) in vals.iter().enumerate() {
+                            live.push(match desc.callbacks.get(i).and_then(|c| c.as_ref()) {
+                                Some(sig) => Some(
+                                    self.install_callback(sig, v.clone(), callee.line, callee.col)
+                                        .map_err(|msg| runtime_error(callee.line, callee.col, &msg))?,
+                                ),
+                                None => None,
+                            });
+                        }
                     }
                     let fargs: Vec<_> = vals
                         .iter()
-                        .zip(&live)
-                        .map(|(v, cb)| match cb {
-                            Some(cb) => crate::ffi::FfiVal::Int(cb.ptr()),
-                            None => value_to_ffi(v),
+                        .enumerate()
+                        .map(|(i, v)| match live.get(i) {
+                            Some(Some(cb)) => crate::ffi::FfiVal::Int(cb.ptr()),
+                            _ => value_to_ffi(v),
                         })
                         .collect();
-                    let has_callbacks = live.iter().any(|cb| cb.is_some());
                     let outer = if has_callbacks { crate::ffi::begin_callback_errors() } else { None };
                     let result = crate::ffi::call(&desc, &fargs);
                     drop(live);

@@ -593,7 +593,7 @@ impl<'a> Vm<'a> {
     /// IDEAS §131: instala `f` como callback C con la firma `sig`. El trampolín vuelve a entrar
     /// en ESTA VM (`run_callback`) desde los marcos de C de la llamada `extern` en curso; un error
     /// de ejecución se guarda para esa llamada y C recibe cero.
-    fn install_callback(&mut self, sig: &crate::ffi::CallbackSig, f: HeapValue) -> Result<crate::ffi::callback_pool::Callback, String> {
+    fn install_callback(&mut self, sig: &crate::ffi::CallbackSig, f: HeapValue, line: usize, col: usize) -> Result<crate::ffi::callback_pool::Callback, String> {
         use crate::ffi::{CKind, CallbackArg, CallbackRet};
         // La dirección como entero: el manejador debe ser `'static`. Vale mientras dura la
         // llamada `extern`, que corre dentro de un método de `self` y suelta el callback antes
@@ -605,9 +605,12 @@ impl<'a> Vm<'a> {
             // instaló el callback: esta VM está viva, y detenida dentro de la llamada a C.
             let vm = unsafe { &mut *(me as *mut Self) };
             let zero = if ret == CKind::Float { CallbackRet::Float(0.0) } else { CallbackRet::Int(0) };
-            let mut values = Vec::with_capacity(args.len());
+            // Los argumentos van directos a la pila de operandos (sin `Vec` por invocación):
+            // `run_callback` los pasa de ahí a los locales del marco. Un `Option<ptr>` aloja su
+            // enum; el handle ya está en la pila —raíz— cuando llega el siguiente.
+            let stack_len = vm.cur.stack.len();
             for a in args {
-                values.push(match a {
+                let v = match *a {
                     CallbackArg::Int(n) => HeapValue::Int(n),
                     CallbackArg::U64(n) => HeapValue::UInt(n, 64),
                     CallbackArg::Float(x) => HeapValue::Float(x),
@@ -619,16 +622,16 @@ impl<'a> Vm<'a> {
                             Some(p) => ("Some", vec![HeapValue::Ptr(p)]),
                         };
                         let Some((eid, tag)) = option_variant(&vm.program.enums, variant) else {
-                            crate::ffi::set_callback_error(runtime_error(0, 0, "the prelude Option enum is not available for the FFI callback"));
+                            vm.cur.stack.truncate(stack_len);
+                            crate::ffi::set_callback_error(runtime_error(line, col, "the prelude Option enum is not available for the FFI callback"));
                             return zero;
                         };
-                        // El handle queda sin raíz hasta que `run_callback` lo pasa a los locales
-                        // del marco; no hay punto seguro del GC en medio.
                         HeapValue::Obj(vm.cur.heap.allocate(Obj::Enum(VmEnum { enum_id: eid as u32, tag: tag as u32, payload })))
                     }
-                });
+                };
+                vm.cur.stack.push(v);
             }
-            match vm.run_callback(&f, values) {
+            match vm.run_callback(&f, args.len(), line, col) {
                 Ok(HeapValue::Int(n)) => CallbackRet::Int(n),
                 Ok(HeapValue::UInt(n, _)) => CallbackRet::Int(n as i64),
                 Ok(HeapValue::Float(x)) => CallbackRet::Float(x),
@@ -651,14 +654,18 @@ impl<'a> Vm<'a> {
         })
     }
 
-    /// IDEAS §131: ejecuta `f` (una función o un closure) con `args` desde un trampolín de la FFI,
+    /// IDEAS §131: ejecuta `f` (una función o un closure) con sus `argc` argumentos, que el
+    /// trampolín ya dejó en la pila de operandos, desde un trampolín de la FFI,
     /// es decir, con marcos de C entre este punto y el `run_loop` que hizo la llamada `extern`.
     /// Abre el marco y entra en un bucle ANIDADO que termina cuando ese marco retorna (`floor`).
     /// La fibra no puede aparcarse mientras tanto (`take_current_fiber`). Con error, la fibra
     /// queda como estaba antes de entrar.
-    fn run_callback(&mut self, f: &HeapValue, args: Vec<HeapValue>) -> Result<HeapValue, RuntimeError> {
+    fn run_callback(&mut self, f: &HeapValue, argc: usize, line: usize, col: usize) -> Result<HeapValue, RuntimeError> {
         if self.cur.frames.len() >= max_frames() {
-            return Err(runtime_error(0, 0, &crate::runtime::stack_overflow_message()));
+            let at = self.cur.stack.len() - argc;
+            self.cur.stack.truncate(at);
+            // La posición es la de la llamada `extern` que pasó el callback.
+            return Err(runtime_error(line, col, &crate::runtime::stack_overflow_message()));
         }
         let (fn_idx, upvalues) = match f {
             HeapValue::Function(i) => (*i, Vec::new()),
@@ -669,12 +676,8 @@ impl<'a> Vm<'a> {
             _ => unreachable!("the checker guarantees a function"),
         };
         let saved_floor = self.cur.floor;
-        let (frames_len, scopes_len, stack_len) = (self.cur.frames.len(), self.cur.scopes.len(), self.cur.stack.len());
+        let (frames_len, scopes_len, stack_len) = (self.cur.frames.len(), self.cur.scopes.len(), self.cur.stack.len() - argc);
         let markers_len = self.cur.try_markers.len();
-        let argc = args.len();
-        for a in args {
-            self.cur.stack.push(a);
-        }
         let base = self.open_frame_locals(fn_idx, argc);
         self.cur.frames.push(CallFrame { function: fn_idx, ip: 0, locals_base: base, upvalues, stack_base: self.cur.stack.len() });
         if profile::enabled() {
@@ -1210,26 +1213,30 @@ impl<'a> Vm<'a> {
                     // IDEAS §131: cada argumento función se instala en un trampolín C mientras
                     // dura la llamada. Su valor queda además en la pila de operandos: es la raíz
                     // que lo mantiene vivo si el GC corre dentro del callback.
+                    // Una `extern` sin callbacks (casi todas) no paga nada de esto.
                     let root_base = self.cur.stack.len();
-                    let mut live: Vec<Option<crate::ffi::callback_pool::Callback>> = Vec::with_capacity(*argc);
-                    for (i, v) in fargs.iter().enumerate() {
-                        live.push(match desc.callbacks.get(i).and_then(|c| c.as_ref()) {
-                            Some(sig) => {
-                                self.cur.stack.push(v.clone());
-                                match self.install_callback(sig, v.clone()) {
-                                    Ok(cb) => Some(cb),
-                                    Err(m) => {
-                                        self.cur.stack.truncate(root_base);
-                                        return Err(runtime_error(pos!().0, pos!().1, &m));
+                    let has_callbacks = desc.has_callbacks();
+                    let mut live: Vec<Option<crate::ffi::callback_pool::Callback>> = Vec::new();
+                    if has_callbacks {
+                        for (i, v) in fargs.iter().enumerate() {
+                            live.push(match desc.callbacks.get(i).and_then(|c| c.as_ref()) {
+                                Some(sig) => {
+                                    self.cur.stack.push(v.clone());
+                                    match self.install_callback(sig, v.clone(), pos!().0, pos!().1) {
+                                        Ok(cb) => Some(cb),
+                                        Err(m) => {
+                                            self.cur.stack.truncate(root_base);
+                                            return Err(runtime_error(pos!().0, pos!().1, &m));
+                                        }
                                     }
                                 }
-                            }
-                            None => None,
-                        });
+                                None => None,
+                            });
+                        }
                     }
                     let mut cargs = Vec::with_capacity(*argc);
-                    for (v, cb) in fargs.iter().zip(&live) {
-                        if let Some(cb) = cb {
+                    for (i, v) in fargs.iter().enumerate() {
+                        if let Some(Some(cb)) = live.get(i) {
                             cargs.push(crate::ffi::FfiVal::Int(cb.ptr()));
                             continue;
                         }
@@ -1254,7 +1261,6 @@ impl<'a> Vm<'a> {
                                 "non-marshalable argument at the FFI boundary")),
                         });
                     }
-                    let has_callbacks = live.iter().any(|cb| cb.is_some());
                     let outer = if has_callbacks { crate::ffi::begin_callback_errors() } else { None };
                     let r = crate::ffi::call(desc, &cargs);
                     drop(live);

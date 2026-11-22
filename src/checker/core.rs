@@ -2962,8 +2962,10 @@ impl Checker {
                     // Una `extern fn` no tiene cuerpo que los motores puedan tomar como valor
                     // (antes: ICE del compilador). Vale también para pasarla como callback.
                     if self.extern_fns.contains(name) {
+                        // El nombre como lo escribe el usuario: `mod.f`, no el interno `mod::f`.
+                        let shown = name.replace("::", ".");
                         return Err(self.err(expr.line, expr.col, format!(
-                            "cannot use the extern function '{0}' as a value; wrap it in a function: fn(…) {{ {0}(…) }}", name
+                            "cannot use the extern function '{0}' as a value; wrap it in a function: fn(…) {{ {0}(…) }}", shown
                         )));
                     }
                     let ty = Type::Fn(sig.params.clone(), Box::new(sig.ret.clone()));

@@ -212,9 +212,14 @@ impl Transpiler {
         // de ejecución más.
         let has_callbacks = prog.externs.iter().any(|e| e.params.iter().any(|p| matches!(normalize_type(&p.ty), Type::Fn(..))));
         if has_callbacks {
-            out.push_str("#[allow(dead_code)]\nmod __ray_cb {\n");
-            out.push_str(include_str!("../../crates/ray-runtime/src/ffi_callback.rs"));
-            out.push_str("}\n");
+            if self.fibers {
+                // Con fibras el binario ya enlaza `ray-runtime`: la reserva es la suya.
+                out.push_str("use ray_runtime::ffi_callback as __ray_cb;\n");
+            } else {
+                out.push_str("#[allow(dead_code)]\nmod __ray_cb {\n");
+                out.push_str(include_str!("../../crates/ray-runtime/src/ffi_callback.rs"));
+                out.push_str("}\n");
+            }
             out.push_str("thread_local! { static __RAY_CB_ERR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) }; }\n");
             out.push_str("fn __ray_cb_stash(m: &str) { __RAY_CB_ERR.with(|s| { s.borrow_mut().get_or_insert_with(|| m.to_string()); }); }\n");
             // El pendiente es de UNA llamada `extern`: una anidada (dentro de un callback de otra
@@ -340,8 +345,8 @@ impl Transpiler {
                     other => return Err(format!("FFI argument is not marshalable: {:?}", other)),
                 }
             }
-            let has_callbacks = e.params.iter().any(|p| matches!(normalize_type(&p.ty), Type::Fn(..)));
-            if has_callbacks {
+            let callbacks: Vec<usize> = e.params.iter().enumerate().filter(|(_, p)| matches!(normalize_type(&p.ty), Type::Fn(..))).map(|(i, _)| i).collect();
+            if !callbacks.is_empty() {
                 out.push_str("    let __rt_cb_outer = __ray_cb_begin();\n");
             }
             let raw_call = format!("unsafe {{ __ffi_{}({}) }}", mangle(&e.name), passes.join(", "));
@@ -363,7 +368,6 @@ impl Transpiler {
                 writeln!(out, "    let __rt_r = {};", raw_call).unwrap();
             }
             // IDEAS §131: suelta los trampolines y relanza el error que hubiera dentro de un callback.
-            let callbacks: Vec<usize> = e.params.iter().enumerate().filter(|(_, p)| matches!(normalize_type(&p.ty), Type::Fn(..))).map(|(i, _)| i).collect();
             if !callbacks.is_empty() {
                 for i in &callbacks {
                     writeln!(out, "    drop(__rt_cb{});", i).unwrap();

@@ -2547,7 +2547,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        st.result.clone().unwrap()\n",
             "    }\n",
             // try_join: consume la tarea entera (Ok y Err) — es la observación + la unión en una.
+            // IDEAS §131: dentro de un callback de la FFI no se espera; se falla ANTES de marcar
+            // la tarea como consumida, para que un `join` posterior siga valiendo.
+            "    fn no_wait_in_callback(&self) { if __ray_in_ffi_callback() && self.inner.0.lock().unwrap().result.is_none() { __ray_rt_err(__RAY_FFI_CALLBACK_WAIT); } }\n",
             "    fn wait_consume(&self) -> Result<T, String> {\n",
+            "        self.no_wait_in_callback();\n",
             "        if self.consumed.swap(true, std::sync::atomic::Ordering::SeqCst) { __ray_rt_err(__RAY_TASK_CONSUMED); }\n",
             "        self.wait()\n",
             "    }\n",
@@ -2557,7 +2561,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        if self.consumed.load(std::sync::atomic::Ordering::SeqCst) { __ray_rt_err(__RAY_TASK_CONSUMED); }\n",
             "        match self.wait() { Ok(_) => None, Err(m) => { self.consumed.store(true, std::sync::atomic::Ordering::SeqCst); Some(m) } }\n",
             "    }\n",
-            "    fn join(&self) -> T { if self.consumed.swap(true, std::sync::atomic::Ordering::SeqCst) { __ray_rt_err(__RAY_TASK_CONSUMED); } match self.wait() { Ok(v) => v, Err(m) => __ray_rt_err(&m) } }\n",
+            "    fn join(&self) -> T { self.no_wait_in_callback(); if self.consumed.swap(true, std::sync::atomic::Ordering::SeqCst) { __ray_rt_err(__RAY_TASK_CONSUMED); } match self.wait() { Ok(v) => v, Err(m) => __ray_rt_err(&m) } }\n",
             "}\n",
             // La cara borrada-de-tipo que un scope guarda de cada hija: sondear su estado SIN bloquear
             // (el hilo hijo escribe su resultado al terminar) y cancelarla.

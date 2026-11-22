@@ -21802,8 +21802,8 @@ bastaba donde quien espera deja rastro ANTES de llegar ahí. Corregido:
   espere; dentro de un callback fallaba un `send` que no bloqueaba. Ahora `coop()` no cede ahí.
 - *Nativo, `run_blocking`.* Encargaba el trabajo al pool y luego aparcaba: con el fallo del park
   el llamador se desenrollaba y el hilo del pool seguía usando punteros de su marco. Se comprueba
-  antes de encargar. Efecto visible: una `extern` de un bloque `blocking` llamada desde un
-  callback es error en el nativo con fibras (en la VM `blocking` es inerte y la llamada pasa).
+  antes de encargar. (La tercera pasada cambió el remedio: dentro de un callback el trabajo
+  corre en línea, ver abajo.)
 - *Nativo, canales.* `send` contaba al emisor (y en un canal sin búfer encolaba el valor) antes
   de esperar. Ahora pregunta primero, y `__ray_cv_wait` falla con la guarda soltada y sin apuntar
   la lista de espera. Un envío a un canal sin búfer es siempre error dentro de un callback en el
@@ -21846,4 +21846,26 @@ tampoco el caso con tipos concretos (`count(a, empty())` con `int`) que Rust adm
 1.27.103: va por detrás en toda la inferencia hacia argumentos genéricos, y este cambio no abre
 una clase nueva de divergencia. Sigue sin hacer el coste por invocación (dos `Vec` y el clon de
 los upvalues por llamada).
+
+**Tercera pasada.**
+
+- *Nativo, lo que va al pool.* `run_blocking` fallaba dentro de un callback, y con él todo lo que
+  el runtime descarga: `process.run`, `fs.sync`, `net.tcp_connect`, el handshake TLS. En la VM
+  esas operaciones corren y bloquean al worker. Ahora el nativo hace lo mismo dentro de un
+  callback: el trabajo corre en línea. De paso desaparece la divergencia de las `extern` de un
+  bloque `blocking`. La regla queda nítida: *tardar* vale, *esperar a otra fibra* no.
+- *Nativo, `join`.* Marcaba la tarea como consumida antes de esperar; un `join` fallido dentro de
+  un callback la dejaba inservible. Pregunta antes.
+- *Alias en un módulo importado.* El arreglo de la primera pasada solo valía en el módulo de
+  entrada: el cargador no reescribía los tipos de las firmas `extern`, y `cmp: Cmp` en un módulo
+  importado daba «unknown type». Es justo donde se usa (un paquete que envuelve una librería C).
+- *Posición.* El desbordamiento de pila al entrar a un callback salía en `0:0`; ahora en la
+  llamada `extern`. El diagnóstico de «extern como valor» nombra `mod.f`, no el interno `mod::f`.
+- *Coste.* Una `extern` sin callbacks ya no aloja nada por ellos; los argumentos de una
+  invocación se decodifican en la pila y van directos a la pila de operandos de la VM (sin los
+  dos `Vec` por llamada); el nativo con fibras usa la reserva de `ray-runtime` en vez de pegar
+  una segunda copia.
+
+Sin tocar: `xs.map(to_string)` con `xs: [V]` dentro de una función genérica sigue sin compilar
+(el builtin como valor aún trata un parámetro rígido como incógnita; igual que en 1.27.111).
 

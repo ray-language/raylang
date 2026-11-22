@@ -326,6 +326,89 @@ fn an_error_inside_a_callback_keeps_its_own_position() {
     assert!(err.contains("from main (prog:3:5)"), "{err}");
 }
 
+// De la tercera revisión: un proyecto con la `extern` en un módulo importado y su firma tras un
+// alias; lo que el runtime nativo descarga a su pool corre en línea dentro de un callback; un
+// `join` que tendría que esperar no consume la tarea.
+const PROJECT_MAIN: &str = r#"import std/ffi;
+import std/process;
+import std/time;
+import sorter;
+
+extern "c" blocking {
+    fn getpid() -> int;
+}
+
+fn main() {
+    // El alias de un módulo importado en la firma de su extern.
+    print(sorter.sorted([3, 1, 2]));
+    // Lo que el runtime descarga a su pool (un proceso, una extern `blocking`) corre en línea.
+    print(try_call(fn() -> int {
+        sorter.sort_with(bytes_of([2, 1]), fn(x: ptr, y: ptr) -> int {
+            let r = process.run("true", []);
+            if (r.is_ok() && getpid() > 0) { sorter.byte_at(x) - sorter.byte_at(y) } else { 0 }
+        });
+        1
+    }));
+    // Un `join` que tendría que esperar falla sin consumir la tarea.
+    let gate: Channel<int> = Channel.new();
+    let t = spawn(fn() -> int { gate.recv().unwrap_or(0) + 40 });
+    print(try_call(fn() -> int {
+        sorter.sort_with(bytes_of([2, 1]), fn(x: ptr, y: ptr) -> int { join(t) });
+        1
+    }).is_err());
+    gate.send(2);
+    print(join(t));
+}
+"#;
+
+const PROJECT_SORTER: &str = r#"import std/ffi;
+
+pub type Cmp = fn(ptr, ptr) -> int;
+
+extern "c" {
+    fn qsort(base: bytes, n: u64, size: u64, cmp: Cmp);
+}
+
+pub fn byte_at(p: ptr) -> int { ffi.read(p, 1)[0] as int }
+
+pub fn sort_with(data: bytes, cmp: Cmp) {
+    qsort(data, data.len() as u64, 1 as u64, cmp);
+}
+
+pub fn sorted(xs: [int]) -> bytes {
+    let d = bytes_of(xs);
+    sort_with(d, fn(x: ptr, y: ptr) -> int { byte_at(x) - byte_at(y) });
+    d
+}
+"#;
+
+#[test]
+fn a_module_wraps_a_c_callback_api_behind_an_alias() {
+    let d = tmp("project");
+    std::fs::create_dir_all(d.join("src")).unwrap();
+    std::fs::write(d.join("ray.toml"), "[package]\nname = \"cbproject\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::write(d.join("src/main.ray"), PROJECT_MAIN).unwrap();
+    std::fs::write(d.join("src/sorter.ray"), PROJECT_SORTER).unwrap();
+    let expected = "010203\nResult.Ok(1)\ntrue\n42\n";
+    let (out, err, code) = ray(&d, &["run"]);
+    assert_eq!((out.as_str(), code), (expected, 0), "{err}");
+    if have("rustc") {
+        let bin = d.join("prog_bin");
+        let (_o, err, code) = ray(&d, &["build", "--native", "--no-stubs", "-o", bin.to_str().unwrap()]);
+        assert_eq!(code, 0, "build --native: {err}");
+        assert_eq!(String::from_utf8_lossy(&Command::new(&bin).output().unwrap().stdout), expected);
+    }
+    // Una extern de otro módulo tampoco es un valor, y el diagnóstico la nombra como se escribe.
+    std::fs::write(
+        d.join("src/main.ray"),
+        "import sorter;\nextern \"c\" { fn strcmp(a: ptr, b: ptr) -> int; }\nfn main() { sorter.sort_with(b\"ba\", strcmp); }\n",
+    )
+    .unwrap();
+    let (_out, err, code) = ray(&d, &["check"]);
+    assert_eq!(code, 65);
+    assert!(err.contains("cannot use the extern function 'strcmp' as a value"), "{err}");
+}
+
 // Las formas que libc no ejercita: flotantes mezclados con enteros, `bool`, `u64` anchos,
 // `Option<ptr>` en los dos sentidos y un callback sin retorno.
 const SHAPES_C: &str = r#"#include <stdbool.h>

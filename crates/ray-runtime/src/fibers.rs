@@ -960,14 +960,11 @@ unsafe extern "C" {
 /// modo que `std/ffi.errno()` tras una extern `blocking` lee lo que dejó ESA llamada (misma
 /// semántica que la llamada directa).
 pub fn run_blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
-    if !in_fiber() {
+    // IDEAS §131: dentro de un callback de la FFI la fibra no puede aparcarse a esperar al pool
+    // (hay marcos de C en su pila), así que el trabajo corre aquí mismo y bloquea al worker lo
+    // que dure. Es lo que hace la VM, donde estas operaciones no descargan a ningún pool.
+    if !in_fiber() || in_ffi_callback() {
         return f();
-    }
-    // IDEAS §131: dentro de un callback de la FFI no se puede aparcar. Se comprueba ANTES de
-    // encargar el trabajo: si fallara el park, el llamador se desenrollaría con el hilo del pool
-    // todavía usando los punteros de su marco.
-    if in_ffi_callback() {
-        panic!("{FFI_CALLBACK_WAIT}");
     }
     // El slot del resultado (+ el errno del hilo del pool) + su lista de esperas (el protocolo
     // anti despertar-perdido de F3).

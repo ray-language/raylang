@@ -178,31 +178,41 @@ pub fn callback_sig(params: &[crate::ast::Type], ret: &crate::ast::Type) -> Resu
     Ok(CallbackSig { params: kinds, ret })
 }
 
+/// Los argumentos de una invocación, ya interpretados. En la pila: un callback se llama muchas
+/// veces (el comparador de `qsort`), y no debe alojar por llamada.
+pub struct CallbackArgs {
+    items: [CallbackArg; callback_pool::MAX_INT_ARGS + callback_pool::MAX_FLOAT_ARGS],
+    len: usize,
+}
+
+impl CallbackArgs {
+    pub fn as_slice(&self) -> &[CallbackArg] {
+        &self.items[..self.len]
+    }
+}
+
 /// Interpreta los registros que C pasó según la firma: cada argumento sale de su banco, en orden.
 /// De un `int` de C solo valen los 32 bits bajos (se extiende el signo); de un `bool`, los 8.
-pub fn callback_args(sig: &CallbackSig, regs: &crate::ffi::callback_pool::Regs) -> Vec<CallbackArg> {
+pub fn callback_args(sig: &CallbackSig, regs: &callback_pool::Regs) -> CallbackArgs {
+    let mut out = CallbackArgs { items: [CallbackArg::Int(0); callback_pool::MAX_INT_ARGS + callback_pool::MAX_FLOAT_ARGS], len: sig.params.len() };
     let (mut i, mut f) = (0, 0);
-    let mut next_int = || {
-        i += 1;
-        regs.ints[i - 1]
-    };
-    sig.params
-        .iter()
-        .map(|k| match k {
-            CKind::Float => {
-                f += 1;
-                CallbackArg::Float(regs.floats[f - 1])
+    for (slot, k) in out.items.iter_mut().zip(&sig.params) {
+        *slot = if *k == CKind::Float {
+            f += 1;
+            CallbackArg::Float(regs.floats[f - 1])
+        } else {
+            i += 1;
+            let reg = regs.ints[i - 1];
+            match k {
+                CKind::Int => CallbackArg::Int(reg as i32 as i64),
+                CKind::U64 => CallbackArg::U64(reg as u64),
+                CKind::Bool => CallbackArg::Bool(reg as u8 != 0),
+                CKind::OptPtr => CallbackArg::OptPtr(if reg == 0 { None } else { Some(reg) }),
+                _ => CallbackArg::Ptr(reg),
             }
-            CKind::Int => CallbackArg::Int(next_int() as i32 as i64),
-            CKind::U64 => CallbackArg::U64(next_int() as u64),
-            CKind::Bool => CallbackArg::Bool(next_int() as u8 != 0),
-            CKind::OptPtr => {
-                let p = next_int();
-                CallbackArg::OptPtr(if p == 0 { None } else { Some(p) })
-            }
-            _ => CallbackArg::Ptr(next_int()),
-        })
-        .collect()
+        };
+    }
+    out
 }
 
 /// Los bits que el trampolín devuelve a C (registro entero, o `f64::to_bits`).
@@ -270,7 +280,7 @@ pub const BLOCKING_IN_CALLBACK: &str = callback_pool::WAIT_MESSAGE;
 /// argumentos comparten posición entre bancos de registros).
 pub fn install_callback(
     sig: &CallbackSig,
-    handler: impl Fn(Vec<CallbackArg>) -> CallbackRet + 'static,
+    handler: impl Fn(&[CallbackArg]) -> CallbackRet + 'static,
 ) -> Result<crate::ffi::callback_pool::Callback, String> {
     if cfg!(windows) && sig.params.contains(&CKind::Float) {
         return Err(callback_pool::WINDOWS_FLOAT_MESSAGE.into());
@@ -280,7 +290,7 @@ pub fn install_callback(
         sig.ret == CKind::Float,
         std::rc::Rc::new(move |regs: &crate::ffi::callback_pool::Regs| {
             let _guard = enter_callback();
-            callback_ret_bits(handler(callback_args(&owned, regs)))
+            callback_ret_bits(handler(callback_args(&owned, regs).as_slice()))
         }),
     )
 }
@@ -299,6 +309,13 @@ pub struct ExternDesc {
     pub blocking: bool,
     /// La firma de cada parámetro callback (`None` en los demás), en paralelo con `arg_kinds`.
     pub callbacks: Vec<Option<CallbackSig>>,
+}
+
+impl ExternDesc {
+    /// ¿Algún parámetro es un callback? Las `extern` que no (casi todas) no pagan nada por ellos.
+    pub fn has_callbacks(&self) -> bool {
+        self.callbacks.iter().any(|c| c.is_some())
+    }
 }
 
 /// Clasifica un tipo de raylang para la frontera FFI (M41.1: solo primitivos). `None` si el tipo no

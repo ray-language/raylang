@@ -209,9 +209,9 @@ impl Transpiler {
         // IDEAS §131: callbacks C→raylang. La reserva de trampolines es la MISMA fuente que usan la
         // VM y el intérprete (`ray-runtime/src/ffi_callback.rs`), pegada como módulo: vale también
         // en el `rustc` pelado. El error (panic) de un callback no puede desenrollar marcos de C:
-        // se intercepta con `__ray_try_call` (el de `try_call`: mismo silencio del hook y mismo
-        // mensaje), se guarda aquí y el wrapper de la `extern` lo relanza al volver como un error
-        // de ejecución más.
+        // se intercepta con `__ray_try_quiet` (el mismo silencio del hook que `try_call`), se
+        // guarda ENTERO aquí —un `__RayErr` lleva su posición— y el wrapper de la `extern` lo
+        // relanza al volver con `resume_unwind`, que no vuelve a pasar por el hook.
         let has_callbacks = prog.externs.iter().any(|e| e.params.iter().any(|p| matches!(normalize_type(&p.ty), Type::Fn(..))));
         // ¿Hay un callback de la FFI en curso? Solo puede haberlo si el programa declara alguno
         // (y solo se comprueba con fibras): los demás no pagan la lectura en `send`/`join`.
@@ -229,13 +229,13 @@ impl Transpiler {
                 out.push_str(include_str!("../../crates/ray-runtime/src/ffi_callback.rs"));
                 out.push_str("}\n");
             }
-            out.push_str("thread_local! { static __RAY_CB_ERR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) }; }\n");
-            out.push_str("fn __ray_cb_stash(m: &str) { __RAY_CB_ERR.with(|s| { s.borrow_mut().get_or_insert_with(|| m.to_string()); }); }\n");
+            out.push_str("thread_local! { static __RAY_CB_ERR: std::cell::RefCell<Option<Box<dyn std::any::Any + Send>>> = const { std::cell::RefCell::new(None) }; }\n");
+            out.push_str("fn __ray_cb_stash(e: Box<dyn std::any::Any + Send>) { __RAY_CB_ERR.with(|s| { s.borrow_mut().get_or_insert(e); }); }\n");
             // El pendiente es de UNA llamada `extern`: una anidada (dentro de un callback de otra
             // que ya falló) aparta el de fuera al empezar y lo repone al terminar.
             out.push_str("fn __ray_cb_failed() -> bool { __RAY_CB_ERR.with(|s| s.borrow().is_some()) }\n");
-            out.push_str("fn __ray_cb_begin() -> Option<String> { __RAY_CB_ERR.with(|s| s.borrow_mut().take()) }\n");
-            out.push_str("fn __ray_cb_end(outer: Option<String>) { if let Some(m) = __RAY_CB_ERR.with(|s| std::mem::replace(&mut *s.borrow_mut(), outer)) { __ray_rt_err(&m); } }\n");
+            out.push_str("fn __ray_cb_begin() -> Option<Box<dyn std::any::Any + Send>> { __RAY_CB_ERR.with(|s| s.borrow_mut().take()) }\n");
+            out.push_str("fn __ray_cb_end(outer: Option<Box<dyn std::any::Any + Send>>) { if let Some(e) = __RAY_CB_ERR.with(|s| std::mem::replace(&mut *s.borrow_mut(), outer)) { std::panic::resume_unwind(e); } }\n");
         }
         // (1) Declaraciones `extern "C"`, agrupadas por librería (orden estable). M417: la clave
         // incluye los nombres por plataforma, que son parte de la identidad del bloque.
@@ -451,12 +451,12 @@ impl Transpiler {
         // En Windows x64 los argumentos comparten posición entre bancos de registros: un callback
         // con `float` no es alcanzable (mismo texto que la VM, `ffi::install_callback`).
         let windows = if sig.params.contains(&CKind::Float) {
-            format!("if cfg!(windows) {{ __ray_rt_err({:?}); }} ", crate::ffi::callback_pool::WINDOWS_FLOAT_MESSAGE)
+            format!("if cfg!(all(windows, target_arch = \"x86_64\")) {{ __ray_rt_err({:?}); }} ", crate::ffi::callback_pool::WINDOWS_FLOAT_MESSAGE)
         } else {
             String::new()
         };
         format!(
-            "{{ {windows}let __f = __p{i}.clone(); match __ray_cb::install({float_ret}, Rc::new(move |__r: &__ray_cb::Regs| -> u64 {{ if __ray_cb_failed() {{ return 0; }} {guard}let mut __out = 0u64; if let Some(__m) = __ray_try_quiet(|| {{ let __v = __f({args}); __out = {encode}; }}) {{ __ray_cb_stash(&__m); }} __out }})) {{ Ok(__c) => __c, Err(__m) => __ray_rt_err(&__m) }} }}",
+            "{{ {windows}let __f = __p{i}.clone(); match __ray_cb::install({float_ret}, Rc::new(move |__r: &__ray_cb::Regs| -> u64 {{ if __ray_cb_failed() {{ return 0; }} {guard}let mut __out = 0u64; if let Some(__e) = __ray_try_quiet(|| {{ let __v = __f({args}); __out = {encode}; }}) {{ __ray_cb_stash(__e); }} __out }})) {{ Ok(__c) => __c, Err(__m) => __ray_rt_err(&__m) }} }}",
             float_ret = sig.ret == CKind::Float,
             args = args.join(", "),
         )

@@ -462,6 +462,11 @@ impl<'a> Interpreter<'a> {
                         if crate::builtins::is_builtin(name) {
                             return self.eval_call(callee, args);
                         }
+                        // Una `extern fn` tampoco recurre en raylang: llamada normal (antes
+                        // caía al camino indirecto y moría con un error interno).
+                        if self.externs.contains_key(name.as_str()) {
+                            return self.eval_call(callee, args);
+                        }
                         if let Some(&idx) = self.named_index.get(name.as_str()) {
                             let mut values = Vec::with_capacity(args.len());
                             for arg in args {

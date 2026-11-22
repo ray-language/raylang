@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.111** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.112** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -307,8 +307,8 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   se declara `u64`. Usar el puntero **después**
   de que la llamada retorne, o desde otro hilo, está **fuera de contrato**: lo habitual es que el
   programa escriba el motivo y aborte, pero no se garantiza detectarlo.
-  Hasta 64 callbacks vivos a la vez por hilo. En Windows un callback con parámetros `float` es
-  error de ejecución.
+  Hasta 64 callbacks vivos a la vez por hilo. En Windows x64 un callback con parámetros `float`
+  es error de ejecución.
   El **retorno** admite `int`/`u64`/`float`/`bool`/`unit`, `ptr`/`Option<ptr>` (`NULL → None`, p. ej.
   `fopen`), y para un `char*`, **`Option<bytes>`** (`NULL → None`; la frontera copia los bytes hasta el NUL
   y no libera el puntero) o **`Option<string>`** (azúcar que valida UTF-8; bytes inválidos → error de

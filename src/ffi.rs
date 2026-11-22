@@ -299,7 +299,7 @@ pub fn install_callback(
     sig: &CallbackSig,
     handler: impl Fn(&[CallbackArg]) -> CallbackRet + 'static,
 ) -> Result<crate::ffi::callback_pool::Callback, String> {
-    if cfg!(windows) && sig.params.contains(&CKind::Float) {
+    if cfg!(all(windows, target_arch = "x86_64")) && sig.params.contains(&CKind::Float) {
         return Err(callback_pool::WINDOWS_FLOAT_MESSAGE.into());
     }
     let owned = sig.clone();

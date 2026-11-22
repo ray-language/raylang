@@ -687,7 +687,7 @@ does not check it outside a fiber (`--without fibers`, or the main thread of a `
 waiting blocks the thread there. An error inside the callback is seen by the `extern` call
 when C returns (C gets zero from that callback and from the following ones, which no longer
 run); `try_call` recovers it. At most 64 live callbacks
-at a time. On Windows a callback with `float` parameters is not supported yet (runtime error).
+at a time. On Windows x64 a callback with `float` parameters is not supported yet (runtime error).
 
 **Cost of a call** (measured on arm64, rayserial #396): ~0.5 µs on the VM and ~1 ns natively.
 `blocking` adds 4 to 8 µs natively (a thread hop) and nothing on the VM, where it is inert:
@@ -873,4 +873,4 @@ orientations) **replaces** it; the rest are added.
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:ccc249b11c0e -->
+<!-- sync: sha256:34c72ad414c7 -->

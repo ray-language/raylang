@@ -683,7 +683,7 @@ comprueba fuera de una fibra (`--without fibers`, o el hilo principal de una app
 esperar bloquea el hilo. Un error dentro del callback lo ve la llamada `extern`
 cuando C retorna (C recibe cero de ese callback y de los siguientes, que ya no se ejecutan);
 `try_call` lo recupera. Como mucho 64 callbacks
-vivos a la vez. En Windows un callback con parámetros `float` aún no se admite (error de ejecución).
+vivos a la vez. En Windows x64 un callback con parámetros `float` aún no se admite (error de ejecución).
 
 **Coste de una llamada** (medido en arm64, rayserial #396): ~0,5 µs en la VM y ~1 ns en nativo.
 `blocking` añade entre 4 y 8 µs en nativo (un salto de hilo) y nada en la VM, donde es inerte:

@@ -21912,3 +21912,14 @@ mensaje del ordinario. Rehecho:
   como `u64`). Y el nativo no comprueba «no se puede esperar» fuera de una fibra: sin fibras, o
   en el hilo principal de una app `std/ui` o de una librería `--lib`.
 
+**Sexta pasada: ya sin fallos graves en los callbacks.** Corregido lo barato: una `extern` en
+posición de cola daba un error interno en el intérprete (desde antes de este arco; los tests
+usaban siempre `;`); en el nativo el error de un callback perdía su posición (ahora viaja el
+`__RayErr` entero y se relanza con `resume_unwind`); la restricción de `float` es de Windows
+**x64**, no de Windows (en ARM64 los bancos son independientes); y `Callback` deja de ser `Send`
+para que el compilador rechace soltarlo en otro hilo. Aceptado como está: la sesión TLS tolera el
+envenenamiento venga de donde venga (más ancho que el caso del callback); `--fuel` y `--heap`
+solo rigen en el worker de `main` cuando el programa lanza tareas (así era en 1.27.111); los 22
+sitios que aparcan repiten el mismo adaptador; el camino de Windows no tiene test de integración
+(los tests son de unix, y el CI de Windows no corre los unitarios de `ray-runtime`).
+

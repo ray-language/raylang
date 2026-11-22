@@ -304,13 +304,13 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     out.push_str("}\n");
     // IDEAS §131: como `__ray_try_call` (mismo silencio del hook), sin alojar nada cuando no
     // falla: lo usa cada invocación de un callback de la FFI.
-    out.push_str("#[allow(dead_code)]\nfn __ray_try_quiet<F: FnOnce()>(f: F) -> Option<String> {\n");
+    out.push_str("#[allow(dead_code)]\nfn __ray_try_quiet<F: FnOnce()>(f: F) -> Option<Box<dyn std::any::Any + Send>> {\n");
     if fibers {
         out.push_str("    __ray_ctx(|c| c.in_try += 1);\n    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));\n    __ray_ctx(|c| c.in_try -= 1);\n");
     } else {
         out.push_str("    __RAY_IN_TRY.with(|d| d.set(d.get() + 1));\n    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));\n    __RAY_IN_TRY.with(|d| d.set(d.get() - 1));\n");
     }
-    out.push_str("    r.err().map(|e| __ray_panic_msg(&*e))\n}\n");
+    out.push_str("    r.err()\n}\n");
     out.push_str("fn __ray_panic_msg(e: &(dyn std::any::Any + Send)) -> String {\n");
     out.push_str("    if let Some(r) = e.downcast_ref::<__RayErr>() { r.0.clone() }\n");
     out.push_str("    else if let Some(s) = e.downcast_ref::<&str>() { s.to_string() }\n");

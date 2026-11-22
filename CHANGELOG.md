@@ -4,18 +4,30 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.112 — 2026-11-22
 
 - **Callbacks en la FFI** (ray-daw #425): un parámetro de tipo función en una `extern fn` pasa una
   función de raylang —con nombre o closure— a C como puntero a función:
   `fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int);`. Vale mientras dura la
   llamada y en el mismo hilo (`qsort`, `bsearch`, `sqlite3_exec`, enumeradores); igual en la VM,
-  el intérprete y el binario nativo. Dentro del callback no se puede esperar (canal vacío,
-  `time.sleep`, `join`, red: error de ejecución), y un error dentro lo ve la llamada `extern` al
-  volver. Queda fuera el callback que C guarda y llama más tarde o desde un hilo suyo (el render
-  de CoreAudio, CoreMIDI): fuera de contrato, y lo habitual es que el programa aborte con el
-  motivo. Un alias de tipo en la firma de una `extern` (`type Cmp = fn(ptr, ptr) -> int`) ya no
-  rompe el compilador. REFERENCE §13, MANUAL §16.
+  el intérprete y el binario nativo. Lo que hay que saber:
+  - Dentro del callback no se puede **esperar** a otra fibra (canal vacío o lleno, `time.sleep`
+    con plazo, `join`, red): es un error de ejecución. Lo que solo tarda (un proceso, `fs.sync`)
+    sí vale.
+  - Un error dentro del callback lo ve la llamada `extern` cuando C retorna, con la posición de
+    donde ocurrió; `try_call` lo recupera. Tras fallar, el callback no vuelve a ejecutarse aunque
+    C lo siga llamando.
+  - En un callback `int` es el `int` de C (32 bits); un `long` o `size_t` se declara `u64`.
+  - Queda fuera el callback que C guarda y llama más tarde o desde un hilo suyo (el render de
+    CoreAudio, CoreMIDI): fuera de contrato, y lo habitual es que el programa aborte con el
+    motivo. La FFI se queda en este límite (IDEAS §131).
+  - En Windows x64 un callback con parámetros `float` aún no se admite.
+  REFERENCE §13, MANUAL §16.
+- **`extern fn`: dos errores internos menos.** Un alias de tipo en la firma
+  (`type Cmp = fn(ptr, ptr) -> int`), también en un módulo importado, y una `extern` usada como
+  valor (`qsort(d, n, 1, strcmp)`, `let g = labs;`) rompían el compilador. Lo primero ya funciona;
+  lo segundo es un error de tipos que dice cómo envolverla. En el intérprete, una `extern` en
+  posición de cola ya no falla.
 - **Inferencia dentro de una función genérica** (raysolve #358): el parámetro de tipo del
   llamador da contexto igual que un tipo concreto. `fn h<V>(a: [V]) { count(a, empty()) }`,
   `sat(t, any(p))` con `t: T<P, V>` y `if (c) { full() } else { at_least(v) }` con `v: V` ya

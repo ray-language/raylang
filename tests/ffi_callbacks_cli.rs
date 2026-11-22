@@ -485,6 +485,22 @@ fn a_failed_callback_does_not_run_again_and_ordinary_errors_stay_recoverable() {
     }
 }
 
+/// De la sexta revisión: una `extern` en posición de cola (sin `;`) vale en los dos motores; en
+/// el intérprete daba un error interno.
+#[test]
+fn an_extern_call_in_tail_position_works_in_both_engines() {
+    let d = tmp("tail");
+    std::fs::write(
+        d.join("prog.ray"),
+        "import std/ffi;\nextern \"c\" { fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int); }\nfn b(p: ptr) -> int { ffi.read(p, 1)[0] as int }\nfn sort_with(d: bytes, cmp: fn(ptr, ptr) -> int) { qsort(d, d.len() as u64, 1 as u64, cmp) }\nfn main() {\n    let d = bytes_of([3, 1, 2]);\n    sort_with(d, fn(x: ptr, y: ptr) -> int { b(x) - b(y) });\n    print(d);\n}\n",
+    )
+    .unwrap();
+    for args in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let (out, err, code) = ray(&d, args);
+        assert_eq!((out.as_str(), code), ("010203\n", 0), "{args:?}: {err}");
+    }
+}
+
 // Las formas que libc no ejercita: flotantes mezclados con enteros, `bool`, `u64` anchos,
 // `Option<ptr>` en los dos sentidos y un callback sin retorno.
 const SHAPES_C: &str = r#"#include <stdbool.h>

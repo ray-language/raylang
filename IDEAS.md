@@ -4840,7 +4840,7 @@ respuestas de `net/http`). Las tres cosas van juntas:
 
 Sin demanda de ninguna app todavía.
 
-## 131. Callbacks C→raylang en la FFI (ray-daw #425) — 🟡 fases 1 y 2 EJECUTADAS (DESIGN §474); pendiente `ffi.callback` retenido
+## 131. Callbacks C→raylang en la FFI (ray-daw #425) — ✅ EJECUTADO hasta el límite acordado (DESIGN §474); el resto, DIFERIDO
 
 **Qué se pide.** Que una función de raylang pueda pasarse a C como puntero a función. Hoy
 REFERENCE §13 lo deja fuera de contrato. Es la carencia grande de la FFI (§14 la anotó para
@@ -4908,9 +4908,26 @@ SECURITY.md.
 
 **Decidido (usuario, 21 nov 2026):** el objetivo es la FFI general; la clase 2 queda fuera, con
 aborto claro; reserva fija de trampolines, sin libffi. Hechas las fases 1 y 2 (los tres motores y el
-nativo, callbacks de alcance de llamada) y la 4 (docs). Pendiente la fase 3, `ffi.callback(f)`
-retenido, para el patrón «registrar y luego arrancar el bucle de eventos»: hoy ese puntero deja de
-valer al volver de la llamada que lo pasó. En el nativo con fibras hay que resolver además que la
-fibra no cambie de hilo entre el registro y la llamada (las fibras están fijadas a su worker, así
-que en principio basta la tabla por hilo).
+nativo, callbacks de alcance de llamada) y la 4 (docs). 
+**El límite de la FFI (usuario, 21 nov 2026).** La FFI se queda aquí: llamadas a símbolos con
+nombre y callbacks que valen mientras dura la llamada. No se amplía hasta una nueva evaluación, y
+esa evaluación pide lo de siempre: una librería C real que lo necesite, con su caso de uso guiando
+el diseño. Lo que queda fuera, y por qué pesa:
+
+| Ampliación | Para qué serviría | Riesgo que añade |
+|---|---|---|
+| Callback retenido, `ffi.callback(f)` (la fase 3) | «registrar y luego arrancar el bucle de eventos»; el callback de entrada de un Audio Unit de efecto | el programa decide cuándo se libera un puntero que C conserva: un error ahí es corrupción de memoria, no un error de ejecución. En el nativo con fibras, además, la fibra no puede cambiar de hilo entre el registro y la llamada |
+| Callback desde un hilo ajeno (la clase 2) | render de CoreAudio, CoreMIDI, señales | ejecutar raylang sin fibra ni heap; GC en un hilo de tiempo real |
+| Llamar a una función por su dirección (`ptr`) | objetos estilo COM: la tabla de métodos de un VST3 | cualquier entero pasa a ser código ejecutable; hoy un `ptr` solo se transporta |
+| Memoria nativa con dirección estable y escritura de punteros en ella | montar tablas de punteros y structs con punteros anidados | aritmética de punteros con escritura: el resto de `unsafe` de C |
+| El handle nativo de una ventana de `std/ui` | incrustar la vista del editor de un plugin | acopla la superficie estable a cada toolkit |
+| Structs por valor, variádicas | APIs C que las usan | cada ABI las pasa distinto; piden libffi o un catálogo por plataforma |
+
+**La respuesta a ray-daw #425.** Alojar plugins VST3/AU no pasa por ampliar la FFI sino por una
+**librería puente** en C/C++ dentro de la app: aloja el plugin con el SDK oficial y expone una API
+plana (`load(path)`, `process(in, out, frames)`, parámetros, abrir el editor) que ray-daw llama con
+`extern` normales, sin callbacks. El audio encaja porque es el host quien llama a `process()`.
+Escribir el host en raylang habría pedido las cuatro primeras filas de la tabla y la ventana del
+editor, sobre punteros crudos. Si varias apps acabaran necesitando lo mismo, lo que se evaluaría es
+un subsistema del runtime (`std/plugin`), no más FFI.
 

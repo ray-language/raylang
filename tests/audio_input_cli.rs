@@ -51,7 +51,10 @@ fn main() -> int {
     let ms = time.now() - t0;
     print("aligned: ${aligned}");
     print("tone heard: ${peak > 16000 && peak < 16500}");
-    print("paced: ${ms >= 400 && ms < 2500}");
+    // El tope solo detecta una lectura colgada. Holgado a propósito: el bucle de arriba decodifica
+    // 48 000 muestras, y en el intérprete de un build de depuración en un runner cargado eso solo
+    // ya ronda los 2 s (falló dos veces en CI con 2500).
+    print("paced: ${ms >= 400 && ms < 10000}");
     // Sin leer durante 1,4 s el reloj sigue; la cola guarda ~1 s y descarta el resto, entero.
     time.sleep(1400);
     let clock = audio.recorded_ms(h).unwrap();

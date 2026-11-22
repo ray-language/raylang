@@ -437,9 +437,9 @@ impl Transpiler {
         // En Windows x64 los argumentos comparten posición entre bancos de registros: un callback
         // con `float` no es alcanzable (mismo texto que la VM, `ffi::install_callback`).
         let windows = if sig.params.contains(&CKind::Float) {
-            "if cfg!(windows) { __ray_rt_err(\"an FFI callback with float parameters is not supported on Windows yet\"); } "
+            format!("if cfg!(windows) {{ __ray_rt_err({:?}); }} ", crate::ffi::callback_pool::WINDOWS_FLOAT_MESSAGE)
         } else {
-            ""
+            String::new()
         };
         format!(
             "{{ {windows}let __f = __p{i}.clone(); match __ray_cb::install({float_ret}, Rc::new(move |__r: &__ray_cb::Regs| -> u64 {{ {guard}let mut __out = 0u64; let __res = __ray_try_call(|| {{ let __v = __f({args}); __out = {encode}; }}); if let Some(__m) = __res.borrow().first() {{ __ray_cb_stash(__m); }} __out }})) {{ Ok(__c) => __c, Err(__m) => __ray_rt_err(&__m) }} }}",

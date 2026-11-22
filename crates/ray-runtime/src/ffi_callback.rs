@@ -34,6 +34,13 @@ pub const MAX_INT_ARGS: usize = 6;
 /// Argumentos de coma flotante que lee un trampolín.
 pub const MAX_FLOAT_ARGS: usize = 4;
 
+/// El error de intentar esperar dentro de un callback. Una sola copia del texto: la usan la VM,
+/// el intérprete, el runtime de fibras y el binario nativo.
+pub const WAIT_MESSAGE: &str =
+    "cannot wait inside an FFI callback (channels, sleep, join and network I/O are not available while C code is on the stack)";
+/// El error de instalar en Windows x64 un callback con parámetros de coma flotante.
+pub const WINDOWS_FLOAT_MESSAGE: &str = "an FFI callback with float parameters is not supported on Windows yet";
+
 /// Lo que C pasó al callback: los registros de cada banco, en orden. Los enteros llegan como los
 /// dejó el llamador: de un `int` de C solo valen los 32 bits bajos, de un `bool` los 8 bajos.
 #[derive(Clone, Copy, Debug, Default)]

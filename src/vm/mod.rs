@@ -619,7 +619,7 @@ impl<'a> Vm<'a> {
                             Some(p) => ("Some", vec![HeapValue::Ptr(p)]),
                         };
                         let Some((eid, tag)) = option_variant(&vm.program.enums, variant) else {
-                            crate::ffi::set_callback_error("the prelude Option enum is not available for the FFI callback".into());
+                            crate::ffi::set_callback_error(runtime_error(0, 0, "the prelude Option enum is not available for the FFI callback"));
                             return zero;
                         };
                         // El handle queda sin raíz hasta que `run_callback` lo pasa a los locales
@@ -644,7 +644,7 @@ impl<'a> Vm<'a> {
                 },
                 Ok(_) => CallbackRet::Unit,
                 Err(e) => {
-                    crate::ffi::set_callback_error(e.msg);
+                    crate::ffi::set_callback_error(e);
                     zero
                 }
             }
@@ -1260,8 +1260,10 @@ impl<'a> Vm<'a> {
                     drop(live);
                     self.cur.stack.truncate(root_base);
                     // Un error dentro de un callback no cruzó los marcos de C: se relanza aquí.
-                    if has_callbacks && let Some(m) = crate::ffi::end_callback_errors(outer) {
-                        return Err(runtime_error(pos!().0, pos!().1, &m));
+                    // Conserva su posición y su traza (compuesta con los marcos del callback aún
+                    // vivos): el usuario ve dónde falló, no solo qué `extern` lo recibió.
+                    if has_callbacks && let Some(e) = crate::ffi::end_callback_errors(outer) {
+                        return Err(e);
                     }
                     let r = r.map_err(|m| runtime_error(pos!().0, pos!().1, &m))?;
                     let val = match r {
@@ -1675,6 +1677,13 @@ impl<'a> Vm<'a> {
                     };
                     if closed {
                         return Err(runtime_error(pos!().0, pos!().1, "send on a closed channel"));
+                    }
+                    // IDEAS §131: un envío a un canal sin búfer es una cita con el receptor, y
+                    // dentro de un callback de la FFI no se puede esperar a nadie. Es error
+                    // aunque haya un receptor aparcado: el nativo no puede entregarle el valor
+                    // sin ceder, y los dos motores deben decir lo mismo.
+                    if cap == Some(0) && self.cur.floor != 0 {
+                        return Err(runtime_error(pos!().0, pos!().1, crate::ffi::BLOCKING_IN_CALLBACK));
                     }
                     // (1) ¿Hay un receptor bloqueado en este canal? Entrégaselo directo (rendezvous) y
                     // despiértalo (el primero, FIFO → determinista).

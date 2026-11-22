@@ -294,8 +294,9 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   `float`— y su retorno, esos mismos o `unit` (`None → NULL`); otro tipo es error de compilación,
   igual que un callback en un bloque `blocking`. Dentro del callback el programa corre normal, salvo
   que **no puede esperar**: una operación que tendría que ceder (recibir de un canal vacío, enviar
-  a uno lleno o sin búfer, `time.sleep`, `join`, E/S de red) es error de ejecución y no deja
-  efecto; la que no necesita esperar funciona. (El binario nativo sin fibras, `--without fibers`,
+  a uno lleno o sin búfer, `time.sleep` con plazo, `join`, E/S de red) es error de ejecución; la
+  que no necesita esperar funciona. El intento fallido no deja efecto en canales ni tareas; una
+  escritura de red sí puede haber enviado ya una parte. (El binario nativo sin fibras, `--without fibers`,
   no lo comprueba: ahí esperar bloquea el hilo. En el nativo con fibras, llamar a una `extern`
   de un bloque `blocking` desde un callback también es este error.) Un error de ejecución dentro
   del callback no atraviesa C: C recibe cero de ese callback y, cuando la función C retorna, la

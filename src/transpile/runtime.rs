@@ -270,7 +270,7 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // IDEAS §131: ¿hay un callback de la FFI en curso? (solo con fibras: sin ellas esperar bloquea
     // el hilo, que es lo que ese modo hace siempre). Lo preguntan los sitios que dejan rastro
     // antes de esperar.
-    out.push_str("#[allow(dead_code)]\nconst __RAY_FFI_CALLBACK_WAIT: &str = \"cannot wait inside an FFI callback (channels, sleep, join and network I/O are not available while C code is on the stack)\";\n");
+    out.push_str(&format!("#[allow(dead_code)]\nconst __RAY_FFI_CALLBACK_WAIT: &str = {:?};\n", crate::ffi::BLOCKING_IN_CALLBACK));
     if fibers {
         out.push_str("#[allow(dead_code)]\nfn __ray_in_ffi_callback() -> bool { ray_runtime::fibers::in_ffi_callback() }\n");
     } else {
@@ -2463,6 +2463,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         }
         out.push_str(concat!(
             "fn __ray_wait_activity(act: u64) {\n",
+            // IDEAS §131: dentro de un callback de la FFI no se espera; se falla ANTES de contarse
+            // como esperante (el contador no se desharía y encarecería cada operación de canal).
+            "    if __ray_in_ffi_callback() { __ray_rt_err(__RAY_FFI_CALLBACK_WAIT); }\n",
             "    __RAY_ACT_WAITERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
             "    let mut g = __RAY_ACT_M.lock().unwrap();\n",
             "    while __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst) == act {\n",
@@ -2494,6 +2497,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // aunque no haya ninguna actividad de canales que despierte. `d` = min(restante, 10 ms)
             // (raylb L21: con un pulso FIJO de 10 ms, un plazo de 2 ms duraba 10 y uno de 11, 20).
             "fn __ray_wait_activity_once(act: u64, d: std::time::Duration) {\n",
+            "    if __ray_in_ffi_callback() { __ray_rt_err(__RAY_FFI_CALLBACK_WAIT); }\n",
             "    __RAY_ACT_WAITERS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);\n",
             "    let g = __RAY_ACT_M.lock().unwrap();\n",
             "    if __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst) == act {\n",

@@ -252,6 +252,80 @@ fn a_failed_wait_or_callback_leaves_nothing_behind() {
     assert_eq!((out.as_str(), code), (WAIT_ERR, 0), "{err}");
 }
 
+// De la segunda revisión: los dos motores dicen lo mismo en los bordes de «no se puede esperar».
+const EDGES: &str = r#"import std/ffi;
+import std/time;
+extern "c" {
+    fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int);
+}
+fn b(p: ptr) -> int { ffi.read(p, 1)[0] as int }
+fn main() {
+    // Un envío a un canal sin búfer es error dentro de un callback aunque haya un receptor esperando.
+    let ch: Channel<int> = Channel.bounded(0);
+    let got: Channel<int> = Channel.new();
+    spawn(fn() { got.send(ch.recv().unwrap_or(-1)); });
+    time.sleep(50);
+    print(try_call(fn() -> int {
+        qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int {
+            ch.send(7);
+            0
+        });
+        1
+    }).is_err());
+    ch.close();
+    print(got.recv());
+    // `time.sleep(0)` no espera: vale.
+    print(try_call(fn() -> int {
+        qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int {
+            time.sleep(0);
+            b(x) - b(y)
+        });
+        1
+    }));
+    // Un select que tendría que esperar falla, y después los canales siguen sirviendo.
+    let never: Channel<int> = Channel.new();
+    print(try_call(fn() -> int {
+        qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int { select([never]) });
+        1
+    }).is_err());
+    never.send(5);
+    print(select([never]));
+}
+"#;
+
+const EDGES_OUT: &str = "true\nOption.Some(-1)\nResult.Ok(1)\ntrue\n0\n";
+
+#[test]
+fn the_vm_and_the_native_binary_agree_on_what_counts_as_waiting() {
+    let d = tmp("edges");
+    std::fs::write(d.join("prog.ray"), EDGES).unwrap();
+    let (out, err, code) = ray(&d, &["run", "prog.ray"]);
+    assert_eq!((out.as_str(), code), (EDGES_OUT, 0), "{err}");
+    if let Some(out) = native(&d, "prog.ray", &[]) {
+        assert_eq!(out, EDGES_OUT);
+    }
+}
+
+/// Un error dentro de un callback llega con la posición y la traza de donde ocurrió, no solo con
+/// la de la `extern` que lo recibió.
+#[test]
+fn an_error_inside_a_callback_keeps_its_own_position() {
+    let d = tmp("position");
+    std::fs::write(
+        d.join("prog.ray"),
+        "extern \"c\" { fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int); }\nfn main() {\n    qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int {\n        let z: [int] = [];\n        z[3]\n    });\n}\n",
+    )
+    .unwrap();
+    for args in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let (_out, err, code) = ray(&d, args);
+        assert_eq!(code, 70, "{args:?}: {err}");
+        // (La columna del índice difiere entre motores desde antes: se compara la línea.)
+        assert!(err.contains("runtime error at 5:") && err.contains("index 3 out of range (length 0)"), "{args:?}: {err}");
+    }
+    let (_out, err, _code) = ray(&d, &["run", "prog.ray"]);
+    assert!(err.contains("from main (prog:3:5)"), "{err}");
+}
+
 // Las formas que libc no ejercita: flotantes mezclados con enteros, `bool`, `u64` anchos,
 // `Option<ptr>` en los dos sentidos y un callback sin retorno.
 const SHAPES_C: &str = r#"#include <stdbool.h>
@@ -365,6 +439,11 @@ fn the_checker_rejects_callbacks_it_cannot_marshal() {
         (
             "extern \"c\" { fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int); }\nfn main() { qsort(b\"ba\", 2 as u64, 1 as u64, fn(x: ptr) -> int { 0 }); }\n",
             "argument 4 of 'qsort'",
+        ),
+        // Una `extern fn` no es un valor (antes: error interno del compilador).
+        (
+            "extern \"c\" { fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int); fn strcmp(a: ptr, b: ptr) -> int; }\nfn main() { qsort(b\"ba\", 2 as u64, 1 as u64, strcmp); }\n",
+            "cannot use the extern function 'strcmp' as a value; wrap it in a function: fn(…) { strcmp(…) }",
         ),
     ];
     for (src, expected) in cases {

@@ -254,7 +254,7 @@ impl<'a> Interpreter<'a> {
                 },
                 Ok(_) => CallbackRet::Unit,
                 Err(Flow::Error(e)) => {
-                    crate::ffi::set_callback_error(e.msg);
+                    crate::ffi::set_callback_error(e);
                     zero
                 }
                 Err(_) => zero,
@@ -1196,8 +1196,8 @@ impl<'a> Interpreter<'a> {
                     let result = crate::ffi::call(&desc, &fargs);
                     drop(live);
                     // Un error dentro de un callback no cruzó los marcos de C: se relanza aquí.
-                    if has_callbacks && let Some(msg) = crate::ffi::end_callback_errors(outer) {
-                        return Err(runtime_error(callee.line, callee.col, &msg));
+                    if has_callbacks && let Some(e) = crate::ffi::end_callback_errors(outer) {
+                        return Err(Flow::Error(e));
                     }
                     return match result {
                         Ok(r) => ffi_to_value(r, desc.ret_kind, callee.line, callee.col),

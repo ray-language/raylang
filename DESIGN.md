@@ -21823,3 +21823,27 @@ Sin hacer: cada invocación aloca dos `Vec` de argumentos y busca la variante de
 nombre; es coste por llamada en un comparador de `qsort` y se puede quitar decodificando los
 registros directamente a valores del motor.
 
+**Segunda pasada, antes de la 1.27.112.** Sobre todo el rango desde la 1.27.111:
+
+- *Una `extern fn` como valor.* `qsort(d, n, 1, strcmp)` pasaba el checker y rompía el compilador
+  con un error interno (igual que `let g = labs;`, desde antes). Ahora es un error de tipos que
+  dice cómo envolverla. Un módulo que la nombre calificada (`mod.f`) como valor no se revisó.
+- *Qué cuenta como esperar, igual en los dos motores.* En la VM un envío a un canal sin búfer con
+  un receptor ya aparcado pasaba dentro de un callback, y en el nativo `time.sleep(0)` fallaba:
+  justo al revés que el otro motor. La regla es la de la SPEC: sin búfer, siempre error; plazo
+  cero, nunca.
+- *Nativo, `select`.* `__ray_wait_activity` se contaba como esperante antes de fallar y el
+  contador quedaba subido para siempre, encareciendo cada operación de canal posterior.
+- *Posición del error.* El error de un callback se relanzaba solo con su mensaje, en la posición
+  de la `extern`. Ahora viaja entero (`RuntimeError`): posición y traza de donde falló, con los
+  marcos del callback y el de la llamada.
+- *Textos.* El mensaje de «no se puede esperar» y el de Windows tenían tres y dos copias que
+  debían coincidir byte a byte; ahora salen de `ffi_callback.rs` y el transpilador los interpola.
+- *SPEC.* «No deja efecto» no vale para una escritura de red, que puede haber enviado una parte.
+
+Descartado con motivo: reflejar raysolve #358 en `selfhost/checker.ray`. El espejo no acepta
+tampoco el caso con tipos concretos (`count(a, empty())` con `int`) que Rust admite desde
+1.27.103: va por detrás en toda la inferencia hacia argumentos genéricos, y este cambio no abre
+una clase nueva de divergencia. Sigue sin hacer el coste por invocación (dos `Vec` y el clon de
+los upvalues por llamada).
+

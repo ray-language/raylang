@@ -217,28 +217,29 @@ pub fn callback_ret_bits(ret: CallbackRet) -> u64 {
 thread_local! {
     // El primer error de ejecución dentro de un callback: no puede cruzar los marcos de C, así
     // que se guarda aquí, el trampolín devuelve cero y la llamada `extern` exterior lo relanza.
-    static CALLBACK_ERROR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+    static CALLBACK_ERROR: std::cell::RefCell<Option<crate::runtime::RuntimeError>> = const { std::cell::RefCell::new(None) };
     // Cuántos callbacks hay en curso en este hilo: dentro de uno no se puede aparcar la fibra.
     static CALLBACK_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Guarda el error de un callback (solo el primero) para la llamada `extern` que lo recibió.
-pub fn set_callback_error(msg: String) {
+/// Entero: con la posición y la traza de DONDE falló, que es lo que el usuario necesita ver.
+pub fn set_callback_error(err: crate::runtime::RuntimeError) {
     CALLBACK_ERROR.with(|e| {
-        e.borrow_mut().get_or_insert(msg);
+        e.borrow_mut().get_or_insert(err);
     });
 }
 
 /// Abre el ámbito de errores de UNA llamada `extern` con callbacks: aparta el error pendiente de
 /// una llamada exterior (esta puede estar corriendo dentro de un callback de aquella, que ya
 /// falló en una invocación anterior) y lo devuelve para `end_callback_errors`.
-pub fn begin_callback_errors() -> Option<String> {
+pub fn begin_callback_errors() -> Option<crate::runtime::RuntimeError> {
     CALLBACK_ERROR.with(|e| e.borrow_mut().take())
 }
 
 /// Cierra el ámbito: devuelve el error de los callbacks de ESTA llamada, si lo hubo, y repone el
 /// de la exterior para que lo relance ella al volver.
-pub fn end_callback_errors(outer: Option<String>) -> Option<String> {
+pub fn end_callback_errors(outer: Option<crate::runtime::RuntimeError>) -> Option<crate::runtime::RuntimeError> {
     CALLBACK_ERROR.with(|e| std::mem::replace(&mut *e.borrow_mut(), outer))
 }
 
@@ -262,8 +263,7 @@ impl Drop for CallbackGuard {
 }
 
 /// El mensaje del error de ejecución al intentar aparcar la fibra dentro de un callback.
-pub const BLOCKING_IN_CALLBACK: &str =
-    "cannot wait inside an FFI callback (channels, sleep, join and network I/O are not available while C code is on the stack)";
+pub const BLOCKING_IN_CALLBACK: &str = callback_pool::WAIT_MESSAGE;
 
 /// Instala el trampolín de un callback: `handler` recibe los argumentos ya interpretados y
 /// devuelve el valor para C. En Windows x64 un callback con `float` no es alcanzable (los
@@ -273,7 +273,7 @@ pub fn install_callback(
     handler: impl Fn(Vec<CallbackArg>) -> CallbackRet + 'static,
 ) -> Result<crate::ffi::callback_pool::Callback, String> {
     if cfg!(windows) && sig.params.contains(&CKind::Float) {
-        return Err("an FFI callback with float parameters is not supported on Windows yet".into());
+        return Err(callback_pool::WINDOWS_FLOAT_MESSAGE.into());
     }
     let owned = sig.clone();
     crate::ffi::callback_pool::install(

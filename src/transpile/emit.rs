@@ -217,7 +217,10 @@ impl Transpiler {
             out.push_str("}\n");
             out.push_str("thread_local! { static __RAY_CB_ERR: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) }; }\n");
             out.push_str("fn __ray_cb_stash(m: &str) { __RAY_CB_ERR.with(|s| { s.borrow_mut().get_or_insert_with(|| m.to_string()); }); }\n");
-            out.push_str("fn __ray_cb_rethrow() { if let Some(m) = __RAY_CB_ERR.with(|s| s.borrow_mut().take()) { __ray_rt_err(&m); } }\n");
+            // El pendiente es de UNA llamada `extern`: una anidada (dentro de un callback de otra
+            // que ya falló) aparta el de fuera al empezar y lo repone al terminar.
+            out.push_str("fn __ray_cb_begin() -> Option<String> { __RAY_CB_ERR.with(|s| s.borrow_mut().take()) }\n");
+            out.push_str("fn __ray_cb_end(outer: Option<String>) { if let Some(m) = __RAY_CB_ERR.with(|s| std::mem::replace(&mut *s.borrow_mut(), outer)) { __ray_rt_err(&m); } }\n");
         }
         // (1) Declaraciones `extern "C"`, agrupadas por librería (orden estable). M417: la clave
         // incluye los nombres por plataforma, que son parte de la identidad del bloque.
@@ -337,6 +340,10 @@ impl Transpiler {
                     other => return Err(format!("FFI argument is not marshalable: {:?}", other)),
                 }
             }
+            let has_callbacks = e.params.iter().any(|p| matches!(normalize_type(&p.ty), Type::Fn(..)));
+            if has_callbacks {
+                out.push_str("    let __rt_cb_outer = __ray_cb_begin();\n");
+            }
             let raw_call = format!("unsafe {{ __ffi_{}({}) }}", mangle(&e.name), passes.join(", "));
             if blocking {
                 // Conversión DENTRO del closure a un tipo Send (los punteros crudos no lo son).
@@ -361,7 +368,7 @@ impl Transpiler {
                 for i in &callbacks {
                     writeln!(out, "    drop(__rt_cb{});", i).unwrap();
                 }
-                out.push_str("    __ray_cb_rethrow();\n");
+                out.push_str("    __ray_cb_end(__rt_cb_outer);\n");
             }
             // Marshalling del retorno C → valor raylang. En modo blocking los retornos-puntero ya
             // llegaron convertidos a tipos Send (i64 / Option<Vec<u8>> / Option<i64>) por el closure.

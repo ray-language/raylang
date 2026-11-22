@@ -21788,9 +21788,38 @@ thread-local nuevo leído desde la fibra costó un 20 % en su día (M372). Sin f
 siempre.
 
 **Intérprete.** Reentrante por naturaleza: el trampolín llama a `call_index`. Como oráculo
-secuencial no tiene canales ni fibras, y `time.sleep` dentro de un callback duerme en vez de
-fallar: es la única divergencia y no se persigue.
+secuencial no tiene canales ni fibras; su única espera es `time.sleep`, que dentro de un callback
+da el mismo error.
 
 **Lo que queda.** `ffi.callback(f)` retenido (IDEAS §131, fase 3). Los structs por valor y las
 variádicas siguen fuera de contrato.
+
+**Revisión previa a fusionar.** La pasada independiente encontró que «no se puede esperar» estaba
+puesto en un solo sitio (`suspend` en el nativo, `take_current_fiber` en la VM) y que eso no
+bastaba donde quien espera deja rastro ANTES de llegar ahí. Corregido:
+
+- *Nativo, cesión cooperativa.* `coop()` cede el turno cada 32 operaciones de canal aunque nadie
+  espere; dentro de un callback fallaba un `send` que no bloqueaba. Ahora `coop()` no cede ahí.
+- *Nativo, `run_blocking`.* Encargaba el trabajo al pool y luego aparcaba: con el fallo del park
+  el llamador se desenrollaba y el hilo del pool seguía usando punteros de su marco. Se comprueba
+  antes de encargar. Efecto visible: una `extern` de un bloque `blocking` llamada desde un
+  callback es error en el nativo con fibras (en la VM `blocking` es inerte y la llamada pasa).
+- *Nativo, canales.* `send` contaba al emisor (y en un canal sin búfer encolaba el valor) antes
+  de esperar. Ahora pregunta primero, y `__ray_cv_wait` falla con la guarda soltada y sin apuntar
+  la lista de espera. Un envío a un canal sin búfer es siempre error dentro de un callback en el
+  nativo, aunque haya un receptor esperando.
+- *VM, `select_timeout`.* Guardaba el plazo en la fibra antes de fallar el aparcado y lo heredaba
+  el siguiente `select_timeout`.
+- *Error pendiente.* Era una sola casilla por hilo: una `extern` anidada dentro de una invocación
+  posterior se llevaba el error de la exterior. Ahora cada llamada con callbacks abre su ámbito
+  (`begin_callback_errors`/`end_callback_errors`) y repone el de fuera al terminar.
+- *Puntero caducado.* Las casillas se reutilizaban por «primera libre», así que un puntero
+  guardado por C podía despachar al siguiente callback en vez de abortar. Ahora rotan, y la
+  documentación dice lo que hay: fuera de contrato, detección no garantizada.
+- *Alias.* `lower_type_aliases` no expandía las firmas `extern`, y los motores las clasifican
+  desde el AST: un alias (cualquiera, no solo de función) acababa en un ICE del compilador.
+
+Sin hacer: cada invocación aloca dos `Vec` de argumentos y busca la variante de `Option` por
+nombre; es coste por llamada en un comparador de `qsort` y se puede quitar decodificando los
+registros directamente a valores del motor.
 

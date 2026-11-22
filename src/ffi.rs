@@ -229,9 +229,17 @@ pub fn set_callback_error(msg: String) {
     });
 }
 
-/// El error pendiente de un callback, si lo hubo; lo consume.
-pub fn take_callback_error() -> Option<String> {
+/// Abre el ámbito de errores de UNA llamada `extern` con callbacks: aparta el error pendiente de
+/// una llamada exterior (esta puede estar corriendo dentro de un callback de aquella, que ya
+/// falló en una invocación anterior) y lo devuelve para `end_callback_errors`.
+pub fn begin_callback_errors() -> Option<String> {
     CALLBACK_ERROR.with(|e| e.borrow_mut().take())
+}
+
+/// Cierra el ámbito: devuelve el error de los callbacks de ESTA llamada, si lo hubo, y repone el
+/// de la exterior para que lo relance ella al volver.
+pub fn end_callback_errors(outer: Option<String>) -> Option<String> {
+    CALLBACK_ERROR.with(|e| std::mem::replace(&mut *e.borrow_mut(), outer))
 }
 
 /// ¿Hay un callback de la FFI en curso en este hilo?

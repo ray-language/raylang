@@ -679,8 +679,8 @@ CALLBACKS: a parameter of function type passes a raylang function (named or clos
 function pointer — `fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int);` then
 `qsort(d, n, 1 as u64, fn(a: ptr, b: ptr) -> int { … })`; callback params `int u64 float bool ptr
 Option<ptr>` (max 6 integer/pointer + 4 float), return those or unit; valid ONLY during that
-extern call and on the same thread (C storing it for later, or calling from its own thread,
-aborts; not allowed in a `blocking` block); inside it you cannot wait (empty channel recv,
+extern call and on the same thread (C storing it for later, or calling from its own thread, is
+out of contract and usually aborts; not allowed in a `blocking` block); inside it you cannot wait (empty channel recv,
 `time.sleep`, `join`, network → runtime error); an error inside surfaces at the extern call once C
 returns (`try_call` recovers). The VM dlopens the library at run time; a native build links
 `-l<name>` at BUILD time (dev files needed). A library named differently per OS:

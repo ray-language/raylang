@@ -293,11 +293,15 @@ firma_extern = 'fn' IDENT '(' [ param { ',' param } ] ')' [ '->' tipo ] ';' ;
   `int`/`u64`/`float`/`bool`/`ptr`/`Option<ptr>` (`NULL → None`) —hasta 6 enteros o punteros y 4
   `float`— y su retorno, esos mismos o `unit` (`None → NULL`); otro tipo es error de compilación,
   igual que un callback en un bloque `blocking`. Dentro del callback el programa corre normal, salvo
-  que **no puede esperar**: una operación que tendría que ceder (recibir de un canal vacío,
-  `time.sleep`, `join`, E/S de red) es error de ejecución. Un error de ejecución dentro del
-  callback no atraviesa C: C recibe cero de ese callback y, cuando la función C retorna, la llamada
-  `extern` falla con ese error (recuperable con `try_call`). Usar el puntero **después** de que la
-  llamada retorne, o desde otro hilo, no es recuperable: el programa escribe el motivo y aborta.
+  que **no puede esperar**: una operación que tendría que ceder (recibir de un canal vacío, enviar
+  a uno lleno o sin búfer, `time.sleep`, `join`, E/S de red) es error de ejecución y no deja
+  efecto; la que no necesita esperar funciona. (El binario nativo sin fibras, `--without fibers`,
+  no lo comprueba: ahí esperar bloquea el hilo. En el nativo con fibras, llamar a una `extern`
+  de un bloque `blocking` desde un callback también es este error.) Un error de ejecución dentro
+  del callback no atraviesa C: C recibe cero de ese callback y, cuando la función C retorna, la
+  llamada `extern` falla con ese error (recuperable con `try_call`). Usar el puntero **después**
+  de que la llamada retorne, o desde otro hilo, está **fuera de contrato**: lo habitual es que el
+  programa escriba el motivo y aborte, pero no se garantiza detectarlo.
   Hasta 64 callbacks vivos a la vez por hilo. En Windows un callback con parámetros `float` es
   error de ejecución.
   El **retorno** admite `int`/`u64`/`float`/`bool`/`unit`, `ptr`/`Option<ptr>` (`NULL → None`, p. ej.

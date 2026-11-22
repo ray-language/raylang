@@ -329,7 +329,9 @@ documentada:
   a C. Lo que se confía es lo de siempre en la FFI: que C los llame con la firma declarada (el
   trampolín lee 6 registros enteros y 4 de coma flotante; los que C no pasó son basura que nadie
   lee). Un trampolín sin manejador en el hilo que lo llama (hilo ajeno, o puntero usado tras la
-  llamada) aborta el proceso en vez de ejecutar raylang sin heap. Los manejadores de la VM y del
+  llamada) aborta el proceso en vez de ejecutar raylang sin heap; si la casilla ya volvió a
+  ocuparse despacha al callback que la tiene ahora (uso fuera de contrato, como una firma
+  `extern` equivocada; las casillas rotan para que sea raro). Los manejadores de la VM y del
   intérprete (`install_callback` en `src/vm/mod.rs` y `src/interpreter.rs`) sí llevan un
   `unsafe`: recuperan `&mut` del motor desde su dirección; la invariante es que el trampolín
   solo corre en ese hilo y dentro de la llamada `extern` que lo instaló, con el motor detenido en

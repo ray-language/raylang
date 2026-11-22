@@ -153,6 +153,105 @@ fn a_callback_cannot_wait_and_the_fiber_survives_the_error() {
     }
 }
 
+// De la revisión previa a fusionar: lo que NO espera sigue valiendo dentro de un callback, el
+// error de un callback es de su llamada, y un intento de esperar no deja rastro.
+const AFTERMATH: &str = r#"import std/ffi;
+import std/time;
+type Cmp = fn(ptr, ptr) -> int;
+extern "c" {
+    fn qsort(base: bytes, n: u64, size: u64, cmp: Cmp);
+}
+fn b(p: ptr) -> int { ffi.read(p, 1)[0] as int }
+fn sorted(xs: [int]) -> bytes {
+    let d = bytes_of(xs);
+    qsort(d, xs.len() as u64, 1 as u64, fn(x: ptr, y: ptr) -> int { b(x) - b(y) });
+    d
+}
+fn main() {
+    // Un envío que no espera vale dentro de un callback, aunque haya fibras listas.
+    let ch: Channel<int> = Channel.new();
+    let done: Channel<int> = Channel.new();
+    var i = 0;
+    while (i < 64) {
+        spawn(fn() { done.send(1); });
+        i = i + 1;
+    }
+    print(try_call(fn() -> int {
+        qsort(bytes_of([4, 3, 2, 1]), 4 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int {
+            var k = 0;
+            while (k < 40) {
+                ch.send(k);
+                k = k + 1;
+            }
+            b(x) - b(y)
+        });
+        1
+    }));
+    // El error de una invocación es de SU llamada: una extern anidada posterior no se lo lleva.
+    var calls = 0;
+    var inner = "";
+    print(try_call(fn() -> int {
+        qsort(bytes_of([3, 2, 1]), 3 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int {
+            calls = calls + 1;
+            if (calls == 1) {
+                let z: [int] = [];
+                return z[3];
+            }
+            inner = to_string(try_call(fn() -> bytes { sorted([2, 1]) }).is_ok());
+            0
+        });
+        1
+    }));
+    print(inner);
+    // Un select con plazo que falla dentro de un callback no deja su plazo al siguiente.
+    let quiet: Channel<int> = Channel.new();
+    print(try_call(fn() -> int {
+        qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int {
+            select_timeout([quiet], 10).unwrap_or(0)
+        });
+        1
+    }).is_err());
+    time.sleep(30);
+    let t0 = time.now();
+    print(select_timeout([quiet], 200).is_none());
+    print(time.now() - t0 >= 150);
+    // Un envío a un canal acotado lleno falla sin dejar rastro: el canal sigue sirviendo.
+    let full: Channel<int> = Channel.bounded(1);
+    full.send(7);
+    print(try_call(fn() -> int {
+        qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int {
+            full.send(8);
+            0
+        });
+        1
+    }).is_err());
+    print(full.recv());
+    full.send(9);
+    print(full.recv());
+}
+"#;
+
+const AFTERMATH_OUT: &str = "Result.Ok(1)\nResult.Err(index 3 out of range (length 0))\ntrue\ntrue\ntrue\ntrue\ntrue\nOption.Some(7)\nOption.Some(9)\n";
+
+#[test]
+fn a_failed_wait_or_callback_leaves_nothing_behind() {
+    let d = tmp("aftermath");
+    std::fs::write(d.join("prog.ray"), AFTERMATH).unwrap();
+    let (out, err, code) = ray(&d, &["run", "prog.ray"]);
+    assert_eq!((out.as_str(), code), (AFTERMATH_OUT, 0), "{err}");
+    if let Some(out) = native(&d, "prog.ray", &[]) {
+        assert_eq!(out, AFTERMATH_OUT);
+    }
+    // El intérprete es secuencial: su única espera es `time.sleep`, y también la rechaza.
+    std::fs::write(
+        d.join("nap.ray"),
+        "import std/time;\nextern \"c\" { fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int); }\nfn main() {\n    print(try_call(fn() -> int {\n        qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int { time.sleep(5); 0 });\n        1\n    }));\n}\n",
+    )
+    .unwrap();
+    let (out, err, code) = ray(&d, &["run", "--interp", "nap.ray"]);
+    assert_eq!((out.as_str(), code), (WAIT_ERR, 0), "{err}");
+}
+
 // Las formas que libc no ejercita: flotantes mezclados con enteros, `bool`, `u64` anchos,
 // `Option<ptr>` en los dos sentidos y un callback sin retorno.
 const SHAPES_C: &str = r#"#include <stdbool.h>

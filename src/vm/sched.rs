@@ -555,26 +555,24 @@ impl<'a> Vm<'a> {
     /// Desenrolla la fibra en curso hasta las alturas dadas (de un marcador de `try_call`, o de la
     /// entrada a un callback de la FFI): descarta marcos, cierra scopes y recorta la pila.
     pub(super) fn unwind_to(&mut self, frames_len: usize, scopes_len: usize, stack_len: usize) {
-        struct M { frames_len: usize, scopes_len: usize, stack_len: usize }
-        let m = M { frames_len, scopes_len, stack_len };
         // Los marcos del tramo abortado se descartan truncando sus ventanas de locales,
         // como hace `Return` (V12: el register file vuelve a la base del marcador).
-        while self.cur.frames.len() > m.frames_len {
+        while self.cur.frames.len() > frames_len {
             if let Some(f) = self.cur.frames.pop() {
                 self.cur.locals.truncate(f.locals_base); // V12: descarta la ventana del marco
             }
         }
         // Scopes abiertos dentro del cuerpo que falló: sus hijas no pueden quedar huérfanas.
-        if self.cur.scopes.len() > m.scopes_len {
-            let orphans: Vec<usize> = self.cur.scopes[m.scopes_len..]
+        if self.cur.scopes.len() > scopes_len {
+            let orphans: Vec<usize> = self.cur.scopes[scopes_len..]
                 .iter()
                 .flat_map(|s| s.children.iter().copied())
                 .collect();
             // 2e: los procesos del SO de los scopes descartados se matan y cosechan aquí mismo.
-            for s in &self.cur.scopes[m.scopes_len..] {
+            for s in &self.cur.scopes[scopes_len..] {
                 for &h in &s.procs { crate::builtins::proc_kill_and_reap(h); }
             }
-            self.cur.scopes.truncate(m.scopes_len);
+            self.cur.scopes.truncate(scopes_len);
             if !orphans.is_empty() {
                 let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                 for c in orphans {
@@ -582,7 +580,7 @@ impl<'a> Vm<'a> {
                 }
             }
         }
-        self.cur.stack.truncate(m.stack_len);
+        self.cur.stack.truncate(stack_len);
     }
 
     pub(super) fn fail_current_fiber(&mut self, e: RuntimeError) -> Result<(), RuntimeError> {

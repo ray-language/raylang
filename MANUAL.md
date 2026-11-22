@@ -3234,7 +3234,8 @@ fn main() {
 ```
 
 Tres reglas. El callback vale **mientras dura la llamada** y en el mismo hilo: si C guarda el
-puntero para llamarlo después, o lo llama desde un hilo suyo, el programa aborta diciendo por qué.
+puntero para llamarlo después, o lo llama desde un hilo suyo, estás fuera de contrato (lo habitual
+es que el programa aborte diciendo por qué).
 Dentro del callback **no se puede esperar** (un canal vacío, `time.sleep`, `join`, la red): es un
 error de ejecución. Y un error dentro del callback no se pierde: C recibe cero de ese callback y
 la llamada `extern` falla con ese error cuando C retorna, así que `try_call` alrededor lo recupera.

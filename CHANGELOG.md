@@ -13,7 +13,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   el intérprete y el binario nativo. Dentro del callback no se puede esperar (canal vacío,
   `time.sleep`, `join`, red: error de ejecución), y un error dentro lo ve la llamada `extern` al
   volver. Queda fuera el callback que C guarda y llama más tarde o desde un hilo suyo (el render
-  de CoreAudio, CoreMIDI): el programa aborta con el motivo. REFERENCE §13, MANUAL §16.
+  de CoreAudio, CoreMIDI): fuera de contrato, y lo habitual es que el programa aborte con el
+  motivo. Un alias de tipo en la firma de una `extern` (`type Cmp = fn(ptr, ptr) -> int`) ya no
+  rompe el compilador. REFERENCE §13, MANUAL §16.
 - **Inferencia dentro de una función genérica** (raysolve #358): el parámetro de tipo del
   llamador da contexto igual que un tipo concreto. `fn h<V>(a: [V]) { count(a, empty()) }`,
   `sat(t, any(p))` con `t: T<P, V>` y `if (c) { full() } else { at_least(v) }` con `v: V` ya

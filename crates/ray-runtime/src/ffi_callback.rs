@@ -17,7 +17,9 @@
 //! que no es `Send`. Por eso un trampolín llamado desde un hilo que no instaló nada en su casilla
 //! (C guardó el puntero y lo llama desde un hilo suyo, o después de liberarlo) no tiene a quién
 //! despachar: escribe el motivo y aborta. No hay a quién devolver un error, y seguir sería
-//! ejecutar raylang sin heap.
+//! ejecutar raylang sin heap. La detección NO es completa: si la casilla ya volvió a ocuparse, el
+//! puntero caducado despacha al callback que la tiene ahora. Usar el puntero fuera de su llamada
+//! está fuera de contrato; las casillas rotan para que lo habitual sea el aborto.
 //!
 //! Este archivo solo usa `std`: el transpilador lo incluye tal cual en el binario nativo que se
 //! compila con `rustc` a secas (sin `ray-runtime`).
@@ -47,6 +49,11 @@ pub type Handler = Rc<dyn Fn(&Regs) -> u64>;
 thread_local! {
     static INT_TABLE: RefCell<Vec<Option<Handler>>> = RefCell::new(vec![None; SLOTS]);
     static FLOAT_TABLE: RefCell<Vec<Option<Handler>>> = RefCell::new(vec![None; SLOTS]);
+    // Por dónde seguir buscando casilla: las casillas ROTAN en vez de reutilizar la primera libre.
+    // Un puntero que C guardó más allá de su llamada apunta a una casilla ya liberada; cuanto más
+    // tarde en volver a ocuparse, más probable es que ese uso indebido acabe en el aborto con
+    // motivo y no despachando a otro callback.
+    static NEXT_SLOT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Un callback instalado: el puntero que se le da a C y la casilla que ocupa. Soltarlo libera la
@@ -78,9 +85,11 @@ pub fn install(float_ret: bool, handler: Handler) -> Result<Callback, String> {
     let table = if float_ret { &FLOAT_TABLE } else { &INT_TABLE };
     table.with(|t| {
         let mut t = t.borrow_mut();
-        let Some(slot) = t.iter().position(|h| h.is_none()) else {
+        let start = NEXT_SLOT.with(|n| n.get());
+        let Some(slot) = (0..SLOTS).map(|i| (start + i) % SLOTS).find(|&i| t[i].is_none()) else {
             return Err(format!("too many live FFI callbacks (at most {SLOTS} at a time)"));
         };
+        NEXT_SLOT.with(|n| n.set((slot + 1) % SLOTS));
         t[slot] = Some(handler);
         let ptr = if float_ret { FLOAT_TRAMPOLINES[slot] as usize } else { INT_TRAMPOLINES[slot] as usize };
         Ok(Callback { slot, float_ret, ptr })
@@ -163,6 +172,16 @@ mod tests {
         let again = install(false, Rc::new(|_: &Regs| 77)).unwrap();
         let f: extern "C" fn() -> i64 = unsafe { std::mem::transmute(again.ptr() as usize) };
         assert_eq!(f(), 77);
+    }
+
+    // Una casilla recién liberada no es la siguiente en ocuparse.
+    #[test]
+    fn a_released_slot_is_not_reused_right_away() {
+        let first = install(false, Rc::new(|_: &Regs| 1)).unwrap();
+        let stale = first.ptr();
+        drop(first);
+        let second = install(false, Rc::new(|_: &Regs| 2)).unwrap();
+        assert_ne!(second.ptr(), stale);
     }
 
     // Un callback puede instalar otro mientras corre (una `extern` anidada).

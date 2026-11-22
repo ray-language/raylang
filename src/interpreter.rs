@@ -1154,6 +1154,11 @@ impl<'a> Interpreter<'a> {
                     {
                         return Err(runtime_error(callee.line, callee.col, &e));
                     }
+                    // IDEAS §131: dentro de un callback de la FFI no se puede esperar. El
+                    // intérprete es secuencial: su única espera es `sleep`.
+                    if name == "__sleep" && crate::ffi::in_callback() && matches!(values.first(), Some(Value::Int(ms)) if *ms > 0) {
+                        return Err(runtime_error(callee.line, callee.col, crate::ffi::BLOCKING_IN_CALLBACK));
+                    }
                     return Ok(self.eval_builtin(name, values));
                 }
                 // M41: función externa (FFI). Se despacha a la librería C vía `ffi::call`. La frontera
@@ -1186,10 +1191,12 @@ impl<'a> Interpreter<'a> {
                             None => value_to_ffi(v),
                         })
                         .collect();
+                    let has_callbacks = live.iter().any(|cb| cb.is_some());
+                    let outer = if has_callbacks { crate::ffi::begin_callback_errors() } else { None };
                     let result = crate::ffi::call(&desc, &fargs);
                     drop(live);
                     // Un error dentro de un callback no cruzó los marcos de C: se relanza aquí.
-                    if let Some(msg) = crate::ffi::take_callback_error() {
+                    if has_callbacks && let Some(msg) = crate::ffi::end_callback_errors(outer) {
                         return Err(runtime_error(callee.line, callee.col, &msg));
                     }
                     return match result {

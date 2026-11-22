@@ -1254,11 +1254,13 @@ impl<'a> Vm<'a> {
                                 "non-marshalable argument at the FFI boundary")),
                         });
                     }
+                    let has_callbacks = live.iter().any(|cb| cb.is_some());
+                    let outer = if has_callbacks { crate::ffi::begin_callback_errors() } else { None };
                     let r = crate::ffi::call(desc, &cargs);
                     drop(live);
                     self.cur.stack.truncate(root_base);
                     // Un error dentro de un callback no cruzó los marcos de C: se relanza aquí.
-                    if let Some(m) = crate::ffi::take_callback_error() {
+                    if has_callbacks && let Some(m) = crate::ffi::end_callback_errors(outer) {
                         return Err(runtime_error(pos!().0, pos!().1, &m));
                     }
                     let r = r.map_err(|m| runtime_error(pos!().0, pos!().1, &m))?;
@@ -2156,8 +2158,12 @@ impl<'a> Vm<'a> {
                                         self.push(HeapValue::Obj(h));
                                         return Ok(None);
                                     }
-                                    let d = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);
-                                    self.cur.select_deadline = Some(d);
+                                    // Dentro de un callback de la FFI el aparcado de abajo falla:
+                                    // el plazo no se guarda, o lo heredaría el siguiente select.
+                                    if self.cur.floor == 0 {
+                                        let d = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);
+                                        self.cur.select_deadline = Some(d);
+                                    }
                                 }
                                 // Aparca: re-empuja arr y ms, rebobina el ip al SelectTimeout.
                                 self.cur.stack.push(HeapValue::Obj(arr));

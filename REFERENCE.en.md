@@ -678,9 +678,11 @@ calls it back: `fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> in
 return: those same types or `unit`. The pointer is valid **for the duration of the call** and **on
 the same thread**: it serves `qsort`, `bsearch`, `sqlite3_exec`, enumerators and anything that
 calls back before returning; not a callback that C stores and calls later or from a thread of its
-own (the program aborts saying why), nor in a `blocking` block (compile error). A callback cannot
-wait: receiving from an empty channel, `time.sleep`, `join` or network I/O give
-`cannot wait inside an FFI callback …`. An error inside the callback is seen by the `extern` call
+own (out of contract: the program usually aborts saying why, but detection is not guaranteed),
+nor in a `blocking` block (compile error). A callback cannot wait: receiving from an empty
+channel, sending to a full one, `time.sleep`, `join` or network I/O give
+`cannot wait inside an FFI callback …` and leave no effect; what does not wait works. A native
+`--without fibers` build does not check it (waiting blocks the thread there). An error inside the callback is seen by the `extern` call
 when C returns (C gets zero from that callback); `try_call` recovers it. At most 64 live callbacks
 at a time. On Windows a callback with `float` parameters is not supported yet (runtime error).
 
@@ -868,4 +870,4 @@ orientations) **replaces** it; the rest are added.
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:d497102ca9bb -->
+<!-- sync: sha256:0bbc03397954 -->

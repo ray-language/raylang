@@ -79,6 +79,7 @@ fn cast_value(v: Value, ty: &Type, line: usize, col: usize) -> Result<Value, Flo
                 line,
                 col,
                 trace: Vec::new(),
+                fatal: false,
             })),
         },
         // M28.3: conversiones de/hacia enteros sin signo con tamaño. Enmascaran al ancho destino.
@@ -519,6 +520,7 @@ impl<'a> Interpreter<'a> {
                     line: scrutinee.line,
                     col: scrutinee.col,
                     trace: Vec::new(),
+                    fatal: false,
                 }))
             }
             // Cualquier otra forma no es una llamada en cola: evaluación normal.
@@ -958,6 +960,7 @@ impl<'a> Interpreter<'a> {
                     line: scrutinee.line,
                     col: scrutinee.col,
                     trace: Vec::new(),
+                    fatal: false,
                 }))
             }
 
@@ -3504,7 +3507,7 @@ impl<'a> Interpreter<'a> {
 }
 
 fn runtime_error(line: usize, col: usize, msg: &str) -> Flow {
-    Flow::Error(RuntimeError { msg: msg.to_string(), line, col, trace: Vec::new() })
+    Flow::Error(RuntimeError { msg: msg.to_string(), line, col, trace: Vec::new(), fatal: false })
 }
 
 /// Convierte un `Value` de raylang a un valor de la frontera FFI (M41). El checker ya garantizó que

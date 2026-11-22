@@ -21895,3 +21895,20 @@ cubre el test de formas (`every_callback_signature_shape_reaches_raylang_intact`
 motores. Fuera del rango, anotado: `ray build --native` falla con E0525 cuando un lambda anidado
 en otro contiene `spawn`/`scope` (pasa en 1.27.111 sin FFI de por medio).
 
+**Quinta pasada.** El arreglo del error fatal de la cuarta deducía «fatal» del camino que tomaba
+el error (tres banderas en la VM), y eso clasificaba mal dos casos: quedarse sin pila al entrar a
+un callback pasaba a ser fatal, y un error ordinario seguido de uno fatal salía como fatal con el
+mensaje del ordinario. Rehecho:
+
+- *`RuntimeError.fatal`.* Lo marca quien crea el error (el tope de memoria, el de instrucciones)
+  y lo respeta el bucle; atraviesa un callback sin perderse y sin banderas.
+- *Un callback que falla no vuelve a ejecutarse.* C puede seguir llamándolo hasta que su función
+  retorne (un comparador de `qsort`, miles de veces): recibe ceros y no corre más raylang. Antes
+  seguían ocurriendo sus efectos —prints, envíos— después de que la llamada ya había fallado.
+  Vale en los tres motores, y deja un solo error posible por llamada.
+- *Nativo, TLS.* `tls.alpn`, `peer_cert` y `peer_chain` tomaban el mismo mutex de la sesión sin
+  tolerar el envenenamiento.
+- *Documentado.* En un callback `int` es el `int` de C, de 32 bits (un `long` o `size_t` va
+  como `u64`). Y el nativo no comprueba «no se puede esperar» fuera de una fibra: sin fibras, o
+  en el hilo principal de una app `std/ui` o de una librería `--lib`.
+

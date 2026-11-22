@@ -233,6 +233,7 @@ impl Transpiler {
             out.push_str("fn __ray_cb_stash(m: &str) { __RAY_CB_ERR.with(|s| { s.borrow_mut().get_or_insert_with(|| m.to_string()); }); }\n");
             // El pendiente es de UNA llamada `extern`: una anidada (dentro de un callback de otra
             // que ya falló) aparta el de fuera al empezar y lo repone al terminar.
+            out.push_str("fn __ray_cb_failed() -> bool { __RAY_CB_ERR.with(|s| s.borrow().is_some()) }\n");
             out.push_str("fn __ray_cb_begin() -> Option<String> { __RAY_CB_ERR.with(|s| s.borrow_mut().take()) }\n");
             out.push_str("fn __ray_cb_end(outer: Option<String>) { if let Some(m) = __RAY_CB_ERR.with(|s| std::mem::replace(&mut *s.borrow_mut(), outer)) { __ray_rt_err(&m); } }\n");
         }
@@ -455,7 +456,7 @@ impl Transpiler {
             String::new()
         };
         format!(
-            "{{ {windows}let __f = __p{i}.clone(); match __ray_cb::install({float_ret}, Rc::new(move |__r: &__ray_cb::Regs| -> u64 {{ {guard}let mut __out = 0u64; if let Some(__m) = __ray_try_quiet(|| {{ let __v = __f({args}); __out = {encode}; }}) {{ __ray_cb_stash(&__m); }} __out }})) {{ Ok(__c) => __c, Err(__m) => __ray_rt_err(&__m) }} }}",
+            "{{ {windows}let __f = __p{i}.clone(); match __ray_cb::install({float_ret}, Rc::new(move |__r: &__ray_cb::Regs| -> u64 {{ if __ray_cb_failed() {{ return 0; }} {guard}let mut __out = 0u64; if let Some(__m) = __ray_try_quiet(|| {{ let __v = __f({args}); __out = {encode}; }}) {{ __ray_cb_stash(&__m); }} __out }})) {{ Ok(__c) => __c, Err(__m) => __ray_rt_err(&__m) }} }}",
             float_ret = sig.ret == CKind::Float,
             args = args.join(", "),
         )

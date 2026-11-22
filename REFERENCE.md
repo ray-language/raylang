@@ -671,15 +671,18 @@ del símbolo).
 C la llama de vuelta: `fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int);` y luego
 `qsort(data, n, 1 as u64, fn(a: ptr, b: ptr) -> int { … })`. Parámetros del callback: `int`, `u64`,
 `float`, `bool`, `ptr`, `Option<ptr>` (NULL → `None`), hasta 6 enteros/punteros y 4 `float`;
-retorno: esos mismos o `unit`. El puntero vale **mientras dura la llamada** y **en el mismo hilo**:
+retorno: esos mismos o `unit`. Ojo: en un callback `int` es el `int` de C (32 bits con signo);
+para un `long` o un `size_t` declara `u64`. El puntero vale **mientras dura la llamada** y **en el mismo hilo**:
 sirve para `qsort`, `bsearch`, `sqlite3_exec`, enumeradores y todo lo que llama de vuelta antes de
 retornar; no para un callback que C guarda y llama más tarde o desde un hilo suyo (fuera de
 contrato: lo habitual es que el programa aborte diciendo por qué, pero no se garantiza
 detectarlo), ni en un bloque `blocking` (error de compilación). Dentro del callback no se puede
 esperar: recibir de un canal vacío, enviar a uno lleno, `time.sleep`, `join` o E/S de red dan
-`cannot wait inside an FFI callback …` sin dejar efecto; lo que no espera funciona. El nativo
-`--without fibers` no lo comprueba (ahí esperar bloquea el hilo). Un error dentro del callback lo ve la llamada `extern`
-cuando C retorna (C recibe cero de ese callback); `try_call` lo recupera. Como mucho 64 callbacks
+`cannot wait inside an FFI callback …` sin dejar efecto; lo que no espera funciona. El nativo no lo
+comprueba fuera de una fibra (`--without fibers`, o el hilo principal de una app `std/ui`): ahí
+esperar bloquea el hilo. Un error dentro del callback lo ve la llamada `extern`
+cuando C retorna (C recibe cero de ese callback y de los siguientes, que ya no se ejecutan);
+`try_call` lo recupera. Como mucho 64 callbacks
 vivos a la vez. En Windows un callback con parámetros `float` aún no se admite (error de ejecución).
 
 **Coste de una llamada** (medido en arm64, rayserial #396): ~0,5 µs en la VM y ~1 ns en nativo.

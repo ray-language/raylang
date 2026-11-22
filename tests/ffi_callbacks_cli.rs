@@ -187,18 +187,19 @@ fn main() {
         });
         1
     }));
-    // El error de una invocación es de SU llamada: una extern anidada posterior no se lo lleva.
-    var calls = 0;
+    // El error de un callback es de SU llamada: el de una extern interna, recuperado dentro del
+    // callback de otra, no hace fallar a la exterior.
     var inner = "";
     print(try_call(fn() -> int {
         qsort(bytes_of([3, 2, 1]), 3 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int {
-            calls = calls + 1;
-            if (calls == 1) {
-                let z: [int] = [];
-                return z[3];
-            }
-            inner = to_string(try_call(fn() -> bytes { sorted([2, 1]) }).is_ok());
-            0
+            inner = to_string(try_call(fn() -> int {
+                qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(p: ptr, q: ptr) -> int {
+                    let z: [int] = [];
+                    z[3]
+                });
+                1
+            }).is_err());
+            b(x) - b(y)
         });
         1
     }));
@@ -231,7 +232,7 @@ fn main() {
 }
 "#;
 
-const AFTERMATH_OUT: &str = "Result.Ok(1)\nResult.Err(index 3 out of range (length 0))\ntrue\ntrue\ntrue\ntrue\ntrue\nOption.Some(7)\nOption.Some(9)\n";
+const AFTERMATH_OUT: &str = "Result.Ok(1)\nResult.Ok(1)\ntrue\ntrue\ntrue\ntrue\ntrue\nOption.Some(7)\nOption.Some(9)\n";
 
 #[test]
 fn a_failed_wait_or_callback_leaves_nothing_behind() {
@@ -440,6 +441,48 @@ fn a_fatal_limit_inside_a_callback_is_still_fatal() {
     let (out, err, code) = ray(&d, &["run", "--heap", "50000", "prog.ray"]);
     assert_eq!((out.as_str(), code), ("start\n", 70), "{err}");
     assert!(err.contains("memory limit exhausted (heap cap)"), "{err}");
+}
+
+// De la quinta revisión: tras su primer error el callback no vuelve a ejecutarse, y quedarse sin
+// pila al entrar a uno es un error ordinario (no de los que nada recupera).
+const ONCE: &str = r#"extern "c" {
+    fn qsort(base: bytes, n: u64, size: u64, cmp: fn(ptr, ptr) -> int);
+}
+fn deep(k: int) -> int {
+    if (k == 0) {
+        qsort(bytes_of([2, 1]), 2 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int { 0 });
+        return 0;
+    }
+    1 + deep(k - 1)
+}
+fn main() {
+    // Tras el primer error el callback no vuelve a ejecutarse, aunque C lo siga llamando.
+    var calls = 0;
+    print(try_call(fn() -> int {
+        qsort(bytes_of([5, 4, 3, 2, 1, 0]), 6 as u64, 1 as u64, fn(x: ptr, y: ptr) -> int {
+            calls = calls + 1;
+            let z: [int] = [];
+            z[3]
+        });
+        1
+    }));
+    print(calls);
+    // Quedarse sin pila al entrar a un callback es un error ordinario: `try_call` lo recupera.
+    print(try_call(fn() -> int { deep(100000) }).is_err());
+    print("alive");
+}
+"#;
+
+#[test]
+fn a_failed_callback_does_not_run_again_and_ordinary_errors_stay_recoverable() {
+    let d = tmp("once");
+    std::fs::write(d.join("prog.ray"), ONCE).unwrap();
+    let expected = "Result.Err(index 3 out of range (length 0))\n1\ntrue\nalive\n";
+    for args in [&["run", "prog.ray"][..], &["run", "--interp", "prog.ray"][..]] {
+        let out = Command::new(env!("CARGO_BIN_EXE_ray")).args(args).env("RAYLANG_MAX_DEPTH", "64").current_dir(&d).output().unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout), expected, "{args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        assert_eq!(out.status.code(), Some(0), "{args:?}");
+    }
 }
 
 // Las formas que libc no ejercita: flotantes mezclados con enteros, `bool`, `u64` anchos,

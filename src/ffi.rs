@@ -306,6 +306,11 @@ pub fn install_callback(
     crate::ffi::callback_pool::install(
         sig.ret == CKind::Float,
         std::rc::Rc::new(move |regs: &crate::ffi::callback_pool::Regs| {
+            // La llamada `extern` ya falló (un callback suyo dio error): C puede seguir llamando
+            // hasta que su función retorne, pero no se ejecuta más raylang; recibe ceros.
+            if CALLBACK_ERROR.with(|e| e.borrow().is_some()) {
+                return 0;
+            }
             callback_ret_bits(handler(callback_args(&owned, regs).as_slice()))
         }),
     )

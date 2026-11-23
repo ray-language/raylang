@@ -146,6 +146,11 @@ fn transpile_src(src: &str) -> String {
 #[test]
 fn empty_array_concat_and_tuples_with_none_transpile() {
     let rs = transpile_src("fn main() -> int { let entries: [string] = [\"a\"]; let q: [string] = [] + entries; let r = [] + entries; q.len() + r.len() }");
+    // Con un operando `[]` el resultado es una copia del otro, sin `extend` (nov 2026: `xs + []`
+    // dejaba un `Vec::new()` sin tipo y rustc daba E0283).
+    assert!(rs.contains("let __rt_v = entries.clone().borrow().clone(); Rc::new(std::cell::RefCell::new(__rt_v))"), "{rs}");
+    assert!(!rs.contains("__rt_v.extend("), "{rs}");
+    let rs = transpile_src("fn main() -> int { let xs: [int] = [1]; let a = xs + []; let b = xs + [2]; a.len() + b.len() }");
     assert!(rs.contains("__rt_v.extend("), "{rs}");
     let rs = transpile_src("fn f(r: Result<int, string>) -> int { let t = match (r) { Result.Ok(v) => (\"ok\", Option.Some(v)), Result.Err(e) => (\"error\", Option.None) }; match (t) { (_, Option.Some(v)) => v, (_, Option.None) => 0 } }\nfn main() -> int { f(Result.Ok(1)) }");
     assert!(rs.contains("fn f("), "{rs}");

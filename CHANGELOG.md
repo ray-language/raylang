@@ -4,6 +4,25 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **Binario nativo — programas que la VM ejecuta y `ray build --native` no compilaba o hacía
+  morir** (los encontró el harness diferencial al sortear el tipo de cada sonda, no una app):
+  - Leer un contenedor y mutarlo en la misma expresión (`xs.len() + grow(xs)`,
+    `m.contains_key(k) || put(m, k)`, `xs.reverse().len() + grow(xs)`) terminaba con
+    «RefCell already borrowed».
+  - `map`, `filter` y `fold` con un closure que toca el arreglo que recorren (`xs.map(fn(x) {
+    xs.push(…); … })`) también; ahora ven lo añadido, como en la VM.
+  - Un closure guardado en una variable y usado como valor dentro de un array, una tupla, un
+    `Option` o las ramas de un `if`/`match` (`[f, g]`, `if (c) { f } else { g }`) daba un error
+    de rustc.
+  - Llamar a una expresión de tipo función (`get(table, k).unwrap()(x)`, `make(d)(x)`,
+    `fs[i](x)`) se rechazaba con «call to an expression … is not supported».
+  - Una función genérica cuyo parámetro de tipo solo aparece dentro de un `Channel<…>`
+    (`fn drain<P>(ch: Channel<Msg<P>>)`) daba un error de rustc.
+  - Un `[]` como argumento de una función genérica (`first_or([], d)`) dejaba la función entera
+    fuera del binario, y `xs + []` daba un error de rustc.
+
 ## 1.27.112 — 2026-11-22
 
 - **Callbacks en la FFI** (ray-daw #425): un parámetro de tipo función en una `extern fn` pasa una

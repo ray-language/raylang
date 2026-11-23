@@ -21923,3 +21923,60 @@ solo rigen en el worker de `main` cuando el programa lanza tareas (así era en 1
 sitios que aparcan repiten el mismo adaptador; el camino de Windows no tiene test de integración
 (los tests son de unix, y el CI de Windows no corre los unitarios de `ray-runtime`).
 
+
+
+## 475. El diferencial sortea el tipo, no solo los valores (nov 2026)
+
+**De dónde sale.** Un repaso de los 478 hallazgos históricos de las apps (425 sobre raylang y sus
+paquetes) dio como patrón más limpio «`ray check` acepta y el nativo no compila»: 24 hallazgos,
+todos bugs, desde 11 apps. El harness diferencial (M120, `tests/native_differential.rs`)
+existe para esa clase y aun así se colaron. La causa estaba en el propio harness: sus 28
+generadores eran plantillas FIJAS; la semilla cambiaba los literales, no la forma, de modo que la
+campaña repetía los mismos 28 programas con otros números. Los hallazgos, en cambio, nacen del
+cruce forma × tipo: lo que funciona con `int` falla con una tupla, un struct propio o un `Option`
+de un enum.
+
+**Qué se hizo.** Ocho generadores ESTRUCTURALES (seis secuenciales, dos de concurrencia). Cada uno
+fija una forma — una familia de hallazgos — y sortea el tipo sobre el que opera: primitivo, tupla,
+struct o enum propio (con `@derive`), y sus envoltorios `[T]`, `Option<T>`, `[[T]]`. El tipo trae
+sus dos valores distintos, si sirve de clave de `Map` y sus declaraciones. Las plantillas van en
+raw strings con marcas (`@T@`, `@A@`, `@B@`), no en `format!`: se leen como raylang. Un test de
+sondeo (`differential_structural_survey`, `#[ignore]`) corre cada generador de uno en uno con N
+semillas sin parar en el primer fallo; el humo de cada `cargo test` y la campaña del CI los
+incluyen.
+
+**Qué encontró.** El primer sondeo (48 sondas) falló en 30, en cinco familias. Ninguna venía de un
+hallazgo abierto:
+
+1. *El guard de un `.borrow()` suelto vive hasta el final de la sentencia.* `xs.len()` se emitía
+   como `(xs.borrow().len() as i64)`; en `xs.len() + grow(xs)` el guard seguía vivo durante
+   `grow`, que hace `borrow_mut`. Es la misma clase que ya se había parcheado en la lectura de
+   campos (M439), en `get` y en los argumentos de una llamada de usuario, sitio a sitio. Se
+   envuelven en bloque `len`, `contains_key`, `reverse` y `bytes_of` (edition 2024: los temporales
+   de la expresión de cola mueren al cerrar el bloque).
+2. *`map`/`filter`/`fold` prestaban el arreglo toda la pasada.* El prelude los define por índice
+   sobre el arreglo vivo (`while (i < xs.len()) … xs[i]`), y la VM deja que el closure lo toque y
+   ve lo añadido. El nativo ahora hace lo mismo… salvo cuando el closure es una función anónima
+   de aritmética escalar pura (`is_scalar_pure_fn`: parámetros escalares, una expresión, sin
+   llamadas, índices ni campos), que no puede tocar ningún arreglo y conserva el iterador
+   prestado. Medido: con el camino por índice para todos, un `map`+`filter`+`fold` sobre 1 M de
+   enteros pasaba de 48 a 67 ms; con la excepción, 48 ms.
+3. *Un closure local tiene tipo concreto.* `let f = fn…` deja `Rc<{closure}>` para que `f(x)` se
+   despache estática; la coerción a `Rc<dyn Fn>` solo es implícita en un argumento o un campo.
+   Como valor en cualquier otra posición se emite el cast explícito.
+4. *Llamar a una expresión.* `resolve_callee` solo conocía nombre y método. Una expresión de tipo
+   función se iza a un temporal, con sus argumentos, y se llama.
+5. *Un genérico que solo aparece dentro de `Channel<…>`* no está en la firma de Rust (el canal va
+   borrado): se emite el turbofish. Y *un `[]` para un parámetro genérico* se tipa con la
+   sustitución que dan los demás argumentos.
+
+**Lo que queda fuera a propósito.** Un closure capturado por `spawn` no cruza hilos en el nativo
+(`Rc`, no `Send`): es un límite declarado, con su aviso al compilar, y el generador de concurrencia
+no lo sondea. Las restricciones del lenguaje que acotan el universo de tipos del generador
+(`@derive(Show)` sin tuplas ni `Option` en los campos, `@derive(Hash)` sin arrays, `print` de una
+tupla con un tipo propio) son del checker, no divergencias entre motores.
+
+**Lección.** Un fuzzer que solo varía valores certifica una lista de programas, no una clase. El
+coste de variar la forma fue bajo — un `Ty` con cinco campos — porque el checker hace de oráculo de
+validez: una sonda que la VM rechaza es un bug del generador y se ve al instante.
+

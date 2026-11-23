@@ -21974,7 +21974,9 @@ hallazgo abierto:
 (`Rc`, no `Send`): es un límite declarado, con su aviso al compilar, y el generador de concurrencia
 no lo sondea. Las restricciones del lenguaje que acotan el universo de tipos del generador
 (`@derive(Show)` sin tuplas ni `Option` en los campos, `@derive(Hash)` sin arrays, `print` de una
-tupla con un tipo propio) son del checker, no divergencias entre motores.
+tupla con un tipo propio) son del checker, no divergencias entre motores. Una queda anotada por
+incoherente: `print((1, "a"))` se rechaza, pero la misma tupla dentro de un array o de un
+`Option` sí se imprime.
 
 **Lección.** Un fuzzer que solo varía valores certifica una lista de programas, no una clase. El
 coste de variar la forma fue bajo — un `Ty` con cinco campos — porque el checker hace de oráculo de

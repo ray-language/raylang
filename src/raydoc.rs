@@ -33,6 +33,8 @@ pub fn module_doc(src: &str) -> Option<String> {
 /// visible (`b`), el original (`a`), el módulo tal como se escribió y el archivo —con su fuente—
 /// donde el ítem se DEFINE (siguiendo las cadenas de re-export).
 pub struct Reexported {
+    /// Reexportado con `opaque`: su forma no es parte del contrato.
+    pub opaque: bool,
     pub visible: String,
     pub original: String,
     pub module: String,
@@ -100,7 +102,7 @@ pub fn reexports(src: &str, file: &std::path::Path) -> Vec<Reexported> {
     for fi in prog.from_imports.iter().filter(|fi| fi.is_pub) {
         for n in &fi.names {
             if let Some((def_file, source, original)) = definition(file, &fi.module, &n.name, 4) {
-                out.push(Reexported { visible: n.local().to_string(), original, module: fi.module.clone(), file: def_file, source });
+                out.push(Reexported { opaque: n.opaque, visible: n.local().to_string(), original, module: fi.module.clone(), file: def_file, source });
             }
         }
     }
@@ -132,7 +134,8 @@ pub fn generate_file(path: &std::path::Path) -> Result<String, String> {
         let (sig, line) = if let Some(f) = prog.functions.iter().find(|f| f.name == name) {
             (sig_function(f), f.line)
         } else if let Some(s) = prog.structs.iter().find(|s| s.name == name) {
-            (sig_struct(s), s.line)
+            // Un tipo opaco se documenta SIN sus campos: no son parte del contrato.
+            if item.opaque { (format!("struct {} (opaque)", s.name), s.line) } else { (sig_struct(s), s.line) }
         } else if let Some(e) = prog.enums.iter().find(|e| e.name == name) {
             (sig_enum(e), e.line)
         } else if let Some(t) = prog.traits.iter().find(|t| t.name == name) {

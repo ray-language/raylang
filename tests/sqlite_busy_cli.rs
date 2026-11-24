@@ -81,6 +81,40 @@ fn main() -> int {
     print("writers on time: ${time.monotonic() - begun < 4000}");
     let rows = sqlite.query(setup, "SELECT count(*) FROM t", []).unwrap();
     print("rows: ${rows[0][0]}");
+
+    // 4. Un script que se queda a medias NO se reintenta entero: su primera sentencia ya se aplicó.
+    let scripted = open(path, 300);
+    let _ = sqlite.exec(scripted, "CREATE TEMP TABLE audit (n INTEGER)", []).unwrap();
+    let lock = open(path, 0);
+    let _ = sqlite.exec(lock, "BEGIN IMMEDIATE", []).unwrap();
+    match (sqlite.exec(scripted, "INSERT INTO audit VALUES (1); INSERT INTO t VALUES (999);", [])) {
+        Result.Ok(_) => print("script: unexpected ok"),
+        Result.Err(e) => print("script: ${e}"),
+    }
+    let audited = sqlite.query(scripted, "SELECT count(*) FROM audit", []).unwrap();
+    print("audit rows: ${audited[0][0]}");
+
+    // 5. Un `PRAGMA busy_timeout` DENTRO de un script no devuelve la espera a SQLite.
+    let pragmas = open(path, 0);
+    let _ = sqlite.exec(pragmas, "PRAGMA busy_timeout = 3000; PRAGMA synchronous = NORMAL;", []).unwrap();
+    sqlite.busy_timeout(pragmas, 0);
+    let asked = time.monotonic();
+    print("after a script pragma: ${sqlite.exec(pragmas, "BEGIN IMMEDIATE", []).is_err()} fast=${time.monotonic() - asked < 1000}");
+    let _ = sqlite.exec(lock, "COMMIT", []).unwrap();
+
+    // 6. Lo que esperar no arregla: una transacción que ya lee y quiere escribir mientras otra
+    //    tiene el candado de escritura. Falla en el acto aunque el plazo sea de 5 s.
+    let reader = open(path, 5000);
+    let _ = sqlite.exec(reader, "BEGIN", []).unwrap();
+    let _ = sqlite.query(reader, "SELECT count(*) FROM t", []).unwrap();
+    let _ = sqlite.exec(lock, "BEGIN IMMEDIATE", []).unwrap();
+    let tried = time.monotonic();
+    match (sqlite.exec(reader, "INSERT INTO t VALUES (7)", [])) {
+        Result.Ok(_) => print("upgrade: unexpected ok"),
+        Result.Err(e) => print("upgrade: not waited=${e.contains("not waited for")} fast=${time.monotonic() - tried < 1000}"),
+    }
+    let _ = sqlite.exec(reader, "ROLLBACK", []);
+    let _ = sqlite.exec(lock, "COMMIT", []);
     0
 }
 "#;
@@ -91,7 +125,11 @@ holder finished on time: true\n\
 both done on time: true\n\
 writers ok: 20\n\
 writers on time: true\n\
-rows: 22\n";
+rows: 22\n\
+script: database is locked (after 1 statement(s) of the script had run; the rest did not run)\n\
+audit rows: 1\n\
+after a script pragma: true fast=true\n\
+upgrade: not waited=true fast=true\n";
 
 fn project(name: &str) -> std::path::PathBuf {
     let base = std::env::temp_dir().join(format!("ray_sqlite_busy_{name}_{}", std::process::id()));

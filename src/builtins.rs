@@ -2745,25 +2745,8 @@ pub fn sqlite_query(h: i64, sql: &str, params: &[String]) -> Result<(usize, Vec<
 pub fn sqlite_query_nulls(h: i64, sql: &str, params: &[String]) -> Result<(usize, Vec<Option<String>>), String> {
     let mut reg = registry().lock().unwrap();
     let conn = sqlite_conn(&mut reg, h)?;
-    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
-    let ncols = stmt.column_count();
-    let mut rows = stmt.query(rusqlite::params_from_iter(params.iter())).map_err(|e| e.to_string())?;
-    let mut out = Vec::new();
-    loop {
-        match rows.next() {
-            Ok(Some(row)) => {
-                // Copiar cada celda ANTES de avanzar: el texto de un ValueRef solo vive hasta el
-                // siguiente paso del statement.
-                for i in 0..ncols {
-                    let v = row.get_ref(i).map_err(|e| e.to_string())?;
-                    out.push(if matches!(v, rusqlite::types::ValueRef::Null) { None } else { Some(sqlite_value_str(v)) });
-                }
-            }
-            Ok(None) => break,
-            Err(e) => return Err(e.to_string()),
-        }
-    }
-    Ok((ncols, out))
+    // La misma función que el binario nativo (una sola espera del candado, rayhotel #491).
+    ray_runtime::sqlite::query_conn(conn, sql, params)
 }
 #[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
 pub fn sqlite_query(_h: i64, _sql: &str, _params: &[String]) -> Result<(usize, Vec<String>), String> { Err(SQLITE_UNAVAILABLE.to_string()) }

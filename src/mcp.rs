@@ -801,7 +801,8 @@ fn reexport_lines(src: &str, file: &std::path::Path) -> Vec<String> {
         let sig = if let Some(f) = prog.functions.iter().find(|f| f.name == name) {
             fn_signature(f)
         } else if let Some(s) = prog.structs.iter().find(|s| s.name == name) {
-            struct_signature(s)
+            // Opaco: sin campos (fuera de la cápsula no se construye ni se leen).
+            if item.opaque { format!("struct {} (opaque: use the functions the capsule exports)", s.name) } else { struct_signature(s) }
         } else if let Some(e) = prog.enums.iter().find(|e| e.name == name) {
             enum_signature(e)
         } else if let Some(t) = prog.traits.iter().find(|t| t.name == name) {
@@ -909,7 +910,9 @@ fn project_files(path: &str) -> Option<(std::path::PathBuf, Vec<std::path::PathB
             if let Some(rel) = crate::deps::path_of_path_dep(spec) {
                 let dir = root.join(rel);
                 if dir.is_dir() {
-                    pending.push(dir);
+                    // Al FONDO de la pila: el proyecto se recorre entero antes, y son sus
+                    // archivos los que cuentan para el tope.
+                    pending.insert(0, dir);
                 }
             }
         }

@@ -398,6 +398,12 @@ fn server_cases() -> Vec<Case> {
     huge_ext.extend(std::iter::repeat_n(b'a', 200_000));
     huge_ext.extend_from_slice(b"\r\nhello\r\n0\r\n\r\n");
     cases.push(Case { name: "chunk_extension_of_200_kb", request: huge_ext, expect: RejectOrDrop });
+    // Un valor casi todo ESPACIOS, dentro del límite: se recorta en una pasada (revisión previa a
+    // 1.27.113: quitar un carácter por vuelta era cuadrático sobre entrada del cliente).
+    let mut padded = b"GET / HTTP/1.1\r\nHost: h\r\nX-Test: ".to_vec();
+    padded.extend(std::iter::repeat_n(b' ', 60_000));
+    padded.extend_from_slice(b"end\r\n\r\n");
+    cases.push(Case { name: "header_value_padded_with_60_kb_of_spaces", request: padded, expect: Ok(&["x=end>"]) });
     // Una línea de cabecera por encima del límite de cabeceras (64 KiB).
     let mut huge_header = b"GET / HTTP/1.1\r\nHost: h\r\nX-Test: ".to_vec();
     huge_header.extend(std::iter::repeat_n(b'a', 100_000));

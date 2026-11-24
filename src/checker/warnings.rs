@@ -140,6 +140,13 @@ pub fn facade_shows_unexported(program: &Program) -> Vec<Warning> {
     for (capsule, values) in &program.capsule_surfaces {
         let exported = program.capsule_types.get(capsule);
         let inside = format!("{capsule}::");
+        // Un alias `pub type X = interno.T;` de la fachada también deja nombrar `T` (como `capsule.X`).
+        let mut aliased = Vec::new();
+        for a in program.type_aliases.iter().filter(|a| a.is_pub) {
+            if a.name.strip_prefix(&inside).is_some_and(|leaf| !leaf.contains("::")) {
+                names(&a.target, &mut aliased);
+            }
+        }
         let mut globals: Vec<&String> = values.values().collect();
         globals.sort();
         for global in globals {
@@ -150,7 +157,7 @@ pub fn facade_shows_unexported(program: &Program) -> Vec<Warning> {
             shown.sort();
             shown.dedup();
             for ty in shown {
-                if !ty.starts_with(&inside) || exported.is_some_and(|e| e.contains(&ty)) {
+                if !ty.starts_with(&inside) || exported.is_some_and(|e| e.contains(&ty)) || aliased.contains(&ty) {
                     continue;
                 }
                 let leaf = ty.rsplit("::").next().unwrap_or(&ty);

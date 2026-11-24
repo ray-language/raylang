@@ -3009,52 +3009,54 @@ impl Transpiler {
             // quedaba prestado durante TODA la pasada y un closure que lo tocaba (`xs.map(fn(x) {
             // xs.push(…) })`) moría con «RefCell already borrowed»; la VM lo permite y ve lo añadido.
             "map" if !name.contains('#') && self.is_scalar_pure_fn(eff[1]) => {
-                out.push_str("{ let __rt_f = ");
-                self.emit_expr(out, eff[1])?;
-                out.push_str("; Rc::new(std::cell::RefCell::new(");
+                // El receptor primero, luego el closure: el orden de la VM (`xs.map(f)` ≡ `map(xs, f)`).
+                out.push_str("{ let __rt_s = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().iter().map(|__rt_x| __rt_f(__rt_x.clone())).collect::<Vec<_>>())) }");
+                out.push_str("; let __rt_f = ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("; Rc::new(std::cell::RefCell::new(__rt_s.borrow().iter().map(|__rt_x| __rt_f(__rt_x.clone())).collect::<Vec<_>>())) }");
             }
             "filter" if !name.contains('#') && self.is_scalar_pure_fn(eff[1]) => {
-                out.push_str("{ let __rt_f = ");
-                self.emit_expr(out, eff[1])?;
-                out.push_str("; Rc::new(std::cell::RefCell::new(");
+                out.push_str("{ let __rt_s = ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().iter().cloned().filter(|__rt_x| __rt_f(__rt_x.clone())).collect::<Vec<_>>())) }");
+                out.push_str("; let __rt_f = ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("; Rc::new(std::cell::RefCell::new(__rt_s.borrow().iter().cloned().filter(|__rt_x| __rt_f(__rt_x.clone())).collect::<Vec<_>>())) }");
             }
             "fold" if !name.contains('#') && self.is_scalar_pure_fn(eff[2]) => {
-                // El valor inicial va a un temporal ANTES de prestar el arreglo: es una expresión
-                // cualquiera (`xs.fold(grow(xs), …)`) y dentro del `.borrow()` chocaba.
-                out.push_str("{ let __rt_f = ");
-                self.emit_expr(out, eff[2])?;
+                // Receptor, valor inicial y closure, EN ESE ORDEN (el de la VM), cada uno a un
+                // temporal antes de prestar el arreglo: el inicial es una expresión cualquiera
+                // (`xs.fold(grow(xs), …)`) y dentro del `.borrow()` chocaba.
+                out.push_str("{ let __rt_s = ");
+                self.emit_expr(out, eff[0])?;
                 out.push_str("; let __rt_z = ");
                 self.emit_expr(out, eff[1])?;
-                out.push_str("; ");
-                self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().iter().fold(__rt_z, |__acc, __rt_x| __rt_f(__acc, __rt_x.clone())) }");
+                out.push_str("; let __rt_f = ");
+                self.emit_expr(out, eff[2])?;
+                out.push_str("; __rt_s.borrow().iter().fold(__rt_z, |__acc, __rt_x| __rt_f(__acc, __rt_x.clone())) }");
             }
             "map" if !name.contains('#') => {
-                out.push_str("{ let __rt_f = ");
-                self.emit_expr(out, eff[1])?;
-                out.push_str("; let __rt_s = ");
+                out.push_str("{ let __rt_s = ");
                 self.emit_expr(out, eff[0])?;
+                out.push_str("; let __rt_f = ");
+                self.emit_expr(out, eff[1])?;
                 out.push_str("; let mut __rt_o = Vec::with_capacity(__rt_s.borrow().len()); let mut __rt_i = 0usize; loop { let __rt_x = { let __rt_b = __rt_s.borrow(); if __rt_i >= __rt_b.len() { break; } __rt_b[__rt_i].clone() }; __rt_o.push(__rt_f(__rt_x)); __rt_i += 1; } Rc::new(std::cell::RefCell::new(__rt_o)) }");
             }
             "filter" if !name.contains('#') => {
-                out.push_str("{ let __rt_f = ");
-                self.emit_expr(out, eff[1])?;
-                out.push_str("; let __rt_s = ");
+                out.push_str("{ let __rt_s = ");
                 self.emit_expr(out, eff[0])?;
+                out.push_str("; let __rt_f = ");
+                self.emit_expr(out, eff[1])?;
                 // El elemento se RELEE tras el predicado (el prelude hace `out.push(xs[i])`).
                 out.push_str("; let mut __rt_o = Vec::new(); let mut __rt_i = 0usize; loop { let __rt_x = { let __rt_b = __rt_s.borrow(); if __rt_i >= __rt_b.len() { break; } __rt_b[__rt_i].clone() }; if __rt_f(__rt_x) { let __rt_b = __rt_s.borrow(); __rt_o.push(__rt_b[__ray_idx(__rt_i as i64, __rt_b.len())].clone()); } __rt_i += 1; } Rc::new(std::cell::RefCell::new(__rt_o)) }");
             }
             "fold" if !name.contains('#') => {
-                out.push_str("{ let __rt_f = ");
-                self.emit_expr(out, eff[2])?;
-                out.push_str("; let __rt_s = ");
+                out.push_str("{ let __rt_s = ");
                 self.emit_expr(out, eff[0])?;
                 out.push_str("; let mut __acc = ");
                 self.emit_expr(out, eff[1])?;
+                out.push_str("; let __rt_f = ");
+                self.emit_expr(out, eff[2])?;
                 out.push_str("; let mut __rt_i = 0usize; loop { let __rt_x = { let __rt_b = __rt_s.borrow(); if __rt_i >= __rt_b.len() { break; } __rt_b[__rt_i].clone() }; __acc = __rt_f(__acc, __rt_x); __rt_i += 1; } __acc }");
             }
             // Cripto de producción (M43): los primitivos `__*` se interceptan a `ray_runtime::crypto::*`

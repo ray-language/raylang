@@ -386,14 +386,25 @@ fn parse_chunk_size(b: bytes, start: int, end: int) -> int {
 // cabecera. NO es `trim()`: ese también quita VT, FF y CR, y un `Transfer-Encoding: \x0bchunked`
 // quedaba normalizado a `chunked` antes de validarse — la ofuscación clásica de TE.
 fn trim_ows(s: string) -> string {
-    var t: string = s;
-    while (t.starts_with(" ") || t.starts_with("\t")) {
-        t = t.substring(1, t.len());
+    // Una pasada: un valor de 64 KiB de espacios es entrada del otro extremo, y quitar un
+    // carácter por vuelta con `substring` (que copia) era cuadrático.
+    var first: int = 0 - 1;
+    var end: int = 0;
+    var i: int = 0;
+    for c in s {
+        let n = char_code(c);
+        if (n != 32 && n != 9) {
+            if (first < 0) {
+                first = i;
+            }
+            end = i + 1;
+        }
+        i = i + 1;
     }
-    while (t.ends_with(" ") || t.ends_with("\t")) {
-        t = t.substring(0, t.len() - 1);
+    if (first < 0) {
+        return "";
     }
-    t
+    s.substring(first, end)
 }
 
 // ¿Solo dígitos decimales, entre 1 y 18 (lo que cabe en un int)?

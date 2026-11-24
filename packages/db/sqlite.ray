@@ -77,7 +77,9 @@ pub fn busy_timeout(c: Conn, ms: int) {
 // SQLITE_BUSY: otra conexión tiene el candado. (`database table is locked`, SQLITE_LOCKED, es un
 // conflicto dentro de la MISMA conexión y esperar no lo arregla.)
 fn is_busy(message: string) -> bool {
-    message.contains("database is locked")
+    // A SECAS: el runtime añade el motivo a los `database is locked` que NO se deben reintentar
+    // (parte del script ya se aplicó; o SQLite ni esperó porque sería un interbloqueo).
+    message == "database is locked"
 }
 
 // `PRAGMA busy_timeout = N` (lo normal en SQLite) como única sentencia: los ms pedidos. El plazo

@@ -493,6 +493,12 @@ impl<'a> Vm<'a> {
             if idle_spins <= 100 {
                 drop(sh);
                 std::thread::sleep(std::time::Duration::from_micros(SPIN_SLEEP_US));
+            } else if cfg!(windows) {
+                // En Windows `park_timeout` redondea al tic del sistema (~15 ms) y retrasaría los
+                // temporizadores de las fibras aparcadas; `sleep` usa el temporizador de alta
+                // resolución. Sin despertar por encolado: 1 ms de espera como mucho.
+                drop(sh);
+                std::thread::sleep(std::time::Duration::from_millis(1));
             } else {
                 sh.ready.wait_for_work();
                 drop(sh);

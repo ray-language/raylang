@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Editores — los usos de un tipo ya no cuentan como definiciones** (ray-sublime #479): las
+  gramáticas de Sublime y VS Code marcaban cada uso de un tipo con el mismo scope que su
+  definición (`entity.name.type`), y Sublime listaba cada uso en Goto Symbol. Ahora ese scope
+  queda para el nombre que sigue a `struct`, `enum`, `trait` y `type`; los usos llevan
+  `support.type`. Llega a los editores cuando se publiquen sus paquetes.
+
 - **Binario nativo — patrones de struct en `match`** (rayhotel #489): `match (i) { Invoice { id,
   status: Status.Paid(n) } => … }` se rechazaba con «struct destructuring pattern is not
   supported» aunque la VM lo ejecuta y la documentación lo anuncia. Ahora compila: en el

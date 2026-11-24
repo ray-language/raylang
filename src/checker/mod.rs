@@ -958,6 +958,10 @@ struct Checker {
     /// (`prefijo::nombre`, por la banda a la que pertenece su línea) — el ámbito léxico del módulo,
     /// sin depender de lo que importe la entrada. Vacío en un programa de un solo archivo.
     module_bands: Vec<(usize, String)>,
+    /// rayhotel #481: la superficie de valores de cada cápsula y la identidad de la entrada (ver
+    /// `Program::capsule_surfaces` / `Program::entry_module`).
+    capsule_surfaces: HashMap<String, HashMap<String, String>>,
+    entry_module: String,
     /// Exigir la función de entrada `main` (DESIGN §11). `true` por defecto (`check`/`check_all`: un
     /// programa ejecutable la necesita). El LSP la pone en `false` al analizar un **archivo de módulo**
     /// (submódulo `pub`, sin `main`): un módulo suelto es legítimo sin entrada, y esa regla es de

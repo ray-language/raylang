@@ -235,8 +235,8 @@ keeps it on one line if it fits in 100 columns and wraps it one name per line if
 One file = one module. Types cross modules with `pub` + `from M import Type` (or use
 them qualified: `regex.Regex` in a signature, `json.Json.JObject(m)` in a pattern). A
 `dir/mod.ray` file makes `dir/` an importable capsule (`import dir;`) whose internals
-are private. Inside a module, calls to its own functions and UFCS both resolve
-module-locally. Dependencies live in `ray.toml` `[dependencies]`, ALWAYS as a quoted string:
+are private (see "Capsules" below). Inside a module, calls to its own functions and UFCS both
+resolve module-locally. Dependencies live in `ray.toml` `[dependencies]`, ALWAYS as a quoted string:
 `net = "^0.15"` (a version from the index; `ray add net` writes it; `^` keeps the leftmost
 non-zero component: `^1.2` = 1.2.0 up to 2.0.0, but `^0.15` = 0.15.x only; `~1.2.3` = 1.2.x,
 `1.2.0` exact, `*` any; ONE version per package is installed, the newest requested, with a
@@ -313,6 +313,40 @@ match (try_recv(ch)) {                           // non-blocking receive
 
 Fibers have isolated heaps: values sent over channels are deep-copied; share state by
 giving it to ONE owner fiber (an actor) and talking to it via channels.
+
+### Capsules — a module boundary (`dir/mod.ray`)
+
+A directory with a `mod.ray` is a capsule: `import shop;` loads `shop/mod.ray`, the FACADE, and
+every other file under `shop/` is internal — importing `shop/model` from outside is an error
+(also by another path such as `src/shop/model`). The facade builds the public contract:
+
+```
+// src/shop/mod.ray
+pub from shop/model import Invoice, Status, make as new_invoice;   // re-export (the key piece)
+pub fn total(i: Invoice) -> int { i.amount }                       // or declare it here
+```
+
+- `pub from M import a, B as c;` re-exports functions, structs, enums (with variants and
+  patterns), traits, constants and aliases. There is no `pub import` / `pub use`. Without `pub`
+  the names stay private to the facade.
+- Internals import each other by the FULL path (`import shop/model;`, never `import model;`).
+  An internal may import its own facade; two capsules may import each other.
+- From outside, method-call style (`x.f()`) on a capsule's type reaches what the facade
+  exports — declared or re-exported — and nothing else. A `pub fn` of an internal module is
+  public inside its capsule only.
+- Nesting: `shop/tax/mod.ray` is internal to `shop`; code in `shop` uses it through its facade,
+  and its own internals see `shop`'s. A `mod.ray` hides EVERY directory below it; `src/mod.ray`
+  does nothing; `x.ray` next to `x/mod.ray` is an ambiguity error.
+- Tests: `tests/*.ray` see the contract only. White-box tests go in a `*_test.ray` file INSIDE
+  the capsule (`src/shop/model_test.ray`, importing `shop/model`): `ray test` discovers every
+  `src/**/*_test.ray`, and `@test` functions written in a module also run.
+- Field visibility does not exist: a struct the facade exports can be built and its fields read
+  and written from outside. To hide a representation, return a `dyn Trait`.
+- In a package, a `mod.ray` at the root hides everything else; for several public modules, use
+  one capsule per subdirectory. A package's modules import each other by the `[package] name`
+  whatever key the consumer declares it under.
+- `ray check <file>` and `ray doc <file>` work on a facade or an internal file; `ray doc shop`
+  and `ray doc shop.make` show the contract, re-exports included.
 
 What does NOT compile to a native binary (`ray build --native`; `ray check` and the VM accept
 it — the native backend reports it, `--release` rejects it): (1) a closure STORED IN A VARIABLE

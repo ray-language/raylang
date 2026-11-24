@@ -407,7 +407,9 @@ pub(super) fn load(entry: &Path, src: &str) -> Result<loader::Loaded, loader::Lo
     let deps = dep_roots_for(entry);
     match project_root_for(entry) {
         Some(root) => loader::load_source_module(entry, src, &root, &deps),
-        None => loader::load_source(entry, src, &deps),
+        // Sin `main.ray` por encima (un paquete-librería): si el archivo vive en una cápsula, con
+        // su raíz e identidad reales; si no, como entrada suelta en su carpeta.
+        None => loader::load_source_in_capsule(entry, src, &deps).unwrap_or_else(|| loader::load_source(entry, src, &deps)),
     }
 }
 

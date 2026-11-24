@@ -186,6 +186,15 @@ pub struct Program {
     /// la entrada importe el nombre pelado (el acoplamiento accidental de §52). Vacío para un
     /// programa de un solo archivo → coste y comportamiento idénticos a antes.
     pub module_bands: Vec<(usize, String)>,
+    /// Metadata del **loader** (rayhotel #481): la superficie de VALORES de cada cápsula — el
+    /// prefijo de namespacing de su fachada (`shop` para `shop/mod.ray`) → nombre exportado →
+    /// global. Con ella el checker resuelve un UFCS hecho desde FUERA de la cápsula contra lo que
+    /// la fachada exporta, y no contra el módulo interno que declara el tipo.
+    pub capsule_surfaces: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    /// Metadata del **loader**: la identidad (con `::`) del módulo de ENTRADA cuando es un módulo
+    /// de dentro de una cápsula comprobado como archivo (`ray check src/shop/mod.ray`); `""` en el
+    /// caso normal. La entrada no se namespaca, así que su banda no dice dónde vive.
+    pub entry_module: String,
     /// Spans de expresiones (M33a-2): inicio `(línea, col)` de una expresión → su **fin**
     /// `(línea_fin, col_fin)` (exclusivo), registrado por el parser en `expression()` con
     /// política *max-end* (si dos expresiones comparten inicio, queda la más ancha). Lo

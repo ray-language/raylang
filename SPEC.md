@@ -117,7 +117,13 @@ anotaciones = { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] } ;
   calificada es la canónica.
 - **Cápsulas**: la presencia de `P/mod.ray` vuelve `P/` direccionable (`import P;` carga
   `P/mod.ray`) y **encapsula** su subárbol: importar `P/interno` desde fuera de `P/` es error.
-  `P.ray` y `P/mod.ray` a la vez es error (forma canónica única).
+  `P.ray` y `P/mod.ray` a la vez es error (forma canónica única). La regla va sobre el ARCHIVO,
+  no sobre el texto del import: el mismo módulo interno nombrado por otra ruta (`import
+  src/P/interno;`) es el mismo error. La fachada arma su cara pública con lo que declara `pub` y
+  con `pub from P/interno import a, B as c;` (reexportar). Las cápsulas anidan: `P/Q/mod.ray` es
+  interna a `P`; quien está dentro de `P` la usa por su fachada. Dentro de un paquete, sus
+  módulos se importan por el `[package] name`, sea cual sea la clave con que lo declare quien lo
+  consume.
 - Los **tipos** se namespacan por módulo (dos módulos pueden definir `Node`); las funciones
   también, y las `extern fn` (1.27.66): cada una es del módulo que la declara —se llama por su
   nombre dentro y calificada desde fuera— y su símbolo C es aparte, así que dos módulos pueden
@@ -488,7 +494,10 @@ receptor participa en la inferencia de genéricos), (5) **UFCS dirigido por el t
 parámetro admite el receptor, la llamada es `M.f(recv, args)` — sin importar `f` por nombre
 (`import M;` basta; el tipo dice dónde mirar, como un método inherente). No aplica a tipos del
 prelude (`Option`, `Result`, `Map`…) ni a primitivos, ni alcanza funciones privadas de `M`; una
-función libre en el ámbito con ese nombre (paso 4) sigue ganando. Todo se resuelve
+función libre en el ámbito con ese nombre (paso 4) sigue ganando. Si `M` es interno a una
+**cápsula** y la llamada está FUERA de ella, el paso 5 mira la cara pública de la cápsula (la más
+externa que contiene al tipo y no a la llamada): alcanza lo que la fachada declara o reexporta y
+nada más — los `pub` de un módulo interno son públicos dentro de su cápsula, no fuera. Todo se resuelve
 **estáticamente** en el checker (salvo el despacho de `dyn`, que es una llamada a través del objeto).
 
 Dos precisiones sobre el paso 4 (M344): **un local solo tapa al método si es una función** —

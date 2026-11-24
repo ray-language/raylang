@@ -6,6 +6,24 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Cápsulas (`dir/mod.ray`) — la frontera cierra y las herramientas la entienden** (rayhotel
+  #481–#490):
+  - Una llamada como método desde fuera (`x.f()`) alcanzaba cualquier `pub fn` del módulo
+    interno que declara el tipo, y no las que declara la fachada. Ahora resuelve contra lo que la
+    fachada declara o reexporta. **Cambia**: código que llamaba así a una función interna no
+    exportada deja de compilar; hay que reexportarla con `pub from`.
+  - `import src/<cápsula>/<interno>;` se saltaba la cápsula; es el mismo error que por su nombre.
+  - `ray check` y `ray test` fallaban sobre un `mod.ray` y sobre un paquete-librería con
+    cápsulas (la fachada se trataba como ajena a su cápsula). El LSP, igual.
+  - `ray test` descubre los `*_test.ray` de dentro de `src/`: las pruebas de caja blanca de una
+    cápsula viven junto a lo interno.
+  - Un paquete se importa a sí mismo por su `[package] name` aunque quien lo consume lo declare
+    con otra clave.
+  - `ray doc` muestra el contrato de una cápsula: lo reexportado con `pub from`, el título con
+    el nombre de la cápsula, `ray doc <dir>` y `ray doc <dir>.<símbolo>`, también en dependencias
+    `path:`. Los encabezados salen en inglés (`## Functions`, `## Constants`).
+  - Documentadas en `llms.txt` (sección «Capsules»), el manual y la SPEC.
+
 - **Binario nativo — programas que la VM ejecuta y `ray build --native` no compilaba o hacía
   morir** (los encontró el harness diferencial al sortear el tipo de cada sonda, no una app):
   - Leer un contenedor y mutarlo en la misma expresión (`xs.len() + grow(xs)`,

@@ -76,7 +76,10 @@ fn show(r: Result<http.Response, string>) -> string {
 fn handle(req: Request) -> Response {
     var r = webserver.text(200, "hi");
     match (get(req.headers, "x-copy")) {
-        Option.Some(v) => { r.headers.insert("X-A", v); },
+        // El CR lo pone el HANDLER (un valor que trae de fuera, p. ej. de un upstream): desde la
+        // tabla de conformidad HTTP (nov 2026) una petición con un CR en una cabecera ya es un 400
+        // y nunca llega aquí.
+        Option.Some(v) => { r.headers.insert("X-A", if (v == "cr") { "a\rX-Injected: 1" } else { v }); },
         Option.None => { },
     }
     r
@@ -102,7 +105,7 @@ fn main() -> int {
     let l = net.tcp_listen("127.0.0.1", 0).unwrap();
     let sport = net.local_port(l);
     let _ = spawn(fn() -> int { let _ = webserver.serve_on(l, handle); 0 });
-    print("srv-cr " + raw(sport, "GET / HTTP/1.1\r\nHost: t\r\nX-Copy: a\rX-Injected: 1\r\nConnection: close\r\n\r\n"));
+    print("srv-cr " + raw(sport, "GET / HTTP/1.1\r\nHost: t\r\nX-Copy: cr\r\nConnection: close\r\n\r\n"));
     print("srv-ok " + raw(sport, "GET / HTTP/1.1\r\nHost: t\r\nX-Copy: plain\r\nConnection: close\r\n\r\n"));
     // #243 lado cliente
     let p1 = upstream(["HTTP/1.1 200 OK\r\nContent-Length: 2\r\nX-A: a\r\n X-Injected: 1\r\n\r\nok"], true);

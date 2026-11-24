@@ -80,6 +80,22 @@ fn main() -> int {
   degradación. Sobre `std/net` + `net/mail`.
 - **`net/webserver`** devuelve **413** a un cuerpo mayor que `max_body_bytes`, **431** a unas cabeceras
   mayores que `max_header_bytes` y **408** al vencer el plazo de lectura (antes todo era 400; M354).
+  **0.18.0** — encuadre HTTP/1.1 según RFC 9112, contra una tabla de conformidad
+  (`tests/http_conformance_cli.rs`). El servidor responde **400** y cierra ante: una línea de
+  petición que no es `método SP destino SP versión` (ya no vale `GET /` sin versión, ni dos
+  espacios, ni una versión distinta de `HTTP/1.0`/`HTTP/1.1`); un método o un destino con
+  caracteres inválidos; una línea de cabecera sin `:`; un valor de cabecera con NUL, CR u otro
+  control; más de un `Host`; y un `Transfer-Encoding` que no sea exactamente `chunked`
+  (`xchunked`, `chunked, gzip`, repetido, o en HTTP/1.0) — antes bastaba con que contuviera
+  «chunked». Además: los trailers tras el último chunk se leen y se descartan (antes eran un
+  400), y una petición con `Content-Length` seguida de otra en la misma escritura ya no pierde la
+  segunda. Sigue sirviéndose una petición HTTP/1.1 sin `Host`.
+  El cliente (`net/http`, los tres lectores con una sola regla) da `Err` ante: un
+  `Content-Length` que no son solo dígitos o que se repite con valores distintos; un
+  `Transfer-Encoding` que no es `chunked`; un tamaño de chunk que no es hexadecimal o no cabe
+  en un entero (antes abortaba el programa); y una línea de estado que no empieza por
+  `HTTP/1.x` con tres dígitos. Una respuesta interina `1xx` (`100 Continue`) se salta en vez de
+  devolverse como la respuesta.
 - **`net/session_store`** — el almacén de sesiones de `web` como actor con protocolo (`Msg`:
   get/set/delete/drop/sweep), `memory(path, persist, ttl_s)` (RKV1 opcional) y `from_channel` para
   backends propios; el SQLite vive en `db/sessions` (M350). Sobre `std/kv`.

@@ -1252,6 +1252,18 @@ fn hex_digit(b: int) -> int {
     0 - 1
 }
 
+// El destino de la línea de petición (RFC 9112 §3.2): sin espacios ni controles. Los octetos
+// altos se dejan pasar (clientes que mandan UTF-8 sin escapar); el `%XX` se valida al descodificar.
+fn valid_target(target: string) -> bool {
+    for c in target {
+        let n = char_code(c);
+        if (n <= 32 || n == 127) {
+            return false;
+        }
+    }
+    true
+}
+
 // raysec #243: un valor de cabecera no puede llevar CR, LF, NUL ni otro control (RFC 9110 §5.5;
 // el tabulador vale). Un valor copiado de fuera (la cabecera de un upstream en un proxy) con un
 // CR o LF suelto partiría la respuesta en dos cabeceras para el cliente.
@@ -1605,13 +1617,25 @@ fn read_request_mode(
             // Línea de petición: "GET /ruta?query HTTP/1.1". M56.2: se parte en el PRIMER `?`
             // (la query cruda va aparte) y la ruta se decodifica (%XX; un escape inválido es 400,
             // no una ruta corrupta silenciosa).
+            // RFC 9112 §3: `método SP destino SP versión`, con UN espacio y nada más. Una línea con
+            // otra forma («GET /», dos espacios, un cuarto trozo, una versión que no es 1.0 ni
+            // 1.1) la leería distinto cada salto del camino: 400, no una petición adivinada.
             let parts: [string] = lines[0].split(" ");
-            if (parts.len() < 2) {
+            if (parts.len() != 3) {
                 return Result.Err(ReadError.Failed("malformed request line: " + lines[0]));
             }
             let method: string = parts[0];
             let target: string = parts[1];
-            let version: string = if (parts.len() >= 3) { parts[2] } else { "" };
+            let version: string = parts[2];
+            if (method.len() == 0 || !valid_header_name(method)) {
+                return Result.Err(ReadError.Failed("invalid method: " + method));
+            }
+            if (version != "HTTP/1.1" && version != "HTTP/1.0") {
+                return Result.Err(ReadError.Failed("unsupported HTTP version: " + version));
+            }
+            if (target.len() == 0 || !valid_target(target)) {
+                return Result.Err(ReadError.Failed("invalid request target"));
+            }
             var path_raw: string = target;
             var query: string = "";
             match (index_of(target, "?")) {
@@ -1649,6 +1673,22 @@ fn read_request_mode(
                         }
                         let name: string = raw_name.to_lower();
                         let value: string = lines[i].substring(c + 1, lines[i].len()).trim();
+                        // RFC 9110 §5.5: ni NUL ni CR ni otro control dentro de un valor (el
+                        // tabulador vale). Un CR suelto es un salto de línea para otros parsers.
+                        if (!valid_header_value(value)) {
+                            return Result.Err(ReadError.Failed("invalid header value in " + name));
+                        }
+                        // RFC 9112 §3.2: más de un `Host` es un 400 (cada salto elegiría el suyo).
+                        if (name == "host" && headers.contains_key(name)) {
+                            return Result.Err(ReadError.Failed("more than one Host header"));
+                        }
+                        // Dos líneas `Transfer-Encoding` equivalen a una lista: se juntan para que
+                        // la comprobación de abajo vea TODAS las codificaciones, no la última.
+                        if (name == "transfer-encoding" && headers.contains_key(name)) {
+                            headers.insert(name, get(headers, name).unwrap_or("") + ", " + value);
+                            i = i + 1;
+                            continue;
+                        }
                         // raysec #240 (RFC 9112 §3.2): un `Host` que no es `nombre[:puerto]` o
                         // `[v6][:puerto]` (`localhost:1@evil.example`) es un 400, para todas las apps.
                         if (name == "host" && !valid_host(value)) {
@@ -1670,7 +1710,10 @@ fn read_request_mode(
                         }
                         headers.insert(name, value);
                     },
-                    Option.None => { },
+                    Option.None => {
+                        // Una línea sin `:` no es una cabecera (RFC 9112 §5): 400, no ignorarla.
+                        return Result.Err(ReadError.Failed("malformed header line"));
+                    },
                 }
                 i = i + 1;
             }
@@ -1679,10 +1722,18 @@ fn read_request_mode(
             // silencio). Tiene prioridad sobre Content-Length (RFC 7230 §3.3.3).
             // M316: lo que sobra tras el cuerpo (el arrastre para la siguiente petición) sale de
             // `BodyStream.rest`.
+            // RFC 9112 §6.1: la única codificación que este servidor entiende es `chunked`, sola.
+            // Cualquier otra lista (`xchunked`, `chunked, gzip`, `chunked, chunked`, `gzip` +
+            // `chunked` en dos líneas) es un 400: antes bastaba con que el valor CONTUVIERA
+            // «chunked», y un proxy que no reconociera esa lista leía otro cuerpo. En HTTP/1.0 la
+            // cabecera no existe: el encuadre es defectuoso.
             var chunked: bool = false;
             match (get(headers, "transfer-encoding")) {
                 Option.Some(te) => {
-                    chunked = te.to_lower().contains("chunked");
+                    if (te.to_lower() != "chunked" || version == "HTTP/1.0") {
+                        return Result.Err(ReadError.Failed("unsupported Transfer-Encoding: " + te));
+                    }
+                    chunked = true;
                 },
                 Option.None => { },
             }
@@ -1887,9 +1938,14 @@ fn drain_body(st: BodyStream, max: int) -> Result<bytes, string> {
 // Un trozo de un cuerpo con Content-Length: lo que haya en el búfer o lo que dé una lectura.
 fn next_sized_piece(st: BodyStream) -> Result<Option<bytes>, string> {
     if (st.remaining <= 0) {
-        st.done = true;
-        st.rest = st.buffer;
-        st.buffer = b"";
+        // Solo la PRIMERA vez: quien drena vuelve a llamar tras el último trozo, y entonces
+        // `buffer` ya está vacío — copiarlo otra vez borraba `rest`, es decir, la petición
+        // siguiente que venía en la misma escritura (`POST` con cuerpo + `GET` en un envío).
+        if (!st.done) {
+            st.done = true;
+            st.rest = st.buffer;
+            st.buffer = b"";
+        }
         return Result.Ok(Option.None);
     }
     if (st.buffer.len() == 0) {
@@ -1952,28 +2008,42 @@ fn next_chunked_piece(st: BodyStream) -> Result<Option<bytes>, string> {
             return Result.Err("malformed chunked body (chunk size not hex or too large)");
         }
         if (n == 0) {
-            // Tras el `0\r\n` va la línea vacía final (puede llegar en el siguiente segmento): se
-            // espera y se comprueba; un trailer en su lugar no se soporta. Lo que siga es la
-            // próxima petición.
-            let end: int = nl + 2;
-            while (st.buffer.len() < end + 2) {
-                match (stream_read(st)) {
-                    Result.Ok(t) => {
-                        if (t.len() == 0) {
-                            return Result.Err("incomplete chunked body (the connection closed)");
-                        }
-                        st.buffer = st.buffer + t;
-                    },
-                    Result.Err(e) => {
-                        return Result.Err("error reading the chunked body: " + e);
-                    },
+            // Tras el `0\r\n` va la sección de trailers y la línea vacía final (RFC 9112 §7.1.2):
+            // cero o más líneas de campo, que se leen y se DESCARTAN (un receptor debe saber
+            // saltarlas; no se mezclan con las cabeceras), con el tope de las líneas de chunk.
+            // Lo que siga a la línea vacía es la próxima petición.
+            var at: int = nl + 2;
+            while (true) {
+                let line_end: int = find_crlf(st.buffer, at);
+                if (line_end < 0) {
+                    if (st.buffer.len() - at > MAX_CHUNK_LINE) {
+                        return Result.Err("malformed chunked body (trailer section too long)");
+                    }
+                    match (stream_read(st)) {
+                        Result.Ok(t) => {
+                            if (t.len() == 0) {
+                                return Result.Err(
+                                    "incomplete chunked body (the connection closed)"
+                                );
+                            }
+                            st.buffer = st.buffer + t;
+                        },
+                        Result.Err(e) => {
+                            return Result.Err("error reading the chunked body: " + e);
+                        },
+                    }
+                    continue;
                 }
-            }
-            if (st.buffer[end] != 13 || st.buffer[end + 1] != 10) {
-                return Result.Err("malformed chunked body (trailers are not supported)");
+                if (line_end == at) {
+                    break;
+                }
+                if (line_end - (nl + 2) > MAX_CHUNK_LINE) {
+                    return Result.Err("malformed chunked body (trailer section too long)");
+                }
+                at = line_end + 2;
             }
             st.done = true;
-            st.rest = st.buffer.sub_bytes(end + 2, st.buffer.len());
+            st.rest = st.buffer.sub_bytes(at + 2, st.buffer.len());
             st.buffer = b"";
             return Result.Ok(Option.None);
         }
@@ -1992,6 +2062,9 @@ fn next_chunked_piece(st: BodyStream) -> Result<Option<bytes>, string> {
                     return Result.Err("error reading the chunked body: " + e);
                 },
             }
+        }
+        if (st.buffer[nl + 2 + n] != 13 || st.buffer[nl + 2 + n + 1] != 10) {
+            return Result.Err("malformed chunked body (no CRLF after the chunk data)");
         }
         let piece: bytes = st.buffer.sub_bytes(nl + 2, nl + 2 + n);
         st.buffer = st.buffer.sub_bytes(nl + 2 + n + 2, st.buffer.len());

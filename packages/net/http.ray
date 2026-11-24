@@ -346,25 +346,84 @@ fn hex_byte_val(o: int) -> int {
     }
 }
 
-// Tamaño (decimal) de un chunk a partir de su línea hex `[start, end)`. Se detiene en `;` (extensiones)
-// o en el primer carácter no-hexadecimal (tolerante).
+// Tamaño de un chunk a partir de su línea hex `[start, end)`, hasta el `;` de las extensiones.
+// -1 si no es un tamaño válido (RFC 9112 §7.1): sin dígitos, con un carácter que no es hex, o con
+// más de 15 dígitos — 16 ya desbordan un int, y antes `10000000000000005` abortaba el programa
+// cliente con un error de desbordamiento que ningún `Result` recogía.
 fn parse_chunk_size(b: bytes, start: int, end: int) -> int {
     var size: int = 0;
+    var digits: int = 0;
     var i: int = start;
     while (i < end) {
         let o: int = b[i];
         if (o == 59) {
             // ';'
-            return size;
+            break;
         }
         let v: int = hex_byte_val(o);
-        if (v < 0) {
-            return size;
+        if (v < 0 || digits >= 15) {
+            return 0 - 1;
         }
         size = size * 16 + v;
+        digits = digits + 1;
         i = i + 1;
     }
-    size
+    if (digits == 0) { 0 - 1 } else { size }
+}
+
+// ¿Solo dígitos decimales, entre 1 y 18 (lo que cabe en un int)?
+fn is_length(s: string) -> bool {
+    if (s.len() == 0 || s.len() > 18) {
+        return false;
+    }
+    for c in s {
+        let n = char_code(c);
+        if (n < 48 || n > 57) {
+            return false;
+        }
+    }
+    true
+}
+
+// El ENCUADRE del cuerpo de una respuesta, de sus cabeceras en orden de cable (RFC 9112 §6):
+// `(chunked, content_length)`, con -1 si no hay `Content-Length`. Una sola función para los tres
+// lectores (petición suelta, conexión persistente, streaming), porque el encuadre ambiguo es lo
+// que deja a un servidor —o a un proxy intermedio— colar una respuesta dentro de otra:
+// - `Transfer-Encoding` solo puede ser `chunked` (lo demás no se sabe leer: error, no «sin cuerpo»);
+// - con `Transfer-Encoding`, un `Content-Length` es ambiguo (raysec #244);
+// - `Content-Length` son solo dígitos, y si se repite, todos iguales.
+fn framing_of(raw_headers: [(string, string)]) -> Result<(bool, int), string> {
+    var te: string = "";
+    var has_te: bool = false;
+    var length: int = 0 - 1;
+    for h in raw_headers {
+        if (h.0 == "transfer-encoding") {
+            te = if (has_te) { te + ", " + h.1 } else { h.1 };
+            has_te = true;
+        }
+        if (h.0 == "content-length") {
+            if (!is_length(h.1)) {
+                return Result.Err("invalid Content-Length in the response: " + show_escaped(h.1));
+            }
+            let n: int = parse_int(h.1).unwrap_or(0 - 1);
+            if (length >= 0 && n != length) {
+                return Result.Err("conflicting Content-Length headers in the response");
+            }
+            length = n;
+        }
+    }
+    if (has_te) {
+        if (te.to_lower() != "chunked") {
+            return Result.Err("unsupported Transfer-Encoding in the response: " + show_escaped(te));
+        }
+        if (length >= 0) {
+            return Result.Err(
+                "ambiguous response framing: Transfer-Encoding and Content-Length together"
+            );
+        }
+        return Result.Ok((true, 0 - 1));
+    }
+    Result.Ok((false, length))
 }
 
 // Decodifica un cuerpo con Transfer-Encoding: chunked → los octetos crudos. Formato:
@@ -380,12 +439,18 @@ fn decode_chunked(body: bytes) -> Result<bytes, string> {
             return Result.Err("chunk without size CRLF");
         }
         let size: int = parse_chunk_size(body, pos, line_end);
+        if (size < 0) {
+            return Result.Err("malformed chunk size");
+        }
         pos = line_end + 2;
-        if (size <= 0) {
+        if (size == 0) {
             follow = false;  // chunk final (0)
         } else {
-            if (pos + size > n) {
+            if (pos + size + 2 > n) {
                 return Result.Err("truncated chunk");
+            }
+            if (body[pos + size] != 13 || body[pos + size + 1] != 10) {
+                return Result.Err("malformed chunk (no CRLF after the data)");
             }
             out = out + body.sub_bytes(pos, pos + size);
             pos = pos + size + 2;  // salta el \r\n tras los datos
@@ -404,18 +469,14 @@ fn parse_head(head: bytes) -> Result<(int, Map<string, string>, [(string, string
 
             // Línea de estado: "HTTP/1.1 200 OK".
             let parts: [string] = lines[0].split(" ");
-            if (parts.len() < 2) {
-                return Result.Err("malformed status line: " + lines[0]);
+            if (parts.len() < 2 || (parts[0] != "HTTP/1.1" && parts[0] != "HTTP/1.0")) {
+                return Result.Err("malformed status line: " + show_escaped(lines[0]));
             }
-            var status: int = 0;
-            match (parse_int(parts[1])) {
-                Option.Some(n) => {
-                    status = n;
-                },
-                Option.None => {
-                    return Result.Err("invalid status code: " + parts[1]);
-                },
+            // El estado son TRES dígitos (RFC 9112 §4): `parse_int` aceptaría `+200` o `-1`.
+            if (parts[1].len() != 3 || !is_length(parts[1])) {
+                return Result.Err("invalid status code: " + show_escaped(parts[1]));
             }
+            let status: int = parse_int(parts[1]).unwrap_or(0);
 
             // Cabeceras: "Nombre: Valor" (nombre en minúsculas para lookup case-insensitive).
             var headers: Map<string, string> = Map.new();
@@ -476,6 +537,12 @@ fn parse_response(raw: bytes, method: string) -> Result<Response, string> {
             let status: int = head.0;
             let headers: Map<string, string> = head.1;
             let raw_headers: [(string, string)] = head.2;
+            // Una respuesta INTERINA (1xx, salvo el 101 que cambia de protocolo) precede a la
+            // final y no es la respuesta (RFC 9110 §15.2): se salta. Antes un `100 Continue`
+            // salía como el resultado de la petición.
+            if (status >= 100 && status < 200 && status != 101 && body.len() > 0) {
+                return parse_response(body, method);
+            }
             if (method == "HEAD"
                 || status == 204
                 || status == 304
@@ -492,62 +559,29 @@ fn parse_response(raw: bytes, method: string) -> Result<Response, string> {
             // raysec #244 (RFC 9112 §6.3): Content-Length y Transfer-Encoding a la vez es un
             // encuadre ambiguo (lo que un proxy intermedio toma por una respuesta y lo que
             // nosotros tomamos pueden diferir) → error, nunca elegir uno.
-            if (headers.contains_key("transfer-encoding")
-                && headers.contains_key("content-length")) {
-                return Result.Err(
-                    "ambiguous response framing: Transfer-Encoding and Content-Length together"
-                );
-            }
+            let framing: (bool, int) = framing_of(raw_headers)?;
             // Transfer-Encoding: chunked → decodificar el cuerpo (un cliente robusto lo soporta;
             // algunos servidores siempre chunked aunque pidamos Connection: close).
             var body_final: bytes = body;
-            match (get(headers, "transfer-encoding")) {
-                Option.Some(te) => {
-                    if (te.to_lower().contains("chunked")) {
-                        match (decode_chunked(body)) {
-                            Result.Ok(d) => {
-                                body_final = d;
-                            },
-                            Result.Err(e) => {
-                                return Result.Err(e);
-                            },
-                        }
-                    }
-                },
-                Option.None => { },
+            if (framing.0) {
+                body_final = decode_chunked(body)?;
             }
             // M58.2: con Content-Length declarado (y sin chunked), verificar la longitud: menos
             // octetos = respuesta truncada (el servidor cayó a mitad) → Err, no un cuerpo a
             // medias en silencio; de más (basura tras el cierre) se recorta a lo declarado.
-            var was_chunked: bool = false;
-            match (get(headers, "transfer-encoding")) {
-                Option.Some(te2) => {
-                    was_chunked = te2.to_lower().contains("chunked");
-                },
-                Option.None => { },
-            }
-            if (!was_chunked) {
-                match (get(headers, "content-length")) {
-                    Option.Some(cl) => {
-                        match (parse_int(cl)) {
-                            Option.Some(n) => {
-                                if (body_final.len() < n) {
-                                    return Result.Err(
-                                        "truncated response: got "
-                                            + to_string(body_final.len())
-                                            + " of "
-                                            + to_string(n)
-                                            + " bytes"
-                                    );
-                                }
-                                if (body_final.len() > n) {
-                                    body_final = body_final.sub_bytes(0, n);
-                                }
-                            },
-                            Option.None => { },
-                        }
-                    },
-                    Option.None => { },
+            if (!framing.0 && framing.1 >= 0) {
+                let n: int = framing.1;
+                if (body_final.len() < n) {
+                    return Result.Err(
+                        "truncated response: got "
+                            + to_string(body_final.len())
+                            + " of "
+                            + to_string(n)
+                            + " bytes"
+                    );
+                }
+                if (body_final.len() > n) {
+                    body_final = body_final.sub_bytes(0, n);
                 }
             }
             // Content-Encoding: gzip → descomprimir el cuerpo (M20.10b; M64.2: tope de 64 MiB anti-bomba).
@@ -1201,52 +1235,35 @@ fn conn_read_response(c: Conn, method: string, deadline: int) -> Result<bytes, s
     }
     let fin_cab: int = sep + 4;
 
-    // 2. Decidir la delimitación del cuerpo con las cabeceras ya recibidas.
-    match (from_utf8(c.buf.sub_bytes(0, sep))) {
-        Result.Err(e) => Result.Err("HTTP headers are not UTF-8: " + e),
-        Result.Ok(cab) => {
-            let lines: [string] = cab.split("\r\n");
-            var status: int = 0;
-            let parts: [string] = lines[0].split(" ");
-            if (parts.len() >= 2) {
-                match (parse_int(parts[1])) {
-                    Option.Some(n) => {
-                        status = n;
-                    },
-                    Option.None => { },
-                }
+    // 2. Decidir la delimitación del cuerpo con las cabeceras ya recibidas. La cabeza se valida
+    // con `parse_head` y el encuadre sale de `framing_of`: las mismas reglas que la petición
+    // suelta. Una cabeza que no se entiende deja la conexión sin encuadre fiable: se cierra.
+    match (parse_head(c.buf.sub_bytes(0, sep))) {
+        Result.Err(e) => {
+            conn_close(c);
+            Result.Err(e)
+        },
+        Result.Ok(head) => {
+            let status: int = head.0;
+            // Una respuesta interina (1xx salvo 101) no es la respuesta: se descarta y se sigue
+            // leyendo la final por la misma conexión.
+            if (status >= 100 && status < 200 && status != 101) {
+                c.buf = c.buf.sub_bytes(fin_cab, c.buf.len());
+                return conn_read_response(c, method, deadline);
             }
-            var chunked: bool = false;
-            var content_len: int = 0 - 1;
-            var i: int = 1;
-            while (i < lines.len()) {
-                let lin: string = lines[i].to_lower();
-                if (lin.starts_with("transfer-encoding:")) {
-                    chunked = lin.contains("chunked");
-                }
-                if (lin.starts_with("content-length:")) {
-                    match (parse_int(lines[i].substring(15, lines[i].len()).trim())) {
-                        Option.Some(n) => {
-                            content_len = n;
-                        },
-                        Option.None => { },
-                    }
-                }
-                i = i + 1;
-            }
-            // Sin cuerpo por definición (RFC 9112 §6.3): HEAD, 1xx, 204 y 304.
-            if (method == "HEAD"
-                || status == 204
-                || status == 304
-                || status >= 100 && status < 200) {
+            // Sin cuerpo por definición (RFC 9112 §6.3): HEAD, 101, 204 y 304.
+            if (method == "HEAD" || status == 204 || status == 304 || status == 101) {
                 return Result.Ok(take(c, fin_cab));
             }
-            if (chunked && content_len >= 0) {
-                conn_close(c);
-                return Result.Err(
-                    "ambiguous response framing: Transfer-Encoding and Content-Length together"
-                );
-            }
+            let framing: (bool, int) = match (framing_of(head.2)) {
+                Result.Ok(f) => f,
+                Result.Err(e) => {
+                    conn_close(c);
+                    return Result.Err(e);
+                },
+            };
+            let chunked: bool = framing.0;
+            let content_len: int = framing.1;
             if (chunked) {
                 return conn_read_chunked(c, fin_cab, deadline);
             }
@@ -1286,8 +1303,12 @@ fn conn_read_chunked(c: Conn, start: int, deadline: int) -> Result<bytes, string
             line_end = find_crlf(c.buf, pos);
         }
         let size: int = parse_chunk_size(c.buf, pos, line_end);
+        if (size < 0) {
+            conn_close(c);
+            return Result.Err("malformed chunk size");
+        }
         pos = line_end + 2;
-        if (size <= 0) {
+        if (size == 0) {
             // Chunk final: consumir trailers (raros) hasta la línea vacía.
             while (true) {
                 var te: int = find_crlf(c.buf, pos);
@@ -1480,44 +1501,28 @@ fn stream_head(s: Stream, method: string) -> Result<Stream, string> {
                 s.mode = "done";
                 return Result.Ok(s);
             }
-            if (s.headers.contains_key("transfer-encoding")
-                && s.headers.contains_key("content-length")) {
-                stream_close(s);
-                return Result.Err(
-                    "ambiguous response framing: Transfer-Encoding and Content-Length together"
-                );
-            }
-            var chunked: bool = false;
-            match (get(s.headers, "transfer-encoding")) {
-                Option.Some(te) => {
-                    chunked = te.to_lower().contains("chunked");
+            // El mismo encuadre que los otros dos lectores (`framing_of`): antes bastaba con que
+            // `Transfer-Encoding` contuviera «chunked» y un `Content-Length: -1` se aceptaba.
+            let framing: (bool, int) = match (framing_of(s.raw_headers)) {
+                Result.Ok(f) => f,
+                Result.Err(e) => {
+                    stream_close(s);
+                    return Result.Err(e);
                 },
-                Option.None => { },
-            }
-            if (chunked) {
+            };
+            if (framing.0) {
                 s.mode = "size";
                 return Result.Ok(s);
             }
-            match (get(s.headers, "content-length")) {
-                Option.Some(cl) => {
-                    match (parse_int(cl)) {
-                        Option.Some(n) => {
-                            s.remaining = n;
-                            s.mode = "length";
-                            if (n == 0) {
-                                stream_finish(s);
-                                s.mode = "done";
-                            }
-                        },
-                        Option.None => {
-                            stream_close(s);
-                            return Result.Err("invalid content-length: " + cl);
-                        },
-                    }
-                },
-                Option.None => {
-                    s.mode = "eof";
-                },
+            if (framing.1 >= 0) {
+                s.remaining = framing.1;
+                s.mode = "length";
+                if (framing.1 == 0) {
+                    stream_finish(s);
+                    s.mode = "done";
+                }
+            } else {
+                s.mode = "eof";
             }
             Result.Ok(s)
         },

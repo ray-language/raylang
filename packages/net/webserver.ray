@@ -1264,6 +1264,20 @@ fn valid_target(target: string) -> bool {
     true
 }
 
+// Quita el espacio opcional (OWS: SP y HTAB, RFC 9110 §5.6.3) de los extremos de un valor de
+// cabecera. NO es `trim()`: ese también quita VT, FF y CR, y un `Transfer-Encoding: \x0bchunked`
+// quedaba normalizado a `chunked` antes de validarse — la ofuscación clásica de TE.
+fn trim_ows(s: string) -> string {
+    var t: string = s;
+    while (t.starts_with(" ") || t.starts_with("\t")) {
+        t = t.substring(1, t.len());
+    }
+    while (t.ends_with(" ") || t.ends_with("\t")) {
+        t = t.substring(0, t.len() - 1);
+    }
+    t
+}
+
 // raysec #243: un valor de cabecera no puede llevar CR, LF, NUL ni otro control (RFC 9110 §5.5;
 // el tabulador vale). Un valor copiado de fuera (la cabecera de un upstream en un proxy) con un
 // CR o LF suelto partiría la respuesta en dos cabeceras para el cliente.
@@ -1556,6 +1570,12 @@ fn read_request_mode(
     var start: int = 0;
     var follow: bool = true;
     while (follow) {
+        // RFC 9112 §2.2: las líneas vacías ANTES de la línea de petición se ignoran (un cliente
+        // que añade un CRLF tras el cuerpo de un POST lo deja delante de la siguiente petición).
+        while (acc.len() >= 2 && acc[0] == 13 && acc[1] == 10) {
+            acc = acc.sub_bytes(2, acc.len());
+            start = 0;
+        }
         let s: int = find_fin_headers(acc, start);
         if (s >= 0) {
             sep = s;
@@ -1672,12 +1692,14 @@ fn read_request_mode(
                             return Result.Err(ReadError.Failed("invalid header name: " + raw_name));
                         }
                         let name: string = raw_name.to_lower();
-                        let value: string = lines[i].substring(c + 1, lines[i].len()).trim();
                         // RFC 9110 §5.5: ni NUL ni CR ni otro control dentro de un valor (el
-                        // tabulador vale). Un CR suelto es un salto de línea para otros parsers.
-                        if (!valid_header_value(value)) {
+                        // tabulador vale). Se valida el valor CRUDO, antes de recortar, y solo se
+                        // recortan SP y HTAB (`trim_ows`).
+                        let raw_value: string = lines[i].substring(c + 1, lines[i].len());
+                        if (!valid_header_value(raw_value)) {
                             return Result.Err(ReadError.Failed("invalid header value in " + name));
                         }
+                        let value: string = trim_ows(raw_value);
                         // RFC 9112 §3.2: más de un `Host` es un 400 (cada salto elegiría el suyo).
                         if (name == "host" && headers.contains_key(name)) {
                             return Result.Err(ReadError.Failed("more than one Host header"));
@@ -1716,6 +1738,11 @@ fn read_request_mode(
                     },
                 }
                 i = i + 1;
+            }
+
+            // RFC 9112 §3.2: una petición HTTP/1.1 sin `Host` es un 400 (HTTP/1.0 no lo exige).
+            if (version == "HTTP/1.1" && !headers.contains_key("host")) {
+                return Result.Err(ReadError.Failed("missing Host header"));
             }
 
             // M56.8: un cuerpo `Transfer-Encoding: chunked` se decodifica (antes llegaba vacío en

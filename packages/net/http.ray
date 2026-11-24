@@ -360,6 +360,17 @@ fn parse_chunk_size(b: bytes, start: int, end: int) -> int {
             // ';'
             break;
         }
+        if (o == 32 || o == 9) {
+            // Espacio tras los dígitos (`5 \r\n`, `5 ;ext`): hay servidores que lo mandan; se
+            // tolera, pero después solo puede venir más espacio, `;` o el final.
+            while (i < end && (b[i] == 32 || b[i] == 9)) {
+                i = i + 1;
+            }
+            if (i < end && b[i] != 59) {
+                return 0 - 1;
+            }
+            break;
+        }
         let v: int = hex_byte_val(o);
         if (v < 0 || digits >= 15) {
             return 0 - 1;
@@ -369,6 +380,20 @@ fn parse_chunk_size(b: bytes, start: int, end: int) -> int {
         i = i + 1;
     }
     if (digits == 0) { 0 - 1 } else { size }
+}
+
+// Quita el espacio opcional (OWS: SP y HTAB, RFC 9110 §5.6.3) de los extremos de un valor de
+// cabecera. NO es `trim()`: ese también quita VT, FF y CR, y un `Transfer-Encoding: \x0bchunked`
+// quedaba normalizado a `chunked` antes de validarse — la ofuscación clásica de TE.
+fn trim_ows(s: string) -> string {
+    var t: string = s;
+    while (t.starts_with(" ") || t.starts_with("\t")) {
+        t = t.substring(1, t.len());
+    }
+    while (t.ends_with(" ") || t.ends_with("\t")) {
+        t = t.substring(0, t.len() - 1);
+    }
+    t
 }
 
 // ¿Solo dígitos decimales, entre 1 y 18 (lo que cabe en un int)?
@@ -499,8 +524,10 @@ fn parse_head(head: bytes) -> Result<(int, Map<string, string>, [(string, string
                                 "malformed response header name: " + show_escaped(name_raw)
                             );
                         }
-                        let value: string = line.substring(c + 1, line.len()).trim();
-                        if (unsafe_char(value, true)) {
+                        // Se valida el valor CRUDO y solo se recortan SP y HTAB (`trim_ows`).
+                        let raw_value: string = line.substring(c + 1, line.len());
+                        let value: string = trim_ows(raw_value);
+                        if (unsafe_char(raw_value, true)) {
                             return Result.Err(
                                 "malformed response header value for "
                                     + name_raw
@@ -537,12 +564,6 @@ fn parse_response(raw: bytes, method: string) -> Result<Response, string> {
             let status: int = head.0;
             let headers: Map<string, string> = head.1;
             let raw_headers: [(string, string)] = head.2;
-            // Una respuesta INTERINA (1xx, salvo el 101 que cambia de protocolo) precede a la
-            // final y no es la respuesta (RFC 9110 §15.2): se salta. Antes un `100 Continue`
-            // salía como el resultado de la petición.
-            if (status >= 100 && status < 200 && status != 101 && body.len() > 0) {
-                return parse_response(body, method);
-            }
             if (method == "HEAD"
                 || status == 204
                 || status == 304
@@ -1210,6 +1231,17 @@ fn take(c: Conn, n: int) -> bytes {
 // chunked / sin-cuerpo (HEAD, 1xx, 204, 304, RFC 9112). Sin longitud declarada, cae a leer
 // hasta EOF (delimitación de una petición suelta) y la conexión deja de ser reutilizable.
 fn conn_read_response(c: Conn, method: string, deadline: int) -> Result<bytes, string> {
+    conn_read_final(c, method, deadline, false)
+}
+
+// `after_interim`: ya llegó una respuesta 1xx por esta petición. El servidor la RECIBIÓ, así que
+// un cierre ahora no es la carrera del keep-alive ocioso: reintentar mandaría dos veces un POST.
+fn conn_read_final(
+    c: Conn,
+    method: string,
+    deadline: int,
+    after_interim: bool
+) -> Result<bytes, string> {
     // 1. Cabeceras completas ("\r\n\r\n").
     var sep: int = find_fin_headers(c.buf);
     while (sep < 0) {
@@ -1223,7 +1255,7 @@ fn conn_read_response(c: Conn, method: string, deadline: int) -> Result<bytes, s
                     // EOF antes de completar las cabeceras. Si no había llegado NADA, es la
                     // carrera del keep-alive ocioso → reintentable; si llegó algo, truncada.
                     conn_close(c);
-                    return if (had == 0) {
+                    return if (had == 0 && !after_interim) {
                         Result.Err(err_dropped())
                     } else {
                         Result.Err("error reading: incomplete response")
@@ -1249,7 +1281,7 @@ fn conn_read_response(c: Conn, method: string, deadline: int) -> Result<bytes, s
             // leyendo la final por la misma conexión.
             if (status >= 100 && status < 200 && status != 101) {
                 c.buf = c.buf.sub_bytes(fin_cab, c.buf.len());
-                return conn_read_response(c, method, deadline);
+                return conn_read_final(c, method, deadline, true);
             }
             // Sin cuerpo por definición (RFC 9112 §6.3): HEAD, 101, 204 y 304.
             if (method == "HEAD" || status == 204 || status == 304 || status == 101) {
@@ -1475,6 +1507,11 @@ fn stream_head(s: Stream, method: string) -> Result<Stream, string> {
             s.headers = head.1;
             s.raw_headers = head.2;
             s.buf = s.buf.sub_bytes(sep + 4, s.buf.len());
+            // Una respuesta interina (1xx salvo 101) no es la respuesta: se lee la siguiente
+            // cabeza, como en `conn_read_response`.
+            if (s.status >= 100 && s.status < 200 && s.status != 101) {
+                return stream_head(s, method);
+            }
             match (get(s.headers, "connection")) {
                 Option.Some(v) => {
                     if (v.to_lower().contains("close")) {

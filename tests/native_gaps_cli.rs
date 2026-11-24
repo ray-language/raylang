@@ -238,3 +238,39 @@ fn main() {
         "1\n2\n1\n",
     );
 }
+
+/// De la revisión previa a publicar (nov 2026): el valor inicial de un `fold` rápido se evaluaba
+/// con el arreglo ya prestado; una función global con nombre conserva el camino rápido de
+/// `map`/`filter`/`fold`; y los argumentos de una llamada a una expresión llevan el tipo del
+/// parámetro (un `[]` no se tipa solo).
+#[test]
+fn fold_initial_value_named_functions_and_typed_arguments_of_expression_calls() {
+    same_everywhere(
+        "review",
+        r#"fn grow(xs: [int]) -> int {
+    xs.push(10);
+    xs.len()
+}
+fn double(x: int) -> int { x * 2 }
+fn add(a: int, x: int) -> int { a + x }
+fn is_big(x: int) -> bool { x > 2 }
+fn total(xs: [int]) -> int { xs.len() }
+fn pick() -> fn([int], int) -> int {
+    fn(xs: [int], k: int) -> int { xs.len() + k }
+}
+fn main() {
+    var xs = [1, 2, 3];
+    print(xs.fold(grow(xs), fn(a: int, x: int) -> int { a + x }));
+    print(xs.map(double));
+    print(xs.filter(is_big));
+    print(xs.fold(0, add));
+    let fs = [total];
+    print(fs[0]([]));
+    print(pick()([], 4));
+    print(pick()([1, 2], 4));
+}
+"#,
+        true,
+        "20\n[2, 4, 6, 20]\n[3, 10]\n16\n0\n4\n6\n",
+    );
+}

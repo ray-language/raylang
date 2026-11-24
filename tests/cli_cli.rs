@@ -2212,8 +2212,9 @@ fn build_native_iterators_match_the_vm() {
 
 #[test]
 fn build_native_warns_about_stubbed_functions() {
-    // H7: una función cuyo cuerpo cae fuera del subconjunto (aquí un patrón de struct anidado en un
-    // payload; la guarda `if` que usaba este test se soporta desde M287) se emite
+    // H7: una función cuyo cuerpo cae fuera del subconjunto (aquí un closure guardado en una
+    // variable que cruza a `spawn`; el patrón de struct que usaba este test se soporta desde
+    // rayhotel #489 y la guarda `if` desde M287) se emite
     // como stub que panica. Antes el build decía "ok" en silencio y el binario moría en runtime si la
     // llamaba. Ahora AVISA (nombre + motivo) al compilar; el binario sigue compilando y corre si no llama
     // a la función stubbeada. Oráculo del camino feliz: main no la llama → nativo ≡ VM.
@@ -2224,13 +2225,10 @@ fn build_native_warns_about_stubbed_functions() {
     let base = tmp("build_native_stub_warn");
     std::fs::write(
         base.join("prog.ray"),
-        "struct Pt { x: int }\n\
-         enum E { A(Pt), B }\n\
-         fn g(e: E) -> int {\n\
-           match (e) {\n\
-             E.A(Pt { x }) => x,   // patrón de struct anidado: fuera del subconjunto nativo → g se stubbea\n\
-             E.B => 2,\n\
-           }\n\
+        "fn g() -> int {\n\
+           let f = fn() -> int { 3 };\n\
+           let t = spawn(fn() -> int { f() });   // un closure en variable cruza a spawn: g se stubbea\n\
+           join(t)\n\
          }\n\
          fn main() -> int { print(\"ok\"); 0 }  // NO llama a g → el binario corre bien\n",
     )
@@ -2241,7 +2239,7 @@ fn build_native_warns_about_stubbed_functions() {
     assert_eq!(code, 0, "build --native con stub sale 0\nstdout={out}\nstderr={err}");
     // El aviso nombra la función stubbeada y su motivo.
     assert!(err.contains("not supported in the native subset"), "avisa del stub: {err}");
-    assert!(err.contains("g:") && err.contains("struct destructuring pattern"), "nombra la función y el motivo: {err}");
+    assert!(err.contains("g:") && err.contains("cannot cross threads in the native backend"), "nombra la función y el motivo: {err}");
     // El binario compila y corre (no toca el stub) idéntico a la VM.
     let native = Command::new(&bin).output().expect("corre el binario nativo");
     let native_out = String::from_utf8_lossy(&native.stdout).into_owned();

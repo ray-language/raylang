@@ -903,12 +903,12 @@ fn function_field_call_unwraps_it() {
 
 #[test]
 fn an_untranspilable_function_becomes_a_panicking_stub() {
-    // Una función no-main cuyo cuerpo cae fuera del subconjunto (aquí un patrón de STRUCT anidado en
-    // un payload; la guarda que usaba este test se soporta desde M287, y el canal de struct desde
-    // H21-N5a) se emite como STUB que panica, con su firma → el programa COMPILA; si el flujo real
+    // Una función no-main cuyo cuerpo cae fuera del subconjunto (aquí un closure guardado en una
+    // variable que cruza a `spawn`; el patrón de struct que usaba este test se soporta desde
+    // rayhotel #489, la guarda desde M287 y el canal de struct desde H21-N5a) se emite como STUB que panica, con su firma → el programa COMPILA; si el flujo real
     // no la llama, corre igual que la VM. Antes se OMITÍA y una llamada colgante hacía fallar rustc.
     let rust = transpile_src(
-        "struct Pt { x: int }\nenum E { P(Pt) }\nfn start() -> int { let e = E.P(Pt { x: 3 }); match (e) { E.P(Pt { x }) => x } }\n\
+        "fn start() -> int { let f = fn() -> int { 3 }; let t = spawn(fn() -> int { f() }); join(t) }\n\
          fn main() -> int { print(42); 0 }",
     );
     assert!(
@@ -1677,11 +1677,11 @@ fn transpiles_for_over_map() {
 
 #[test]
 fn rejects_outside_the_subset() {
-    // Un patrón de STRUCT anidado en un payload (`E.P(Pt { x }) =>`) sigue fuera del subconjunto → no
-    // transpilable. (La guarda de match que usaba este test se soporta desde M287; try_join, el
-    // caso original, se portó en H21-N2 — ver abajo.)
+    // Un closure guardado en una variable que cruza a `spawn` sigue fuera del subconjunto → no
+    // transpilable. (El patrón de struct que usaba este test se soporta desde rayhotel #489; la
+    // guarda de match, desde M287; try_join, el caso original, se portó en H21-N2 — ver abajo.)
     let tokens = crate::lexer::lex(
-        "struct Pt { x: int }\nenum E { P(Pt) }\nfn main() -> int { let e = E.P(Pt { x: 3 }); match (e) { E.P(Pt { x }) => x } }",
+        "fn main() -> int { let f = fn() -> int { 3 }; let t = spawn(fn() -> int { f() }); join(t) }",
     )
     .unwrap();
     let mut prog = crate::parser::parse(tokens).unwrap();

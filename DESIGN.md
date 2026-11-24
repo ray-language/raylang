@@ -22113,3 +22113,19 @@ también 5 s, ahora cooperativo.
 **Límite.** Dos transacciones `BEGIN` diferidas que leen y luego escriben se interbloquean en
 SQLite y una recibe `database is locked` aunque haya plazo: es de SQLite, no de la espera. La
 receta sigue siendo `BEGIN IMMEDIATE`.
+
+## 479. Patrones de struct en el nativo (rayhotel #489, nov 2026)
+
+Un struct viaja como `Rc<RefCell<S>>` y un patrón de Rust no destructura a través de él: por eso
+el transpilador los rechazaba. Se resuelven con el mecanismo que ya tenían las variantes de enum
+de usuario anidadas (M287): en el patrón de Rust el struct es un temporal (`__rt_pN`), su prueba
+va a la guarda del brazo y sus bindings se recuperan en el prólogo. Lo nuevo es que la prueba y
+la recuperación son por CAMPO (`temp.borrow().campo`), y que un sub-patrón de campo se prueba
+según su tipo (`value_test`): un enum de usuario por `&*`, un `Option` o una tupla por `&`, un
+string por igualdad, un struct recursivamente.
+
+El harness diferencial gana un generador (`struct_patterns_over_type`): es la misma clase que
+§475 — el checker acepta, el nativo no — y ningún generador usaba un patrón de struct.
+
+`dyn Trait` capturado por `spawn` queda como límite declarado: es un `Rc<dyn …>`, no `Send`, la
+misma razón que los closures.

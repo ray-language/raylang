@@ -355,7 +355,9 @@ passed to a parameter that crosses to other fibers (`let h = fn(...) {...}; serv
 (`serve_with(fn() -> handler { ... })`); (2) a function VALUE captured by `spawn` (`let f = ...;
 spawn(fn() { f() })`) — call a named function or pass data, not functions, over channels;
 (3) a value whose type holds functions (a struct with a `fn` field, a `Map<string, fn(...)>`)
-captured by `spawn`. Rule of thumb: what crosses a fiber boundary is data or a named function.
+captured by `spawn`; (4) a `dyn Trait` value captured by `spawn` (`let p = mk(); spawn(fn() {
+p.go() })` with `fn mk() -> dyn Port`) — build the object inside the fiber. Rule of thumb: what
+crosses a fiber boundary is data or a named function.
 
 ## Stdlib map — three calling conventions (getting this wrong = 'not declared')
 

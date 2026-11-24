@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Binario nativo — patrones de struct en `match`** (rayhotel #489): `match (i) { Invoice { id,
+  status: Status.Paid(n) } => … }` se rechazaba con «struct destructuring pattern is not
+  supported» aunque la VM lo ejecuta y la documentación lo anuncia. Ahora compila: en el
+  escrutinio, anidado en un `Option`, con sub-patrones y con guarda. Un `dyn Trait` capturado
+  por `spawn` sigue sin cruzar hilos en nativo; `llms.txt` lo lista ahora entre los límites.
+
 - **Paquete `db` 0.11.0 — `db/sqlite` espera un candado sin retener el hilo** (rayhotel #491, sin
   publicar en el índice todavía). Con varios escritores a la vez, el que esperaba el candado lo
   hacía dentro de SQLite y dejaba parado al que lo tenía: 20 escrituras simultáneas podían dejar

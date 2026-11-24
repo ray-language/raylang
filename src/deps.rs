@@ -1097,6 +1097,11 @@ pub fn dependency_roots_for(dir: &Path) -> DepRoots {
                     // llame el directorio. El padre sigue entrando como directorio-raíz (los
                     // imports por nombre de directorio y las hermanas de un monorepo).
                     roots.push_package(name, pdir.clone());
+                    // rayhotel #490: si el paquete se llama de otra forma que su clave, sus
+                    // módulos (que se importan entre sí por el nombre) se traducen a la clave.
+                    if let Ok(Some(dep_manifest)) = crate::manifest::Manifest::load(&pdir) {
+                        roots.push_own_name(name, &dep_manifest.name);
+                    }
                     if let Some(parent) = pdir.parent().map(Path::to_path_buf) {
                         roots.push_dir(parent);
                     }

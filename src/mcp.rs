@@ -790,6 +790,49 @@ fn module_surface(src: &str) -> Option<Vec<String>> {
     if lines.is_empty() { None } else { Some(lines) }
 }
 
+/// rayhotel #485: las firmas de lo que un archivo re-exporta con `pub from` (el contrato de una
+/// fachada `dir/mod.ray`), con el nombre con que se exporta si cambia.
+fn reexport_lines(src: &str, file: &std::path::Path) -> Vec<String> {
+    let mut lines = Vec::new();
+    for item in crate::raydoc::reexports(src, file) {
+        let Ok(tokens) = crate::lexer::lex(&item.source) else { continue };
+        let Ok(prog) = crate::parser::parse(tokens) else { continue };
+        let name = item.original.as_str();
+        let sig = if let Some(f) = prog.functions.iter().find(|f| f.name == name) {
+            fn_signature(f)
+        } else if let Some(s) = prog.structs.iter().find(|s| s.name == name) {
+            struct_signature(s)
+        } else if let Some(e) = prog.enums.iter().find(|e| e.name == name) {
+            enum_signature(e)
+        } else if let Some(t) = prog.traits.iter().find(|t| t.name == name) {
+            trait_signature(t)
+        } else if let Some(c) = prog.consts.iter().find(|c| c.name == name) {
+            const_signature(c)
+        } else {
+            continue;
+        };
+        if item.visible == item.original {
+            lines.push(format!("{sig}  [re-exported from {}]", item.module));
+        } else {
+            lines.push(format!("{sig}  [re-exported from {} as {}]", item.module, item.visible));
+        }
+    }
+    lines
+}
+
+/// El nombre con que se IMPORTA el módulo de un archivo: su *stem*, o el directorio si es la
+/// fachada de una cápsula (`booking/mod.ray` → `booking`), y el directorio que lo contiene.
+fn module_stem_and_dir(f: &std::path::Path) -> Option<(String, Option<String>)> {
+    let stem = f.file_stem()?.to_string_lossy().into_owned();
+    let dir_name = |d: &std::path::Path| d.file_name().map(|n| n.to_string_lossy().into_owned());
+    if stem == "mod" {
+        let dir = f.parent()?;
+        Some((dir_name(dir)?, dir.parent().and_then(dir_name)))
+    } else {
+        Some((stem, f.parent().and_then(dir_name)))
+    }
+}
+
 /// M305 (IDEAS §97 #34): la superficie pública de un módulo del PROYECTO o de un paquete de
 /// `.ray-deps` — `ray_doc "rpc/rpc"` / `"web/framework"` / `"framework"` con `path`. Antes solo
 /// `modulo.simbolo` resolvía en modo proyecto y un nombre pelado era «not a builtin…».
@@ -803,17 +846,38 @@ fn project_module_listing(symbol: &str, path: &str) -> Option<String> {
         None => (None, symbol.to_string()),
     };
     for f in &files {
-        let stem = f.file_stem()?.to_string_lossy().into_owned();
+        // rayhotel #485: una cápsula se nombra por su directorio (`modules/booking` es
+        // `modules/booking/mod.ray`), y su superficie incluye lo que re-exporta.
+        let Some((stem, dir)) = module_stem_and_dir(f) else { continue };
         if stem != stem_wanted {
             continue;
         }
+        // El directorio pedido puede ser la CLAVE de una dependencia `path:` (`k/kernel` con
+        // `k = "path:../lib3"`): vale si el módulo vive directamente en ese paquete.
+        let by_key = |d: &str| {
+            crate::manifest::Manifest::load(&root).ok().flatten().is_some_and(|m| {
+                m.dependencies.iter().any(|(key, spec)| {
+                    key == d
+                        && crate::deps::path_of_path_dep(spec).is_some_and(|rel| {
+                            let pkg = root.join(rel).canonicalize().unwrap_or_else(|_| root.join(rel));
+                            let home = if f.file_stem().is_some_and(|s| s == "mod") { f.parent().and_then(|x| x.parent()) } else { f.parent() };
+                            home.and_then(|h| h.canonicalize().ok()).is_some_and(|h| h == pkg)
+                        })
+                })
+            })
+        };
         if let Some(d) = &dir_hint
-            && f.parent().is_none_or(|p| p.file_name().is_none_or(|n| n.to_string_lossy() != **d))
+            && dir.as_ref() != Some(d)
+            && !by_key(d)
         {
             continue;
         }
         let Ok(src) = std::fs::read_to_string(f) else { continue };
-        let Some(lines) = module_surface(&src) else { continue };
+        let mut lines = module_surface(&src).unwrap_or_default();
+        lines.extend(reexport_lines(&src, f));
+        if lines.is_empty() {
+            continue;
+        }
         let label = f.strip_prefix(&root).unwrap_or(f).to_string_lossy().into_owned();
         let intro = crate::raydoc::module_doc(&src).map(|d| format!("{d}\n\n")).unwrap_or_default();
         return Some(format!(
@@ -838,6 +902,18 @@ fn project_files(path: &str) -> Option<(std::path::PathBuf, Vec<std::path::PathB
     };
     let mut files: Vec<std::path::PathBuf> = Vec::new();
     let mut pending = vec![root.clone()];
+    // rayhotel #485: también las dependencias `path:` (un monorepo: `modulith = "path:../modulith"`),
+    // que no viven en `.ray-deps`.
+    if let Ok(Some(manifest)) = crate::manifest::Manifest::load(&root) {
+        for (_, spec) in &manifest.dependencies {
+            if let Some(rel) = crate::deps::path_of_path_dep(spec) {
+                let dir = root.join(rel);
+                if dir.is_dir() {
+                    pending.push(dir);
+                }
+            }
+        }
+    }
     while let Some(d) = pending.pop() {
         if files.len() > 400 {
             break;
@@ -908,6 +984,13 @@ fn project_doc_text(symbol: &str, path: &str) -> Option<String> {
         let label = f.strip_prefix(&root).unwrap_or(f).to_string_lossy().into_owned();
         if let Some(text) = source_symbol_doc(&label, &src, &func) {
             return Some(text);
+        }
+        // rayhotel #485: `kernel.enter` cuando `enter` llega a la fachada por `pub from`: la firma
+        // y la doc son las de su definición.
+        if let Some(item) = crate::raydoc::reexports(&src, f).into_iter().find(|r| r.visible == func)
+            && let Some(text) = source_symbol_doc(&label, &item.source, &item.original)
+        {
+            return Some(format!("{text}\n(re-exported by {label} from {})", item.module));
         }
     }
     None

@@ -147,7 +147,51 @@ pub fn load(entry: &Path) -> Result<Loaded, LoadError> {
 /// protegidos por el enforcement de cápsula (M11.6b) sin código nuevo. Con `dep_roots` vacío el
 /// comportamiento es idéntico a antes (un solo `root`).
 pub fn load_with_deps(entry: &Path, dep_roots: &DepRoots) -> Result<Loaded, LoadError> {
-    load_impl(entry, dep_roots, None, None)
+    match capsule_entry_identity(entry, dep_roots) {
+        Some((root, name)) => load_impl(entry, dep_roots, None, Some(root), Some(name)),
+        None => load_impl(entry, dep_roots, None, None, None),
+    }
+}
+
+/// rayhotel #483/#488: la raíz de módulos y la identidad de una ENTRADA que vive dentro de una
+/// cápsula (`ray check src/shop/mod.ray`, `ray test` sobre un módulo interno, un paquete-librería
+/// sin entry cuyos módulos se comprueban de uno en uno). Sin esto la entrada se identificaba por su
+/// *stem* (`mod`, `model`) con su propio directorio por raíz: la fachada quedaba FUERA de su
+/// cápsula y su `pub from shop/model …` se rechazaba — un paquete con cápsulas no pasaba `ray
+/// check`. Dos formas, según dónde esté el archivo respecto al `ray.toml` más cercano:
+/// - bajo `<proyecto>/src/`: la raíz es `src/` y la identidad, su ruta relativa (`shop`, `shop/model`);
+/// - en un paquete-librería (módulos en la raíz del paquete): la raíz es el paquete y la identidad
+///   lleva el `[package] name` delante (`kit/kernel`), que es como se importan entre sí.
+///
+/// Solo aplica a un archivo que está DENTRO de una cápsula (él o un directorio suyo, por debajo de
+/// la raíz, tiene `mod.ray`): ahí los imports ya son por ruta completa. Cualquier otra entrada
+/// conserva la identidad clásica y su directorio como raíz (un script con imports relativos a él).
+fn capsule_entry_identity(entry: &Path, dep_roots: &DepRoots) -> Option<(PathBuf, String)> {
+    let entry_abs = entry.canonicalize().ok()?;
+    let project = entry_abs.ancestors().skip(1).find(|d| d.join("ray.toml").is_file())?.to_path_buf();
+    let src = project.join("src");
+    let (root, package) = if entry_abs.starts_with(&src) {
+        (src, None)
+    } else {
+        let name = dep_roots.packages.iter().find(|(_, d)| d.canonicalize().is_ok_and(|c| c == project)).map(|(n, _)| n.clone())?;
+        (project, Some(name))
+    };
+    // ¿Dentro de una cápsula? Algún directorio entre la raíz (sin incluirla, salvo en un paquete,
+    // donde un `mod.ray` en la raíz es la cápsula del paquete) y el del archivo tiene `mod.ray`.
+    let in_capsule = entry_abs.ancestors().skip(1).take_while(|d| d.starts_with(&root)).any(|d| {
+        (d != root || package.is_some()) && d.join("mod.ray").is_file()
+    });
+    if !in_capsule {
+        return None;
+    }
+    let rel = rel_module_name(&entry_abs, &root);
+    let name = match (package, rel) {
+        (Some(p), Some(r)) => format!("{p}/{r}"),
+        (Some(p), None) => p, // `<paquete>/mod.ray`: la cápsula ES el paquete
+        (None, Some(r)) => r,
+        (None, None) => return None,
+    };
+    Some((root, name))
 }
 
 /// M383 (ray-elements #135/#142): las raíces de dependencias del loader, en dos formas. `dirs` son
@@ -162,12 +206,17 @@ pub fn load_with_deps(entry: &Path, dep_roots: &DepRoots) -> Result<Loaded, Load
 pub struct DepRoots {
     pub dirs: Vec<PathBuf>,
     pub packages: Vec<(String, PathBuf)>,
+    /// rayhotel #490: `(clave, nombre)` de las dependencias cuya CLAVE en `[dependencies]` no es su
+    /// `[package] name`. Dentro de un paquete sus módulos se importan por el nombre (`import
+    /// kit/a;`), y el consumidor lo conoce por la clave (`k = "path:…"`): el loader traduce esos
+    /// imports a la clave al cargar los módulos del paquete.
+    pub own_names: Vec<(String, String)>,
 }
 
 impl DepRoots {
     /// Solo directorios (la forma clásica).
     pub fn from_dirs(dirs: Vec<PathBuf>) -> Self {
-        DepRoots { dirs, packages: Vec::new() }
+        DepRoots { dirs, packages: Vec::new(), own_names: Vec::new() }
     }
 
     /// Añade un directorio-raíz, sin duplicarlo.
@@ -181,6 +230,28 @@ impl DepRoots {
     pub fn push_package(&mut self, name: &str, dir: PathBuf) {
         if !self.packages.iter().any(|(n, _)| n == name) {
             self.packages.push((name.to_string(), dir));
+        }
+    }
+
+    /// Registra el `[package] name` de una dependencia declarada con otra clave (#490).
+    pub fn push_own_name(&mut self, key: &str, name: &str) {
+        if key != name && !self.own_names.iter().any(|(k, _)| k == key) {
+            self.own_names.push((key.to_string(), name.to_string()));
+        }
+    }
+
+    /// rayhotel #490: dentro de un módulo del paquete de clave `k` (nombre `kit`), `kit/a` → `k/a`.
+    /// `None` si `importer` no es de un paquete así, si `dep` no empieza por su nombre, o si ese
+    /// nombre es además la clave de OTRA dependencia (lo declarado manda).
+    fn own_name_to_key(&self, importer: &str, dep: &str) -> Option<String> {
+        let (key, name) = self.own_names.iter().find(|(k, _)| importer == k || importer.starts_with(&format!("{k}/")))?;
+        if self.packages.iter().any(|(n, _)| n == name) {
+            return None;
+        }
+        if dep == name {
+            Some(key.clone())
+        } else {
+            dep.strip_prefix(name.as_str()).and_then(|r| r.strip_prefix('/')).map(|rest| format!("{key}/{rest}"))
         }
     }
 
@@ -201,7 +272,17 @@ impl DepRoots {
 /// leerlo del disco (los imports sí se leen de disco). Es lo que necesita el **LSP**: analizar el
 /// buffer en memoria (con cambios sin guardar) mientras resuelve sus imports desde los archivos.
 pub fn load_source(entry: &Path, source: &str, dep_roots: &DepRoots) -> Result<Loaded, LoadError> {
-    load_impl(entry, dep_roots, Some(source), None)
+    load_impl(entry, dep_roots, Some(source), None, None)
+}
+
+/// Como [`load_source`], para un archivo que vive DENTRO de una cápsula y no tiene un proyecto con
+/// `main.ray` por encima (un paquete-librería): la raíz y la identidad salen de
+/// `capsule_entry_identity`, como en `load_with_deps`. `None` si el archivo no está en una cápsula.
+/// Lo usa el LSP: sin esto, abrir la fachada `kernel/mod.ray` de una librería marcaba su propio
+/// `pub from kit/kernel/inner …` como «internal to capsule».
+pub fn load_source_in_capsule(entry: &Path, source: &str, dep_roots: &DepRoots) -> Option<Result<Loaded, LoadError>> {
+    let (root, name) = capsule_entry_identity(entry, dep_roots)?;
+    Some(load_impl(entry, dep_roots, Some(source), Some(root), Some(name)))
 }
 
 /// Como [`load_source`], pero con la **raíz del proyecto** dada explícitamente (no inferida como
@@ -213,7 +294,7 @@ pub fn load_source(entry: &Path, source: &str, dep_roots: &DepRoots) -> Result<L
 /// **ruta relativa** a ella y ambos problemas desaparecen (imports y cápsulas se comportan como bajo
 /// `ray run` desde la entrada real del proyecto).
 pub fn load_source_module(entry: &Path, source: &str, project_root: &Path, dep_roots: &DepRoots) -> Result<Loaded, LoadError> {
-    load_impl(entry, dep_roots, Some(source), Some(project_root.to_path_buf()))
+    load_impl(entry, dep_roots, Some(source), Some(project_root.to_path_buf()), None)
 }
 
 /// Núcleo de la carga. `entry_source`, si está, es el contenido del archivo de entrada (buffer en
@@ -221,20 +302,22 @@ pub fn load_source_module(entry: &Path, source: &str, project_root: &Path, dep_r
 /// si está, fija la raíz del proyecto (y con ella la identidad de módulo de la entrada, por su ruta
 /// relativa); si es `None`, la raíz es `entry.parent()` y la entrada se identifica por su *stem* (el
 /// comportamiento clásico: la entrada del proyecto vive en la raíz).
-fn load_impl(entry: &Path, dep_roots: &DepRoots, entry_source: Option<&str>, project_root_override: Option<PathBuf>) -> Result<Loaded, LoadError> {
+fn load_impl(entry: &Path, dep_roots: &DepRoots, entry_source: Option<&str>, project_root_override: Option<PathBuf>, entry_name_override: Option<String>) -> Result<Loaded, LoadError> {
     let project_root = project_root_override.clone()
         .unwrap_or_else(|| entry.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(".")));
     // Raíces de búsqueda de módulos: el proyecto primero, luego los paquetes por clave (M383) y
     // la caché de dependencias (`roots` son los directorios; `dep_roots.packages`, los paquetes).
     let mut roots = vec![project_root.clone()];
     roots.extend(dep_roots.dirs.iter().cloned());
-    let all_roots = DepRoots { dirs: roots.clone(), packages: dep_roots.packages.clone() };
+    let all_roots = DepRoots { dirs: roots.clone(), packages: dep_roots.packages.clone(), own_names: dep_roots.own_names.clone() };
     // Identidad de la entrada: su ruta relativa a la raíz (`geo/formas/circulo`) cuando la raíz se dio
     // explícitamente (LSP sobre un submódulo); si no, el *stem* clásico. Solo afecta a la clave del
     // módulo y al enforcement de cápsula: la entrada NUNCA se namespaca (`module_prefix` → None).
-    let entry_name = match &project_root_override {
-        Some(root) => rel_module_name(entry, root).unwrap_or_else(|| module_name(entry)),
-        None => module_name(entry),
+    let in_capsule_entry = entry_name_override.is_some();
+    let entry_name = match (entry_name_override, &project_root_override) {
+        (Some(name), _) => name,
+        (None, Some(root)) => rel_module_name(entry, root).unwrap_or_else(|| module_name(entry)),
+        (None, None) => module_name(entry),
     };
 
     // --- Fase 1: cargar y parsear cada módulo una vez (BFS sobre los imports) ---
@@ -274,7 +357,24 @@ fn load_impl(entry: &Path, dep_roots: &DepRoots, entry_source: Option<&str>, pro
             Some(t) => render(&t.source, template_line(&t.line_map, line), 1, usize::MAX, &name, msg),
             None => render(&source, line, col, len, &name, msg),
         };
-        let program = parse_source(&name, &source, template.as_ref())?;
+        let mut program = parse_source(&name, &source, template.as_ref())?;
+        // rayhotel #490: un módulo de una dependencia declarada con una clave distinta de su
+        // nombre importa a sus hermanos por el NOMBRE; aquí se traducen a la clave, que es como
+        // este proyecto conoce al paquete (una sola identidad por módulo). El nombre local de un
+        // `import kit;` se conserva con un alias.
+        for imp in &mut program.imports {
+            if let Some(by_key) = all_roots.own_name_to_key(&name, &imp.module) {
+                if imp.alias.is_none() {
+                    imp.alias = Some(imp.leaf().to_string());
+                }
+                imp.module = by_key;
+            }
+        }
+        for imp in &mut program.from_imports {
+            if let Some(by_key) = all_roots.own_name_to_key(&name, &imp.module) {
+                imp.module = by_key;
+            }
+        }
         // Dependencias del módulo: tanto `import M;` como `from M import …;` cargan `M`.
         let deps = program.imports.iter().map(|i| (&i.module, i.line, i.col))
             .chain(program.from_imports.iter().map(|f| (&f.module, f.line, f.col)));
@@ -286,6 +386,30 @@ fn load_impl(entry: &Path, dep_roots: &DepRoots, entry_source: Option<&str>, pro
                     "module '{}' is internal to capsule '{}'; import it with 'import {};'",
                     dep, c, c
                 )));
+            }
+            // rayhotel #482: la misma regla sobre la RUTA del archivo. El texto del import puede
+            // nombrar el módulo por otro camino (`import src/shop/model;` desde `src/main.ray`,
+            // porque el directorio del proyecto también es una raíz): la regla por nombre no ve
+            // ninguna cápsula `src/shop`… y el módulo interno se cargaba, con otra identidad.
+            if crate::stdlib::embedded(dep).is_none() {
+                // Con el mismo respaldo que la carga de abajo: la auto-referencia por el nombre
+                // del directorio raíz (`src/…` cuando la raíz es `src/`).
+                let by_roots = resolve_module(&all_roots, dep).ok().flatten();
+                let by_self = || {
+                    let dir = project_root.file_name()?.to_str()?;
+                    if dep != dir && !dep.starts_with(&format!("{dir}/")) {
+                        return None;
+                    }
+                    resolve_module_path(&[project_root.parent()?.to_path_buf()], dep).ok().flatten()
+                };
+                if let Some(target) = by_roots.or_else(by_self) {
+                    if let Some(c) = capsule_violated_by_path(&all_roots, &project_root, &path, &target) {
+                        return Err(rend(line, col, 1, &format!(
+                            "module '{}' is internal to capsule '{}'; import it with 'import {};'",
+                            dep, c, c
+                        )));
+                    }
+                }
             }
             if !visited.contains(dep) {
                 // M40.5: un módulo de la stdlib se resuelve a su fuente embebida (sin disco). La ruta
@@ -361,11 +485,19 @@ fn load_impl(entry: &Path, dep_roots: &DepRoots, entry_source: Option<&str>, pro
     // Unifica ítems `pub` definidos y reexports (`pub from …`); la consultan el Resolver, el
     // TypeRewriter y la clasificación de `from`-imports.
     let surfaces = build_surfaces(&modules);
+    // rayhotel #481: la cara de valores de cada FACHADA (`dir/mod.ray`), por su prefijo, para que el
+    // checker resuelva el UFCS de fuera de la cápsula contra el contrato y no contra lo interno.
+    let capsule_surfaces: HashMap<String, HashMap<String, String>> = modules
+        .iter()
+        .filter(|m| m.path.file_name().is_some_and(|n| n == "mod.ray"))
+        .filter_map(|m| surfaces.get(&m.name).map(|s| (ns_prefix(&m.name), s.values.clone())))
+        .collect();
     let types = collect_types(&modules); // todos los tipos: para distinguir "privado" de "no existe"
     let mut merged = Program {
         functions: Vec::new(), structs: Vec::new(), enums: Vec::new(), consts: Vec::new(),
         traits: Vec::new(), impls: Vec::new(), imports: Vec::new(), from_imports: Vec::new(),
         ufcs_aliases: HashMap::new(), module_bands: Vec::new(),
+        capsule_surfaces: HashMap::new(), entry_module: String::new(),
         expr_spans: HashMap::new(), field_name_pos: HashMap::new(), type_name_sites: Vec::new(),
         externs: Vec::new(), type_aliases: Vec::new(),
         // El programa fusionado se usa para check/run (AST desazucarado), no para formatear → tablas vacías.
@@ -422,7 +554,20 @@ fn load_impl(entry: &Path, dep_roots: &DepRoots, entry_source: Option<&str>, pro
         //    posiciones de tipo y en expresiones que nombran tipos (struct lit, `Color.Rojo`,
         //    patrones)—, sin tocar los parámetros de tipo en ámbito. El mapa de reescritura suma
         //    los tipos propios y los `from`-importados (-2).
-        let own_types = build_own_types(&m.program, &prefix);
+        let mut own_types = build_own_types(&m.program, &prefix);
+        // Un módulo comprobado como archivo suelto (el LSP con un submódulo abierto, `ray check
+        // src/x.ray`) que define un tipo con nombre de tipo builtin (`struct Task`): en el
+        // proyecto ese tipo va namespacado (`tasks::Task`) y convive con el builtin; suelto se
+        // quedaba con el nombre pelado y el checker lo rechazaba («'Task' is a builtin type…») en
+        // un archivo que compila. Como `entry_shadow_name` hace con las funciones (raycdc #407).
+        if m.is_entry && !m.program.functions.iter().any(|f| f.name == "main") {
+            let leaf = ns_prefix(m.name.rsplit('/').next().unwrap_or(&m.name));
+            for (local, global) in own_types.iter_mut() {
+                if matches!(local.as_str(), "Task" | "Map" | "Channel") {
+                    *global = format!("{leaf}::{local}");
+                }
+            }
+        }
         rename_type_defs(&mut m.program, &own_types);
         let mut type_refs = own_types;
         type_refs.extend(from_types);
@@ -486,6 +631,11 @@ fn load_impl(entry: &Path, dep_roots: &DepRoots, entry_source: Option<&str>, pro
         ufcs_aliases.remove(ambiguous);
     }
     merged.ufcs_aliases = ufcs_aliases;
+    merged.capsule_surfaces = capsule_surfaces;
+    // También con la raíz dada (el LSP sobre un submódulo abierto): la identidad es la real.
+    if in_capsule_entry || project_root_override.is_some() {
+        merged.entry_module = ns_prefix(&entry_name);
+    }
     Ok(Loaded { program: merged, modules: loaded_modules, from_import_sites })
 }
 
@@ -760,6 +910,52 @@ fn capsule_violated(roots: &DepRoots, importer: &str, target: &str) -> Option<St
         if in_package || roots.dirs.iter().any(|r| r.join(&c).join("mod.ray").exists()) {
             let inside = importer == c || importer.starts_with(&format!("{}/", c));
             return if inside { None } else { Some(c) };
+        }
+    }
+    None
+}
+
+/// rayhotel #482: la regla de cápsula sobre RUTAS. `target` es interno a una cápsula si algún
+/// directorio suyo (el propio no cuenta cuando `target` es su `mod.ray`: esa es la fachada) tiene
+/// `mod.ray`, por debajo de la raíz de módulos que lo contiene; la viola un `importer` que no vive
+/// bajo ese directorio. Devuelve el nombre importable de la cápsula. Solo decide lo que la regla
+/// por nombre no ve; donde las dos aplican dicen lo mismo.
+fn capsule_violated_by_path(roots: &DepRoots, project_root: &Path, importer: &Path, target: &Path) -> Option<String> {
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let (importer, target) = (canon(importer), canon(target));
+    // La raíz de módulos MÁS PROFUNDA que contiene al destino: por debajo de ella valen las cápsulas.
+    // Un paquete por clave cuenta con su propio directorio (su `mod.ray` de raíz es su cápsula).
+    let mut best: Option<(PathBuf, Option<String>)> = None;
+    let mut consider = |dir: PathBuf, key: Option<String>| {
+        if target.starts_with(&dir) && best.as_ref().is_none_or(|(b, _)| dir.components().count() > b.components().count()) {
+            best = Some((dir, key));
+        }
+    };
+    consider(canon(project_root), None);
+    for d in &roots.dirs {
+        consider(canon(d), None);
+    }
+    for (name, d) in &roots.packages {
+        consider(canon(d), Some(name.clone()));
+    }
+    let (root, key) = best?;
+    let is_facade = target.file_name().is_some_and(|n| n == "mod.ray");
+    let start = if is_facade { target.parent()?.parent()? } else { target.parent()? };
+    // De dentro afuera: la cápsula más cercana decide (las anidadas componen).
+    for dir in start.ancestors().take_while(|d| d.starts_with(&root)) {
+        if dir == root && key.is_none() {
+            break; // `src/mod.ray` (o el de una raíz de directorios) no hace cápsula
+        }
+        if dir.join("mod.ray").is_file() {
+            if importer.starts_with(dir) {
+                return None;
+            }
+            let rel = dir.strip_prefix(&root).ok()?.to_str()?.replace('\\', "/");
+            return Some(match (&key, rel.is_empty()) {
+                (Some(k), true) => k.clone(),
+                (Some(k), false) => format!("{k}/{rel}"),
+                (None, _) => rel,
+            });
         }
     }
     None

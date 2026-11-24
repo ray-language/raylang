@@ -1149,6 +1149,22 @@ Un `pub from … import …` (con `pub`) **reexporta**: trae nombres de un subm�
 cara pública de la cápsula. Sin `pub`, el `from`-import es privado al `mod.ray`. El ejemplo completo está en
 [`examples/capsula/`](examples/capsula/).
 
+Lo que conviene saber al montar un programa por módulos con cápsulas:
+
+- **Los internos se importan por la ruta completa** (`import geo/util;`, no `import util;`), también entre
+  hermanos. Un interno puede importar su propia fachada, y dos cápsulas pueden importarse entre sí.
+- **Desde fuera, `x.f()` alcanza el contrato.** Una llamada como método sobre un tipo de la cápsula resuelve
+  contra lo que la fachada declara o reexporta. Un `pub fn` de un módulo interno es público dentro de la
+  cápsula, no fuera.
+- **Anidamiento.** `geo/formas/mod.ray` es una cápsula interna a `geo`: desde `geo` se usa por su fachada.
+  Un `mod.ray` oculta todos los directorios que tiene debajo; `src/mod.ray` no hace nada.
+- **Pruebas.** `tests/*.ray` ven solo el contrato. Las de caja blanca van en un `*_test.ray` dentro de la
+  cápsula (`src/geo/util_test.ray`): `ray test` descubre todos los `*_test.ray` de `src/`.
+- **No hay campos privados.** Un struct que la fachada exporta se puede construir y modificar desde fuera;
+  para ocultar la representación, devuelve un `dyn Trait`.
+- **Herramientas.** `ray check` y `ray doc` aceptan el archivo de una fachada o de un interno; `ray doc geo`
+  muestra el contrato con lo reexportado.
+
 ### Paquetes y dependencias (`ray.toml`)
 
 ```toml

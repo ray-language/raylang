@@ -76,6 +76,8 @@ impl Checker {
             extern_fns: HashSet::new(),
             ufcs_aliases: HashMap::new(),
             module_bands: Vec::new(),
+            capsule_surfaces: HashMap::new(),
+            entry_module: String::new(),
             shadowed_free_fns: HashSet::new(),
             root_user_fns: HashSet::new(),
             require_main: true,
@@ -92,6 +94,10 @@ impl Checker {
         }
         // Fix §52: las bandas de módulo del loader (inicio → prefijo), para resolver un sitio
         // UFCS contra las funciones PROPIAS de su módulo por posición.
+        if self.capsule_surfaces.is_empty() && !program.capsule_surfaces.is_empty() {
+            self.capsule_surfaces = program.capsule_surfaces.clone();
+            self.entry_module = program.entry_module.clone();
+        }
         if self.module_bands.is_empty() && !program.module_bands.is_empty() {
             self.module_bands = program.module_bands.clone();
         }
@@ -3851,7 +3857,7 @@ impl Checker {
             }
         } else if let Some(global) = self.ufcs_aliases.get(name).cloned() {
             global
-        } else if let Some(by_type) = self.type_module_fn(name, recv_ty) {
+        } else if let Some(by_type) = self.type_module_fn(name, recv_ty, line) {
             by_type
         } else {
             // M316 (findings #89): si es un método de un trait de la stdlib implementado para este
@@ -3955,12 +3961,33 @@ impl Checker {
         self.root_user_fns.contains(name)
     }
 
-    fn type_module_fn(&self, name: &str, recv_ty: &Type) -> Option<String> {
+    fn type_module_fn(&self, name: &str, recv_ty: &Type, line: usize) -> Option<String> {
         let tname = match recv_ty {
             Type::Struct(n, _) | Type::Enum(n, _) => n,
             _ => return None,
         };
         let (prefix, _) = tname.rsplit_once("::")?;
+        // rayhotel #481: desde FUERA de una cápsula el tipo solo tiene los métodos que su
+        // fachada exporta (propios o por `pub from`), no los `pub` del módulo interno que lo
+        // declara — que eran alcanzables por aquí y solo por aquí — y sí los que la fachada
+        // declara sobre él. Manda la cápsula más EXTERNA que contiene al tipo y no al sitio.
+        if !self.capsule_surfaces.is_empty() {
+            let within = |module: &str, capsule: &str| module == capsule || module.starts_with(&format!("{capsule}::"));
+            let site = match self.module_bands.iter().rev().find(|(start, _)| *start <= line) {
+                Some((_, p)) if !p.is_empty() => p.as_str(),
+                _ => self.entry_module.as_str(),
+            };
+            let boundary = self.capsule_surfaces.keys()
+                .filter(|c| within(prefix, c) && !within(site, c))
+                .min_by_key(|c| c.len());
+            if let Some(capsule) = boundary {
+                let global = self.capsule_surfaces[capsule].get(name)?;
+                let sig = self.functions.get(global)?;
+                let mut sigma: HashMap<String, Type> = HashMap::new();
+                unify(sig.params.first()?, recv_ty, &mut sigma).ok()?;
+                return Some(global.clone());
+            }
+        }
         let candidate = format!("{prefix}::{name}");
         if !self.pub_functions.contains(&candidate) {
             return None;

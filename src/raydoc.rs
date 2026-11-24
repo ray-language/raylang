@@ -29,6 +29,131 @@ pub fn module_doc(src: &str) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+/// Un nombre que una fachada re-exporta con `pub from M import a as b;` (rayhotel #485): el nombre
+/// visible (`b`), el original (`a`), el módulo tal como se escribió y el archivo —con su fuente—
+/// donde el ítem se DEFINE (siguiendo las cadenas de re-export).
+pub struct Reexported {
+    pub visible: String,
+    pub original: String,
+    pub module: String,
+    pub file: std::path::PathBuf,
+    pub source: String,
+}
+
+/// El archivo de un módulo importado desde `from_file`: `<base>/<módulo>.ray` o
+/// `<base>/<módulo>/mod.ray` con `base` cada directorio hacia arriba hasta el del `ray.toml`; ahí
+/// se prueba también sin el primer segmento (dentro de un paquete sus módulos se importan con el
+/// nombre del paquete delante). Es para DOCUMENTAR: no aplica la regla de cápsula ni las
+/// dependencias — lo que no encuentra, se omite.
+pub fn locate_module(from_file: &std::path::Path, module: &str) -> Option<std::path::PathBuf> {
+    let try_at = |base: &std::path::Path, m: &str| {
+        let file = base.join(format!("{m}.ray"));
+        if file.is_file() {
+            return Some(file);
+        }
+        let facade = base.join(m).join("mod.ray");
+        facade.is_file().then_some(facade)
+    };
+    for base in from_file.parent()?.ancestors() {
+        if let Some(found) = try_at(base, module) {
+            return Some(found);
+        }
+        if base.join("ray.toml").is_file() {
+            return module.split_once('/').and_then(|(_, rest)| try_at(base, rest));
+        }
+    }
+    None
+}
+
+/// Lo que el fuente `src` (del archivo `file`) re-exporta con `pub from`, resuelto hasta su
+/// definición. Vacío si no re-exporta nada o no parsea.
+pub fn reexports(src: &str, file: &std::path::Path) -> Vec<Reexported> {
+    fn defines(prog: &crate::ast::Program, name: &str) -> bool {
+        prog.functions.iter().any(|f| f.name == name)
+            || prog.structs.iter().any(|s| s.name == name)
+            || prog.enums.iter().any(|e| e.name == name)
+            || prog.traits.iter().any(|t| t.name == name)
+            || prog.consts.iter().any(|c| c.name == name)
+            || prog.type_aliases.iter().any(|a| a.name == name)
+    }
+    fn parse(src: &str) -> Option<crate::ast::Program> {
+        crate::parser::parse(crate::lexer::lex(src).ok()?).ok()
+    }
+    // Sigue `name` desde `file` hasta el archivo que lo define (tope de saltos: sin ciclos).
+    fn definition(file: &std::path::Path, module: &str, name: &str, hops: usize) -> Option<(std::path::PathBuf, String, String)> {
+        let target = locate_module(file, module)?;
+        let source = std::fs::read_to_string(&target).ok()?;
+        let prog = parse(&source)?;
+        if defines(&prog, name) {
+            return Some((target, source, name.to_string()));
+        }
+        if hops == 0 {
+            return None;
+        }
+        prog.from_imports.iter().filter(|fi| fi.is_pub).find_map(|fi| {
+            let n = fi.names.iter().find(|n| n.local() == name)?;
+            definition(&target, &fi.module, &n.name, hops - 1)
+        })
+    }
+    let Some(prog) = parse(src) else { return Vec::new() };
+    let mut out = Vec::new();
+    for fi in prog.from_imports.iter().filter(|fi| fi.is_pub) {
+        for n in &fi.names {
+            if let Some((def_file, source, original)) = definition(file, &fi.module, &n.name, 4) {
+                out.push(Reexported { visible: n.local().to_string(), original, module: fi.module.clone(), file: def_file, source });
+            }
+        }
+    }
+    out
+}
+
+/// La documentación Markdown de un ARCHIVO: la de su fuente (`generate`) más lo que re-exporta con
+/// `pub from` — que en una fachada `dir/mod.ray` es el contrato entero y antes se omitía. Una
+/// fachada se titula con el nombre de su cápsula (el directorio), no `mod.ray`.
+pub fn generate_file(path: &std::path::Path) -> Result<String, String> {
+    let src = std::fs::read_to_string(path).map_err(|e| format!("could not read '{}': {e}", path.display()))?;
+    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("module");
+    let abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let title = match (file_name, abs.parent().and_then(|d| d.file_name()).and_then(|n| n.to_str())) {
+        ("mod.ray", Some(dir)) => dir.to_string(),
+        _ => file_name.to_string(),
+    };
+    let mut out = generate(&src, &title)?;
+    let items = reexports(&src, &abs);
+    if items.is_empty() {
+        return Ok(out);
+    }
+    out.push_str("## Re-exports\n\n");
+    for item in items {
+        let Ok(tokens) = crate::lexer::lex(&item.source) else { continue };
+        let Ok(prog) = crate::parser::parse(tokens) else { continue };
+        let lines: Vec<&str> = item.source.lines().collect();
+        let name = item.original.as_str();
+        let (sig, line) = if let Some(f) = prog.functions.iter().find(|f| f.name == name) {
+            (sig_function(f), f.line)
+        } else if let Some(s) = prog.structs.iter().find(|s| s.name == name) {
+            (sig_struct(s), s.line)
+        } else if let Some(e) = prog.enums.iter().find(|e| e.name == name) {
+            (sig_enum(e), e.line)
+        } else if let Some(t) = prog.traits.iter().find(|t| t.name == name) {
+            (sig_trait(t), t.line)
+        } else if let Some(c) = prog.consts.iter().find(|c| c.name == name) {
+            (const_signature(c), c.line)
+        } else if let Some(a) = prog.type_aliases.iter().find(|a| a.name == name) {
+            (format!("type {}{} = {}", a.name, generics(&a.type_params, &[], &Vec::new()), a.target), a.line)
+        } else {
+            continue;
+        };
+        out.push_str(&format!("### `{sig}`\n\n"));
+        if item.visible != item.original {
+            out.push_str(&format!("Exported as `{}`. ", item.visible));
+        }
+        out.push_str(&format!("From `{}`.\n\n", item.module));
+        emit_doc(&mut out, &lines, line);
+    }
+    Ok(out)
+}
+
 pub fn generate(src: &str, title: &str) -> Result<String, String> {
     let tokens = crate::lexer::lex(src).map_err(|e| format!("{e}"))?;
     let program = crate::parser::parse(tokens).map_err(|e| format!("{e}"))?;
@@ -106,7 +231,7 @@ pub fn generate(src: &str, title: &str) -> Result<String, String> {
     // --- Constantes (M326, findings #101: el modo símbolo ya las daba desde M305; el Markdown no) ---
     let consts: Vec<&ConstDef> = program.consts.iter().filter(|c| include(c.is_pub)).collect();
     if !consts.is_empty() {
-        out.push_str("## Constantes\n\n");
+        out.push_str("## Constants\n\n");
         for c in consts {
             out.push_str(&format!("### `{}`\n\n", const_signature(c)));
             emit_doc(&mut out, &lines, c.line);
@@ -116,7 +241,7 @@ pub fn generate(src: &str, title: &str) -> Result<String, String> {
     // --- Funciones ---
     let funcs: Vec<&Function> = program.functions.iter().filter(|f| include(f.is_pub)).collect();
     if !funcs.is_empty() {
-        out.push_str("## Funciones\n\n");
+        out.push_str("## Functions\n\n");
         for f in funcs {
             out.push_str(&format!("### `{}`\n\n", sig_function(f)));
             emit_doc(&mut out, &lines, f.line);
@@ -324,10 +449,10 @@ fn privada() -> int { 0 }
         assert!(!md.contains("privada"));
         // M326 (findings #101): las constantes públicas también, con su valor literal.
         let md3 = generate("/// Retries.\npub const MAX_RETRIES: int = 3;\npub const NAMES: [string] = [\"a\"];\nconst HIDDEN: int = 1;\npub fn f() -> int { MAX_RETRIES }\n", "cfg.ray").unwrap();
-        assert!(md3.contains("## Constantes\n\n### `const MAX_RETRIES: int = 3`\n\nRetries.\n\n### `const NAMES: [string]`"), "{md3}");
+        assert!(md3.contains("## Constants\n\n### `const MAX_RETRIES: int = 3`\n\nRetries.\n\n### `const NAMES: [string]`"), "{md3}");
         assert!(!md3.contains("HIDDEN"), "{md3}");
-        let pos_c = md3.find("## Constantes").unwrap();
-        assert!(pos_c < md3.find("## Funciones").unwrap(), "las constantes van antes que las funciones");
+        let pos_c = md3.find("## Constants").unwrap();
+        assert!(pos_c < md3.find("## Functions").unwrap(), "las constantes van antes que las funciones");
     }
 
     #[test]

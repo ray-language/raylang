@@ -22040,3 +22040,50 @@ paralelas (dígitos, tamaño de chunk, validación de valores) que pedirían un 
 **Lo que no cubre.** `examples/web/webserver.ray` y `examples/web/http.ray` son copias antiguas
 que algunos tests todavía usan; no reciben estos arreglos. HTTP/2 y gRPC tienen su propio
 encuadre y sus propios tests.
+
+## 477. Las cápsulas como frontera de verdad (rayhotel #481–#490, nov 2026)
+
+**De dónde sale.** rayhotel es la primera app que usa las cápsulas (M11.6) para lo que prometen:
+un monolito modular donde lo interno de un módulo no se alcanza desde fuera. Encontró que la
+frontera solo se comprobaba en una puerta — el `import` por nombre — y que ninguna herramienta
+sabía qué era una fachada.
+
+**La frontera.**
+
+- *UFCS (#481).* El paso 5 de la resolución de `recv.f()` (M206) mira «el módulo que declara el
+  tipo»: desde fuera alcanzaba cualquier `pub fn` del módulo interno, y no las que la fachada
+  declara sobre ese tipo. Lo interno quedaba accesible y el contrato no. El loader deja ahora en
+  el `Program` la superficie de valores de cada fachada (`capsule_surfaces`) y el checker, si el
+  sitio está fuera de la cápsula del tipo — la más externa que lo contiene y no contiene al sitio
+  —, resuelve contra ella. `pub` en un módulo interno pasa a significar lo que ya significaba
+  para un `import`: público dentro de la cápsula.
+- *La ruta (#482).* `capsule_violated` razona sobre el NOMBRE del import. Pero un archivo tiene
+  más de un nombre: el directorio del proyecto también es una raíz, así que `src/shop/model`
+  resolvía, sin que existiera ninguna cápsula llamada `src/shop`. Hay una segunda comprobación
+  sobre la ruta canónica del archivo resuelto.
+
+**La identidad de la entrada (#483, #488, y el LSP).** La raíz de todo era una sola: un archivo
+comprobado como ENTRADA se identificaba por su *stem* (`mod`, `model`) con su directorio por raíz.
+La fachada quedaba fuera de su propia cápsula, y `ray check` de un paquete-librería — que
+comprueba sus módulos de uno en uno — no podía pasar. `capsule_entry_identity` le da la identidad
+que tendría importado: su ruta relativa a `src/`, o en una librería su ruta con el nombre del
+paquete delante. Solo aplica a un archivo que vive dentro de una cápsula (ahí los imports ya son
+por ruta completa); una entrada cualquiera conserva su directorio como raíz, porque un script con
+imports relativos a sí mismo seguiría esperándolo. El LSP ya tenía esto para proyectos con
+`main.ray`; lo hereda para librerías.
+
+**Clave ≠ nombre (#490).** Dentro de un paquete sus módulos se importan por el `[package] name`;
+el consumidor lo conoce por la clave de `[dependencies]`. Registrar el nombre como segunda clave
+habría dado dos identidades al mismo módulo — y dos cápsulas distintas a ojos de la regla por
+nombre —, así que el loader TRADUCE: al cargar un módulo de ese paquete, sus imports por nombre
+pasan a la clave. Una identidad por módulo.
+
+**Documentar el contrato (#485, #484).** `ray doc` de una fachada salía vacío: el contrato de una
+cápsula es casi todo `pub from`, que el generador ignoraba. Ahora sigue cada reexport hasta su
+definición (con tope de saltos) y muestra firma y `///`. La resolución es deliberadamente simple
+— archivos hacia arriba hasta el `ray.toml` —: es para documentar, no para compilar.
+
+**Fuera de esta ronda.** Tipos opacos (#486) y los avisos sobre una fachada que muestra tipos que
+no exporta (#487) son decisiones de lenguaje: IDEAS §132. Un método de un trait interno no
+reexportado todavía se puede llamar desde fuera (va por el paso 3, no por el 5). El checker
+auto-alojado no conoce `capsule_surfaces`.

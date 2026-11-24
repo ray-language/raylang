@@ -4931,3 +4931,27 @@ Escribir el host en raylang habría pedido las cuatro primeras filas de la tabla
 editor, sobre punteros crudos. Si varias apps acabaran necesitando lo mismo, lo que se evaluaría es
 un subsistema del runtime (`std/plugin`), no más FFI.
 
+## 132. Cápsulas: tipos opacos y fachadas que muestran lo que no exportan (rayhotel #486, #487)
+
+Clasificación: **cambio de lenguaje, aditivo**. Pendiente de decisión.
+
+**#486 — tipos opacos.** Un struct que una cápsula exporta se construye y se modifica desde
+fuera (`guests.Guest { id: -1, … }`, `b.nightly_cents = 0`): la cápsula no puede sostener un
+invariante de sus valores. Hoy el rodeo es devolver un `dyn Trait`, que no lleva `==` ni
+`ToJson` ni cruza a otra fibra en nativo. Opciones:
+
+| Opción | Qué da | Coste |
+|---|---|---|
+| `pub opaque struct T` | Fuera del módulo: se nombra y se pasa; no se construye, no se desestructura, no se accede a campos | Una palabra contextual; el checker ya sabe en qué módulo está cada sitio (bandas) |
+| `pub from x import opaque T;` | Lo mismo, decidido por la fachada y no por el tipo | El tipo es transparente dentro de la cápsula y opaco fuera: encaja con que `pub` ya significa «dentro de la cápsula» |
+| Visibilidad por campo (`pub x: int`) | Granular | Cambia el significado de todos los structs existentes, o exige una edición |
+
+Recomendación: la segunda. Es la fachada quien define el contrato (DESIGN §477), no rompe nada y
+no toca los structs de fuera de las cápsulas.
+
+**#487 — fachadas que muestran tipos que no exportan.** `pub fn raw() -> core.Account` sin
+exportar `Account` compila; el llamante recibe un valor cuyo tipo no puede nombrar. Y
+`pub type Invoice = model.Invoice;` sirve en firmas pero no construye ni casa patrones, sin que
+el error sugiera `pub from`. Propuesta: (1) aviso del checker «`pub fn raw` shows
+`core.Account`, which the capsule does not export»; (2) el error de construir o casar por un
+alias de fachada dice «re-export it with `pub from …`».

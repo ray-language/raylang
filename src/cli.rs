@@ -5450,6 +5450,14 @@ fn test_suites_and_roots(explicit: &[String]) -> (Vec<PathBuf>, crate::loader::D
             suites.push(PathBuf::from(&entry));
             let root = load_manifest().map(|m| m.root).unwrap_or_else(|| PathBuf::from("."));
             suites.extend(discover_test_files(&root.join("tests")));
+            // rayhotel #488: los `*_test.ray` de DENTRO de `src/` — las pruebas de caja blanca de
+            // una cápsula viven junto a lo interno, que es lo único que pueden ver desde ahí, y
+            // nadie los importa (antes no se descubrían: «no tests (@test) in the project»).
+            suites.extend(
+                discover_test_files(&root.join("src"))
+                    .into_iter()
+                    .filter(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with("_test.ray"))),
+            );
         }
     } else {
         for f in explicit {
@@ -6700,11 +6708,9 @@ fn cmd_doc(args: &[String]) {
         println!("{text}");
         return;
     }
-    let title = std::path::Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(path);
-    match crate::raydoc::generate(&read_source(path), title) {
+    // rayhotel #485: por ARCHIVO — una fachada (`dir/mod.ray`) documenta también lo que
+    // re-exporta con `pub from`, y se titula con el nombre de su cápsula.
+    match crate::raydoc::generate_file(std::path::Path::new(path)) {
         Ok(md) => print!("{md}"),
         Err(e) => {
             eprintln!("documentation error: {e}");

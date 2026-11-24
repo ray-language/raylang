@@ -3346,6 +3346,14 @@ función C. La VM carga la biblioteca al ejecutar (acepta `"z"`, `"libz"`, `"lib
 el binario nativo la **enlaza al compilar** con `-l<nombre>`, así que necesita los archivos de
 desarrollo de la biblioteca en la máquina que compila.
 
+**Una biblioteca tuya.** Lo que la FFI no cubre (un callback que C guarda y llama más tarde, un
+struct por valor, una función variádica) se envuelve en una biblioteca puente en C, compilada en
+el proyecto, con una API plana. `[native] link_dirs = ["out"]` en `ray.toml` dice dónde queda:
+`ray run` la carga de ahí y `ray build --native` enlaza contra ella, sin variables de entorno. Para
+distribuir en macOS, `[app.macos] frameworks = ["out/libpuente.dylib"]` hace que `ray bundle` la
+copie a `Contents/Frameworks` antes de firmar; compílala con `-install_name
+@rpath/libpuente.dylib`.
+
 **Pila**: en el binario nativo con fibras, tu llamada C corre sobre la pila de la fibra. Con externs
 declaradas, el default sube solo a **1 MiB** por fibra (de los 128 KiB habituales; reserva virtual,
 solo cuestan las páginas que se tocan). Si una C-lib necesita aún más, `RAY_FIBER_STACK_KIB=4096`

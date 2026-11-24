@@ -651,7 +651,25 @@ what the linker expects (`"libz.1.dylib"` → `z`; a path loses its directory). 
 work on every platform (zlib is `libz` on macOS/Linux and `zlib1.dll` on Windows): pick it **per
 platform** after the general name — `extern "z" windows "zlib1" { … }` (the words `windows macos
 linux android ios freebsd`, those of `platform()`; the running system uses its own name, the general
-one without an entry; natively each becomes a `#[cfg_attr(target_os = …, link(name = …))]`). **Is the
+one without an entry; natively each becomes a `#[cfg_attr(target_os = …, link(name = …))]`).
+
+**A library of your own project** (a C bridge built next to the app: what the FFI does not cover —
+retained callbacks, structs by value, variadics — is wrapped there). `ray.toml` says where it is:
+
+```toml
+[native]
+link_dirs = ["out"]                        # folders holding libbridge.dylib / .so / .dll
+
+[app.macos]
+frameworks = ["out/libbridge.dylib"]       # ray bundle copies it to Contents/Frameworks
+```
+
+With `link_dirs`, `ray run` loads it from there (no `DYLD_LIBRARY_PATH`/`LD_LIBRARY_PATH`) and `ray
+build --native` links against it (no `LIBRARY_PATH`). The development binary finds it where it was
+built; a `--release` one carries no paths of the machine. On macOS, with `frameworks`, `ray bundle`
+copies it to `Contents/Frameworks` before signing (the signature and the notary cover it) and the
+binary looks there through `@rpath`: build the library with `-install_name @rpath/libbridge.dylib`.
+**Is the
 library there?** `ffi.library_available("z") -> bool` (`import std/ffi;`) looks it up with the same
 file names without calling anything: the way to make a C dependency optional. A missing library that
 is called anyway fails on the VM with `library 'x' not found (tried libx.dylib, x.dylib, x); symbol
@@ -873,4 +891,4 @@ orientations) **replaces** it; the rest are added.
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:34c72ad414c7 -->
+<!-- sync: sha256:97b28159b729 -->

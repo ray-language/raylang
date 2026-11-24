@@ -647,7 +647,26 @@ una ruta pierde el directorio). El mismo nombre no vale en todas las plataformas
 macOS/Linux y `zlib1.dll` en Windows): se elige **por plataforma** tras el nombre general —
 `extern "z" windows "zlib1" { … }` (palabras `windows macos linux android ios freebsd`, las de
 `platform()`; el sistema en curso usa su nombre, sin entrada el general; en el nativo cada una es un
-`#[cfg_attr(target_os = …, link(name = …))]`). **¿Está la biblioteca?** `ffi.library_available("z")
+`#[cfg_attr(target_os = …, link(name = …))]`).
+
+**Una biblioteca propia del proyecto** (un puente en C compilado junto a la app: lo que la FFI no
+cubre — callbacks retenidos, structs por valor, variádicas — se envuelve ahí). `ray.toml` dice
+dónde está:
+
+```toml
+[native]
+link_dirs = ["out"]                        # carpetas con libpuente.dylib / .so / .dll
+
+[app.macos]
+frameworks = ["out/libpuente.dylib"]       # ray bundle la copia a Contents/Frameworks
+```
+
+Con `link_dirs`, `ray run` la carga de ahí (sin `DYLD_LIBRARY_PATH`/`LD_LIBRARY_PATH`) y `ray build
+--native` enlaza contra ella (sin `LIBRARY_PATH`). El binario de desarrollo la encuentra donde se
+compiló; el de `--release` no lleva rutas de la máquina. En macOS, con `frameworks`, `ray bundle`
+la copia a `Contents/Frameworks` antes de firmar (la firma y la notaría la cubren) y el binario
+busca ahí por `@rpath`: compila la biblioteca con `-install_name @rpath/libpuente.dylib`.
+**¿Está la biblioteca?** `ffi.library_available("z")
 -> bool` (`import std/ffi;`) la busca con los mismos nombres de archivo, sin llamar a nada: la forma de
 hacer opcional una dependencia C. Una biblioteca ausente que sí se llama da en la VM `library 'x' not
 found (tried libx.dylib, x.dylib, x); symbol 'f' is not in the process either` (antes solo hablaba

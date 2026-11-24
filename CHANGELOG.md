@@ -11,6 +11,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   supported» aunque la VM lo ejecuta y la documentación lo anuncia. Ahora compila: en el
   escrutinio, anidado en un `Option`, con sub-patrones y con guarda. Un `dyn Trait` capturado
   por `spawn` sigue sin cruzar hilos en nativo; `llms.txt` lo lista ahora entre los límites.
+- **FFI — una biblioteca C propia del proyecto se enlaza y se empaqueta** (ray-daw #478). El
+  puente en C es la salida para lo que la FFI no cubre, pero un build nativo solo lo encontraba
+  con un `LIBRARY_PATH` sin documentar y `ray bundle` dejaba el `.app` sin la biblioteca.
+  - `[native] link_dirs = ["out"]`: `ray run` la carga de ahí y `ray build --native` enlaza
+    contra ella. El binario de desarrollo la encuentra donde se compiló; el de `--release` no
+    lleva rutas de la máquina.
+  - `[app.macos] frameworks = ["out/libpuente.dylib"]`: `ray bundle` la copia a
+    `Contents/Frameworks` antes de firmar, y el binario la busca ahí por `@rpath`.
 
 - **Paquete `db` 0.11.0 — `db/sqlite` espera un candado sin retener el hilo** (rayhotel #491, sin
   publicar en el índice todavía). Con varios escritores a la vez, el que esperaba el candado lo

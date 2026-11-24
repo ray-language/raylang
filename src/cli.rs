@@ -2992,7 +2992,8 @@ fn cmd_bundle(args: &[String]) {
         let signing = signing_config(manifest.as_ref(), sign_arg, notary_arg, entitlements_arg);
         let opens: Vec<String> = manifest.as_ref().map(|m| m.app_opens.clone()).unwrap_or_default();
         warn_unknown_open_types(&opens);
-        bundle_macos(&out_dir, &name, &display, &version, &bundle_id, icon_macos.as_deref().or(icon.as_deref()), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &extra, &opens, &tmp_bin, &signing);
+        let frameworks: Vec<PathBuf> = manifest.as_ref().map(|m| m.app_macos_frameworks.iter().map(|f| m.root.join(f)).collect()).unwrap_or_default();
+        bundle_macos(&out_dir, &name, &display, &version, &bundle_id, icon_macos.as_deref().or(icon.as_deref()), manifest.as_ref().and_then(|m| m.app_copyright.as_deref()), &extra, &opens, &tmp_bin, &signing, &frameworks);
     } else if cfg!(unix) {
         let opens: Vec<String> = manifest.as_ref().map(|m| m.app_opens.clone()).unwrap_or_default();
         warn_unknown_open_types(&opens);
@@ -3371,7 +3372,7 @@ fn sign_and_notarize_macos(app: &Path, signing: &Signing) {
     }
 }
 
-fn bundle_macos(out_dir: &Path, name: &str, display: &str, version: &str, bundle_id: &str, icon: Option<&str>, copyright: Option<&str>, extra: &[(String, crate::manifest::PlistValue)], opens: &[String], bin: &Path, signing: &Signing) {
+fn bundle_macos(out_dir: &Path, name: &str, display: &str, version: &str, bundle_id: &str, icon: Option<&str>, copyright: Option<&str>, extra: &[(String, crate::manifest::PlistValue)], opens: &[String], bin: &Path, signing: &Signing, frameworks: &[PathBuf]) {
     // ray-sublime #454: la carpeta lleva el nombre VISIBLE: Finder, el Dock y Launchpad muestran
     // el nombre del `.app`, no `CFBundleDisplayName`. El ejecutable y el id siguen con `name`.
     let app = out_dir.join(format!("{display}.app"));
@@ -3386,6 +3387,22 @@ fn bundle_macos(out_dir: &Path, name: &str, display: &str, version: &str, bundle
     if let Err(e) = fs::copy(bin, &exe) {
         eprintln!("bundle: could not place the binary: {e}");
         process::exit(74);
+    }
+    // ray-daw #478: las librerías dinámicas del proyecto (`[app.macos] frameworks`) van a
+    // `Contents/Frameworks`, ANTES de firmar: la firma del `.app` las cubre y la notaría las ve.
+    if !frameworks.is_empty() {
+        let dest = app.join("Contents/Frameworks");
+        if let Err(e) = fs::create_dir_all(&dest) {
+            eprintln!("bundle: could not create '{}': {e}", dest.display());
+            process::exit(74);
+        }
+        for lib in frameworks {
+            let Some(file_name) = lib.file_name() else { continue };
+            if let Err(e) = fs::copy(lib, dest.join(file_name)) {
+                eprintln!("bundle: could not copy the library '{}' ([app.macos] frameworks): {e}", lib.display());
+                process::exit(74);
+            }
+        }
     }
     let mut icon_key = String::new();
     if let Some(icon) = icon {
@@ -4916,6 +4933,18 @@ fn cmd_dev_lib(args: &[String]) {
     println!("ok: development library for {target} → {out}");
 }
 
+/// ray-daw #478: las carpetas `[native] link_dirs` del proyecto, absolutas (las que existen).
+fn native_link_dirs() -> Vec<PathBuf> {
+    load_manifest().map(|m| m.native_link_dirs.iter().map(|d| m.root.join(d)).filter(|d| d.is_dir()).collect()).unwrap_or_default()
+}
+
+/// ray-daw #478: con `[app.macos] frameworks`, el binario de macOS busca también en
+/// `Contents/Frameworks` del `.app` (`@rpath/libx.dylib` como install name de la librería).
+fn native_needs_frameworks_rpath(target: Option<&str>) -> bool {
+    let for_macos = target.map_or(cfg!(target_os = "macos"), |t| t.contains("apple-darwin"));
+    for_macos && load_manifest().is_some_and(|m| !m.app_macos_frameworks.is_empty())
+}
+
 fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool, target: Option<&str>) {
     // El `.rs` temporal incluye el PID para que dos `ray build --native` CONCURRENTES (o con el mismo stem)
     // no colisionen sobre el mismo temporal.
@@ -4945,6 +4974,18 @@ fn build_native_rustc(rust: &str, stem: &str, out_bin: &str, release: bool, targ
     // pelado caía a la 2015 → los dos caminos compilaban el MISMO Rust generado bajo reglas distintas
     // (p. ej. `gen` es keyword solo en 2024: un identificador podía pasar por un tier y romper por el otro).
     cmd.arg("--edition").arg("2024");
+    // ray-daw #478: las carpetas `[native] link_dirs` del proyecto, para el `-l<lib>` de un extern.
+    for dir in native_link_dirs() {
+        // Sin `--release`, también como rpath: el binario de desarrollo encuentra la librería
+        // donde se compiló. Un build de release no lleva rutas de esta máquina.
+        if !release && cfg!(unix) {
+            cmd.arg("-C").arg(format!("link-arg=-Wl,-rpath,{}", dir.display()));
+        }
+        cmd.arg("-L").arg(dir);
+    }
+    if native_needs_frameworks_rpath(target) {
+        cmd.arg("-C").arg("link-arg=-Wl,-rpath,@executable_path/../Frameworks");
+    }
     if let Some(t) = target {
         cmd.arg("--target").arg(t);
     }
@@ -5239,11 +5280,25 @@ fn build_native_cargo(rust: &str, rt_features: &[&str], src_path: &str, stem: &s
     if let Some(c) = native_cpu() {
         extra_rustflags.push_str(&format!(" -C target-cpu={c}"));
     }
-    if release {
-        cmd.arg("--release").env("RUSTFLAGS", format!("-A warnings{extra_rustflags}"));
-    } else {
-        cmd.env("RUSTFLAGS", format!("-A warnings{extra_rustflags}"));
+    // ray-daw #478: `[native] link_dirs` y el rpath de `Contents/Frameworks`. Con
+    // CARGO_ENCODED_RUSTFLAGS (separador 0x1f) una ruta con espacios llega entera a rustc.
+    let mut flags: Vec<String> = format!("-A warnings{extra_rustflags}").split_whitespace().map(str::to_string).collect();
+    for dir in native_link_dirs() {
+        if !release && cfg!(unix) {
+            flags.push("-C".to_string());
+            flags.push(format!("link-arg=-Wl,-rpath,{}", dir.display()));
+        }
+        flags.push("-L".to_string());
+        flags.push(format!("native={}", dir.display()));
     }
+    if native_needs_frameworks_rpath(target) {
+        flags.push("-C".to_string());
+        flags.push("link-arg=-Wl,-rpath,@executable_path/../Frameworks".to_string());
+    }
+    if release {
+        cmd.arg("--release");
+    }
+    cmd.env_remove("RUSTFLAGS").env("CARGO_ENCODED_RUSTFLAGS", flags.join("\u{1f}"));
     // M184: si el build necesita clang y está instalado fuera del PATH, se lo damos al hijo en vez
     // de rendirnos (`cc` lo busca por PATH; rustc localiza `link.exe` igual de solo).
     if let Some(bin) = crate::toolchain::augment_build_path(&mut cmd, needs_clang) {

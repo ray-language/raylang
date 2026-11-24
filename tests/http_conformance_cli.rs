@@ -291,6 +291,11 @@ fn server_cases() -> Vec<Case> {
             "POST /1 HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r\n0\r\n\r\nGET /2 HTTP/1.1\r\nHost: h\r\n\r\n",
             Ok(&["<POST /1 q= b=abc", "<GET /2 q= b= "]),
         ),
+        case(
+            "crlf_after_a_body_before_the_next_request",
+            "POST /1 HTTP/1.1\r\nHost: h\r\nContent-Length: 3\r\n\r\nabc\r\nGET /2 HTTP/1.1\r\nHost: h\r\n\r\n",
+            Ok(&["<POST /1 q= b=abc", "<GET /2 q= b= "]),
+        ),
         case("header_names_are_case_insensitive_and_values_trimmed", "GET / HTTP/1.1\r\nhOsT: h\r\nX-TEST:   padded value \t\r\n\r\n", Ok(&["x=padded value>"])),
         case("empty_header_value", "GET / HTTP/1.1\r\nHost: h\r\nX-Test:\r\n\r\n", Ok(&["x=>"])),
         case("absolute_form_target", "GET http://example.test/abs?k=v HTTP/1.1\r\nHost: example.test\r\n\r\n", Ok(&["q=k=v"])),
@@ -335,6 +340,9 @@ fn server_cases() -> Vec<Case> {
             Reject,
         ),
         case("transfer_encoding_in_http_1_0", "POST /p HTTP/1.0\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n0\r\n\r\n", RejectOrChunkedThenClose("b=ok")),
+        case("transfer_encoding_with_a_vertical_tab", "POST /p HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: \x0bchunked\r\n\r\n2\r\nok\r\n0\r\n\r\n", Reject),
+        case("transfer_encoding_with_a_trailing_cr", "POST /p HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\r\n\r\n2\r\nok\r\n0\r\n\r\n", Reject),
+        case("content_length_with_a_form_feed", "POST /p HTTP/1.1\r\nHost: h\r\nContent-Length: \x0c2\r\n\r\nok", Reject),
         // ---- Chunks mal formados ----
         case("chunk_size_17_hex_digits", "POST /p HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\n10000000000000005\r\nhello\r\n0\r\n\r\n", Reject),
         case("chunk_size_not_hex", "POST /p HTTP/1.1\r\nHost: h\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nhello\r\n0\r\n\r\n", Reject),
@@ -355,9 +363,7 @@ fn server_cases() -> Vec<Case> {
         case("header_name_with_a_control_character", "GET / HTTP/1.1\r\nHost: h\r\nX-\x01Test: v\r\n\r\n", Reject),
         case("nul_in_header_value", "GET / HTTP/1.1\r\nHost: h\r\nX-Test: a\0b\r\n\r\n", Reject),
         case("bare_cr_in_header_value", "GET / HTTP/1.1\r\nHost: h\r\nX-Test: a\rb\r\n\r\n", Reject),
-        // RFC 9112 §3.2 manda 400 sin `Host` en HTTP/1.1; este servidor la sirve (DECISIÓN
-        // pendiente: exigirlo rompe a los clientes crudos que no lo mandan).
-        case("missing_host_in_http_1_1", "GET /nohost HTTP/1.1\r\n\r\n", RejectOrOk("<GET /nohost ")),
+        case("missing_host_in_http_1_1", "GET /nohost HTTP/1.1\r\n\r\n", Reject),
         case("two_host_headers", "GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n", Reject),
         // ---- Línea de petición mal formada ----
         case("request_line_without_version", "GET /\r\nHost: h\r\n\r\n", Reject),
@@ -436,6 +442,23 @@ fn the_webserver_never_writes_a_line_break_inside_a_response_header() {
 /// conexión reutilizable e imprime lo que entendió de cada una.
 const CLIENT: &str = r#"import net/http;
 
+// El tercer lector del cliente: cabeza ya, cuerpo a trozos.
+fn streamed(url: string) -> string {
+    let s = match (http.stream("GET", url, b"", Map.new())) {
+        Result.Ok(st) => st,
+        Result.Err(_e) => { return "err"; },
+    };
+    var parts: [bytes] = [];
+    while (true) {
+        match (http.stream_read(s)) {
+            Result.Ok(Option.Some(piece)) => { parts.push(piece); },
+            Result.Ok(Option.None) => { break; },
+            Result.Err(_e) => { return "err"; },
+        }
+    }
+    "ok ${s.status} [${from_utf8(bytes_concat(parts)).unwrap_or("?")}]"
+}
+
 fn main() -> int {
     let port = env("PORT").unwrap_or("0");
     let plan = env("PLAN").unwrap_or("GET /");
@@ -448,6 +471,10 @@ fn main() -> int {
     };
     for step in plan.split(";") {
         let parts = step.split(" ");
+        if (parts[0] == "STREAM") {
+            print(streamed("http://127.0.0.1:${port}${parts[1]}"));
+            continue;
+        }
         match (http.conn_request(conn, parts[0], parts[1], "", Map.new())) {
             Result.Ok(r) => print("ok ${r.status} [${http.body_text(r).unwrap_or("?")}]"),
             Result.Err(_e) => print("err"),
@@ -584,6 +611,21 @@ fn the_http_client_frames_responses_as_rfc_9112_says() {
             close_after: false,
             want: &["ok 200 [one]", "ok 200 [two]"],
         },
+        ClientCase { name: "transfer_encoding_with_a_vertical_tab_is_refused", plan: "GET /", replies: vec!["HTTP/1.1 200 OK\r\nTransfer-Encoding: \x0bchunked\r\n\r\n2\r\nok\r\n0\r\n\r\n"], close_after: true, want: &["err"] },
+        ClientCase { name: "content_length_with_a_form_feed_is_refused", plan: "GET /", replies: vec!["HTTP/1.1 200 OK\r\nContent-Length: 2\x0c\r\n\r\nok"], close_after: true, want: &["err"] },
+        ClientCase { name: "chunk_size_followed_by_a_space", plan: "GET /", replies: vec!["HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5 \r\nhello\r\n1 ;e\r\n!\r\n0\r\n\r\n"], close_after: false, want: &["ok 200 [hello!]"] },
+        ClientCase { name: "stream_content_length_body", plan: "STREAM /", replies: vec!["HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"], close_after: true, want: &["ok 200 [hello]"] },
+        ClientCase { name: "stream_chunked_body", plan: "STREAM /", replies: vec!["HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n1 \r\n!\r\n0\r\n\r\n"], close_after: true, want: &["ok 200 [hello!]"] },
+        ClientCase {
+            name: "stream_interim_100_is_skipped",
+            plan: "STREAM /",
+            replies: vec!["HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"],
+            close_after: true,
+            want: &["ok 200 [ok]"],
+        },
+        ClientCase { name: "stream_chunk_size_not_hex_is_refused", plan: "STREAM /", replies: vec!["HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\nhello\r\n0\r\n\r\n"], close_after: true, want: &["err"] },
+        ClientCase { name: "stream_unknown_transfer_encoding_is_refused", plan: "STREAM /", replies: vec!["HTTP/1.1 200 OK\r\nTransfer-Encoding: xchunked\r\n\r\n2\r\nok\r\n0\r\n\r\n"], close_after: true, want: &["err"] },
+        ClientCase { name: "stream_negative_content_length_is_refused", plan: "STREAM /", replies: vec!["HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\n"], close_after: true, want: &["err"] },
         ClientCase { name: "folded_header_is_not_a_new_header", plan: "GET /", replies: vec!["HTTP/1.1 200 OK\r\nX-A: 1\r\n Content-Length: 99\r\nContent-Length: 2\r\n\r\nok"], close_after: true, want: &["ok 200 [ok]|err"] },
     ];
     let failures: Vec<String> = std::thread::scope(|s| {

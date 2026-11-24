@@ -28,14 +28,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   - El servidor (`net/webserver`) responde 400 y cierra ante lo que antes servía: un
     `Transfer-Encoding` que no es exactamente `chunked` (`xchunked`, `chunked, gzip`, repetido —
     bastaba con que contuviera «chunked»), más de un `Host`, una cabecera sin `:`, un valor con
-    NUL o CR, y una línea de petición que no es `método SP destino SP versión`. **Cambia**: una
-    petición `GET /` sin versión ya no se acepta.
+    NUL, CR u otro control (también pegado a un extremo: `Transfer-Encoding: \\x0bchunked`), y
+    una línea de petición que no es `método SP destino SP versión`. **Cambia**: una petición
+    `GET /` sin versión ya no se acepta, y una petición HTTP/1.1 **sin `Host`** tampoco (400).
   - El servidor acepta lo que antes rechazaba o perdía: los trailers tras el último chunk, y una
-    petición con `Content-Length` seguida de otra en la misma escritura (la segunda se perdía).
+    petición con `Content-Length` seguida de otra en la misma escritura (la segunda se perdía), también con un CRLF de más entre las dos.
   - El cliente (`net/http`) da `Err` ante un `Content-Length` que no son dígitos o que se repite
     con valores distintos, un `Transfer-Encoding` que no es `chunked` y una línea de estado mal
     formada. Un tamaño de chunk de 17 dígitos hexadecimales abortaba el programa; ahora es un
-    `Err`. Un `100 Continue` ya no se devuelve como la respuesta.
+    `Err`. Un `100 Continue` ya no se devuelve como la respuesta, tampoco en `http.stream`.
 
 ## 1.27.112 — 2026-11-22
 

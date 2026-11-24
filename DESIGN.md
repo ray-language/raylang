@@ -22019,10 +22019,23 @@ que el handler no la vea.
   `Result` recogía. Quince dígitos como máximo.
 - *`100 Continue`* salía como la respuesta de la petición. Las interinas se saltan (salvo 101).
 
-**Decisión que queda abierta.** La RFC manda 400 a una petición HTTP/1.1 sin `Host`. El servidor
-la sigue sirviendo: exigirlo rompe a los clientes crudos que no lo mandan (incluidos muchos tests
-propios), y no es un vector de *smuggling* — el duplicado sí, y ese se rechaza. La fila está en la
-tabla como «rechazar o servir», con la nota.
+**`Host` obligatorio.** La RFC manda 400 a una petición HTTP/1.1 sin `Host`. La primera versión
+la dejó sirviéndose por si rompía a clientes crudos; el usuario decidió exigirlo (24 nov) y las
+100 suites que hablan HTTP siguieron en verde. HTTP/1.0 no lo exige.
+
+**Revisión previa a publicar.** Diez observaciones. Las de fondo: los valores de cabecera se
+recortaban con `trim()` ANTES de validarse, y `trim()` quita también VT, FF y CR, de modo que
+`Transfer-Encoding: \\x0bchunked` quedaba en `chunked` y pasaba — la ofuscación de TE que la tabla
+quería cerrar; ahora se valida el valor crudo y solo se recorta SP y HTAB (`trim_ows`), en servidor
+y cliente. El lector de streaming no saltaba las `1xx`. Al sobrevivir `rest`, un CRLF de más tras
+un cuerpo llegaba a la petición siguiente y daba 400: las líneas vacías antes de la línea de
+petición se ignoran (RFC 9112 §2.2). Un cierre tras un `100 Continue` se tomaba por la carrera del
+keep-alive y reintentaba un POST. El tamaño de chunk estricto rompía a los servidores que lo
+rellenan con espacios (`5 \\r\\n`): se tolera. En el nativo (§475): el valor inicial de un `fold`
+rápido se evaluaba con el arreglo prestado, los argumentos de una llamada a una expresión iban
+sin el tipo del parámetro, y una función global con nombre perdía el camino rápido de
+`map`/`filter`/`fold`. Queda sin hacer: cliente y servidor tienen primitivas de encuadre
+paralelas (dígitos, tamaño de chunk, validación de valores) que pedirían un módulo hoja común.
 
 **Lo que no cubre.** `examples/web/webserver.ray` y `examples/web/http.ray` son copias antiguas
 que algunos tests todavía usan; no reciben estos arreglos. HTTP/2 y gRPC tienen su propio

@@ -13,7 +13,8 @@ use super::*;
 const PROCESS_EXCLUDED: &str = "process: not available in this build (the process subsystem is excluded; it always is on iOS and Android)";
 
 impl Transpiler {
-    /// ¿`e` es una función anónima de ARITMÉTICA ESCALAR pura? Parámetros escalares y un cuerpo
+    /// ¿`e` es una función que NO puede tocar ningún arreglo? O una global con nombre y parámetros
+    /// escalares, o una función anónima de ARITMÉTICA ESCALAR pura: parámetros escalares y un cuerpo
     /// de una sola expresión hecha de literales, variables escalares, operadores, casts e `if`
     /// con valor: sin llamadas, sin asignaciones, sin índices ni campos. Un closure así NO puede
     /// tocar ningún arreglo, así que `map`/`filter`/`fold` pueden recorrer el receptor con su
@@ -37,6 +38,12 @@ impl Transpiler {
                 ExprKind::Block(b) => block_ok(t, f, b),
                 _ => false,
             }
+        }
+        // Una función GLOBAL con nombre y parámetros escalares tampoco puede alcanzar el arreglo:
+        // no recibe ninguna referencia y raylang no tiene estado global mutable.
+        if let ExprKind::Ident(n) = &e.kind {
+            return self.lookup(n).is_none()
+                && self.funcs.get(n).is_some_and(|sig| sig.tparams.is_empty() && sig.params.iter().all(|p| scalar(&normalize_type(p))));
         }
         let ExprKind::Func(f) = &e.kind else { return false };
         f.params.iter().all(|p| scalar(&p.ty)) && block_ok(self, f, &f.body)
@@ -1501,15 +1508,20 @@ impl Transpiler {
         // `make(d)(x)`): ni nombre ni método. El valor y los argumentos se izan a temporales, en
         // orden, como en una llamada de usuario (ningún guard vivo durante la llamada).
         if !matches!(callee.kind, ExprKind::Ident(_) | ExprKind::Field { .. }) {
-            if !matches!(self.type_of(callee).map(|t| normalize_type(&t)), Ok(Type::Fn(..))) {
+            let Ok(Type::Fn(param_tys, _)) = self.type_of(callee).map(|t| normalize_type(&t)) else {
                 return Err("call to an expression that is not a function value is not supported".into());
-            }
+            };
             self.expected_ty = None;
             out.push_str("{ let __rt_cl = ");
             self.emit_expr(out, callee)?;
             for (i, a) in args.iter().enumerate() {
                 write!(out, "; let __rt_c{i} = ").unwrap();
-                self.emit_expr(out, a)?;
+                // Con el tipo del parámetro, como en una llamada con nombre: un `[]` o un literal
+                // para un `u32` no se tipan solos.
+                match param_tys.get(i) {
+                    Some(pt) => self.emit_typed(out, a, pt)?,
+                    None => self.emit_expr(out, a)?,
+                }
             }
             out.push_str("; __rt_cl(");
             for i in 0..args.len() {
@@ -3011,13 +3023,15 @@ impl Transpiler {
                 out.push_str(".borrow().iter().cloned().filter(|__rt_x| __rt_f(__rt_x.clone())).collect::<Vec<_>>())) }");
             }
             "fold" if !name.contains('#') && self.is_scalar_pure_fn(eff[2]) => {
+                // El valor inicial va a un temporal ANTES de prestar el arreglo: es una expresión
+                // cualquiera (`xs.fold(grow(xs), …)`) y dentro del `.borrow()` chocaba.
                 out.push_str("{ let __rt_f = ");
                 self.emit_expr(out, eff[2])?;
+                out.push_str("; let __rt_z = ");
+                self.emit_expr(out, eff[1])?;
                 out.push_str("; ");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().iter().fold(");
-                self.emit_expr(out, eff[1])?;
-                out.push_str(", |__acc, __rt_x| __rt_f(__acc, __rt_x.clone())) }");
+                out.push_str(".borrow().iter().fold(__rt_z, |__acc, __rt_x| __rt_f(__acc, __rt_x.clone())) }");
             }
             "map" if !name.contains('#') => {
                 out.push_str("{ let __rt_f = ");

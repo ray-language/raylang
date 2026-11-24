@@ -89,7 +89,8 @@ fn main() -> int {
   (`xchunked`, `chunked, gzip`, repetido, o en HTTP/1.0) — antes bastaba con que contuviera
   «chunked». Además: los trailers tras el último chunk se leen y se descartan (antes eran un
   400), y una petición con `Content-Length` seguida de otra en la misma escritura ya no pierde la
-  segunda. Sigue sirviéndose una petición HTTP/1.1 sin `Host`.
+  segunda. Una petición HTTP/1.1 sin `Host` es un 400 (HTTP/1.0 no lo exige). Los valores de
+  cabecera se validan crudos y solo se les recorta SP y HTAB.
   El cliente (`net/http`, los tres lectores con una sola regla) da `Err` ante: un
   `Content-Length` que no son solo dígitos o que se repite con valores distintos; un
   `Transfer-Encoding` que no es `chunked`; un tamaño de chunk que no es hexadecimal o no cabe

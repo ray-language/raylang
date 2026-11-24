@@ -82,41 +82,54 @@ fn main() -> int {
     let rows = sqlite.query(setup, "SELECT count(*) FROM t", []).unwrap();
     print("rows: ${rows[0][0]}");
 
-    // 4. Un script que se topa con el candado a MITAD se reanuda donde iba: su primera sentencia
-    //    (sobre una tabla temporal, que no necesita el candado) no se aplica dos veces.
-    let scripted = open(path, 3000);
+    // 4. Un script cuya PRIMERA sentencia ya corrió y una posterior encuentra el candado: espera
+    //    dentro de la llamada y, vencido el plazo, lo dice. Nunca se repite desde el principio:
+    //    la primera sentencia (sobre una tabla temporal, que no necesita el candado) queda una vez.
+    let scripted = open(path, 200);
     let _ = sqlite.exec(scripted, "CREATE TEMP TABLE audit (n INTEGER)", []).unwrap();
     let lock = open(path, 0);
     let _ = sqlite.exec(lock, "BEGIN IMMEDIATE", []).unwrap();
-    let releaser = spawn_local(fn() -> int {
-        time.sleep(150);
-        let _ = sqlite.exec(lock, "COMMIT", []).unwrap();
-        0
-    });
-    match (sqlite.exec(scripted, "INSERT INTO audit VALUES (1); INSERT INTO t VALUES (999); INSERT INTO t VALUES (998);", [])) {
-        Result.Ok(n) => print("script: ok, rows ${n}"),
+    match (sqlite.exec(scripted, "INSERT INTO audit VALUES (1); INSERT INTO t VALUES (999);", [])) {
+        Result.Ok(_) => print("script: unexpected ok"),
         Result.Err(e) => print("script: ${e}"),
     }
-    let _ = join(releaser);
     let audited = sqlite.query(scripted, "SELECT count(*) FROM audit", []).unwrap();
     print("audit rows: ${audited[0][0]}");
-    // Sin que nadie suelte el candado, el plazo vence con el error de siempre.
-    let _ = sqlite.exec(lock, "BEGIN IMMEDIATE", []).unwrap();
-    sqlite.busy_timeout(scripted, 200);
-    match (sqlite.exec(scripted, "INSERT INTO audit VALUES (2); INSERT INTO t VALUES (997);", [])) {
-        Result.Ok(_) => print("script 2: unexpected ok"),
-        Result.Err(e) => print("script 2: ${e}"),
-    }
+    // La MISMA llamada otra vez es una ejecución nueva y completa (no «sigue» nada).
+    let _ = sqlite.exec(lock, "COMMIT", []).unwrap();
+    print("script again: ${sqlite.exec(scripted, "INSERT INTO audit VALUES (1); INSERT INTO t VALUES (999);", []).unwrap()}");
     let audited2 = sqlite.query(scripted, "SELECT count(*) FROM audit", []).unwrap();
     print("audit rows: ${audited2[0][0]}");
 
-    // 5. Un `PRAGMA busy_timeout` DENTRO de un script no devuelve la espera a SQLite.
+    // 5. `PRAGMA busy_timeout`, llegue por donde llegue, fija el plazo de la conexión y la espera
+    //    sigue siendo de la fibra: mientras una espera 300 ms, otra del mismo hilo avanza.
     let pragmas = open(path, 0);
-    //    El plazo que pide lo toma la conexión: aquí 0, así que falla en el acto.
-    let _ = sqlite.exec(pragmas, "PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 0;", []).unwrap();
+    let _ = sqlite.exec(pragmas, "PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 300;", []).unwrap();
+    print("script pragma: ${sqlite.query(pragmas, "PRAGMA busy_timeout", []).unwrap()[0][0]}");
+    let _ = sqlite.exec(lock, "BEGIN IMMEDIATE", []).unwrap();
+    var ticks = 0;
+    let ticker = spawn_local(fn() -> int {
+        var n = 0;
+        while (n < 10) {
+            time.sleep(20);
+            n = n + 1;
+        }
+        n
+    });
     let asked = time.monotonic();
-    print("after a script pragma: ${sqlite.exec(pragmas, "BEGIN IMMEDIATE", []).is_err()} fast=${time.monotonic() - asked < 1000}");
+    let refused = sqlite.exec(pragmas, "BEGIN IMMEDIATE", []).is_err();
+    let waited = time.monotonic() - asked;
+    ticks = join(ticker);
+    print("waited the script's timeout: ${refused} ${waited >= 250 && waited < 2000} ticks=${ticks}");
     let _ = sqlite.exec(lock, "COMMIT", []).unwrap();
+    // Por `query` también; y una COLUMNA con ese nombre no es el PRAGMA.
+    let _ = sqlite.query(pragmas, "PRAGMA busy_timeout = 700", []).unwrap();
+    print("query pragma: ${sqlite.query(pragmas, "PRAGMA busy_timeout", []).unwrap()[0][0]}");
+    let _ = sqlite.exec(pragmas, "CREATE TABLE settings (id INTEGER, busy_timeout INTEGER)", []).unwrap();
+    let _ = sqlite.exec(pragmas, "INSERT INTO settings VALUES (1, 9); UPDATE settings SET busy_timeout = 0 WHERE id = 1;", []).unwrap();
+    print("a column is not the pragma: ${sqlite.query(pragmas, "PRAGMA busy_timeout", []).unwrap()[0][0]}");
+    sqlite.busy_timeout(pragmas, 0);
+    print("busy_timeout(): ${sqlite.query(pragmas, "PRAGMA busy_timeout", []).unwrap()[0][0]}");
 
     // 6. Lo que esperar no arregla: una transacción que ya lee y quiere escribir mientras otra
     //    tiene el candado de escritura. Falla en el acto aunque el plazo sea de 5 s.
@@ -142,11 +155,15 @@ both done on time: true\n\
 writers ok: 20\n\
 writers on time: true\n\
 rows: 22\n\
-script: ok, rows 3\n\
+script: database is locked (after 1 statement(s) of the script had run; the rest did not run)\n\
 audit rows: 1\n\
-script 2: database is locked\n\
+script again: 2\n\
 audit rows: 2\n\
-after a script pragma: true fast=true\n\
+script pragma: 300\n\
+waited the script's timeout: true true ticks=10\n\
+query pragma: 700\n\
+a column is not the pragma: 700\n\
+busy_timeout(): 0\n\
 upgrade: not waited=true fast=true\n";
 
 fn project(name: &str) -> std::path::PathBuf {

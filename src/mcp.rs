@@ -802,7 +802,7 @@ fn reexport_lines(src: &str, file: &std::path::Path) -> Vec<String> {
             fn_signature(f)
         } else if let Some(s) = prog.structs.iter().find(|s| s.name == name) {
             // Opaco: sin campos (fuera de la cápsula no se construye ni se leen).
-            if item.opaque { format!("{}: use the functions the capsule exports", crate::raydoc::opaque_struct(s)) } else { struct_signature(s) }
+            if item.opaque { format!("{}: use the functions the capsule exports", crate::raydoc::opaque_struct(s, &item.visible)) } else { struct_signature(s) }
         } else if let Some(e) = prog.enums.iter().find(|e| e.name == name) {
             enum_signature(e)
         } else if let Some(t) = prog.traits.iter().find(|t| t.name == name) {
@@ -1005,9 +1005,12 @@ fn project_doc_text(symbol: &str, path: &str) -> Option<String> {
                 && let Some(def) = crate::lexer::lex(&item.source).ok().and_then(|t| crate::parser::parse(t).ok())
                 && let Some(s) = def.structs.iter().find(|s| s.name == item.original)
             {
+                // Su `///` es la única guía de un tipo cuyos campos no se ven: va con él.
+                let source_lines: Vec<&str> = item.source.lines().collect();
+                let doc = crate::raydoc::doc_lines_above(&source_lines, s.line).map(|d| format!("{}\n", d.join(" "))).unwrap_or_default();
                 return Some(format!(
-                    "{label}: {}\nIts fields are not part of the contract: outside the capsule it cannot be built, destructured or have its fields read; use the functions the capsule exports.\n(re-exported by {label} from {})",
-                    crate::raydoc::opaque_struct(s),
+                    "{label}: {}\n{doc}Its fields are not part of the contract: outside the capsule it cannot be built, destructured or have its fields read; use the functions the capsule exports.\n(re-exported by {label} from {})",
+                    crate::raydoc::opaque_struct(s, &item.visible),
                     item.module
                 ));
             }

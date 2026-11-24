@@ -44,10 +44,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   dentro de SQLite y dejaba parado al que lo tenía: 20 escrituras simultáneas podían dejar un
   servidor sin responder más de 20 s, en la VM y en nativo. Ahora la conexión reintenta
   aparcando la fibra, hasta su plazo (5 s por defecto; `sqlite.busy_timeout(c, ms)` o
-  `PRAGMA busy_timeout = N`, solo o dentro de un script). Las mismas 20 escrituras terminan en
+  `PRAGMA busy_timeout = N`, por `exec` o `query`, solo o dentro de un script). Las mismas 20 escrituras terminan en
   milisegundos. Lo que conviene saber:
-  - Un script de varias sentencias que se topa con el candado a mitad sigue, al reintentar,
-    desde la sentencia que falló: lo ya aplicado no se aplica otra vez.
+  - Un script de varias sentencias cuya primera ya corrió y una posterior encuentra el candado
+    espera dentro de la llamada (reteniendo el hilo, como antes): repetirla aplicaría dos veces
+    las primeras. Con contención, una sentencia por `exec`.
   - Una transacción que ya leyó y quiere escribir mientras otra conexión tiene el candado de
     escritura NO espera (SQLite lo detecta como interbloqueo): el error es `database is locked
     (not waited for: …)`. Hay que deshacerla y reintentar, o empezarla con `BEGIN IMMEDIATE`.

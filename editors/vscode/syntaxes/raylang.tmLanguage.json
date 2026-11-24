@@ -138,7 +138,7 @@
     },
     "type-alias-definition": {
       "comment": "`type Alias = …`: el nombre que se DEFINE (los usos de un tipo llevan support.type).",
-      "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "match": "\\b(type)\\s+([A-Z][A-Za-z0-9_]*)",
       "captures": {
         "1": { "name": "storage.type.raylang" },
         "2": { "name": "entity.name.type.raylang" }

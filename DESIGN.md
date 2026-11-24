@@ -22112,17 +22112,32 @@ del usuario, la espera seguía dentro de SQLite. `connect` lo pone a 0. Para no 
 app observaba — una escritura que esperaba hasta 5 s — el plazo por defecto de la conexión es
 también 5 s, ahora cooperativo.
 
-**Lo que la revisión previa a 1.27.113 corrigió, en dos vueltas.** El reintento, puesto en el
-envoltorio, repetía la LLAMADA: un script que ya había aplicado sus primeras sentencias las
-aplicaba otra vez. La primera corrección fue no reintentar un script a medias; la segunda vuelta
-mostró que eso rompía el patrón que la propia doc recomienda (`BEGIN; …; COMMIT;` en una
-llamada), que antes esperaba dentro de SQLite. Lo que queda: la conexión del runtime
-(`ray_runtime::sqlite::Conn`, ahora la MISMA para la VM y el nativo) recuerda por qué sentencia
-iba y la misma llamada, repetida, sigue desde ahí. Y para distinguir el candado que se puede
-esperar del que no, el runtime instala un busy handler que no espera y solo anota que SQLite
-preguntó: cuando SQLite ve un interbloqueo no pregunta, y el error lleva `(not waited for: …)`.
-Ese handler se reinstala antes de cada llamada y tras cada sentencia de un script que nombre
-`busy_timeout`, porque el PRAGMA lo sustituye por la espera de SQLite.
+**Lo que la revisión previa a 1.27.113 corrigió, en tres vueltas.** El reintento, puesto en el
+envoltorio, repite la LLAMADA: un script que ya había aplicado sus primeras sentencias las
+aplicaba otra vez. Primera corrección: no reintentar un script a medias — rompía el patrón que
+la propia doc recomienda (`BEGIN; …; COMMIT;` en una llamada), que antes esperaba dentro de
+SQLite. Segunda: que la conexión recordara por qué sentencia iba y la misma llamada siguiera
+desde ahí — estado en un objeto que comparten varias fibras, emparejado por el texto del SQL, que
+otra llamada borraba y que un plazo vencido dejaba armado; y saltar sentencias re-preparándolas
+falla con un `CREATE TABLE` ya aplicado. Tercera, la que queda, sin estado:
+
+- La PRIMERA sentencia de una llamada que encuentra el candado devuelve `database is locked` a
+  secas. Nada se aplicó: el envoltorio repite la llamada tras aparcar la fibra. Es el caso común
+  (una sentencia por `exec`) y el único que hacía falta arreglar.
+- Una sentencia POSTERIOR de un script no puede devolver el control, así que espera dentro de la
+  llamada, reintentando ESA sentencia sobre su `Statement` ya preparado, hasta el plazo. Retiene
+  el hilo y el registro, como hacía SQLite: mismo comportamiento que antes para el caso raro.
+- Para saber si un candado se puede esperar, el runtime instala un busy handler que no espera y
+  solo anota que SQLite preguntó. Ante un interbloqueo SQLite no pregunta: `(not waited for: …)`.
+- El PLAZO vive en un solo sitio, la conexión del runtime (`ray_runtime::sqlite::Conn`, ahora la
+  misma para la VM y el nativo). Un `PRAGMA busy_timeout = N` se reconoce por sentencia — que sea
+  ese PRAGMA, no una columna con ese nombre —, lo analiza SQLite, y su valor se adopta antes de
+  devolver el handler propio. Leer el PRAGMA da ese plazo; el envoltorio lo pregunta solo cuando
+  una llamada se topa con un candado.
+
+**Lección.** Tres vueltas sobre la misma pieza: las dos primeras añadían un mecanismo para tapar
+la consecuencia de la anterior. La tercera quitó el mecanismo y aceptó decir en la doc qué caso no
+mejora.
 
 **Límite.** Dos transacciones `BEGIN` diferidas que leen y luego escriben se interbloquean en
 SQLite y una recibe `database is locked` aunque haya plazo: es de SQLite, no de la espera. La

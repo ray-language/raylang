@@ -27,9 +27,14 @@ import std/time;
 ///
 /// **Waiting for a lock.** When another connection holds the write lock, a call RETRIES for up to
 /// the connection's busy timeout — 5 s by default; change it with `busy_timeout(c, ms)` or the
-/// usual `exec(c, "PRAGMA busy_timeout = 2000", [])`, 0 = fail at once — and then fails with
-/// `database is locked`. Between attempts the fiber is parked, so the fiber that holds the lock
-/// keeps running (db 0.11). SQLite's own busy handler is never used: it waits inside the C library holding the
+/// usual `PRAGMA busy_timeout = 2000` (on its own or inside a script), 0 = fail at once — and
+/// then fails with `database is locked`. Between attempts the fiber is parked, so the fiber that
+/// holds the lock keeps running (db 0.11, raylang 1.27.113). A multi-statement script that hits
+/// the lock halfway resumes at the statement that failed: what already ran is not run again.
+/// One case is NOT waited for, because waiting cannot help: a transaction that has already read
+/// and now wants to write while another connection holds the write lock (SQLite reports it at
+/// once). The error then reads `database is locked (not waited for: …)`: roll back and retry,
+/// or start such transactions with `BEGIN IMMEDIATE`. SQLite's own busy handler is never used: it waits inside the C library holding the
 /// thread — and the runtime's handle registry — so the lock holder could not finish and every
 /// writer stalled until the timeout (rayhotel #491).
 pub struct Conn {
@@ -77,30 +82,59 @@ pub fn busy_timeout(c: Conn, ms: int) {
 // SQLITE_BUSY: otra conexión tiene el candado. (`database table is locked`, SQLITE_LOCKED, es un
 // conflicto dentro de la MISMA conexión y esperar no lo arregla.)
 fn is_busy(message: string) -> bool {
-    // A SECAS: el runtime añade el motivo a los `database is locked` que NO se deben reintentar
-    // (parte del script ya se aplicó; o SQLite ni esperó porque sería un interbloqueo).
+    // A SECAS: el runtime añade el motivo al `database is locked` que NO se debe reintentar
+    // (SQLite ni esperó, porque sería un interbloqueo). Un script que se quedó a medias sí se
+    // reintenta: la conexión recuerda por qué sentencia iba y la misma llamada sigue desde ahí.
     message == "database is locked"
 }
 
-// `PRAGMA busy_timeout = N` (lo normal en SQLite) como única sentencia: los ms pedidos. El plazo
-// lo lleva la conexión de raylang, no SQLite.
+// El plazo que pide un `PRAGMA busy_timeout = N` (o `busy_timeout(N)`) escrito en `sql`, esté
+// solo o dentro de un script: el ÚLTIMO que aparezca. El plazo lo lleva la conexión de raylang,
+// no SQLite (el runtime reinstala su propio handler tras cada sentencia que lo nombre).
 fn busy_pragma(sql: string) -> Option<int> {
+    let text = sql.to_lower();
+    var found: Option<int> = Option.None;
+    var from = 0;
+    while (true) {
+        let at = match (text.index_of_from("busy_timeout", from)) {
+            Option.Some(i) => i,
+            Option.None => {
+                break;
+            },
+        };
+        from = at + 12;
+        var rest = text.substring(from, text.len()).trim();
+        if (rest.starts_with("=") || rest.starts_with("(")) {
+            rest = rest.substring(1, rest.len()).trim();
+            var digits = "";
+            for c in rest {
+                let n = char_code(c);
+                if (n < 48 || n > 57) {
+                    break;
+                }
+                digits = digits + to_string(c);
+            }
+            match (parse_int(digits)) {
+                Option.Some(ms) => {
+                    found = Option.Some(ms);
+                },
+                Option.None => { },
+            }
+        }
+    }
+    found
+}
+
+// ¿Es `sql` SOLO ese PRAGMA (con o sin `;`)? Entonces no hace falta mandarlo a SQLite.
+fn only_busy_pragma(sql: string) -> bool {
     var text = sql.trim().to_lower();
     while (text.ends_with(";")) {
         text = text.substring(0, text.len() - 1).trim();
     }
-    if (!text.starts_with("pragma")) {
-        return Option.None;
+    if (text.contains(";") || !text.starts_with("pragma")) {
+        return false;
     }
-    let rest = text.substring(6, text.len()).trim();
-    if (!rest.starts_with("busy_timeout")) {
-        return Option.None;
-    }
-    let value = rest.substring(12, rest.len()).trim();
-    if (!value.starts_with("=")) {
-        return Option.None;
-    }
-    parse_int(value.substring(1, value.len()).trim())
+    text.substring(6, text.len()).trim().starts_with("busy_timeout")
 }
 
 // Repite `call` mientras responda `database is locked` y quede plazo, aparcando la fibra entre
@@ -134,7 +168,9 @@ pub fn exec(c: Conn, sql: string, params: [string]) -> Result<int, string> {
         match (busy_pragma(sql)) {
             Option.Some(ms) => {
                 busy_timeout(c, ms);
-                return Result.Ok(0);
+                if (only_busy_pragma(sql)) {
+                    return Result.Ok(0);
+                }
             },
             Option.None => { },
         }

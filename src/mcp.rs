@@ -802,7 +802,7 @@ fn reexport_lines(src: &str, file: &std::path::Path) -> Vec<String> {
             fn_signature(f)
         } else if let Some(s) = prog.structs.iter().find(|s| s.name == name) {
             // Opaco: sin campos (fuera de la cápsula no se construye ni se leen).
-            if item.opaque { format!("struct {} (opaque: use the functions the capsule exports)", s.name) } else { struct_signature(s) }
+            if item.opaque { format!("{}: use the functions the capsule exports", crate::raydoc::opaque_struct(s)) } else { struct_signature(s) }
         } else if let Some(e) = prog.enums.iter().find(|e| e.name == name) {
             enum_signature(e)
         } else if let Some(t) = prog.traits.iter().find(|t| t.name == name) {
@@ -969,7 +969,16 @@ fn project_doc_text(symbol: &str, path: &str) -> Option<String> {
         Some((m, f)) => (Some(m.to_string()), f.to_string()),
         None => (None, symbol.to_string()),
     };
-    let (root, files) = project_files(path)?;
+    let (root, mut files) = project_files(path)?;
+    // La FACHADA de una cápsula llamada como el módulo va primero: `wallet.Account` es lo que
+    // `wallet/mod.ray` exporta (quizá opaco), no la definición interna de `wallet/core.ray`.
+    if let Some(m) = &module {
+        files.sort_by_key(|f| {
+            let facade = f.file_name().is_some_and(|n| n == "mod.ray")
+                && f.parent().and_then(|d| d.file_name()).is_some_and(|n| n.to_string_lossy() == **m);
+            !facade
+        });
+    }
     for f in &files {
         let stem = f.file_stem()?.to_string_lossy().into_owned();
         let matches_module = match &module {
@@ -990,10 +999,21 @@ fn project_doc_text(symbol: &str, path: &str) -> Option<String> {
         }
         // rayhotel #485: `kernel.enter` cuando `enter` llega a la fachada por `pub from`: la firma
         // y la doc son las de su definición.
-        if let Some(item) = crate::raydoc::reexports(&src, f).into_iter().find(|r| r.visible == func)
-            && let Some(text) = source_symbol_doc(&label, &item.source, &item.original)
-        {
-            return Some(format!("{text}\n(re-exported by {label} from {})", item.module));
+        if let Some(item) = crate::raydoc::reexports(&src, f).into_iter().find(|r| r.visible == func) {
+            // Un struct reexportado `opaque` se documenta sin campos también por aquí.
+            if item.opaque
+                && let Some(def) = crate::lexer::lex(&item.source).ok().and_then(|t| crate::parser::parse(t).ok())
+                && let Some(s) = def.structs.iter().find(|s| s.name == item.original)
+            {
+                return Some(format!(
+                    "{label}: {}\nIts fields are not part of the contract: outside the capsule it cannot be built, destructured or have its fields read; use the functions the capsule exports.\n(re-exported by {label} from {})",
+                    crate::raydoc::opaque_struct(s),
+                    item.module
+                ));
+            }
+            if let Some(text) = source_symbol_doc(&label, &item.source, &item.original) {
+                return Some(format!("{text}\n(re-exported by {label} from {})", item.module));
+            }
         }
     }
     None

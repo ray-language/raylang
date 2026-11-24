@@ -143,8 +143,12 @@ pub fn facade_shows_unexported(program: &Program) -> Vec<Warning> {
         // Un alias `pub type X = interno.T;` de la fachada también deja nombrar `T` (como `capsule.X`).
         let mut aliased = Vec::new();
         for a in program.type_aliases.iter().filter(|a| a.is_pub) {
-            if a.name.strip_prefix(&inside).is_some_and(|leaf| !leaf.contains("::")) {
-                names(&a.target, &mut aliased);
+            // Solo si el alias ES el tipo (`pub type Bill = model.Invoice;`): `[model.Invoice]`
+            // deja nombrar el arreglo, no el elemento.
+            if a.name.strip_prefix(&inside).is_some_and(|leaf| !leaf.contains("::"))
+                && let Type::Struct(n, _) | Type::Enum(n, _) = &a.target
+            {
+                aliased.push(n.clone());
             }
         }
         let mut globals: Vec<&String> = values.values().collect();

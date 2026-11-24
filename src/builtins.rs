@@ -1131,7 +1131,7 @@ enum OpenHandle {
     /// mapa y el `Drop` de `Connection` cierra la base (statements ya finalizados: nunca escapan del
     /// helper). No existe en `wasm32` (rusqlite compila C) ni sin la feature `sqlite` (M89: build slim).
     #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
-    Sqlite(rusqlite::Connection),
+    Sqlite(ray_runtime::sqlite::Conn),
     /// M100 v2: el extremo de LECTURA de un pipe de un proceso hijo, ya NO-bloqueante. Las bombas de
     /// `std/process` lo leen con `__socket_read_bytes`: el WouldBlock aparca la fibra en el poller
     /// exactamente como un socket (el `IoParked` de la VM es fd+deadline, nada socket-específico).
@@ -2657,23 +2657,12 @@ pub const NET_TLS_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
 // Nota: a diferencia de los sockets (que clonan el descriptor), la conexión no es clonable → el lock
 // del registro se retiene durante la consulta. Aceptable: es I/O local, y serializa entre fibras.
 
-/// Convierte una celda SQLite a su representación de texto para la API `[[string]]`.
-#[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
-fn sqlite_value_str(v: rusqlite::types::ValueRef<'_>) -> String {
-    use rusqlite::types::ValueRef;
-    match v {
-        ValueRef::Null => String::new(),
-        ValueRef::Integer(i) => i.to_string(),
-        ValueRef::Real(f) => f.to_string(),
-        ValueRef::Text(t) => String::from_utf8_lossy(t).into_owned(),
-        ValueRef::Blob(b) => b.iter().map(|x| format!("{x:02x}")).collect(),
-    }
-}
-
 /// Abre (o crea) la base en `path` (`":memory:"` = en memoria) y devuelve un handle (M53.3).
 #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
 pub fn sqlite_open(path: &str) -> Result<i64, String> {
-    let conn = rusqlite::Connection::open(path).map_err(|e| e.to_string())?;
+    // La MISMA conexión que el binario nativo (`ray_runtime::sqlite::Conn`): una sola espera del
+    // candado, una sola reanudación de scripts y un solo texto de error (rayhotel #491).
+    let conn = ray_runtime::sqlite::open(path)?;
     let mut reg = registry().lock().unwrap();
     let id = reg.next;
     reg.next += 1;
@@ -2692,7 +2681,7 @@ pub fn sqlite_open(_path: &str) -> Result<i64, String> { Err(SQLITE_UNAVAILABLE.
 
 /// Recupera la conexión del handle o el error apropiado. Factoriza la validación de exec/query.
 #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
-fn sqlite_conn(reg: &mut FileRegistry, h: i64) -> Result<&mut rusqlite::Connection, String> {
+fn sqlite_conn(reg: &mut FileRegistry, h: i64) -> Result<&mut ray_runtime::sqlite::Conn, String> {
     match reg.open.get_mut(&h) {
         Some(OpenHandle::Sqlite(conn)) => Ok(conn),
         Some(_) => Err("the handle is not a SQLite connection".to_string()),
@@ -2708,7 +2697,7 @@ pub fn sqlite_exec(h: i64, sql: &str, params: &[String]) -> Result<i64, String> 
     let conn = sqlite_conn(&mut reg, h)?;
     // rayreq #247: todas las sentencias sin parámetros, una sola con ellos (la misma función
     // que el binario nativo).
-    ray_runtime::sqlite::exec_conn(conn, sql, params)
+    conn.exec(sql, params)
 }
 
 /// rayreq #248: `sqlite_exec` con parámetros `NULL`: `nulls` lleva una `n` (NULL) o una `v`
@@ -2718,7 +2707,7 @@ pub fn sqlite_exec_opt(h: i64, sql: &str, params: &[String], nulls: &str) -> Res
     let opt = sqlite_opt_params(params, nulls)?;
     let mut reg = registry().lock().unwrap();
     let conn = sqlite_conn(&mut reg, h)?;
-    ray_runtime::sqlite::exec_conn_opt(conn, sql, &opt)
+    conn.exec_opt(sql, &opt)
 }
 #[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
 pub fn sqlite_exec_opt(_h: i64, _sql: &str, _params: &[String], _nulls: &str) -> Result<i64, String> { Err(SQLITE_UNAVAILABLE.to_string()) }
@@ -2745,8 +2734,7 @@ pub fn sqlite_query(h: i64, sql: &str, params: &[String]) -> Result<(usize, Vec<
 pub fn sqlite_query_nulls(h: i64, sql: &str, params: &[String]) -> Result<(usize, Vec<Option<String>>), String> {
     let mut reg = registry().lock().unwrap();
     let conn = sqlite_conn(&mut reg, h)?;
-    // La misma función que el binario nativo (una sola espera del candado, rayhotel #491).
-    ray_runtime::sqlite::query_conn(conn, sql, params)
+    conn.query_nulls(sql, params)
 }
 #[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
 pub fn sqlite_query(_h: i64, _sql: &str, _params: &[String]) -> Result<(usize, Vec<String>), String> { Err(SQLITE_UNAVAILABLE.to_string()) }

@@ -1268,8 +1268,13 @@ fn valid_target(target: string) -> bool {
 // cabecera. NO es `trim()`: ese también quita VT, FF y CR, y un `Transfer-Encoding: \x0bchunked`
 // quedaba normalizado a `chunked` antes de validarse — la ofuscación clásica de TE.
 fn trim_ows(s: string) -> string {
-    // Una pasada: un valor de 64 KiB de espacios es entrada del otro extremo, y quitar un
-    // carácter por vuelta con `substring` (que copia) era cuadrático.
+    // Lo normal — un valor sin relleno, o con el único espacio tras los dos puntos que ya quita
+    // quien llama — no se recorre.
+    if (!s.starts_with(" ") && !s.starts_with("\t") && !s.ends_with(" ") && !s.ends_with("\t")) {
+        return s;
+    }
+    // Con relleno, una pasada: un valor de 64 KiB de espacios es entrada del otro extremo, y
+    // quitar un carácter por vuelta con `substring` (que copia) era cuadrático.
     var first: int = 0 - 1;
     var end: int = 0;
     var i: int = 0;

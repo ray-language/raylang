@@ -363,6 +363,25 @@ fn an_aliased_type_is_nameable_and_an_opaque_one_is_documented_without_its_shape
     let (out, err, code) = ray(&d, &["doc", "wallet"]);
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("struct Account (opaque"), "{out}");
+    // Y por el símbolo, que es adonde manda el listado («Use ray_doc "wallet.<name>"»).
+    let (out, err, code) = ray(&d, &["doc", "wallet.Account"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("struct Account (opaque)") && !out.contains("cents"), "{out}");
+    let _ = std::fs::remove_dir_all(d);
+
+    // Un alias de un tipo COMPUESTO deja nombrar el compuesto, no el tipo de dentro: sigue el aviso.
+    let d = tree(
+        "alias_composite",
+        &[
+            ("ray.toml", APP_TOML),
+            ("src/main.ray", "import shop;\nfn main() {\n    print(shop.amount(shop.make(3)));\n}\n"),
+            ("src/shop/model.ray", "pub struct Invoice { total: int, }\npub fn make(n: int) -> Invoice { Invoice { total: n } }\npub fn amount(i: Invoice) -> int { i.total }\n"),
+            ("src/shop/mod.ray", "import shop/model;\npub from shop/model import make, amount;\npub type Bills = [model.Invoice];\n"),
+        ],
+    );
+    let (_, err, code) = ray(&d, &["check"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("shows the type 'Invoice', which the capsule does not export"), "{err}");
     let _ = std::fs::remove_dir_all(d);
 }
 

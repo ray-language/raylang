@@ -12,6 +12,7 @@
     { "include": "#struct-definition" },
     { "include": "#enum-definition" },
     { "include": "#trait-definition" },
+    { "include": "#type-alias-definition" },
     { "include": "#impl-definition" },
     { "include": "#function-definition" },
     { "include": "#extern" },
@@ -132,6 +133,14 @@
       "match": "\\b(trait)\\s+([A-Za-z_][A-Za-z0-9_]*)",
       "captures": {
         "1": { "name": "storage.type.trait.raylang" },
+        "2": { "name": "entity.name.type.raylang" }
+      }
+    },
+    "type-alias-definition": {
+      "comment": "`type Alias = …`: el nombre que se DEFINE (los usos de un tipo llevan support.type).",
+      "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.raylang" },
         "2": { "name": "entity.name.type.raylang" }
       }
     },

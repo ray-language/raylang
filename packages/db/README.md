@@ -218,8 +218,12 @@ fn main() -> int {
   cambian, y 0 falla en el acto — aparcando la fibra entre intentos, y luego da `database is
   locked`. Antes esperaba el busy handler de SQLite, dentro de la librería C y reteniendo el hilo:
   la fibra que tenía el candado no podía terminar y todos los escritores quedaban parados hasta el
-  plazo (20 escrituras a la vez, más de 20 s). El `PRAGMA busy_timeout` ya no llega a SQLite: lo
-  recoge la conexión.
+  plazo (20 escrituras a la vez, más de 20 s). El `PRAGMA busy_timeout` —solo o dentro de un
+  script— lo recoge la conexión. Un script que se topa con el candado a mitad sigue desde la
+  sentencia que falló al reintentar. Lo único que NO se espera es lo que esperar no arregla: una
+  transacción que ya leyó y quiere escribir mientras otra tiene el candado de escritura da
+  `database is locked (not waited for: …)`; se deshace y se reintenta, o se empieza con `BEGIN
+  IMMEDIATE`. Pide raylang 1.27.113.
 - `disconnect` libera el handle; usar la conexión después falla **limpio** (error como valor, no
   crash: el ciclo prepare→step→finalize ocurre entero dentro del host, un statement nunca escapa).
 - **`last_insert_rowid(c)`** devuelve el rowid del último INSERT (misma conexión). Para el modo

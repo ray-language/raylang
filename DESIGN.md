@@ -22112,6 +22112,18 @@ del usuario, la espera seguía dentro de SQLite. `connect` lo pone a 0. Para no 
 app observaba — una escritura que esperaba hasta 5 s — el plazo por defecto de la conexión es
 también 5 s, ahora cooperativo.
 
+**Lo que la revisión previa a 1.27.113 corrigió, en dos vueltas.** El reintento, puesto en el
+envoltorio, repetía la LLAMADA: un script que ya había aplicado sus primeras sentencias las
+aplicaba otra vez. La primera corrección fue no reintentar un script a medias; la segunda vuelta
+mostró que eso rompía el patrón que la propia doc recomienda (`BEGIN; …; COMMIT;` en una
+llamada), que antes esperaba dentro de SQLite. Lo que queda: la conexión del runtime
+(`ray_runtime::sqlite::Conn`, ahora la MISMA para la VM y el nativo) recuerda por qué sentencia
+iba y la misma llamada, repetida, sigue desde ahí. Y para distinguir el candado que se puede
+esperar del que no, el runtime instala un busy handler que no espera y solo anota que SQLite
+preguntó: cuando SQLite ve un interbloqueo no pregunta, y el error lleva `(not waited for: …)`.
+Ese handler se reinstala antes de cada llamada y tras cada sentencia de un script que nombre
+`busy_timeout`, porque el PRAGMA lo sustituye por la espera de SQLite.
+
 **Límite.** Dos transacciones `BEGIN` diferidas que leen y luego escriben se interbloquean en
 SQLite y una recibe `database is locked` aunque haya plazo: es de SQLite, no de la espera. La
 receta sigue siendo `BEGIN IMMEDIATE`.
@@ -22211,18 +22223,28 @@ abanico de 200 000 mensajes a 4 consumidores; ráfagas con 18 ms de cómputo ent
 | 50 µs fijo (antes) | 37 % | 112 ms | 410 ms | ~0 |
 | Intervalo que crece hasta 4 ms | 5 % | 117 ms | 417 ms | ~0,8 ms por mensaje |
 | `park` + `unpark` en cada encolado | 10 % | 880 ms | 625 ms | ~0 |
-| Girar 5 ms, luego `park` con `unpark` (lo que queda) | 6 % | 117 ms | 420 ms | ~0 |
+| Girar 5 ms, luego `park` de 2 ms con `unpark` | 6 % | 117 ms | 420 ms | ~0 |
 
 La segunda deja de gastar pero un worker ocioso tarda hasta 4 ms en recoger trabajo nuevo. La
 tercera despierta al instante pero cada mensaje paga una llamada al sistema: el ping-pong, donde
 el otro worker estaba girando y recogía gratis, se hunde. La cuarta combina: los primeros ~5 ms
 el worker gira como siempre (el caso caliente no cambia) y solo después se apunta en la cola de
-listos y duerme; `ReadyQueue::push_back` despierta a uno. Un plazo de 2 ms sigue haciendo falta
-para atender los temporizadores y la E/S de las fibras aparcadas (M254).
+listos y duerme; `ReadyQueue::push_back` despierta a uno. Hace falta un plazo para atender los
+temporizadores y la E/S de las fibras aparcadas (M254). La revisión previa a la release lo bajó
+de 2 ms a 1 ms — la resolución que esos temporizadores ya tenían — a costa de CPU: 12 % en vez
+de 6 %. También hizo que fijar el resultado del programa despierte a todos los dormidos, para
+que terminar no espere ese plazo. En Windows el plazo es un `sleep` de 1 ms sin registro
+(`park_timeout` redondea al tic de ~15 ms). Queda la mejora de fondo: que el worker ocioso
+bloquee en el poller hasta el plazo más próximo, con un descriptor para despertarlo.
 
 **Por qué `park`/`unpark` y no una `Condvar`.** El comentario original la descartaba por los
 despertares perdidos. `park` lleva un testigo: un `unpark` que llega antes del `park` no se
 pierde, y el registro del worker ocioso se hace con el mutex del scheduler tomado.
+
+**Atribución.** Al cerrar la revisión el ping-pong salió un 8 % más lento que la release 1.27.111
+instalada. Compilando el árbol de justo antes de este cambio: 127 ms la 1.27.111, 136 ms antes
+del cambio, 138 ms después (medianas de seis pasadas intercaladas). El cambio del scheduler cuesta
+~1,5 %; el resto (~7 %) ya estaba — entró entre la 1.27.111 y este arco, sin localizar todavía.
 
 **Lección.** Una regla de «unos 50 µs no queman un núcleo» es verdad por worker y falsa por nueve.
 Y el primer arreglo que quita el síntoma (alargar el intervalo) cambiaba latencia por CPU sin

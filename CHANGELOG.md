@@ -4,13 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
-## Sin publicar
+## 1.27.113 — 2026-11-24
 
 - **VM — un worker ocioso deja de gastar CPU** (ray-daw #480): con `ray run`, esperar a un
   proceso hijo (`process.run`) gastaba ~40 % de un núcleo en tiempo de sistema durante toda la
   espera, porque los demás hilos del scheduler despertaban cada 50 µs a mirar si había trabajo.
-  Ahora, pasados 5 ms sin trabajo, duermen hasta que lo hay. Medido: de 37 % a 6 %. El binario
-  nativo no tenía el problema.
+  Ahora, pasados 5 ms sin trabajo, duermen hasta que lo hay o hasta 1 ms. Medido: de 43 % a
+  12 %. El binario nativo no tenía el problema.
 - **Editores — los usos de un tipo ya no cuentan como definiciones** (ray-sublime #479): las
   gramáticas de Sublime y VS Code marcaban cada uso de un tipo con el mismo scope que su
   definición (`entity.name.type`), y Sublime listaba cada uso en Goto Symbol. Ahora ese scope
@@ -39,12 +39,18 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   exportada muestra un tipo que la cápsula no exporta, y un consejo (`pub from`) cuando se
   intenta construir o casar un tipo por un alias `pub type` de la fachada.
 
-- **Paquete `db` 0.11.0 — `db/sqlite` espera un candado sin retener el hilo** (rayhotel #491, sin
-  publicar en el índice todavía). Con varios escritores a la vez, el que esperaba el candado lo
-  hacía dentro de SQLite y dejaba parado al que lo tenía: 20 escrituras simultáneas podían dejar
-  un servidor sin responder más de 20 s, en la VM y en nativo. Ahora la conexión reintenta
+- **Paquete `db` 0.11.0 — `db/sqlite` espera un candado sin retener el hilo** (rayhotel #491;
+  pide raylang 1.27.113). Con varios escritores a la vez, el que esperaba el candado lo hacía
+  dentro de SQLite y dejaba parado al que lo tenía: 20 escrituras simultáneas podían dejar un
+  servidor sin responder más de 20 s, en la VM y en nativo. Ahora la conexión reintenta
   aparcando la fibra, hasta su plazo (5 s por defecto; `sqlite.busy_timeout(c, ms)` o
-  `PRAGMA busy_timeout = N`). Las mismas 20 escrituras terminan en milisegundos.
+  `PRAGMA busy_timeout = N`, solo o dentro de un script). Las mismas 20 escrituras terminan en
+  milisegundos. Lo que conviene saber:
+  - Un script de varias sentencias que se topa con el candado a mitad sigue, al reintentar,
+    desde la sentencia que falló: lo ya aplicado no se aplica otra vez.
+  - Una transacción que ya leyó y quiere escribir mientras otra conexión tiene el candado de
+    escritura NO espera (SQLite lo detecta como interbloqueo): el error es `database is locked
+    (not waited for: …)`. Hay que deshacerla y reintentar, o empezarla con `BEGIN IMMEDIATE`.
 
 - **Cápsulas (`dir/mod.ray`) — la frontera cierra y las herramientas la entienden** (rayhotel
   #481–#490):
@@ -81,8 +87,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   - Un `[]` como argumento de una función genérica (`first_or([], d)`) dejaba la función entera
     fuera del binario, y `xs + []` daba un error de rustc.
 
-- **Paquete `net` 0.18.0 — encuadre HTTP/1.1 según la RFC 9112** (sin publicar en el índice
-  todavía), contra una tabla de conformidad de octetos crudos:
+- **Paquete `net` 0.18.0 y 0.18.1 — encuadre HTTP/1.1 según la RFC 9112**, contra una tabla de
+  conformidad de octetos crudos (0.18.1: el recorte del espacio de un valor de cabecera era
+  cuadrático sobre entrada del otro extremo; ahora es una pasada):
   - El servidor (`net/webserver`) responde 400 y cierra ante lo que antes servía: un
     `Transfer-Encoding` que no es exactamente `chunked` (`xchunked`, `chunked, gzip`, repetido —
     bastaba con que contuviera «chunked»), más de un `Host`, una cabecera sin `:`, un valor con

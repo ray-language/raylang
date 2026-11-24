@@ -200,6 +200,13 @@ impl ReadyQueue {
             self.idle.push(me);
         }
     }
+    /// Despierta a TODOS los workers dormidos: el programa termina (o se detiene) y deben verlo
+    /// ya, no al vencer su plazo.
+    pub(super) fn wake_all(&mut self) {
+        for worker in self.idle.drain(..) {
+            worker.unpark();
+        }
+    }
     /// El worker actual deja de estar ocioso (encontró trabajo o termina).
     fn stop_waiting(&mut self) {
         let me = std::thread::current().id();
@@ -398,6 +405,7 @@ impl<'a> Vm<'a> {
                 // Sin fibras ejecutables desde el arranque (no debería con main en cola): registra el fatal.
                 let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                 if sh.outcome.is_none() { sh.outcome = Some(Err(e)); }
+                sh.ready.wake_all();
                 return;
             }
         }
@@ -407,6 +415,7 @@ impl<'a> Vm<'a> {
         if !self.stop {
             let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
             if sh.outcome.is_none() { sh.outcome = Some(res); }
+            sh.ready.wake_all();
         }
     }
 
@@ -433,6 +442,7 @@ impl<'a> Vm<'a> {
             // workers) y este worker se detiene como si otro lo hubiera apagado.
             if super::stop::requested() {
                 sh.outcome = Some(Err(runtime_error(line, col, super::stop::STOP_MSG)));
+                sh.ready.wake_all();
                 return Ok(false);
             }
             // M88.1: entrega de señales pendientes en cada conmutación (bandera atómica barata).
@@ -465,6 +475,7 @@ impl<'a> Vm<'a> {
                 };
                 let e = runtime_error(line, col, msg);
                 sh.outcome = Some(Err(e.clone())); // apaga a los demás workers
+                sh.ready.wake_all();
                 return Err(e);
             }
             // Otro worker ejecuta y podría desbloquearnos trabajo: espera un poco y reintenta.
@@ -485,8 +496,8 @@ impl<'a> Vm<'a> {
             // siempre: recoge sin coste lo que otro acaba de producir (un ping-pong entre fibras no
             // paga ninguna llamada al sistema por mensaje). Si el ocio dura, se apunta en la cola
             // y DUERME hasta que alguien encole una fibra (`ReadyQueue::push_back` lo despierta)
-            // o venza un plazo de 2 ms, que sigue haciendo falta para los temporizadores y la E/S
-            // de las fibras aparcadas (M254). Antes giraba sin fin: con otro worker dentro de una
+            // o venza un plazo de 1 ms — la resolución que ya tenían los temporizadores y la E/S de
+            // las fibras aparcadas (M254), que nadie más atiende mientras otro worker ejecuta. Antes giraba sin fin: con otro worker dentro de una
             // llamada larga (`process.run` esperando a un hijo) eran 20 000 despertares por
             // segundo y worker, ~40 % de un núcleo en tiempo de sistema.
             idle_spins = idle_spins.saturating_add(1);
@@ -502,7 +513,7 @@ impl<'a> Vm<'a> {
             } else {
                 sh.ready.wait_for_work();
                 drop(sh);
-                std::thread::park_timeout(std::time::Duration::from_millis(2));
+                std::thread::park_timeout(std::time::Duration::from_millis(1));
             }
         }
     }

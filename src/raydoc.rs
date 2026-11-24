@@ -109,6 +109,11 @@ pub fn reexports(src: &str, file: &std::path::Path) -> Vec<Reexported> {
     out
 }
 
+/// La cara de un struct reexportado como `opaque`: su nombre y sus parámetros de tipo, sin campos.
+pub fn opaque_struct(s: &StructDef) -> String {
+    format!("struct {}{} (opaque)", s.name, generics(&s.type_params, &[], &Vec::new()))
+}
+
 /// La documentación Markdown de un ARCHIVO: la de su fuente (`generate`) más lo que re-exporta con
 /// `pub from` — que en una fachada `dir/mod.ray` es el contrato entero y antes se omitía. Una
 /// fachada se titula con el nombre de su cápsula (el directorio), no `mod.ray`.
@@ -135,7 +140,7 @@ pub fn generate_file(path: &std::path::Path) -> Result<String, String> {
             (sig_function(f), f.line)
         } else if let Some(s) = prog.structs.iter().find(|s| s.name == name) {
             // Un tipo opaco se documenta SIN sus campos: no son parte del contrato.
-            if item.opaque { (format!("struct {} (opaque)", s.name), s.line) } else { (sig_struct(s), s.line) }
+            if item.opaque { (opaque_struct(s), s.line) } else { (sig_struct(s), s.line) }
         } else if let Some(e) = prog.enums.iter().find(|e| e.name == name) {
             (sig_enum(e), e.line)
         } else if let Some(t) = prog.traits.iter().find(|t| t.name == name) {

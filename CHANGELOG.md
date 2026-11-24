@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Paquete `db` 0.11.0 — `db/sqlite` espera un candado sin retener el hilo** (rayhotel #491, sin
+  publicar en el índice todavía). Con varios escritores a la vez, el que esperaba el candado lo
+  hacía dentro de SQLite y dejaba parado al que lo tenía: 20 escrituras simultáneas podían dejar
+  un servidor sin responder más de 20 s, en la VM y en nativo. Ahora la conexión reintenta
+  aparcando la fibra, hasta su plazo (5 s por defecto; `sqlite.busy_timeout(c, ms)` o
+  `PRAGMA busy_timeout = N`). Las mismas 20 escrituras terminan en milisegundos.
+
 - **Cápsulas (`dir/mod.ray`) — la frontera cierra y las herramientas la entienden** (rayhotel
   #481–#490):
   - Una llamada como método desde fuera (`x.f()`) alcanzaba cualquier `pub fn` del módulo

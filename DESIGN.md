@@ -22087,3 +22087,29 @@ definición (con tope de saltos) y muestra firma y `///`. La resolución es deli
 no exporta (#487) son decisiones de lenguaje: IDEAS §132. Un método de un trait interno no
 reexportado todavía se puede llamar desde fuera (va por el paso 3, no por el 5). El checker
 auto-alojado no conoce `capsule_surfaces`.
+
+## 478. `db/sqlite`: la espera del candado es de la fibra, no del hilo (rayhotel #491, nov 2026)
+
+**El fallo.** rayhotel abre una conexión por petición con `PRAGMA busy_timeout = 5000` y `BEGIN
+IMMEDIATE`, que es la receta estándar de SQLite. Veinte reservas a la vez dejaban el servidor sin
+responder más de 20 s. El busy handler de SQLite espera DENTRO de la librería C, y la llamada
+retiene el hilo y el candado global del registro de handles del runtime: la fibra que tiene el
+candado de la base — que solo necesita correr su `COMMIT` — no puede, y el que espera agota su
+plazo. La configuración recomendada empeoraba las cosas.
+
+**El arreglo, en el paquete.** `Conn` lleva su plazo (`busy_ms`) y cada primitivo se llama a
+través de `retry_busy`: si responde `database is locked` y queda plazo, `time.sleep` (1, 2, 4… 50
+ms) y otra vez. La fibra se aparca; el hilo sigue. `exec(c, "PRAGMA busy_timeout = N", [])` no
+llega a SQLite: lo recoge la conexión. Va en raylang y no en el host porque los primitivos tienen
+dos implementaciones (VM y `ray-runtime`) y el contrato que importa — no esperar reteniendo el
+hilo — se cumple igual en las dos sin tocarlas.
+
+**Lo que no se veía.** El binding (`rusqlite`) instala por su cuenta un busy handler de 5 s en
+cada conexión que abre. El primer intento del arreglo no cambió nada por eso: sin ningún `PRAGMA`
+del usuario, la espera seguía dentro de SQLite. `connect` lo pone a 0. Para no cambiar lo que una
+app observaba — una escritura que esperaba hasta 5 s — el plazo por defecto de la conexión es
+también 5 s, ahora cooperativo.
+
+**Límite.** Dos transacciones `BEGIN` diferidas que leen y luego escriben se interbloquean en
+SQLite y una recibe `database is locked` aunque haya plazo: es de SQLite, no de la espera. La
+receta sigue siendo `BEGIN IMMEDIATE`.

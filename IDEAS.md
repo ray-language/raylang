@@ -4931,9 +4931,10 @@ Escribir el host en raylang habría pedido las cuatro primeras filas de la tabla
 editor, sobre punteros crudos. Si varias apps acabaran necesitando lo mismo, lo que se evaluaría es
 un subsistema del runtime (`std/plugin`), no más FFI.
 
-## 132. Cápsulas: tipos opacos y fachadas que muestran lo que no exportan (rayhotel #486, #487)
+## 132. Cápsulas: tipos opacos y fachadas que muestran lo que no exportan (rayhotel #486, #487) — ✅ EJECUTADO (DESIGN §481)
 
-Clasificación: **cambio de lenguaje, aditivo**. Pendiente de decisión.
+Clasificación: **cambio de lenguaje, aditivo**. Decidido el 24 nov 2026: la segunda opción de
+#486 (`pub from x import opaque T;`) y la propuesta de #487.
 
 **#486 — tipos opacos.** Un struct que una cápsula exporta se construye y se modifica desde
 fuera (`guests.Guest { id: -1, … }`, `b.nightly_cents = 0`): la cápsula no puede sostener un

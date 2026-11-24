@@ -204,6 +204,110 @@ fn a_module_with_a_builtin_named_type_checks_as_a_file() {
     let _ = std::fs::remove_dir_all(d);
 }
 
+const WALLET_CORE: &str = "from std/json import ToJson;\n\n\
+@derive(Eq, Show, ToJson)\n\
+pub struct Account { id: int, cents: int, }\n\
+pub struct Hidden { n: int, }\n\
+pub enum State { Open, Closed, }\n\
+pub fn open(id: int) -> Account { Account { id: id, cents: 0 } }\n\
+pub fn deposit(a: Account, n: int) { a.cents = a.cents + n; }\n\
+pub fn balance(a: Account) -> int { a.cents }\n\
+pub fn leak() -> Hidden { Hidden { n: 1 } }\n";
+const WALLET_FACADE: &str = "import wallet/core;\n\
+pub from wallet/core import opaque Account, open, deposit, balance, leak;\n\
+pub type St = core.State;\n\
+pub fn fresh() -> Account {\n    let a = core.open(9);\n    a.cents = 5;\n    a\n}\n";
+
+fn wallet_app(name: &str, main: &str) -> PathBuf {
+    tree(name, &[("ray.toml", APP_TOML), ("src/main.ray", main), ("src/wallet/mod.ray", WALLET_FACADE), ("src/wallet/core.ray", WALLET_CORE)])
+}
+
+/// #486: `pub from … import opaque T;` — fuera de la cápsula el tipo se nombra, se pasa, se
+/// compara y se serializa (lo que su módulo derivó), y sus funciones se llaman como métodos.
+/// Dentro sigue transparente: la fachada y el `@derive` tocan sus campos.
+#[test]
+fn an_opaque_type_is_named_passed_and_used_through_the_contract() {
+    let d = wallet_app(
+        "opaque_ok",
+        "import wallet;\nfn keep(a: wallet.Account) -> wallet.Account { a }\nfn main() {\n    let a = keep(wallet.fresh());\n    a.deposit(7);\n    print(a.balance());\n    print(a == a);\n    print(a.to_json());\n}\n",
+    );
+    for engine in [&["run"][..], &["run", "--interp"][..]] {
+        let (out, err, code) = ray(&d, engine);
+        assert_eq!((out.as_str(), code), ("12\ntrue\n{\"id\":9,\"cents\":12}\n", 0), "{engine:?}: {err}");
+    }
+    let _ = std::fs::remove_dir_all(d);
+}
+
+/// #486: fuera de la cápsula no se construye, no se leen ni escriben sus campos y no se
+/// desestructura.
+#[test]
+fn an_opaque_type_cannot_be_built_read_written_or_destructured_outside() {
+    let cases = [
+        ("build", "import wallet;\nfn main() {\n    let a = wallet.Account { id: -1, cents: 999 };\n    print(a.balance());\n}\n", "'Account' is opaque outside the capsule 'wallet': it cannot be constructed here"),
+        ("read", "import wallet;\nfn main() {\n    print(wallet.fresh().cents);\n}\n", "'Account' is opaque outside the capsule 'wallet': its fields are not accessible here (field 'cents')"),
+        ("write", "import wallet;\nfn main() {\n    let a = wallet.fresh();\n    a.cents = 0;\n}\n", "its fields are not accessible here (field 'cents')"),
+        (
+            "destructure",
+            "import wallet;\nfrom wallet import Account;\nfn main() {\n    match (wallet.fresh()) {\n        Account { id, cents } => print(id + cents),\n    }\n}\n",
+            "'Account' is opaque outside the capsule 'wallet': it cannot be destructured here",
+        ),
+    ];
+    for (name, main, want) in cases {
+        let d = wallet_app(&format!("opaque_{name}"), main);
+        let (out, err, code) = ray(&d, &["run"]);
+        assert_ne!(code, 0, "{name}: {out}{err}");
+        assert!(err.contains(want), "{name}: {err}");
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// #486: `opaque` es solo para los reexports de una fachada, y solo de un struct.
+#[test]
+fn opaque_is_only_for_structs_re_exported_by_a_facade() {
+    let d = wallet_app("opaque_misuse", "from wallet import opaque Account;\nfn main() {\n    print(1);\n}\n");
+    let (_, err, code) = ray(&d, &["run"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("'opaque' is only for the re-exports of a capsule facade"), "{err}");
+    std::fs::write(d.join("src/wallet/mod.ray"), "pub from wallet/core import opaque State, open;\n").unwrap();
+    std::fs::write(d.join("src/main.ray"), "import wallet;\nfn main() {\n    print(1);\n}\n").unwrap();
+    let (_, err, code) = ray(&d, &["run"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("'opaque State': only a struct can be re-exported as opaque"), "{err}");
+    let _ = std::fs::remove_dir_all(d);
+}
+
+/// `ray fmt` conserva `opaque` (es parte del contrato de la fachada).
+#[test]
+fn ray_fmt_keeps_opaque() {
+    let d = wallet_app("opaque_fmt", "import wallet;\nfn main() {\n    print(1);\n}\n");
+    let (out, err, code) = ray(&d, &["fmt", "src/wallet/mod.ray"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("pub from wallet/core import opaque Account, open, deposit, balance, leak;"), "{out}");
+    let _ = std::fs::remove_dir_all(d);
+}
+
+/// #487: una función exportada que muestra un tipo que la cápsula no exporta recibe un aviso, y
+/// un alias de fachada usado para construir o casar dice que hay que reexportar el tipo.
+#[test]
+fn a_facade_showing_types_it_does_not_export_gets_a_warning_and_alias_hints() {
+    let d = wallet_app("facade_warning", "import wallet;\nfn main() {\n    print(wallet.fresh().balance());\n}\n");
+    let (out, err, code) = ray(&d, &["check"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        err.contains("warning at 10:5: 'leak' is exported by the capsule 'wallet' and shows the type 'Hidden', which the capsule does not export"),
+        "{err}"
+    );
+    // `Account` es opaco pero SÍ está exportado: `fresh`, `open`… no avisan.
+    assert_eq!(err.matches("warning at").count(), 1, "{err}");
+    let _ = std::fs::remove_dir_all(d);
+
+    let d = wallet_app("alias_hint", "import wallet;\nfn main() {\n    let s: wallet.St = wallet.St.Open;\n    print(1);\n}\n");
+    let (_, err, code) = ray(&d, &["run"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("a `pub type` alias only names a type in signatures — re-export the type itself with `pub from … import St;`"), "{err}");
+    let _ = std::fs::remove_dir_all(d);
+}
+
 // ---------------------------------------------------------------------------------------------
 // LSP
 // ---------------------------------------------------------------------------------------------

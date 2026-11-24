@@ -896,6 +896,8 @@ struct Checker {
     /// (nombre pelado y posición real)? Solo ahí aplica el override de una función del prelude;
     /// un módulo (`std::json`, `catalog::store`) o el propio prelude siguen viendo la del prelude.
     current_fn_is_root: bool,
+    /// El módulo (con `::`) de la función que se está comprobando; `""` en la entrada.
+    current_fn_module: String,
     /// #356: mientras se validan los destinos de los alias de tipo, un parámetro de tipo puede
     /// ser clave de `Map` sin bound (un alias no los declara; lo valida cada uso).
     key_params_allowed: bool,
@@ -962,6 +964,10 @@ struct Checker {
     /// `Program::capsule_surfaces` / `Program::entry_module`).
     capsule_surfaces: HashMap<String, HashMap<String, String>>,
     entry_module: String,
+    /// rayhotel #486: structs reexportados como `opaque` → su cápsula (ver `Program::opaque_types`).
+    opaque_types: HashMap<String, String>,
+    /// rayhotel #487: los tipos que cada cápsula exporta, para el consejo de `pub from`.
+    capsule_types: HashMap<String, HashSet<String>>,
     /// Exigir la función de entrada `main` (DESIGN §11). `true` por defecto (`check`/`check_all`: un
     /// programa ejecutable la necesita). El LSP la pone en `false` al analizar un **archivo de módulo**
     /// (submódulo `pub`, sin `main`): un módulo suelto es legítimo sin entrada, y esa regla es de

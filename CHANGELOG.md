@@ -19,6 +19,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
     lleva rutas de la máquina.
   - `[app.macos] frameworks = ["out/libpuente.dylib"]`: `ray bundle` la copia a
     `Contents/Frameworks` antes de firmar, y el binario la busca ahí por `@rpath`.
+- **Cápsulas — tipos opacos** (rayhotel #486): `pub from shop/model import opaque Invoice;`
+  reexporta un struct sin su forma. Fuera de la cápsula se nombra, se pasa, se compara, se
+  serializa y se usa con las funciones que la fachada exporta; no se construye con un literal,
+  no se desestructura y sus campos no se leen ni se escriben. Dentro es un struct corriente.
+  Hasta ahora cualquier struct exportado se podía falsificar y modificar desde fuera.
+- **Cápsulas — el contrato debe poder nombrarse** (rayhotel #487): aviso cuando una función
+  exportada muestra un tipo que la cápsula no exporta, y un consejo (`pub from`) cuando se
+  intenta construir o casar un tipo por un alias `pub type` de la fachada.
 
 - **Paquete `db` 0.11.0 — `db/sqlite` espera un candado sin retener el hilo** (rayhotel #491, sin
   publicar en el índice todavía). Con varios escritores a la vez, el que esperaba el candado lo

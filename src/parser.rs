@@ -301,7 +301,7 @@ impl Parser {
     }
 
     /// from_import_decl = [ 'pub' ] 'from' module_path 'import' name { ',' name } [ ',' ] ';'
-    /// name            = IDENT [ 'as' IDENT ]                                    (M11.3b/.5/.6a)
+    /// name            = [ 'opaque' ] IDENT [ 'as' IDENT ]                       (M11.3b/.5/.6a)
     /// La **coma final** es opcional (M104): con la lista de nombres envuelta en varias líneas —lo que
     /// emite `ray fmt` al pasar de 100 columnas— añadir un nombre toca UNA línea del diff, no dos.
     /// `is_pub` (M11.6a): el `pub` ya lo consumió el bucle de `parse_program` (reexport).
@@ -311,13 +311,19 @@ impl Parser {
         self.expect(&TokenKind::Import, "'import' after 'from M'")?;
         let mut names = Vec::new();
         loop {
+            // `opaque T` (rayhotel #486): palabra contextual — solo delante de OTRO identificador
+            // (un ítem llamado `opaque` se sigue importando como siempre).
+            let opaque = self.check_ident("opaque") && matches!(self.tokens.get(self.pos + 1).map(|t| &t.kind), Some(TokenKind::Ident(_)));
+            if opaque {
+                self.advance();
+            }
             let (name, line, col) = self.expect_ident("a name to import")?;
             let alias = if self.eat(&TokenKind::As) {
                 Some(self.expect_ident("the alias after 'as'")?.0)
             } else {
                 None
             };
-            names.push(ImportName { name, alias, line, col });
+            names.push(ImportName { name, alias, opaque, line, col });
             if !self.eat(&TokenKind::Comma) {
                 break;
             }

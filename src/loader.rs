@@ -492,12 +492,43 @@ fn load_impl(entry: &Path, dep_roots: &DepRoots, entry_source: Option<&str>, pro
         .filter(|m| m.path.file_name().is_some_and(|n| n == "mod.ray"))
         .filter_map(|m| surfaces.get(&m.name).map(|s| (ns_prefix(&m.name), s.values.clone())))
         .collect();
+    // rayhotel #487: los tipos que cada fachada exporta (declarados `pub` en ella o reexportados).
+    let capsule_types: HashMap<String, HashSet<String>> = modules
+        .iter()
+        .filter(|m| m.path.file_name().is_some_and(|n| n == "mod.ray"))
+        .filter_map(|m| surfaces.get(&m.name).map(|s| (ns_prefix(&m.name), s.types.values().cloned().collect())))
+        .collect();
+    // rayhotel #486: `pub from M import opaque T;` — struct global → cápsula fuera de la cual es
+    // opaco. Solo una FACHADA puede hacerlo, con `pub`, y solo de un struct.
+    let mut opaque_types: HashMap<String, String> = HashMap::new();
+    for m in &modules {
+        for fi in &m.program.from_imports {
+            for n in fi.names.iter().filter(|n| n.opaque) {
+                let fail = |msg: &str| Err(render(&m.source, n.line, n.col, n.name.chars().count(), &m.name, msg));
+                if !fi.is_pub || m.path.file_name().is_none_or(|f| f != "mod.ray") {
+                    return fail("'opaque' is only for the re-exports of a capsule facade: `pub from … import opaque T;` in a mod.ray");
+                }
+                let Some(global) = surfaces.get(&fi.module).and_then(|s| s.types.get(&n.name)) else {
+                    return fail(&format!("'opaque {}': only a struct can be re-exported as opaque", n.name));
+                };
+                let is_struct = modules.iter().any(|d| {
+                    let prefix = module_prefix(d);
+                    d.program.structs.iter().any(|s| global_fn(&prefix, &s.name) == *global)
+                });
+                if !is_struct {
+                    return fail(&format!("'opaque {}': only a struct can be re-exported as opaque", n.name));
+                }
+                opaque_types.insert(global.clone(), ns_prefix(&m.name));
+            }
+        }
+    }
     let types = collect_types(&modules); // todos los tipos: para distinguir "privado" de "no existe"
     let mut merged = Program {
         functions: Vec::new(), structs: Vec::new(), enums: Vec::new(), consts: Vec::new(),
         traits: Vec::new(), impls: Vec::new(), imports: Vec::new(), from_imports: Vec::new(),
         ufcs_aliases: HashMap::new(), module_bands: Vec::new(),
         capsule_surfaces: HashMap::new(), entry_module: String::new(),
+        capsule_types: HashMap::new(), opaque_types: HashMap::new(),
         expr_spans: HashMap::new(), field_name_pos: HashMap::new(), type_name_sites: Vec::new(),
         externs: Vec::new(), type_aliases: Vec::new(),
         // El programa fusionado se usa para check/run (AST desazucarado), no para formatear → tablas vacías.
@@ -632,6 +663,8 @@ fn load_impl(entry: &Path, dep_roots: &DepRoots, entry_source: Option<&str>, pro
     }
     merged.ufcs_aliases = ufcs_aliases;
     merged.capsule_surfaces = capsule_surfaces;
+    merged.capsule_types = capsule_types;
+    merged.opaque_types = opaque_types;
     // También con la raíz dada (el LSP sobre un submódulo abierto): la identidad es la real.
     if in_capsule_entry || project_root_override.is_some() {
         merged.entry_module = ns_prefix(&entry_name);

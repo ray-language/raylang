@@ -20475,6 +20475,7 @@ instancia de un `P: MapKey`.
 
 De paso: la llamada a una closure local que se llama como una función genérica del programa
 ya no hereda sus argumentos de tipo en nativo (E0109).
+
 ## 441. M463 — `std/audio` graba: la entrada de audio (nov 2026)
 
 ray-daw (#422) no podía grabar: `std/audio` era solo salida y la FFI no llega a CoreAudio, que
@@ -20975,6 +20976,7 @@ registro, y el nativo —que leía bloqueando con un clon del extremo, lo que im
 sondea `PeekNamedPipe` cada 1 ms sin retener el clon mientras no hay datos. La variante sin
 fibras (hilo por tarea) suelta el clon entre intentos por la misma razón. Coste: hasta 1 ms más
 de latencia al leer la salida de un hijo en un binario nativo de Windows.
+
 ## 455. Ronda pepa: patrones de `exports`, ducking y sonidos del sistema (#421, #346, #331, nov 2026)
 
 **Patrones de `exports` (#421).** Un import map no tiene comodines: solo claves exactas y
@@ -22156,3 +22158,36 @@ espacios se partía.
 que hay en `Contents/Frameworks`, y ray-daw notarizó una estructura igual firmando a mano, pero
 aquí solo se comprobó el bundle sin firma (`--sign none`). Linux y Windows: `link_dirs` usa el
 mismo camino; no hay equivalente de `frameworks` (la biblioteca va junto al ejecutable).
+
+## 481. Tipos opacos: la fachada decide la forma (rayhotel #486, #487, nov 2026)
+
+**El hueco.** Tras §477 una cápsula controla qué FUNCIONES se alcanzan desde fuera, pero no qué
+se hace con sus valores: un struct exportado se construía con un literal y sus campos se leían y
+escribían desde cualquier sitio. Una cápsula no podía sostener un invariante (un saldo, un id).
+
+**La decisión** (IDEAS §132, tres opciones): `pub from M import opaque T;`. Lo decide la FACHADA
+al reexportar, no el tipo al declararse. Encaja con §477 — `pub` en un interno es «público dentro
+de la cápsula» y el contrato lo arma `mod.ray` —, no cambia el significado de ningún struct
+existente y no añade visibilidad por campo, que habría obligado a revisar todos.
+
+**Cómo.** El loader deja `opaque_types` (struct global → cápsula). El checker rechaza tres cosas
+cuando el sitio está fuera de esa cápsula: el literal de struct, el acceso a campo (lectura y
+escritura; un campo-función en posición de llamada deja de contar como campo, así que `x.f()` cae
+a UFCS) y el patrón de struct. Nada más: el tipo se nombra, se pasa, y lo que su módulo derivó
+(`==`, `Show`, `ToJson`) funciona.
+
+**Dónde está un sitio.** Hasta ahora «el módulo del sitio» era la banda de su línea. No basta: el
+código que genera un `@derive` no tiene línea propia (cae en la entrada), y el `eq` derivado de
+un tipo opaco — que toca sus campos — se rechazaba como si estuviera fuera. El checker guarda
+ahora el módulo de la FUNCIÓN que comprueba, sacado de su nombre global (el del tipo, si es un
+método `Tipo#m`), y ese manda.
+
+**#487.** Dos diagnósticos. Un aviso (`warnings.rs`, sobre el AST fusionado, donde las firmas ya
+llevan nombres globales): una función exportada por una cápsula cuya firma muestra un tipo de la
+cápsula que la fachada no exporta. Un tipo opaco SÍ está exportado, así que no avisa. Y un
+consejo en los errores de construir o casar por `<cápsula>::X` cuando `X` no es un struct ni un
+enum: es un alias `pub type`, que solo sirve en firmas.
+
+**Fuera.** Un enum opaco (sin construir variantes ni casarlas) no se ha pedido. `print(x)` de un
+tipo opaco muestra sus campos: oculta la forma al código, no a la vista. El checker auto-alojado
+no conoce `opaque`.

@@ -120,7 +120,11 @@ anotaciones = { '@' IDENT [ '(' IDENT { ',' IDENT } ')' ] } ;
   `P.ray` y `P/mod.ray` a la vez es error (forma canónica única). La regla va sobre el ARCHIVO,
   no sobre el texto del import: el mismo módulo interno nombrado por otra ruta (`import
   src/P/interno;`) es el mismo error. La fachada arma su cara pública con lo que declara `pub` y
-  con `pub from P/interno import a, B as c;` (reexportar). Las cápsulas anidan: `P/Q/mod.ray` es
+  con `pub from P/interno import a, B as c;` (reexportar). Un struct se puede reexportar
+  **opaco** — `pub from P/interno import opaque T;` (`opaque` es contextual: solo delante de un
+  nombre) —: fuera de la cápsula `T` se nombra, se pasa y se usa con lo que la cápsula exporta,
+  pero no se construye con un literal, no se desestructura y no se accede a sus campos; dentro
+  es un struct corriente. Solo una fachada puede hacerlo, y solo de un struct. Las cápsulas anidan: `P/Q/mod.ray` es
   interna a `P`; quien está dentro de `P` la usa por su fachada. Dentro de un paquete, sus
   módulos se importan por el `[package] name`, sea cual sea la clave con que lo declare quien lo
   consume.

@@ -22129,6 +22129,7 @@ El harness diferencial gana un generador (`struct_patterns_over_type`): es la mi
 
 `dyn Trait` capturado por `spawn` queda como límite declarado: es un `Rc<dyn …>`, no `Send`, la
 misma razón que los closures.
+
 ## 480. Una biblioteca C propia: enlazarla y empaquetarla (ray-daw #478, nov 2026)
 
 **Por qué pesa.** El límite de la FFI (§474, IDEAS §131) manda a un puente en C todo lo que no

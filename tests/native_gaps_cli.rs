@@ -274,3 +274,64 @@ fn main() {
         "20\n[2, 4, 6, 20]\n[3, 10]\n16\n0\n4\n6\n",
     );
 }
+
+/// rayhotel #489: los patrones de struct (`Invoice { id, status: Status.Paid(n) }`) no compilaban
+/// en nativo («struct destructuring pattern is not supported») aunque la VM los ejecuta: en el
+/// escrutinio, anidados en un `Option`, con sub-patrones de enum, tupla y literal, con guarda y
+/// sobre un struct genérico.
+#[test]
+fn struct_patterns_in_match() {
+    same_everywhere(
+        "struct_patterns",
+        r#"enum Status { Open, Paid(int), Void(string), }
+struct Line { qty: int, label: string, }
+struct Invoice { id: int, status: Status, first: Option<Line>, tag: (int, string), }
+struct Pair<T> { left: T, right: T, }
+
+fn show(i: Invoice) -> string {
+    match (i) {
+        Invoice { id, status: Status.Paid(n), first: _, tag: _ } if n > 100 => "big ${id}:${n}",
+        Invoice { id, status: Status.Paid(n), first: Option.Some(Line { qty, label }), tag: _ } => "paid ${id}:${n} ${qty}x${label}",
+        Invoice { id: 7, status: _, first: _, tag: (k, "lucky") } => "seven ${k}",
+        Invoice { id, status: Status.Void(why), first: Option.None, tag: (_, t) } => "void ${id} ${why} ${t}",
+        Invoice { id, status, first, tag } => "other ${id} ${first.is_some()} ${tag.0}",
+    }
+}
+
+fn opt(o: Option<Invoice>) -> int {
+    match (o) {
+        Option.Some(Invoice { id, status: Status.Open, first: _, tag: _ }) => id,
+        Option.Some(Invoice { id, status: _, first: _, tag: _ }) => 0 - id,
+        Option.None => 0,
+    }
+}
+
+fn sum(p: Pair<int>) -> int {
+    match (p) {
+        Pair { left: 0, right } => right,
+        Pair { left, right } => left + right,
+    }
+}
+
+fn line(id: int, s: Status, first: Option<Line>, tag: (int, string)) -> Invoice {
+    Invoice { id: id, status: s, first: first, tag: tag }
+}
+
+fn main() {
+    print(show(line(1, Status.Paid(500), Option.None, (1, "a"))));
+    print(show(line(2, Status.Paid(5), Option.Some(Line { qty: 3, label: "pen" }), (1, "a"))));
+    print(show(line(7, Status.Open, Option.None, (9, "lucky"))));
+    print(show(line(4, Status.Void("dup"), Option.None, (1, "t"))));
+    print(show(line(5, Status.Open, Option.Some(Line { qty: 1, label: "x" }), (8, "z"))));
+    print(show(line(6, Status.Paid(5), Option.None, (3, "q"))));
+    print(opt(Option.Some(line(9, Status.Open, Option.None, (0, "")))));
+    print(opt(Option.Some(line(9, Status.Paid(1), Option.None, (0, "")))));
+    print(opt(Option.None));
+    print(sum(Pair { left: 0, right: 5 }));
+    print(sum(Pair { left: 2, right: 5 }));
+}
+"#,
+        true,
+        "big 1:500\npaid 2:5 3xpen\nseven 9\nvoid 4 dup t\nother 5 true 8\nother 6 false 3\n9\n-9\n0\n5\n7\n",
+    );
+}

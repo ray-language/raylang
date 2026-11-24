@@ -2592,6 +2592,40 @@ impl Transpiler {
                 if matches!(&dpat.kind, PatternKind::Literal(_)) {
                     continue; // M310: un literal diferido no liga nada (ya se probó en la guarda)
                 }
+                // rayhotel #489: los campos de un struct diferido. Un binding se clona del campo;
+                // un sub-patrón refutable pasa a un temporal propio — una referencia, como los
+                // que deja un patrón de Rust — y sigue por la misma lista de trabajo.
+                if matches!(&dpat.kind, PatternKind::Struct { .. }) {
+                    for (f, sub, fty) in self.struct_pattern_fields(&dpat, &dty)? {
+                        let field = format!("{dtemp}.borrow().{}.clone()", mangle(&f));
+                        match &sub.kind {
+                            PatternKind::Wildcard | PatternKind::Literal(_) => {}
+                            PatternKind::Binding(x) => {
+                                writeln!(prologue, "let {} = &{field};", mangle(x)).unwrap();
+                                all_binds.push((x.clone(), fty));
+                            }
+                            _ => {
+                                let t = format!("__rt_p{pn}");
+                                pn += 1;
+                                writeln!(prologue, "let {t}_v = {field}; let {t} = &{t}_v;").unwrap();
+                                let user_enum = matches!(&sub.kind, PatternKind::Variant { enum_name, .. } if enum_name != "Option" && enum_name != "Result");
+                                if user_enum || matches!(&sub.kind, PatternKind::Struct { .. }) {
+                                    work.push((t, fty, sub));
+                                } else {
+                                    // Option/Result o tupla: un patrón de Rust los destructura.
+                                    let mut patstr = String::new();
+                                    let mut inner_binds: Vec<(String, Type)> = Vec::new();
+                                    let mut inner_def: Vec<(String, Type, Pattern)> = Vec::new();
+                                    self.emit_pattern(&mut patstr, &sub, &fty, &mut inner_binds, &mut inner_def, &mut pn, true)?;
+                                    writeln!(prologue, "let {patstr} = {t} else {{ unreachable!() }};").unwrap();
+                                    all_binds.extend(inner_binds);
+                                    work.extend(inner_def);
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
                 let mut patstr = String::new();
                 let mut inner_binds: Vec<(String, Type)> = Vec::new();
                 let mut inner_def: Vec<(String, Type, Pattern)> = Vec::new();
@@ -2697,8 +2731,14 @@ impl Transpiler {
                     out.push(')');
                 }
             }
+            // rayhotel #489: un struct viaja como `Rc<RefCell<S>>`, que un patrón de Rust no
+            // destructura: temporal + diferido. La prueba de sus campos refutables va a la guarda
+            // (`struct_test`) y sus bindings se recuperan en el prólogo del brazo.
             PatternKind::Struct { .. } => {
-                return Err("struct destructuring pattern is not supported".into())
+                let temp = format!("__rt_p{}", *pn);
+                *pn += 1;
+                out.push_str(&temp);
+                deferred.push((temp, expected.clone(), pat.clone()));
             }
             // M310: tupla → patrón de tupla de Rust, con los tipos de cada posición.
             PatternKind::Tuple(subs) => {
@@ -2741,7 +2781,56 @@ impl Transpiler {
         {
             return Ok(format!("&**{temp} == {}", rust_literal_pattern(e)?));
         }
+        if matches!(pat.kind, PatternKind::Struct { .. }) {
+            return self.struct_test(temp, pat, ty, pn);
+        }
         self.nested_test(&format!("&**{temp}"), pat, ty, pn)
+    }
+
+    /// rayhotel #489: los campos de un patrón de struct con el tipo de cada uno (los parámetros de
+    /// tipo del struct, sustituidos por los argumentos del tipo esperado).
+    fn struct_pattern_fields(&self, pat: &Pattern, expected: &Type) -> Result<Vec<(String, Pattern, Type)>, String> {
+        let PatternKind::Struct { name, fields } = &pat.kind else { return Err("not a struct pattern".into()) };
+        let declared = self.struct_fields.get(name).ok_or_else(|| format!("unknown struct '{name}' in a pattern"))?;
+        let subst: HashMap<String, Type> = match normalize_type(expected) {
+            Type::Struct(_, args) => self.struct_tparams.get(name).cloned().unwrap_or_default().into_iter().zip(args).collect(),
+            _ => HashMap::new(),
+        };
+        fields
+            .iter()
+            .map(|(f, sub)| {
+                let ty = declared.iter().find(|(n, _)| n == f).map(|(_, t)| subst_type(t, &subst)).ok_or_else(|| format!("struct '{name}' has no field '{f}'"))?;
+                Ok((f.clone(), sub.clone(), ty))
+            })
+            .collect()
+    }
+
+    /// La PRUEBA de un patrón de struct sobre `value` (algo que desreferencia a `Rc<RefCell<S>>`):
+    /// la conjunción de las pruebas de sus campos refutables; `true` si todos ligan o descartan.
+    fn struct_test(&self, value: &str, pat: &Pattern, expected: &Type, pn: &mut usize) -> Result<String, String> {
+        let mut conds: Vec<String> = Vec::new();
+        for (f, sub, fty) in self.struct_pattern_fields(pat, expected)? {
+            let test = self.value_test(&format!("{value}.borrow().{}", mangle(&f)), &sub, &fty, pn)?;
+            if test != "true" {
+                conds.push(test);
+            }
+        }
+        Ok(if conds.is_empty() { "true".to_string() } else { format!("({})", conds.join(" && ")) })
+    }
+
+    /// La prueba de un patrón sobre un VALOR (la expresión de un campo), según su tipo: cómo se
+    /// llega de él a lo que casa un patrón de Rust.
+    fn value_test(&self, value: &str, pat: &Pattern, ty: &Type, pn: &mut usize) -> Result<String, String> {
+        match &pat.kind {
+            PatternKind::Wildcard | PatternKind::Binding(_) => Ok("true".to_string()),
+            PatternKind::Struct { .. } => self.struct_test(value, pat, ty, pn),
+            PatternKind::Literal(e) if matches!(e.kind, ExprKind::Str(_)) => Ok(format!("&*{value} == {}", rust_literal_pattern(e)?)),
+            PatternKind::Literal(e) => Ok(format!("{value} == {}", rust_literal_pattern(e)?)),
+            PatternKind::Variant { enum_name, .. } if enum_name != "Option" && enum_name != "Result" => {
+                self.nested_test(&format!("&*{value}"), pat, ty, pn)
+            }
+            PatternKind::Variant { .. } | PatternKind::Tuple(_) => self.nested_test(&format!("&{value}"), pat, ty, pn),
+        }
     }
 
     /// M287: los payloads de una variante (Option/Result → args del tipo esperado; enum de usuario →
@@ -2820,7 +2909,17 @@ impl Transpiler {
                 }
                 Ok(out)
             }
-            PatternKind::Struct { .. } => Err("struct destructuring pattern is not supported".into()),
+            // Un struct dentro de un patrón de Rust: temporal con su prueba en la guarda.
+            PatternKind::Struct { .. } => {
+                let temp = format!("__rt_q{}", *pn);
+                *pn += 1;
+                let test = self.struct_test(&temp, pat, expected, pn)?;
+                if test == "true" {
+                    return Ok("_".to_string());
+                }
+                conds.push(test);
+                Ok(temp)
+            }
             // M310: tupla y literal en una prueba diferida (`matches!`).
             PatternKind::Tuple(subs) => {
                 let elems = match normalize_type(expected) {

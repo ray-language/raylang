@@ -539,6 +539,7 @@ const SEQ_STRUCT_GENS: &[(&str, GenFn)] = &[
     ("option_result_of_type", gen_option_result_of),
     ("aliasing_mutation", gen_aliasing),
     ("match_guards_and_captures", gen_match_guards),
+    ("struct_patterns_over_type", gen_struct_patterns),
 ];
 
 /// Generadores ESTRUCTURALES de concurrencia (VM ↔ nativo con fibras).
@@ -1006,6 +1007,40 @@ fn probe_@I@() {
         }
     }
     print(acc.join(","));
+}
+"#;
+    (vec![], fill(tpl, i, &t, r.int_in(1, 9)))
+}
+
+/// Patrones de struct con un campo del tipo sorteado (rayhotel #489): en el escrutinio, dentro
+/// de un `Option`, con un literal, con un sub-patrón de `Option` y con guarda.
+fn gen_struct_patterns(r: &mut Rng, i: usize) -> (Vec<&'static str>, String) {
+    let t = any_ty(r, i);
+    let tpl = r#"struct Rec_@I@ { v: @T@, n: int, o: Option<@T@>, }
+fn pick_@I@(r: Rec_@I@) -> int {
+    match (r) {
+        Rec_@I@ { v, n: 0, o: _ } => if (v == @A@) { 1 } else { 2 },
+        Rec_@I@ { v: _, n, o: Option.Some(x) } if x == @B@ => n + 10,
+        Rec_@I@ { v, n, o } => if (v == @B@ && o.is_none()) { n + 20 } else { n + 30 },
+    }
+}
+fn inside_@I@(o: Option<Rec_@I@>) -> int {
+    match (o) {
+        Option.Some(Rec_@I@ { v, n: @K@, o: _ }) => if (v == @A@) { 100 } else { 200 },
+        Option.Some(Rec_@I@ { v: _, n, o: _ }) => n,
+        Option.None => 0 - 1,
+    }
+}
+fn probe_@I@() {
+    print(pick_@I@(Rec_@I@ { v: @A@, n: 0, o: Option.None }));
+    print(pick_@I@(Rec_@I@ { v: @B@, n: 0, o: Option.None }));
+    print(pick_@I@(Rec_@I@ { v: @A@, n: 3, o: Option.Some(@B@) }));
+    print(pick_@I@(Rec_@I@ { v: @A@, n: 3, o: Option.Some(@A@) }));
+    print(pick_@I@(Rec_@I@ { v: @B@, n: 4, o: Option.None }));
+    print(inside_@I@(Option.Some(Rec_@I@ { v: @A@, n: @K@, o: Option.None })));
+    print(inside_@I@(Option.Some(Rec_@I@ { v: @B@, n: @K@, o: Option.None })));
+    print(inside_@I@(Option.Some(Rec_@I@ { v: @A@, n: 77, o: Option.None })));
+    print(inside_@I@(Option.None));
 }
 "#;
     (vec![], fill(tpl, i, &t, r.int_in(1, 9)))

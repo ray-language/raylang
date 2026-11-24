@@ -621,6 +621,23 @@ fn this_process() -> Result<libloading::Library, String> {
     }
 }
 
+// Las carpetas `[native] link_dirs` del proyecto del directorio actual (el `ray.toml` más cercano
+// hacia arriba), absolutas. Se leen una vez; vacío si no hay proyecto o no declara ninguna.
+#[cfg(all(feature = "ffi", not(target_arch = "wasm32")))]
+fn project_link_dirs() -> &'static [std::path::PathBuf] {
+    static DIRS: std::sync::OnceLock<Vec<std::path::PathBuf>> = std::sync::OnceLock::new();
+    DIRS.get_or_init(|| {
+        let Ok(cwd) = std::env::current_dir() else { return Vec::new() };
+        let Some(root) = crate::manifest::Manifest::find(&cwd).and_then(|toml| toml.parent().map(std::path::Path::to_path_buf)) else {
+            return Vec::new();
+        };
+        match crate::manifest::Manifest::load(&root) {
+            Ok(Some(m)) => m.native_link_dirs.iter().map(|d| m.root.join(d)).collect(),
+            _ => Vec::new(),
+        }
+    })
+}
+
 // Abre (o recupera de caché) el handle de la librería `lib`. Prueba los nombres de plataforma y, si
 // ninguno resuelve, cae al **handle global** del proceso (`dlopen(NULL)`), donde están libc/libm.
 #[cfg(all(feature = "ffi", not(target_arch = "wasm32")))]
@@ -630,7 +647,25 @@ fn open_lib(lib: &str) -> Result<&'static libloading::Library, String> {
         return Ok(l);
     }
     let mut opened: Option<libloading::Library> = None;
+    // ray-daw #478: primero las carpetas `[native] link_dirs` del proyecto (una librería propia,
+    // compilada junto a la app): `ray run` la encuentra sin `DYLD_LIBRARY_PATH`/`LD_LIBRARY_PATH`.
+    'dirs: for dir in project_link_dirs() {
+        for name in lib_filenames(lib) {
+            let file = dir.join(&name);
+            if !file.is_file() {
+                continue;
+            }
+            // SAFETY: el mismo contrato que abajo.
+            if let Ok(l) = unsafe { libloading::Library::new(&file) } {
+                opened = Some(l);
+                break 'dirs;
+            }
+        }
+    }
     for name in lib_filenames(lib) {
+        if opened.is_some() {
+            break;
+        }
         // SAFETY: cargar una librería puede ejecutar sus inicializadores; es el contrato del FFI
         // (declarar la extern fn es el acto consciente de abrir la puerta).
         if let Ok(l) = unsafe { libloading::Library::new(&name) } {

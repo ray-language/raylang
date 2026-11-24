@@ -22129,3 +22129,30 @@ El harness diferencial gana un generador (`struct_patterns_over_type`): es la mi
 
 `dyn Trait` capturado por `spawn` queda como límite declarado: es un `Rc<dyn …>`, no `Send`, la
 misma razón que los closures.
+
+## 480. Una biblioteca C propia: enlazarla y empaquetarla (ray-daw #478, nov 2026)
+
+**Por qué pesa.** El límite de la FFI (§474, IDEAS §131) manda a un puente en C todo lo que no
+cubre: callbacks retenidos, structs por valor, variádicas. Ese camino no estaba terminado: el
+puente funcionaba con `ray run` y `DYLD_LIBRARY_PATH`, el build nativo solo con un
+`LIBRARY_PATH` que nadie documentó, y `ray bundle` no copiaba la biblioteca — ray-daw tenía que
+rehacer a mano firma, notaría y empaquetado, es decir, salirse de `ray release`.
+
+**Qué se añade.** Dos claves, las dos declarativas:
+
+- `[native] link_dirs`: las carpetas del proyecto con bibliotecas. El cargador de la VM las prueba
+  antes que los nombres de plataforma; el build nativo las pasa como `-L`. Sin `--release` van
+  además como rpath, para que el binario de desarrollo corra donde se compiló; con `--release` no
+  — un binario distribuible no lleva rutas de la máquina que lo construyó (el reproche de
+  ray-sublime #119).
+- `[app.macos] frameworks`: lo que `ray bundle` copia a `Contents/Frameworks`, antes de firmar. El
+  binario lleva el rpath `@executable_path/../Frameworks`, así que la biblioteca se compila con
+  `-install_name @rpath/…`.
+
+Los flags del build por cargo pasan a `CARGO_ENCODED_RUSTFLAGS`: con `RUSTFLAGS` una ruta con
+espacios se partía.
+
+**Lo que no se probó.** La firma con una identidad real y la notaría: `codesign --deep` cubre lo
+que hay en `Contents/Frameworks`, y ray-daw notarizó una estructura igual firmando a mano, pero
+aquí solo se comprobó el bundle sin firma (`--sign none`). Linux y Windows: `link_dirs` usa el
+mismo camino; no hay equivalente de `frameworks` (la biblioteca va junto al ejecutable).

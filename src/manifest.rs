@@ -75,6 +75,10 @@ pub struct Manifest {
     /// M147: `[native] embed` — directorios de assets embebidos en el binario nativo (y el
     /// espacio de nombres de `std/embed` en todos los motores). Vacío si no hay `[native]`.
     pub native_embed: Vec<String>,
+    /// ray-daw #478: `[native] link_dirs` — carpetas (relativas a la raíz) donde el enlazador
+    /// del binario nativo —y el cargador de la VM— buscan las librerías de un `extern "lib"`
+    /// propias del proyecto (un puente en C compilado junto a la app). Vacío si no hay.
+    pub native_link_dirs: Vec<String>,
     /// M369: `[web] package = "web"` — el directorio (relativo a la raíz) con un paquete npm
     /// (`package.json` con `name` y `exports`) que el PAQUETE ofrece a las apps que dependen de
     /// él: entra al espacio embed como `node_modules/<nombre npm>/…`, `std/ui` lo sirve en
@@ -130,6 +134,9 @@ pub struct Manifest {
     pub app_macos_sign: Option<String>,
     pub app_macos_notary: Option<String>,
     pub app_macos_entitlements: Option<String>,
+    /// ray-daw #478: `[app.macos] frameworks` — librerías dinámicas (rutas relativas a la raíz)
+    /// que `ray bundle` copia a `Contents/Frameworks` del `.app`, antes de firmar.
+    pub app_macos_frameworks: Vec<String>,
     /// M440: `[app.windows] sign` — sujeto del certificado o ruta de un `.pfx` para signtool.
     pub app_windows_sign: Option<String>,
     /// M209 (feedback 26 de ray-remote): `[app.plist]` — claves extra que `ray bundle` vuelca tal
@@ -275,6 +282,8 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
     let mut registry_mirror = None;
     let mut native_without = Vec::new();
     let mut native_embed = Vec::new();
+    let mut native_link_dirs = Vec::new();
+    let mut app_macos_frameworks = Vec::new();
     let mut web_package = None;
     let mut dev_listen = None;
     let mut frontend: Option<Frontend> = None;
@@ -386,6 +395,11 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "embed" => {
                     native_embed = parse_string_array(value_raw)
                         .ok_or_else(|| err(num, "the value must be an array of strings, e.g. [\"assets\"]"))?;
+                }
+                // ray-daw #478: `link_dirs = ["out"]` — dónde buscar las librerías C del proyecto.
+                "link_dirs" => {
+                    native_link_dirs = parse_string_array(value_raw)
+                        .ok_or_else(|| err(num, "the value must be an array of strings, e.g. [\"out\"]"))?;
                 }
                 _ => {} // otras claves de [native] se ignoran por ahora (extensibilidad)
             },
@@ -504,6 +518,11 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
                 "icon" => app_icon_macos = Some(as_string()?),
                 "notary" => app_macos_notary = Some(as_string()?),
                 "entitlements" => app_macos_entitlements = Some(as_string()?),
+                // ray-daw #478: `frameworks = ["out/libhost.dylib"]` → `Contents/Frameworks`.
+                "frameworks" => {
+                    app_macos_frameworks = parse_string_array(value_raw)
+                        .ok_or_else(|| err(num, "the value must be an array of strings, e.g. [\"out/libhost.dylib\"]"))?;
+                }
                 _ => {} // otras claves de [app.macos] se ignoran por ahora (extensibilidad)
             },
             "app.windows" => match key {
@@ -559,6 +578,8 @@ pub(crate) fn parse(src: &str, root: PathBuf) -> Result<Manifest, String> {
         registry_mirror,
         native_without,
         native_embed,
+        native_link_dirs,
+        app_macos_frameworks,
         web_package,
         dev_listen,
         frontend,

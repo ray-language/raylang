@@ -129,7 +129,11 @@ contexts:
 
   definitions:
     # `struct Punto` / `enum Figura` / `trait Mostrable`: la palabra clave + el nombre de tipo.
-    - match: '\b(struct|enum|trait)\s+({{user_type}})'
+    # `entity.name.type` es SOLO para el nombre que se DEFINE (struct/enum/trait/type): es lo que
+    # Sublime lista como símbolo (Goto Symbol, el panel de símbolos). Un USO de un tipo lleva
+    # `support.type` — antes cada uso salía en la lista como si fuera otra definición
+    # (ray-sublime #479).
+    - match: '\b(struct|enum|trait|type)\s+({{user_type}})'
       captures:
         1: storage.type.raylang
         2: entity.name.type.raylang
@@ -137,9 +141,9 @@ contexts:
     - match: '\b(impl)\s+({{user_type}})\s+(for)\s+({{user_type}})'
       captures:
         1: storage.type.raylang
-        2: entity.name.type.raylang
+        2: support.type.raylang
         3: keyword.control.raylang
-        4: entity.name.type.raylang
+        4: support.type.raylang
     # `extern "lib" [blocking] { … }` (M41): bloque FFI; 'blocking' es contextual.
     - match: '\b(extern)\b'
       scope: storage.modifier.raylang
@@ -172,7 +176,7 @@ contexts:
       scope: constant.other.raylang
     # Nombre de tipo de usuario por convención (empieza en mayúscula): struct/enum/variante/etc.
     - match: '\b{{user_type}}\b'
-      scope: entity.name.type.raylang
+      scope: support.type.raylang
 
   literals:
     - match: '\b(true|false)\b'

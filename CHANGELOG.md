@@ -11,6 +11,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   espera, porque los demás hilos del scheduler despertaban cada 50 µs a mirar si había trabajo.
   Ahora, pasados 5 ms sin trabajo, duermen hasta que lo hay. Medido: de 37 % a 6 %. El binario
   nativo no tenía el problema.
+- **Editores — los usos de un tipo ya no cuentan como definiciones** (ray-sublime #479): las
+  gramáticas de Sublime y VS Code marcaban cada uso de un tipo con el mismo scope que su
+  definición (`entity.name.type`), y Sublime listaba cada uso en Goto Symbol. Ahora ese scope
+  queda para el nombre que sigue a `struct`, `enum`, `trait` y `type`; los usos llevan
+  `support.type`. Llega a los editores cuando se publiquen sus paquetes.
 
 - **Binario nativo — patrones de struct en `match`** (rayhotel #489): `match (i) { Invoice { id,
   status: Status.Paid(n) } => … }` se rechazaba con «struct destructuring pattern is not

@@ -140,9 +140,9 @@
       "match": "\\b(impl)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s+(for)\\s+([A-Za-z_][A-Za-z0-9_]*)",
       "captures": {
         "1": { "name": "storage.type.impl.raylang" },
-        "2": { "name": "entity.name.type.raylang" },
+        "2": { "name": "support.type.raylang" },
         "3": { "name": "keyword.control.raylang" },
-        "4": { "name": "entity.name.type.raylang" }
+        "4": { "name": "support.type.raylang" }
       }
     },
     "function-definition": {
@@ -180,7 +180,7 @@
       "match": "\\b[A-Z][A-Z0-9_]*[A-Z0-9]\\b"
     },
     "user-types": {
-      "name": "entity.name.type.raylang",
+      "name": "support.type.raylang",
       "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
     },
     "booleans": {

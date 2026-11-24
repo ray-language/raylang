@@ -1699,6 +1699,18 @@ impl Transpiler {
                         write!(out, "(Rc::new({}.clone()) as {})", mangle(name), dyn_ty).unwrap();
                         return Ok(());
                     }
+                    // Un closure local usado como VALOR: su `let` lo deja con el tipo CONCRETO del
+                    // closure (`Rc<{closure}>`, para que la llamada directa `f(x)` se despache
+                    // estática), y la coerción a `Rc<dyn Fn>` solo es implícita en un argumento o
+                    // un campo. Dentro de un array, una tupla, un `Some(…)` o las ramas de un
+                    // `if`/`match` no la hay: `[f, g]` daba E0308 (dos closures = dos tipos). El
+                    // cast explícito vale en todas las posiciones (y es la identidad si ya es dyn).
+                    if matches!(normalize_type(ty), Type::Fn(..)) {
+                        if let Ok(dyn_ty) = rust_ty(ty, &self.enums, &self.tparams) {
+                            write!(out, "({}.clone() as {})", mangle(name), dyn_ty).unwrap();
+                            return Ok(());
+                        }
+                    }
                     // Variable local: clonar al leer los valores de heap (Rc → bump barato); escalares Copy.
                     let heap = is_heap(ty);
                     out.push_str(&mangle(name));
@@ -1769,6 +1781,15 @@ impl Transpiler {
                 } else if matches!(add_ty, Some(Type::Array(_))) {
                     // arreglos (M11.7b): `a + b` es un arreglo NUEVO con los elementos (clonados) de ambos.
                     // Dos `.borrow()` compartidos coexisten (incl. `a + a`); el `clone()` libera el primero.
+                    // Con un operando `[]` el resultado es una copia del otro: sin `extend` no queda
+                    // ningún `Vec::new()` suelto que rustc no sepa tipar (`xs + []` daba E0283).
+                    let is_empty = |e: &Expr| matches!(&e.kind, ExprKind::ArrayLit(v) if v.is_empty());
+                    if is_empty(left) || is_empty(right) {
+                        out.push_str("{ let __rt_v = ");
+                        self.emit_expr(out, if is_empty(left) { right } else { left })?;
+                        out.push_str(".borrow().clone(); Rc::new(std::cell::RefCell::new(__rt_v)) }");
+                        return Ok(());
+                    }
                     out.push_str("{ let mut __rt_v = ");
                     self.emit_expr(out, left)?;
                     out.push_str(".borrow().clone(); __rt_v.extend(");

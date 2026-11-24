@@ -13,6 +13,35 @@ use super::*;
 const PROCESS_EXCLUDED: &str = "process: not available in this build (the process subsystem is excluded; it always is on iOS and Android)";
 
 impl Transpiler {
+    /// ¿`e` es una función anónima de ARITMÉTICA ESCALAR pura? Parámetros escalares y un cuerpo
+    /// de una sola expresión hecha de literales, variables escalares, operadores, casts e `if`
+    /// con valor: sin llamadas, sin asignaciones, sin índices ni campos. Un closure así NO puede
+    /// tocar ningún arreglo, así que `map`/`filter`/`fold` pueden recorrer el receptor con su
+    /// iterador prestado (lo que LLVM vectoriza); cualquier otro va por índice sobre el arreglo
+    /// vivo, que es lo que hace el prelude. Conservador a propósito: ante la duda, `false`.
+    pub(super) fn is_scalar_pure_fn(&self, e: &Expr) -> bool {
+        fn scalar(t: &Type) -> bool {
+            matches!(t, Type::Int | Type::Float | Type::Bool | Type::Char | Type::UInt(_))
+        }
+        fn block_ok(t: &Transpiler, f: &crate::ast::FnExpr, b: &crate::ast::Block) -> bool {
+            b.statements.is_empty() && b.tail.as_ref().is_some_and(|e| ok(t, f, e))
+        }
+        fn ok(t: &Transpiler, f: &crate::ast::FnExpr, e: &Expr) -> bool {
+            match &e.kind {
+                ExprKind::Int(..) | ExprKind::Float(_) | ExprKind::Bool(_) | ExprKind::Char(_) => true,
+                ExprKind::Ident(n) => f.params.iter().any(|p| p.name == *n) || t.lookup(n).is_some_and(scalar),
+                ExprKind::Unary { expr, .. } => ok(t, f, expr),
+                ExprKind::Binary { left, right, .. } => ok(t, f, left) && ok(t, f, right),
+                ExprKind::Cast { expr, ty } => scalar(ty) && ok(t, f, expr),
+                ExprKind::If { cond, then_branch, else_branch: Some(eb) } => ok(t, f, cond) && block_ok(t, f, then_branch) && ok(t, f, eb),
+                ExprKind::Block(b) => block_ok(t, f, b),
+                _ => false,
+            }
+        }
+        let ExprKind::Func(f) = &e.kind else { return false };
+        f.params.iter().all(|p| scalar(&p.ty)) && block_ok(self, f, &f.body)
+    }
+
     /// Nombres de las variables en ámbito cuyo tipo es `Channel`/`Task` (los valores compartibles entre
     /// hilos). Se clonan antes de un `spawn` para que el closure `move` no consuma el original. Dedup:
     /// el nombre más interno (shadowing) gana, y no se repite.
@@ -152,6 +181,26 @@ impl Transpiler {
                     let pt = pt.clone();
                     self.emit_typed(out, a, &pt)?;
                 }
+                // Un `[]` para un parámetro GENÉRICO (`glen([], x)` con `fn glen<P>(xs: [P], d: P)`):
+                // el literal no se tipa solo, pero los demás argumentos ligan `P`. Con el tipo del
+                // parámetro ya sustituido se emite como cualquier `[]` anotado; antes la función
+                // entera quedaba fuera del subconjunto nativo («empty array literal without an
+                // annotation») aunque el checker la tipa.
+                Some(pt) if no_marked && matches!(&a.kind, ExprKind::ArrayLit(es) if es.is_empty()) => {
+                    let sig_tps: Vec<String> = callee_tps.iter().cloned().collect();
+                    let mut subst: HashMap<String, Type> = HashMap::new();
+                    for (p, other) in sig_params.iter().zip(eff.iter()) {
+                        if let Ok(at) = self.type_of(other) {
+                            unify(&self.classify(p), &self.classify(&at), &sig_tps, &mut subst);
+                        }
+                    }
+                    let closed = subst_type(&self.classify(pt), &subst);
+                    if ty_mentions_tparam(&closed, &callee_tps) {
+                        self.emit_call_arg(out, a, false)?;
+                    } else {
+                        self.emit_typed(out, a, &closed)?;
+                    }
+                }
                 _ => self.emit_call_arg(out, a, marked.contains(&i))?,
             }
             out.push_str("; ");
@@ -184,8 +233,15 @@ impl Transpiler {
             }
         }
         if sig.tparams.iter().all(|t| subst.contains_key(t)) {
-            if !sig.keyed {
-                return Ok(String::new()); // rustc los infiere de los argumentos
+            // rustc los infiere de los argumentos… salvo el que SOLO aparece dentro de un
+            // `Channel<…>`: el canal viaja borrado (`__RayChan<__RaySend>`) y su `P` no está en la
+            // firma de Rust — `drain(ch)` con `fn drain<P>(ch: Channel<Msg<P>>)` daba E0283.
+            let inferable = sig.tparams.iter().all(|t| {
+                let one: std::collections::HashSet<String> = std::iter::once(t.clone()).collect();
+                sig.params.iter().any(|p| ty_mentions_tparam(&self.classify(p), &one))
+            });
+            if !sig.keyed && inferable {
+                return Ok(String::new());
             }
         } else {
             let Some(exp) = expected else { return Ok(String::new()) };
@@ -1441,6 +1497,30 @@ impl Transpiler {
     }
 
     pub(super) fn emit_call(&mut self, out: &mut String, callee: &Expr, args: &[Expr]) -> Result<(), String> {
+        // Llamada a una EXPRESIÓN de tipo función (`get(table, k).unwrap()(x)`, `fs[i](x)`,
+        // `make(d)(x)`): ni nombre ni método. El valor y los argumentos se izan a temporales, en
+        // orden, como en una llamada de usuario (ningún guard vivo durante la llamada).
+        if !matches!(callee.kind, ExprKind::Ident(_) | ExprKind::Field { .. }) {
+            if !matches!(self.type_of(callee).map(|t| normalize_type(&t)), Ok(Type::Fn(..))) {
+                return Err("call to an expression that is not a function value is not supported".into());
+            }
+            self.expected_ty = None;
+            out.push_str("{ let __rt_cl = ");
+            self.emit_expr(out, callee)?;
+            for (i, a) in args.iter().enumerate() {
+                write!(out, "; let __rt_c{i} = ").unwrap();
+                self.emit_expr(out, a)?;
+            }
+            out.push_str("; __rt_cl(");
+            for i in 0..args.len() {
+                if i > 0 {
+                    out.push_str(", ");
+                }
+                write!(out, "__rt_c{i}").unwrap();
+            }
+            out.push_str(") }");
+            return Ok(());
+        }
         let (name, recv) = resolve_callee(callee)?;
         // M270 (raystream [1]): `x#prelude` llama a la función del PRELUDE `x` aunque la raíz haya
         // definido su propia `x`: se despacha por el nombre base saltando la del usuario.
@@ -1844,9 +1924,9 @@ impl Transpiler {
                 if empty {
                     out.push_str("Rc::<[u8]>::from(Vec::<u8>::new())");
                 } else {
-                    out.push_str("Rc::<[u8]>::from(");
+                    out.push_str("({ Rc::<[u8]>::from(");
                     self.emit_expr(out, eff[0])?;
-                    out.push_str(".borrow().iter().map(|__rt_x| *__rt_x as u8).collect::<Vec<u8>>())");
+                    out.push_str(".borrow().iter().map(|__rt_x| *__rt_x as u8).collect::<Vec<u8>>()) })");
                 }
             }
             // M395 (raykv #162): bytes_concat([bytes]) -> bytes — una reserva del total y un memcpy por trozo.
@@ -1984,12 +2064,16 @@ impl Transpiler {
             "len" => {
                 match self.type_of(eff[0])? {
                     Type::Array(_) | Type::Map(_, _) => {
-                        out.push('(');
+                        // En un BLOQUE: el guard del `.borrow()` es un temporal, y suelto viviría
+                        // hasta el final de la sentencia — `xs.len() + grow(xs)` moría con «RefCell
+                        // already borrowed» si `grow` hacía push (la VM lo permite). Con edition
+                        // 2024 los temporales de la expresión de cola mueren al cerrar el bloque.
+                        out.push_str("({ ");
                         // M391: `C.len()` de un const arreglo de escalares lee el compartido.
                         if !self.emit_shared_const(out, eff[0]) {
                             self.emit_expr(out, eff[0])?;
                         }
-                        out.push_str(".borrow().len() as i64)");
+                        out.push_str(".borrow().len() as i64 })");
                     }
                     // string: `len` cuenta CARACTERES, no octetos — clave con UTF-8 multibyte (`más`, `ñ`).
                     // Fast-path ASCII (H19, como la VM en vm.rs:960): para un string ASCII, nº de octetos ==
@@ -2368,10 +2452,13 @@ impl Transpiler {
                 out.push_str("; let __rt_r = __rt_m.borrow_mut().remove(&__rt_k); __rt_r }");
             }
             "contains_key" => {
+                // En un bloque, como `len`: el préstamo del mapa termina aquí y no al final de la
+                // sentencia (`m.contains_key(k) || put(m, k)`).
+                out.push_str("({ ");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow().contains_key(");
                 self.emit_map_key_ref(out, eff[0], eff[1])?;
-                out.push(')');
+                out.push_str(") })");
             }
             "keys" => self.emit_map_listing(out, eff[0], "__ray_keys", "__ray_keys_of")?,
             "values" => {
@@ -2430,9 +2517,10 @@ impl Transpiler {
             }
             // reverse(a) -> [T]: copia invertida (no muta), como el opcode `Reverse` de la VM.
             "reverse" => {
-                out.push_str("Rc::new(std::cell::RefCell::new(");
+                // En un bloque (como `len`): el préstamo del original no sobrevive a la expresión.
+                out.push_str("({ Rc::new(std::cell::RefCell::new(");
                 self.emit_expr(out, eff[0])?;
-                out.push_str(".borrow().iter().rev().cloned().collect::<Vec<_>>()))");
+                out.push_str(".borrow().iter().rev().cloned().collect::<Vec<_>>())) })");
             }
             // pop(a) -> Option<T>: quita el último EN EL SITIO. El envoltorio del prelude (que traduce
             // el `[]`/`[x]` del primitivo `__pop` a Option) no se emite, así que aquí se produce ya el
@@ -2902,21 +2990,27 @@ impl Transpiler {
             // closure una vez; `__rt_x`/`__acc` son los elementos/acumulador. La guarda `!name.contains('#')`
             // distingue la función libre `map`/`filter`/`fold` (sobre `[T]`) del MÉTODO `Iter#map`/… (sobre
             // un iterador de primera clase), que cae al despacho de método ordinario (`_ =>`).
-            "map" if !name.contains('#') => {
+            // Con un closure de aritmética escalar pura (`is_scalar_pure_fn`: no puede tocar ningún
+            // arreglo) valen los tres brazos de arriba, con el iterador prestado. El resto va
+            // POR ÍNDICE sobre el arreglo VIVO, como el prelude (`while (i < xs.len()) … xs[i]`):
+            // el préstamo se suelta antes de llamar al closure. Con `.borrow().iter()` el arreglo
+            // quedaba prestado durante TODA la pasada y un closure que lo tocaba (`xs.map(fn(x) {
+            // xs.push(…) })`) moría con «RefCell already borrowed»; la VM lo permite y ve lo añadido.
+            "map" if !name.contains('#') && self.is_scalar_pure_fn(eff[1]) => {
                 out.push_str("{ let __rt_f = ");
                 self.emit_expr(out, eff[1])?;
                 out.push_str("; Rc::new(std::cell::RefCell::new(");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow().iter().map(|__rt_x| __rt_f(__rt_x.clone())).collect::<Vec<_>>())) }");
             }
-            "filter" if !name.contains('#') => {
+            "filter" if !name.contains('#') && self.is_scalar_pure_fn(eff[1]) => {
                 out.push_str("{ let __rt_f = ");
                 self.emit_expr(out, eff[1])?;
                 out.push_str("; Rc::new(std::cell::RefCell::new(");
                 self.emit_expr(out, eff[0])?;
                 out.push_str(".borrow().iter().cloned().filter(|__rt_x| __rt_f(__rt_x.clone())).collect::<Vec<_>>())) }");
             }
-            "fold" if !name.contains('#') => {
+            "fold" if !name.contains('#') && self.is_scalar_pure_fn(eff[2]) => {
                 out.push_str("{ let __rt_f = ");
                 self.emit_expr(out, eff[2])?;
                 out.push_str("; ");
@@ -2924,6 +3018,30 @@ impl Transpiler {
                 out.push_str(".borrow().iter().fold(");
                 self.emit_expr(out, eff[1])?;
                 out.push_str(", |__acc, __rt_x| __rt_f(__acc, __rt_x.clone())) }");
+            }
+            "map" if !name.contains('#') => {
+                out.push_str("{ let __rt_f = ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("; let __rt_s = ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("; let mut __rt_o = Vec::with_capacity(__rt_s.borrow().len()); let mut __rt_i = 0usize; loop { let __rt_x = { let __rt_b = __rt_s.borrow(); if __rt_i >= __rt_b.len() { break; } __rt_b[__rt_i].clone() }; __rt_o.push(__rt_f(__rt_x)); __rt_i += 1; } Rc::new(std::cell::RefCell::new(__rt_o)) }");
+            }
+            "filter" if !name.contains('#') => {
+                out.push_str("{ let __rt_f = ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("; let __rt_s = ");
+                self.emit_expr(out, eff[0])?;
+                // El elemento se RELEE tras el predicado (el prelude hace `out.push(xs[i])`).
+                out.push_str("; let mut __rt_o = Vec::new(); let mut __rt_i = 0usize; loop { let __rt_x = { let __rt_b = __rt_s.borrow(); if __rt_i >= __rt_b.len() { break; } __rt_b[__rt_i].clone() }; if __rt_f(__rt_x) { let __rt_b = __rt_s.borrow(); __rt_o.push(__rt_b[__ray_idx(__rt_i as i64, __rt_b.len())].clone()); } __rt_i += 1; } Rc::new(std::cell::RefCell::new(__rt_o)) }");
+            }
+            "fold" if !name.contains('#') => {
+                out.push_str("{ let __rt_f = ");
+                self.emit_expr(out, eff[2])?;
+                out.push_str("; let __rt_s = ");
+                self.emit_expr(out, eff[0])?;
+                out.push_str("; let mut __acc = ");
+                self.emit_expr(out, eff[1])?;
+                out.push_str("; let mut __rt_i = 0usize; loop { let __rt_x = { let __rt_b = __rt_s.borrow(); if __rt_i >= __rt_b.len() { break; } __rt_b[__rt_i].clone() }; __acc = __rt_f(__acc, __rt_x); __rt_i += 1; } __acc }");
             }
             // Cripto de producción (M43): los primitivos `__*` se interceptan a `ray_runtime::crypto::*`
             // (el MISMO código que la VM → oráculo byte-idéntico) y activan la feature `crypto` de
@@ -3967,6 +4085,13 @@ impl Transpiler {
                 },
             },
             ExprKind::Call { callee, args } => {
+                // Llamada a una expresión de tipo función: su tipo es el retorno de esa función.
+                if !matches!(callee.kind, ExprKind::Ident(_) | ExprKind::Field { .. }) {
+                    return match normalize_type(&self.type_of(callee)?) {
+                        Type::Fn(_, r) => Ok(*r),
+                        _ => Err("call to an expression that is not a function value is not supported".into()),
+                    };
+                }
                 let (n, recv) = resolve_callee(callee)?;
                 // M270 (raystream [1]): `x#prelude` = el builtin/prelude `x`, aunque la raíz defina `x`.
                 let (n, force_prelude) = self.split_prelude_alias(n);
@@ -4208,6 +4333,10 @@ impl Transpiler {
                                 let mut subst = HashMap::new();
                                 for (i, pt) in params.iter().enumerate() {
                                     if let Some(a) = eff.get(i) {
+                                        // Un `[]` no se tipa solo: lo ligan los demás argumentos.
+                                        if matches!(&a.kind, ExprKind::ArrayLit(es) if es.is_empty()) {
+                                            continue;
+                                        }
                                         let at = self.type_of(a)?;
                                         unify(pt, &at, &tps, &mut subst);
                                     }

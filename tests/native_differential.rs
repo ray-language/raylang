@@ -19,6 +19,12 @@
 //!   batch por mitades hasta aislar la(s) sonda(s) culpable(s), escribe el repro mínimo a un
 //!   archivo y falla nombrando la semilla y la ruta.
 //!
+//! Dos clases de generador (nov 2026): los de PLANTILLA FIJA, donde la semilla solo cambia los
+//! valores, y los ESTRUCTURALES, que fijan la forma y sortean el TIPO sobre el que opera (primitivo,
+//! tupla, struct o enum propio, y sus envoltorios `[T]`/`Option<T>`/`[[T]]`). Los segundos nacieron
+//! del repaso de los hallazgos históricos: casi todos los «el checker acepta y el nativo no
+//! compila» salen del cruce forma × tipo, que una plantilla fija nunca recorre.
+//!
 //! Reproducir: `RAYLANG_DIFF_SEED=<n>` re-ejecuta ese batch exacto. `RAYLANG_DIFF_BATCHES=<n>`
 //! sube el presupuesto (la campaña nocturna corre muchos más que el push de CI).
 //!
@@ -390,6 +396,748 @@ fn gen_try_recv_select(r: &mut Rng, i: usize) -> (Vec<&'static str>, String) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Variación ESTRUCTURAL (arco de huecos, nov 2026)
+// ---------------------------------------------------------------------------------------------
+//
+// Los generadores de arriba son plantillas FIJAS: la semilla cambia los valores, no la forma. El
+// repaso de los hallazgos históricos (24 de «el checker acepta y el nativo no compila», 11 apps)
+// mostró que casi todos nacen del cruce FORMA × TIPO: el mismo código que funciona con `int` falla
+// con una tupla, un struct propio o un `Option` de un enum. Estos generadores fijan la forma (una
+// familia de hallazgos cada uno) y sortean el TIPO sobre el que opera, con sus declaraciones.
+
+/// Un tipo sorteado: su expresión de tipo, dos valores DISTINTOS (expresiones sin contexto: se
+/// pueden escribir en cualquier posición) y las declaraciones top-level que necesita.
+#[derive(Clone)]
+struct Ty {
+    ty: String,
+    a: String,
+    b: String,
+    /// Sirve de clave de `Map` (`MapKey`): ni `float` ni arrays, ni nada que los contenga.
+    key: bool,
+    decls: String,
+}
+
+fn prim_ty(r: &mut Rng) -> Ty {
+    let (ty, a, b, key) = match r.below(4) {
+        0 => {
+            let k = r.int_in(-9, 90);
+            ("int", format!("{k}"), format!("{}", k + 1), true)
+        }
+        1 => {
+            let w = r.word();
+            ("string", format!("\"{w}\""), format!("\"{w}x\""), true)
+        }
+        2 => ("bool", "true".to_string(), "false".to_string(), true),
+        _ => {
+            let k = r.int_in(1, 90);
+            ("float", format!("{k}.5"), format!("{k}.25"), false)
+        }
+    };
+    Ty { ty: ty.to_string(), a, b, key, decls: String::new() }
+}
+
+/// Un tipo «elemento»: primitivo, struct propio o enum propio (con payloads primitivos — el
+/// `@derive` no admite tuplas ni `Option` en los campos).
+fn elem_ty(r: &mut Rng, tag: &str) -> Ty {
+    match r.below(5) {
+        0 | 1 => prim_ty(r),
+        2 | 3 => {
+            let (p, q) = (prim_ty(r), prim_ty(r));
+            let key = p.key && q.key;
+            let name = format!("St{tag}");
+            let derive = if key { "@derive(Eq, Hash, Show)" } else { "@derive(Eq, Show)" };
+            Ty {
+                ty: name.clone(),
+                a: format!("{name} {{ p: {}, q: {} }}", p.a, q.a),
+                b: format!("{name} {{ p: {}, q: {} }}", p.b, q.a),
+                key,
+                decls: format!("{derive}\nstruct {name} {{ p: {}, q: {}, }}\n", p.ty, q.ty),
+            }
+        }
+        _ => {
+            let p = prim_ty(r);
+            let name = format!("En{tag}");
+            let derive = if p.key { "@derive(Eq, Hash, Show)" } else { "@derive(Eq, Show)" };
+            let (a, b) = match r.below(3) {
+                0 => (format!("{name}.One({})", p.a), format!("{name}.Zero")),
+                1 => (format!("{name}.Zero"), format!("{name}.Two(3, {})", p.b)),
+                _ => (format!("{name}.Two(1, {})", p.a), format!("{name}.One({})", p.a)),
+            };
+            Ty {
+                ty: name.clone(),
+                a,
+                b,
+                key: p.key,
+                decls: format!("{derive}\nenum {name} {{ One({}), Zero, Two(int, {}), }}\n", p.ty, p.ty),
+            }
+        }
+    }
+}
+
+/// Un tipo cualquiera del universo de sondas: un elemento, o un elemento envuelto.
+fn any_ty(r: &mut Rng, i: usize) -> Ty {
+    let tag = format!("P{i}");
+    match r.below(9) {
+        0 | 1 | 2 => elem_ty(r, &tag),
+        3 | 4 => {
+            let e = elem_ty(r, &tag);
+            Ty { ty: format!("[{}]", e.ty), a: format!("[{}, {}]", e.a, e.b), b: format!("[{}]", e.b), key: false, decls: e.decls }
+        }
+        5 | 6 => {
+            let e = elem_ty(r, &tag);
+            Ty {
+                ty: format!("Option<{}>", e.ty),
+                a: format!("Option.Some({})", e.a),
+                b: format!("Option.Some({})", e.b),
+                key: e.key,
+                decls: e.decls,
+            }
+        }
+        7 => {
+            // Las tuplas, solo de primitivos: `print` no imprime una tupla con un tipo propio
+            // (ni una tupla suelta: las sondas la imprimen dentro de un array o un `Option`).
+            let (p, q) = (prim_ty(r), prim_ty(r));
+            Ty {
+                ty: format!("({}, {})", p.ty, q.ty),
+                a: format!("({}, {})", p.a, q.a),
+                b: format!("({}, {})", p.b, q.a),
+                key: p.key && q.key,
+                decls: String::new(),
+            }
+        }
+        _ => {
+            let e = elem_ty(r, &tag);
+            Ty {
+                ty: format!("[[{}]]", e.ty),
+                a: format!("[[{}], [{}, {}]]", e.a, e.b, e.a),
+                b: format!("[[{}]]", e.b),
+                key: false,
+                decls: e.decls,
+            }
+        }
+    }
+}
+
+/// Rellena una plantilla: `@I@` = índice de la sonda, `@T@` = el tipo, `@A@`/`@B@` = sus dos
+/// valores, `@K@` = un entero sorteado (1..9). Las plantillas van en raw strings: código raylang
+/// legible, sin el doble escape de `format!`.
+fn fill(template: &str, i: usize, t: &Ty, k: i64) -> String {
+    let body = template
+        .replace("@I@", &i.to_string())
+        .replace("@T@", &t.ty)
+        .replace("@A@", &t.a)
+        .replace("@B@", &t.b)
+        .replace("@K@", &k.to_string());
+    format!("{}{}", t.decls, body)
+}
+
+/// Generadores ESTRUCTURALES secuenciales (3 motores).
+const SEQ_STRUCT_GENS: &[(&str, GenFn)] = &[
+    ("generic_bounds_over_type", gen_generic_bounds),
+    ("empties_typed_by_context", gen_empties),
+    ("closures_stored_and_returned", gen_closures_stored),
+    ("option_result_of_type", gen_option_result_of),
+    ("aliasing_mutation", gen_aliasing),
+    ("match_guards_and_captures", gen_match_guards),
+];
+
+/// Generadores ESTRUCTURALES de concurrencia (VM ↔ nativo con fibras).
+const CONC_STRUCT_GENS: &[(&str, GenFn)] = &[
+    ("channels_in_containers", gen_channels_in_containers),
+    ("values_cross_spawn", gen_values_cross_spawn),
+];
+
+/// Genéricos con bounds sobre un tipo sorteado (raysolve #352–#356, #359): `Eq` sobre arrays,
+/// `MapKey` como clave, un campo `fn` de un struct genérico, closures que producen `P`.
+fn gen_generic_bounds(r: &mut Rng, i: usize) -> (Vec<&'static str>, String) {
+    let t = any_ty(r, i);
+    let mut tpl = String::from(
+        r#"fn has_@I@<P: Eq>(xs: [P], x: P) -> bool { xs.contains(x) }
+fn at_@I@<P: Eq>(xs: [P], x: P) -> Option<int> { xs.position(x) }
+fn same_@I@<P: Eq>(a: P, b: P) -> bool { a == b }
+fn first_or_@I@<P>(xs: [P], d: P) -> P { if (xs.len() > 0) { xs[0] } else { d } }
+fn wrap_@I@<P>(x: P) -> Option<P> { Option.Some(x) }
+fn pair_@I@<A, B>(a: A, b: B) -> (A, B) { (a, b) }
+fn twice_@I@<P>(x: P, f: fn(P) -> P) -> P { f(f(x)) }
+fn collect_@I@<P>(n: int, mk: fn(int) -> P) -> [P] {
+    var out: [P] = [];
+    for j in 0..n { out.push(mk(j)); }
+    out
+}
+struct Prov_@I@<P> { deps: fn(P) -> [P], seed: P, }
+fn expand_@I@<P>(p: Prov_@I@<P>) -> [P] {
+    let f = p.deps;
+    f(p.seed)
+}
+"#,
+    );
+    if t.key {
+        tpl.push_str(
+            r#"fn tally_@I@<P: MapKey>(xs: [P]) -> int {
+    var m: Map<P, int> = Map.new();
+    for x in xs {
+        match (get(m, x)) {
+            Option.Some(n) => { m.insert(x, n + 1); },
+            Option.None => { m.insert(x, 1); },
+        }
+    }
+    m.keys().len()
+}
+fn uniq_@I@<P: MapKey>(xs: [P]) -> [P] {
+    var seen: Map<P, bool> = Map.new();
+    var out: [P] = [];
+    for x in xs {
+        if (!seen.contains_key(x)) {
+            seen.insert(x, true);
+            out.push(x);
+        }
+    }
+    out
+}
+"#,
+        );
+    }
+    tpl.push_str(
+        r#"fn probe_@I@() {
+    let a: @T@ = @A@;
+    let b: @T@ = @B@;
+    let xs = [a, b, a];
+    print(wrap_@I@(a));
+    print(xs);
+    print(has_@I@(xs, b));
+    print(at_@I@(xs, b));
+    print(same_@I@(a, b));
+    print(same_@I@(xs[0], xs[2]));
+    print(first_or_@I@(xs, b) == a);
+    let none: [@T@] = [];
+    print(first_or_@I@(none, b) == b);
+    print(wrap_@I@(a) == Option.Some(a));
+    let p = pair_@I@(a, @K@);
+    print(p.1);
+    print(p.0 == a);
+    print(twice_@I@(a, fn(x: @T@) -> @T@ { x }) == a);
+    let made = collect_@I@(3, fn(j: int) -> @T@ { if (j == 1) { @B@ } else { @A@ } });
+    print(made.len());
+    print(at_@I@(made, b));
+    let prov = Prov_@I@ { deps: fn(x: @T@) -> [@T@] { [x, @B@] }, seed: a };
+    let ex = expand_@I@(prov);
+    print(ex.len());
+    print(ex[1] == b);
+    print(has_@I@(ex, a));
+"#,
+    );
+    if t.key {
+        tpl.push_str(
+            r#"    print(tally_@I@(xs));
+    print(uniq_@I@(xs).len());
+    var idx: Map<@T@, int> = Map.new();
+    idx.insert(a, 1);
+    idx.insert(b, 2);
+    idx.insert(a, 3);
+    print(get(idx, a));
+    print(idx.contains_key(b));
+    print(idx.keys().len());
+"#,
+        );
+    }
+    tpl.push_str("}\n");
+    (vec![], fill(&tpl, i, &t, r.int_in(1, 9)))
+}
+
+/// Literales vacíos y `Option.None` que toman su tipo del contexto (#6, #78, #86, #133, #137,
+/// #147): la rama gemela de un `if`/`match`, un argumento, un campo, un `return`, un operando.
+fn gen_empties(r: &mut Rng, i: usize) -> (Vec<&'static str>, String) {
+    let t = any_ty(r, i);
+    let tpl = r#"struct Hold_@I@ { items: [@T@], pick: Option<@T@>, }
+fn take_arr_@I@(xs: [@T@]) -> int { xs.len() }
+fn take_opt_@I@(o: Option<@T@>) -> bool { o.is_some() }
+fn glen_@I@<P>(xs: [P], d: P) -> int { xs.len() }
+fn gopt_@I@<P>(o: Option<P>, d: P) -> P { o.unwrap_or(d) }
+fn ret_arr_@I@(c: bool) -> [@T@] {
+    if (c) { return []; }
+    [@A@]
+}
+fn ret_res_@I@(n: int) -> Result<@T@, string> {
+    match (n) {
+        0 => Result.Ok(@A@),
+        1 => Result.Err("one"),
+        _ => Result.Ok(@B@),
+    }
+}
+fn ret_opt_@I@(n: int) -> Option<@T@> {
+    if (n > @K@) { Option.Some(@A@) } else { Option.None }
+}
+fn probe_@I@() {
+    let c = ret_opt_@I@(0).is_some();
+    let e1: [@T@] = if (c) { [] } else { [@A@] };
+    let e2: [@T@] = if (c) { [@A@] } else { [] };
+    print(e1.len() + e2.len());
+    let e3 = if (c) { [] } else { [@A@, @B@] };
+    print(e3.len());
+    let o1: Option<@T@> = match (@K@) { 0 => Option.None, _ => Option.Some(@A@), };
+    let o2 = if (c) { Option.Some(@B@) } else { Option.None };
+    print(o1.is_some());
+    print(o2.is_none());
+    print(o1 == Option.None);
+    print(Option.None == o2);
+    print(take_arr_@I@([]));
+    print(take_opt_@I@(Option.None));
+    print(glen_@I@([], @A@));
+    print(gopt_@I@(Option.None, @B@) == @B@);
+    let h = Hold_@I@ { items: [], pick: Option.None };
+    print(h.items.len());
+    print(h.pick.is_none());
+    var grow: [@T@] = [] + e1;
+    grow = grow + [];
+    grow.push(@B@);
+    print(grow.len());
+    var nest: [[@T@]] = [];
+    nest.push([]);
+    nest.push([@A@]);
+    print(nest[0].len() + nest[1].len());
+    var m: Map<string, [@T@]> = Map.new();
+    m.insert("k", []);
+    print(get(m, "k").unwrap_or([@A@]).len());
+    print(ret_arr_@I@(true).len() + ret_arr_@I@(false).len());
+    let r0 = ret_res_@I@(0);
+    print(r0.is_ok());
+    match (ret_res_@I@(1)) {
+        Result.Ok(_v) => print("ok"),
+        Result.Err(e) => print(e),
+    }
+    print(ret_opt_@I@(0).is_none());
+    let t = match (@K@ % 2) { 0 => (Option.None, 1), _ => (Option.Some(@A@), 2), };
+    print(t.1);
+    let ch = if (c) { e3 } else { [] };
+    print(ch.len());
+}
+"#;
+    (vec![], fill(tpl, i, &t, r.int_in(1, 9)))
+}
+
+/// Closures guardados y devueltos (#60, #77 en su parte secuencial): en un `Map`, en un array,
+/// en un campo, como resultado de una función, elegidos por un `if`.
+fn gen_closures_stored(r: &mut Rng, i: usize) -> (Vec<&'static str>, String) {
+    let t = any_ty(r, i);
+    let tpl = r#"struct Ops_@I@ { f: fn(@T@) -> @T@, g: fn(@T@) -> [@T@], tag: string, }
+fn make_@I@(d: @T@) -> fn(@T@) -> @T@ {
+    fn(x: @T@) -> @T@ { if (x == d) { @B@ } else { d } }
+}
+fn register_@I@(m: Map<string, fn(@T@) -> @T@>, name: string, f: fn(@T@) -> @T@) {
+    m.insert(name, f);
+}
+fn apply_all_@I@(fs: [fn(@T@) -> @T@], x: @T@) -> @T@ {
+    var cur = x;
+    for f in fs { cur = f(cur); }
+    cur
+}
+fn probe_@I@() {
+    var table: Map<string, fn(@T@) -> @T@> = Map.new();
+    register_@I@(table, "id", fn(x: @T@) -> @T@ { x });
+    register_@I@(table, "mk", make_@I@(@A@));
+    table.insert("const", fn(_x: @T@) -> @T@ { @B@ });
+    print(table.keys().len());
+    match (get(table, "mk")) {
+        Option.Some(f) => print(f(@A@) == @B@),
+        Option.None => print("missing"),
+    }
+    let idf = get(table, "id").unwrap();
+    print(idf(@A@) == @A@);
+    let fs = [idf, make_@I@(@B@), fn(x: @T@) -> @T@ { x }];
+    print(apply_all_@I@(fs, @A@) == @B@);
+    let ops = Ops_@I@ { f: make_@I@(@A@), g: fn(x: @T@) -> [@T@] { [x, x] }, tag: "t@K@" };
+    let run = fn(o: Ops_@I@, x: @T@) -> int {
+        let g = o.g;
+        let f = o.f;
+        g(f(x)).len()
+    };
+    print(run(ops, @B@));
+    print(ops.tag);
+    var count = 0;
+    let counted = fn(x: @T@) -> @T@ {
+        count = count + 1;
+        x
+    };
+    let _u = apply_all_@I@([counted, counted], @A@);
+    print(count);
+    let pick = if (@K@ > 4) { make_@I@(@A@) } else { idf };
+    print(pick(@B@) == @B@);
+    print(get(table, "const").unwrap()(@A@) == @B@);
+    print(make_@I@(@A@)(@A@) == @B@);
+    print(fs[1](@B@) == @B@);
+    print(ops.g(@A@).len());
+    let viamatch = match (count) { 0 => idf, _ => counted, };
+    print(viamatch(@A@) == @A@);
+    let some: Option<fn(@T@) -> @T@> = Option.Some(counted);
+    match (some) {
+        Option.Some(f) => print(f(@B@) == @B@),
+        Option.None => print("none"),
+    }
+    let tup = (counted, @K@);
+    let first = tup.0;
+    print(first(@A@) == @A@);
+    print(count);
+    var grown: [fn(@T@) -> @T@] = [];
+    grown.push(idf);
+    grown.push(counted);
+    grown.push(make_@I@(@B@));
+    print(apply_all_@I@(grown, @B@) == @B@);
+    let nested = [[idf], [counted, idf]];
+    print(apply_all_@I@(nested[1], @A@) == @A@);
+    print(count);
+}
+"#;
+    (vec![], fill(tpl, i, &t, r.int_in(1, 9)))
+}
+
+/// `Option`/`Result` de un tipo sorteado y con un error propio (#218, #281): `unwrap`, `?`,
+/// `==`, `map`, tuplas de cuatro dentro de un `Option`, arrays de `Result`.
+fn gen_option_result_of(r: &mut Rng, i: usize) -> (Vec<&'static str>, String) {
+    let t = any_ty(r, i);
+    let tpl = r#"struct Fail_@I@ { code: int, what: string, }
+fn find_@I@(n: int) -> Result<@T@, Fail_@I@> {
+    if (n == 0) {
+        Result.Err(Fail_@I@ { code: @K@, what: "none" })
+    } else if (n == 1) {
+        Result.Ok(@A@)
+    } else {
+        Result.Ok(@B@)
+    }
+}
+fn both_@I@(n: int) -> Result<[@T@], Fail_@I@> {
+    let x = find_@I@(n)?;
+    let y = find_@I@(n + 1)?;
+    Result.Ok([x, y])
+}
+fn maybe_@I@(n: int) -> Option<@T@> {
+    if (n > 0) { Option.Some(@A@) } else { Option.None }
+}
+fn probe_@I@() {
+    print(find_@I@(1).unwrap() == @A@);
+    print(find_@I@(2).is_ok());
+    match (find_@I@(0)) {
+        Result.Ok(_v) => print("ok"),
+        Result.Err(e) => print("${e.code}:${e.what}"),
+    }
+    print(both_@I@(1).unwrap().len());
+    print(both_@I@(0).is_err());
+    let o = maybe_@I@(1);
+    print(o.is_some());
+    print(o.unwrap() == @A@);
+    print(maybe_@I@(0).unwrap_or(@B@) == @B@);
+    print(maybe_@I@(0).is_none());
+    print(o == Option.Some(@A@));
+    print(o.map(fn(_x: @T@) -> int { @K@ }).unwrap_or(0));
+    print(o);
+    let pairs: Option<(@T@, int)> = Option.Some((@A@, @K@));
+    print(pairs.is_some());
+    match (pairs) {
+        Option.Some(pq) => print(pq.1),
+        Option.None => print("none"),
+    }
+    let quad: Option<(int, string, bool, @T@)> = Option.Some((1, "q", true, @B@));
+    print(quad.is_none());
+    let rs: [Result<@T@, string>] = [Result.Ok(@A@), Result.Err("bad"), Result.Ok(@B@)];
+    var oks = 0;
+    for res in rs {
+        if let Result.Ok(_v) = res { oks = oks + 1; }
+    }
+    print(oks);
+    match (try_call(fn() -> bool { find_@I@(0).unwrap() == @A@ })) {
+        Result.Ok(v) => print(v),
+        Result.Err(_e) => print("err:unwrap"),
+    }
+}
+"#;
+    (vec![], fill(tpl, i, &t, r.int_in(1, 9)))
+}
+
+/// Mutar un contenedor mientras se lee de él (#156, #315): el `RefCell already borrowed` del
+/// nativo. Índices que leen y escriben el mismo array, un argumento que muta al receptor.
+fn gen_aliasing(r: &mut Rng, i: usize) -> (Vec<&'static str>, String) {
+    let t = any_ty(r, i);
+    let tpl = r#"struct Bag_@I@ { items: [@T@], n: int, }
+fn bump_@I@(b: Bag_@I@) -> int {
+    b.n = b.n + 1;
+    b.items.push(@B@);
+    b.n
+}
+fn grow_@I@(xs: [@T@]) -> int {
+    xs.push(@A@);
+    xs.len()
+}
+fn put_@I@(m: Map<string, [@T@]>, k: string) -> bool {
+    m.insert(k, [@B@]);
+    true
+}
+fn probe_@I@() {
+    var xs: [@T@] = [@A@, @B@, @A@];
+    for j in 1..xs.len() {
+        xs[j] = xs[j - 1];
+        if (j == 1) { xs.push(@B@); }
+    }
+    print(xs.len());
+    print(xs[2] == @A@);
+    xs.push(xs[0]);
+    xs[0] = xs[xs.len() - 1];
+    print(xs.len());
+    var b = Bag_@I@ { items: [@A@], n: @K@ };
+    print("abcdefghijklmnop".substring(b.n % 3, bump_@I@(b) % 3 + 4));
+    print(to_string(b.n) + to_string(bump_@I@(b)) + to_string(b.n));
+    b.items.push(b.items[0]);
+    b.items[0] = b.items[b.items.len() - 1];
+    print(b.items.len());
+    print(b.items.len() + bump_@I@(b) + b.items.len());
+    var m: Map<string, [@T@]> = Map.new();
+    m.insert("a", [@A@]);
+    m.insert("b", get(m, "a").unwrap_or([]));
+    m.insert("a", get(m, "a").unwrap_or([]) + get(m, "b").unwrap_or([]));
+    print(get(m, "a").unwrap_or([]).len());
+    var grid: [[@T@]] = [[@A@], [@B@]];
+    grid[0].push(grid[1][0]);
+    grid[1] = grid[0];
+    grid[1].push(@A@);
+    print(grid[0].len());
+    print(grid[1].len());
+    let snap = xs;
+    xs.push(@B@);
+    print(snap.len() == xs.len());
+    print(xs.len() + grow_@I@(xs));
+    print(grow_@I@(xs) + xs.len());
+    print(xs.reverse().len() + grow_@I@(xs));
+    print(xs.contains(@B@) && grow_@I@(xs) > 0);
+    print(xs.position(@B@).unwrap_or(0) + grow_@I@(xs));
+    print(xs[0] == @A@ && grow_@I@(xs) > 0);
+    let before = xs.len();
+    let ys = xs.map(fn(x: @T@) -> @T@ {
+        if (xs.len() == before) { xs.push(@B@); }
+        x
+    });
+    print(ys.len());
+    let zs = xs.filter(fn(x: @T@) -> bool {
+        if (xs.len() < before + 3) { xs.push(@A@); }
+        x == @A@
+    });
+    print(zs.len());
+    print(xs.fold(0, fn(acc: int, _x: @T@) -> int {
+        if (acc == 1) { xs.push(@B@); }
+        acc + 1
+    }));
+    print(xs.len());
+    for x in xs {
+        if (x == @B@ && xs.len() < 40) { xs.push(@A@); }
+    }
+    print(xs.len());
+    print(m.contains_key("zz") || put_@I@(m, "zz"));
+    print(m.len() + (if (put_@I@(m, "yy")) { 1 } else { 0 }));
+    for k in m.keys() { m.insert(k + "!", [@A@]); }
+    print(m.len());
+}
+"#;
+    (vec![], fill(tpl, i, &t, r.int_in(1, 9)))
+}
+
+/// Guardas de `match` y variables por brazo capturadas por closures (#1, #291): el mismo nombre
+/// como `var` en un brazo y como binding capturado en otro; una guarda en una función que
+/// devuelve un struct.
+fn gen_match_guards(r: &mut Rng, i: usize) -> (Vec<&'static str>, String) {
+    let t = any_ty(r, i);
+    let tpl = r#"struct Resp_@I@ { code: int, body: string, }
+fn route_@I@(x: @T@, n: int) -> Resp_@I@ {
+    match (n) {
+        0 if x == @A@ => Resp_@I@ { code: 200, body: "a" },
+        0 => Resp_@I@ { code: 201, body: "not-a" },
+        k if k > @K@ => {
+            let f = fn() -> string { "big${k}" };
+            Resp_@I@ { code: k, body: f() }
+        },
+        _ => Resp_@I@ { code: 404, body: "nf" },
+    }
+}
+fn classify_@I@(o: Option<@T@>, lim: int) -> string {
+    match (o) {
+        Option.Some(v) if v == @A@ && lim > 0 => "first",
+        Option.Some(v) if v == @B@ => {
+            var hits = lim;
+            let inc = fn() { hits = hits + 1; };
+            inc();
+            "second${hits}"
+        },
+        Option.Some(_v) => "other",
+        Option.None => {
+            let hits = "none";
+            let show = fn() -> string { hits };
+            show()
+        },
+    }
+}
+fn probe_@I@() {
+    let r1 = route_@I@(@A@, 0);
+    print("${r1.code}${r1.body}");
+    let r2 = route_@I@(@B@, 0);
+    print("${r2.code}${r2.body}");
+    let r3 = route_@I@(@A@, @K@ + 5);
+    print("${r3.code}${r3.body}");
+    let r4 = route_@I@(@B@, 1);
+    print("${r4.code}${r4.body}");
+    print(classify_@I@(Option.Some(@A@), 1));
+    print(classify_@I@(Option.Some(@A@), 0));
+    print(classify_@I@(Option.Some(@B@), 3));
+    print(classify_@I@(Option.None, 3));
+    var acc: [string] = [];
+    for n in 0..4 {
+        match (n) {
+            0 => {
+                var x = "zero";
+                x = x + "!";
+                acc.push(x);
+            },
+            1 => {
+                let x = @K@;
+                let f = fn() -> int { x + n };
+                acc.push(to_string(f()));
+            },
+            m if m % 2 == 0 => { acc.push("even"); },
+            _ => {
+                let x = [n];
+                let g = fn() -> int { x.len() };
+                acc.push(to_string(g()));
+            },
+        }
+    }
+    print(acc.join(","));
+}
+"#;
+    (vec![], fill(tpl, i, &t, r.int_in(1, 9)))
+}
+
+/// Canales dentro de tuplas, structs, mapas y enums genéricos (#71, #76, #280, #292).
+fn gen_channels_in_containers(r: &mut Rng, i: usize) -> (Vec<&'static str>, String) {
+    let t = any_ty(r, i);
+    let tpl = r#"enum Msg_@I@<P> { Item(P), Done, }
+struct Hub_@I@ { outs: [Channel<@T@>], name: string, }
+fn drain_@I@<P>(ch: Channel<Msg_@I@<P>>) -> int {
+    var n = 0;
+    var run = true;
+    while (run) {
+        match (recv(ch)) {
+            Option.Some(m) => match (m) {
+                Msg_@I@.Item(_p) => { n = n + 1; },
+                Msg_@I@.Done => { run = false; },
+            },
+            Option.None => { run = false; },
+        }
+    }
+    n
+}
+fn probe_@I@() {
+    let pair: (Channel<@T@>, int) = (Channel.bounded(2), @K@);
+    send(pair.0, @A@);
+    close(pair.0);
+    print(recv(pair.0) == Option.Some(@A@));
+    print(recv(pair.0).is_none());
+    print(pair.1);
+    let hub = Hub_@I@ { outs: [Channel.bounded(1), Channel.bounded(1)], name: "h@K@" };
+    let t = spawn(fn() -> int {
+        send(hub.outs[0], @A@);
+        send(hub.outs[1], @B@);
+        2
+    });
+    print(recv(hub.outs[0]) == Option.Some(@A@));
+    print(recv(hub.outs[1]) == Option.Some(@B@));
+    print(join(t));
+    print(hub.name);
+    let res: Channel<Result<@T@, string>> = Channel.bounded(2);
+    send(res, Result.Ok(@A@));
+    send(res, Result.Err("e@K@"));
+    match (recv(res)) {
+        Option.Some(got) => print(got.is_ok()),
+        Option.None => print("closed"),
+    }
+    match (recv(res)) {
+        Option.Some(Result.Err(e)) => print(e),
+        _ => print("other"),
+    }
+    let msgs: Channel<Msg_@I@<@T@>> = Channel.bounded(4);
+    let w = spawn(fn() -> int { drain_@I@(msgs) });
+    send(msgs, Msg_@I@.Item(@A@));
+    send(msgs, Msg_@I@.Item(@B@));
+    send(msgs, Msg_@I@.Done);
+    print(join(w));
+    let opt: Channel<Option<@T@>> = Channel.bounded(1);
+    send(opt, Option.None);
+    match (recv(opt)) {
+        Option.Some(inner) => print(inner.is_none()),
+        Option.None => print("closed"),
+    }
+    var chans: Map<string, Channel<@T@>> = Map.new();
+    chans.insert("a", Channel.bounded(1));
+    send(get(chans, "a").unwrap(), @B@);
+    print(recv(get(chans, "a").unwrap()) == Option.Some(@B@));
+}
+"#;
+    (vec![], fill(tpl, i, &t, r.int_in(1, 9)))
+}
+
+/// Valores de un tipo sorteado cruzando a `spawn`, `join`, `scope` y canales. Un CLOSURE
+/// capturado por `spawn` queda fuera a propósito: es un límite declarado del nativo («a function
+/// value captured by 'spawn' cannot cross threads in the native backend yet», #59/#77).
+fn gen_values_cross_spawn(r: &mut Rng, i: usize) -> (Vec<&'static str>, String) {
+    let t = any_ty(r, i);
+    let tpl = r#"struct Job_@I@ { input: @T@, extra: [@T@], label: string, }
+fn work_@I@(j: Job_@I@) -> [@T@] {
+    var out = j.extra;
+    out.push(j.input);
+    out
+}
+fn probe_@I@() {
+    let a: @T@ = @A@;
+    let t1 = spawn(fn() -> bool { a == @A@ });
+    print(join(t1));
+    let job = Job_@I@ { input: @B@, extra: [@A@], label: "k@K@" };
+    let t3 = spawn(fn() -> string {
+        if (work_@I@(job).len() == 2) { job.label } else { "no" }
+    });
+    print(join(t3));
+    let t4 = spawn(fn() -> @T@ { @A@ });
+    print(join(t4) == @A@);
+    let t5 = spawn(fn() -> [@T@] { [@A@, @B@] });
+    print(join(t5).len());
+    let t6 = spawn(fn() -> Option<@T@> { Option.Some(@B@) });
+    print(join(t6) == Option.Some(@B@));
+    let t7 = spawn(fn() -> Result<@T@, string> { Result.Err("x") });
+    print(join(t7).is_err());
+    let t9 = spawn(fn() -> (@T@, int) { (@B@, @K@) });
+    let got = join(t9);
+    print(got.1);
+    print(got.0 == @B@);
+    let out: Channel<@T@> = Channel.bounded(2);
+    let items = [@B@, @A@];
+    let t8 = spawn(fn() {
+        for x in items { send(out, x); }
+    });
+    join(t8);
+    print(recv(out) == Option.Some(@B@));
+    print(recv(out) == Option.Some(@A@));
+    let total = scope(fn() -> int {
+        let child = spawn(fn() -> int { if (a == @B@) { 1 } else { 0 } });
+        let other = spawn(fn() -> [@T@] { work_@I@(job) });
+        join(child) + join(other).len() + @K@
+    });
+    print(total);
+    match (try_join(spawn(fn() -> @T@ {
+        if (@K@ > 0) { panic("boom@I@"); }
+        @A@
+    }))) {
+        Result.Ok(_v) => print("ok"),
+        Result.Err(e) => print("caught:${e}"),
+    }
+}
+"#;
+    (vec![], fill(tpl, i, &t, r.int_in(1, 9)))
+}
+
+// ---------------------------------------------------------------------------------------------
 // Ensamblado del batch y ejecución de los motores
 // ---------------------------------------------------------------------------------------------
 
@@ -575,13 +1323,16 @@ fn make_batch(gens: &[(&'static str, GenFn)], seed: u64) -> Vec<Probe> {
 
 /// Corre un batch completo con bisección al fallar. `label` para el mensaje; `seed` reproducible.
 fn run_batch(gens: &[(&'static str, GenFn)], flavor: Flavor, seed: u64, label: &str) {
-    let dir = std::env::temp_dir().join(format!("ray_differential_{}_{seed}", std::process::id()));
+    // La etiqueta entra en el nombre: dos batches con la MISMA semilla (los dos humos, que cargo
+    // corre en paralelo) no deben compartir directorio ni pisarse el programa.
+    let slug: String = label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    let dir = std::env::temp_dir().join(format!("ray_differential_{}_{seed}_{slug}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("crea el dir temporal");
     let probes = make_batch(gens, seed);
     let result = check(&probes, flavor, &dir, "full");
     if let Err(first_err) = result {
         let (minimal, err) = bisect(probes, flavor, &dir);
-        let reproduction = std::env::temp_dir().join(format!("ray_diff_repro_{seed}.ray"));
+        let reproduction = std::env::temp_dir().join(format!("ray_diff_repro_{seed}_{slug}.ray"));
         let _ = std::fs::write(&reproduction, assemble(&minimal));
         let culprits: Vec<&str> = minimal.iter().map(|p| p.gen_name).collect();
         panic!(
@@ -636,6 +1387,15 @@ fn differential_smoke_one_sequential_batch() {
     run_batch(SEQ_GENS, Flavor::Sequential, BASE_SEED, "humo secuencial");
 }
 
+/// Humo ESTRUCTURAL en cada `cargo test`: un batch con un tipo sorteado por generador.
+#[test]
+fn differential_smoke_one_structural_batch() {
+    if !require_rustc() {
+        return;
+    }
+    run_batch(SEQ_STRUCT_GENS, Flavor::Sequential, BASE_SEED, "humo estructural");
+}
+
 /// La campaña: varios batches secuenciales con semillas rotadas + los batches de concurrencia
 /// (build nativo con fibras, la vía Cargo — más lento). `#[ignore]` en local; CI la corre en
 /// cada push (como native_corpus) y la nocturna con `RAYLANG_DIFF_BATCHES` alto.
@@ -649,17 +1409,69 @@ fn differential_campaign() {
     // Modo reproducción: `RAYLANG_DIFF_SEED=<n>` corre SOLO ese batch en ambos sabores.
     if let Some(seed) = std::env::var("RAYLANG_DIFF_SEED").ok().and_then(|s| s.parse::<u64>().ok()) {
         run_batch(SEQ_GENS, Flavor::Sequential, seed, "repro secuencial");
+        run_batch(SEQ_STRUCT_GENS, Flavor::Sequential, seed, "repro estructural");
         run_batch(CONC_GENS, Flavor::Concurrent, seed, "repro concurrente");
+        run_batch(CONC_STRUCT_GENS, Flavor::Concurrent, seed, "repro estructural concurrente");
         return;
     }
     for b in 0..batches {
         let seed = BASE_SEED.wrapping_add((b + 1).wrapping_mul(0x9E37_79B9));
         run_batch(SEQ_GENS, Flavor::Sequential, seed, "campaña secuencial");
+        // Los estructurales rinden por SEMILLA (cada una sortea otros tipos): el doble de batches.
+        run_batch(SEQ_STRUCT_GENS, Flavor::Sequential, seed, "campaña estructural");
+        run_batch(SEQ_STRUCT_GENS, Flavor::Sequential, seed ^ 0x5DEE_CE66, "campaña estructural");
     }
     // Concurrencia: menos batches (el build con fibras va por la vía Cargo, ~5-10 s cada uno).
     let conc_batches = (batches / 2).max(1);
     for b in 0..conc_batches {
         let seed = BASE_SEED.wrapping_add((b + 1).wrapping_mul(0x51_7C_C1_B7));
         run_batch(CONC_GENS, Flavor::Concurrent, seed, "campaña concurrente");
+        run_batch(CONC_STRUCT_GENS, Flavor::Concurrent, seed, "campaña estructural concurrente");
     }
+}
+
+/// SONDEO estructural (herramienta de desarrollo, `#[ignore]`): cada generador estructural, de
+/// uno en uno y con `RAYLANG_DIFF_BATCHES` semillas (por defecto 3), SIN parar en el primer fallo.
+/// Lista todo lo que diverge o no compila, con su repro en disco, y falla al final si hubo algo.
+/// `RAYLANG_DIFF_ONLY=<texto>` filtra los generadores por nombre.
+#[test]
+#[ignore = "sondeo largo: un build nativo por sonda; correr con -- --ignored"]
+fn differential_structural_survey() {
+    if !require_rustc() {
+        return;
+    }
+    let seeds = env_u64("RAYLANG_DIFF_BATCHES", 3);
+    let only = std::env::var("RAYLANG_DIFF_ONLY").unwrap_or_default();
+    let dir = std::env::temp_dir().join(format!("ray_differential_survey_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("crea el dir temporal");
+    let mut failures: Vec<String> = Vec::new();
+    let lists: [(&[(&'static str, GenFn)], Flavor); 2] =
+        [(SEQ_STRUCT_GENS, Flavor::Sequential), (CONC_STRUCT_GENS, Flavor::Concurrent)];
+    for (gens, flavor) in lists {
+        for (idx, (name, g)) in gens.iter().enumerate() {
+            if !name.contains(only.as_str()) {
+                continue;
+            }
+            for s in 0..seeds {
+                let seed = BASE_SEED.wrapping_add((s + 1).wrapping_mul(0x9E37_79B9)).wrapping_add(idx as u64);
+                let mut rng = Rng(seed);
+                let (imports, top) = g(&mut rng, idx);
+                let probe = Probe { imports, top, idx, gen_name: name };
+                let tag = format!("{name}_{s}");
+                let outcome = std::panic::catch_unwind(|| check(std::slice::from_ref(&probe), flavor, &dir, &tag));
+                let err = match outcome {
+                    Ok(Ok(())) => continue,
+                    Ok(Err(e)) => e,
+                    Err(p) => p.downcast_ref::<String>().cloned().unwrap_or_else(|| "pánico del harness".to_string()),
+                };
+                let head: String = err.lines().filter(|l| !l.trim().is_empty()).take(7).collect::<Vec<_>>().join("\n    ");
+                failures.push(format!("{name} (semilla {s}) → {}\n    {head}", dir.join(format!("diff_{tag}.ray")).display()));
+            }
+        }
+    }
+    if failures.is_empty() {
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    panic!("{} sonda(s) estructurales fallan:\n\n{}", failures.len(), failures.join("\n\n"));
 }

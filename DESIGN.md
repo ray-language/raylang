@@ -21982,3 +21982,48 @@ incoherente: `print((1, "a"))` se rechaza, pero la misma tupla dentro de un arra
 coste de variar la forma fue bajo — un `Ty` con cinco campos — porque el checker hace de oráculo de
 validez: una sonda que la VM rechaza es un bug del generador y se ve al instante.
 
+## 476. El encuadre HTTP/1.1 de `net`, contra una tabla (nov 2026)
+
+**De dónde sale.** El mismo repaso de hallazgos que §475 contó diez bugs de un solo corte en
+`net`: cabeceras duplicadas, `Content-Length` contra `chunked`, tamaños de chunk, líneas plegadas,
+pipelining (#81, #229, #230, #238, #239, #243, #244, #275, #277, #283). Cada uno se arregló con su
+test. Diez arreglos sueltos sobre el mismo parser dicen que faltaba la tabla.
+
+**Qué se hizo.** `tests/http_conformance_cli.rs`: un servidor raylang en el puerto 0 cuyo handler
+devuelve lo que VIO, y el test le escribe octetos crudos (73 filas); y al revés, un servidor falso
+de Rust que contesta octetos crudos a un cliente raylang (19 filas). Cada fila declara lo que la
+RFC 9112 manda: servirla, rechazarla, o — donde la RFC deja elegir — cualquiera de las dos. De una
+petición mal formada se exige lo que impide el *request smuggling*: un 4xx, la conexión cerrada y
+que el handler no la vea.
+
+**Qué encontró.** 21 filas del servidor y 7 del cliente. Lo que importa:
+
+- *`Transfer-Encoding` por subcadena.* `te.contains("chunked")` aceptaba `xchunked`, `chunked,
+  gzip` y `chunked, chunked`, y con dos líneas se quedaba con la última. Un proxy que no
+  reconozca esa lista lee otro cuerpo. Ahora es exactamente `chunked` o 400; las líneas repetidas
+  se juntan antes de comprobar.
+- *El parser ignoraba lo que no entendía.* Una línea sin `:` se saltaba; un NUL o un CR dentro
+  de un valor pasaban al handler; la línea de petición valía con dos trozos, con cuatro, o con
+  `HTTP/2.0`. Todo eso es ahora un 400.
+- *`rest` pisado.* `drain_body` vuelve a llamar a `next_sized_piece` tras el último trozo; la
+  rama `remaining <= 0` copiaba otra vez `buffer` (ya vacío) a `rest` y borraba la petición
+  siguiente. Un `POST` con cuerpo y un `GET` en la misma escritura daban una sola respuesta.
+- *Trailers.* El servidor contestaba 400 a un cuerpo chunked con trailers, que es válido. Se leen
+  y se descartan, con el tope de las líneas de chunk.
+- *Tres lectores, tres reglas.* El cliente tiene un lector por modo (petición suelta, conexión
+  persistente, streaming) y cada uno decidía el encuadre a su manera. `framing_of` es ahora la
+  única: `Transfer-Encoding` solo `chunked`, `Content-Length` solo dígitos y sin valores
+  distintos, nunca los dos.
+- *Un servidor podía abortar al cliente.* `parse_chunk_size` acumulaba sin tope: 17 dígitos
+  hexadecimales desbordaban el entero y el programa moría con un error de ejecución que ningún
+  `Result` recogía. Quince dígitos como máximo.
+- *`100 Continue`* salía como la respuesta de la petición. Las interinas se saltan (salvo 101).
+
+**Decisión que queda abierta.** La RFC manda 400 a una petición HTTP/1.1 sin `Host`. El servidor
+la sigue sirviendo: exigirlo rompe a los clientes crudos que no lo mandan (incluidos muchos tests
+propios), y no es un vector de *smuggling* — el duplicado sí, y ese se rechaza. La fila está en la
+tabla como «rechazar o servir», con la nota.
+
+**Lo que no cubre.** `examples/web/webserver.ray` y `examples/web/http.ray` son copias antiguas
+que algunos tests todavía usan; no reciben estos arreglos. HTTP/2 y gRPC tienen su propio
+encuadre y sus propios tests.

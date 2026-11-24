@@ -163,13 +163,57 @@ pub(super) struct ChanSlot {
     pub(super) chan: Option<VmChannel>,
 }
 
+/// La cola de fibras LISTAS, que además sabe qué workers están ociosos (ray-daw #480): encolar
+/// una fibra despierta a uno. Así un worker sin trabajo puede dormir de verdad —y no despertar
+/// 20 000 veces por segundo mientras otro está dentro de una llamada larga— sin que recoger el
+/// trabajo recién producido tarde más. `park`/`unpark` llevan un testigo: un `unpark` que llega
+/// antes del `park` no se pierde.
+#[derive(Default)]
+pub(super) struct ReadyQueue {
+    queue: VecDeque<Fiber>,
+    idle: Vec<std::thread::Thread>,
+}
+
+impl ReadyQueue {
+    pub(super) fn push_back(&mut self, fiber: Fiber) {
+        self.queue.push_back(fiber);
+        if let Some(worker) = self.idle.pop() {
+            worker.unpark();
+        }
+    }
+    pub(super) fn pop_front(&mut self) -> Option<Fiber> {
+        self.queue.pop_front()
+    }
+    pub(super) fn is_empty(&self) -> bool {
+        self.queue.is_empty()
+    }
+    pub(super) fn iter(&self) -> std::collections::vec_deque::Iter<'_, Fiber> {
+        self.queue.iter()
+    }
+    pub(super) fn remove(&mut self, index: usize) -> Option<Fiber> {
+        self.queue.remove(index)
+    }
+    /// Apunta al worker actual como ocioso (una vez): el próximo `push_back` lo despierta.
+    fn wait_for_work(&mut self) {
+        let me = std::thread::current();
+        if !self.idle.iter().any(|t| t.id() == me.id()) {
+            self.idle.push(me);
+        }
+    }
+    /// El worker actual deja de estar ocioso (encontró trabajo o termina).
+    fn stop_waiting(&mut self) {
+        let me = std::thread::current().id();
+        self.idle.retain(|t| t.id() != me);
+    }
+}
+
 /// M38.3a: el estado del scheduler que N hilos compartirían (M38.3b: tras `Arc<Mutex<Shared>>`). Con los
 /// heaps aislados por fibra (M38.1), es lo ÚNICO compartido: las colas de fibras listas/aparcadas y los
 /// almacenes del host de canales/tareas. La ejecución de cada fibra (frames/stack/heap/…) es thread-local.
 #[derive(Default)]
 pub(super) struct Shared {
     /// Fibras listas para ejecutar, en orden FIFO (scheduler determinista).
-    pub(super) ready: VecDeque<Fiber>,
+    pub(super) ready: ReadyQueue,
     /// Fibras bloqueadas en `recv`/`send`/`join`, con el handle (canal o tarea) que esperan.
     pub(super) parked: Vec<Parked>,
     /// M15.5/M17: fibras aparcadas esperando **E/S de red** (`accept`/`read` que dieron `WouldBlock`),
@@ -375,8 +419,13 @@ impl<'a> Vm<'a> {
     /// deadlock cuando `running == 0` (nadie ejecuta) y hay fibras aparcadas. Con N=1, `running` es 0 al
     /// entrar → nunca se espera; el camino es idéntico al viejo `schedule_next`.
     pub(super) fn poll_next(&mut self, line: usize, col: usize) -> Result<bool, RuntimeError> {
+        // ray-daw #480: cuántas vueltas seguidas lleva este worker sin trabajo (ver el final).
+        let mut idle_spins: u32 = 0;
         loop {
             let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
+            if idle_spins > 0 {
+                sh.ready.stop_waiting();
+            }
             if sh.outcome.is_some() {
                 return Ok(false); // otro worker apagó el programa
             }
@@ -432,8 +481,23 @@ impl<'a> Vm<'a> {
                     continue; // dejó fibras en `ready`; reintenta el pop
                 }
             }
-            drop(sh);
-            std::thread::sleep(std::time::Duration::from_micros(SPIN_SLEEP_US));
+            // ray-daw #480: dos fases. Los primeros ~5 ms de ocio el worker gira cada 50 µs, como
+            // siempre: recoge sin coste lo que otro acaba de producir (un ping-pong entre fibras no
+            // paga ninguna llamada al sistema por mensaje). Si el ocio dura, se apunta en la cola
+            // y DUERME hasta que alguien encole una fibra (`ReadyQueue::push_back` lo despierta)
+            // o venza un plazo de 2 ms, que sigue haciendo falta para los temporizadores y la E/S
+            // de las fibras aparcadas (M254). Antes giraba sin fin: con otro worker dentro de una
+            // llamada larga (`process.run` esperando a un hijo) eran 20 000 despertares por
+            // segundo y worker, ~40 % de un núcleo en tiempo de sistema.
+            idle_spins = idle_spins.saturating_add(1);
+            if idle_spins <= 100 {
+                drop(sh);
+                std::thread::sleep(std::time::Duration::from_micros(SPIN_SLEEP_US));
+            } else {
+                sh.ready.wait_for_work();
+                drop(sh);
+                std::thread::park_timeout(std::time::Duration::from_millis(2));
+            }
         }
     }
 

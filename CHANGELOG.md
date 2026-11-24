@@ -6,6 +6,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **VM — un worker ocioso deja de gastar CPU** (ray-daw #480): con `ray run`, esperar a un
+  proceso hijo (`process.run`) gastaba ~40 % de un núcleo en tiempo de sistema durante toda la
+  espera, porque los demás hilos del scheduler despertaban cada 50 µs a mirar si había trabajo.
+  Ahora, pasados 5 ms sin trabajo, duermen hasta que lo hay. Medido: de 37 % a 6 %. El binario
+  nativo no tenía el problema.
+
 - **Binario nativo — patrones de struct en `match`** (rayhotel #489): `match (i) { Invoice { id,
   status: Status.Paid(n) } => … }` se rechazaba con «struct destructuring pattern is not
   supported» aunque la VM lo ejecuta y la documentación lo anuncia. Ahora compila: en el

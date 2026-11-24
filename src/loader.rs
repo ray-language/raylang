@@ -554,7 +554,20 @@ fn load_impl(entry: &Path, dep_roots: &DepRoots, entry_source: Option<&str>, pro
         //    posiciones de tipo y en expresiones que nombran tipos (struct lit, `Color.Rojo`,
         //    patrones)—, sin tocar los parámetros de tipo en ámbito. El mapa de reescritura suma
         //    los tipos propios y los `from`-importados (-2).
-        let own_types = build_own_types(&m.program, &prefix);
+        let mut own_types = build_own_types(&m.program, &prefix);
+        // Un módulo comprobado como archivo suelto (el LSP con un submódulo abierto, `ray check
+        // src/x.ray`) que define un tipo con nombre de tipo builtin (`struct Task`): en el
+        // proyecto ese tipo va namespacado (`tasks::Task`) y convive con el builtin; suelto se
+        // quedaba con el nombre pelado y el checker lo rechazaba («'Task' is a builtin type…») en
+        // un archivo que compila. Como `entry_shadow_name` hace con las funciones (raycdc #407).
+        if m.is_entry && !m.program.functions.iter().any(|f| f.name == "main") {
+            let leaf = ns_prefix(m.name.rsplit('/').next().unwrap_or(&m.name));
+            for (local, global) in own_types.iter_mut() {
+                if matches!(local.as_str(), "Task" | "Map" | "Channel") {
+                    *global = format!("{leaf}::{local}");
+                }
+            }
+        }
         rename_type_defs(&mut m.program, &own_types);
         let mut type_refs = own_types;
         type_refs.extend(from_types);

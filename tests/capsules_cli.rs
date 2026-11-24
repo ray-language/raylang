@@ -182,6 +182,28 @@ fn ray_doc_shows_the_contract_of_a_capsule() {
     let _ = std::fs::remove_dir_all(d);
 }
 
+/// Un módulo que define un tipo con nombre de tipo builtin (`struct Task`) compila dentro del
+/// proyecto (va namespacado); comprobado como archivo —lo que hace el editor al abrirlo— daba
+/// «'Task' is a builtin type…». Visto en rayhotel al barrer sus archivos por el LSP.
+#[test]
+fn a_module_with_a_builtin_named_type_checks_as_a_file() {
+    let d = tree(
+        "builtin_type",
+        &[
+            ("ray.toml", APP_TOML),
+            ("src/main.ray", "import jobs/tasks;\nfn main() {\n    print(tasks.first().id);\n}\n"),
+            ("src/jobs/tasks.ray", "pub struct Task { id: int, }\npub fn first() -> Task { Task { id: 7 } }\npub fn all() -> [Task] { [first()] }\n"),
+        ],
+    );
+    let (out, err, code) = ray(&d, &["run"]);
+    assert_eq!((out.as_str(), code), ("7\n", 0), "{err}");
+    let (out, err, code) = ray(&d, &["check", "src/jobs/tasks.ray"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let out = lsp_open(&d.join("src/jobs/tasks.ray"));
+    assert!(out.contains("\"diagnostics\":[]"), "{out}");
+    let _ = std::fs::remove_dir_all(d);
+}
+
 // ---------------------------------------------------------------------------------------------
 // LSP
 // ---------------------------------------------------------------------------------------------

@@ -22191,3 +22191,39 @@ enum: es un alias `pub type`, que solo sirve en firmas.
 **Fuera.** Un enum opaco (sin construir variantes ni casarlas) no se ha pedido. `print(x)` de un
 tipo opaco muestra sus campos: oculta la forma al código, no a la vista. El checker auto-alojado
 no conoce `opaque`.
+
+## 482. El worker ocioso de la VM duerme de verdad (ray-daw #480, nov 2026)
+
+**El síntoma no estaba donde parecía.** ray-daw midió ~40 % de un núcleo, en tiempo de sistema,
+mientras `process.run` esperaba a un hijo bajo `ray run`. La espera del hijo no gira: duerme 10 ms
+entre comprobaciones. Con `RAYLANG_THREADS=1` el coste es 0 %. Lo que gastaba eran los OTROS
+workers del scheduler M:N: un worker sin fibra lista, mientras otro ejecuta, esperaba con un
+*busy-poll* de 50 µs (M38.3b) — 20 000 despertares por segundo y worker, cada uno tomando el
+mutex del scheduler. «Raro en cargas bien paralelizadas», decía el comentario; pero basta UNA
+fibra dentro de una llamada larga (un proceso, una extern, CPU pura) para tener a todos los demás
+girando el tiempo que dure.
+
+**Tres intentos, medidos** (`sleep 3` bajo `ray run`; ping-pong sin búfer de 100 000 mensajes;
+abanico de 200 000 mensajes a 4 consumidores; ráfagas con 18 ms de cómputo entre envíos):
+
+| Variante | CPU en la espera | ping-pong | abanico | retraso en ráfagas |
+|---|---:|---:|---:|---:|
+| 50 µs fijo (antes) | 37 % | 112 ms | 410 ms | ~0 |
+| Intervalo que crece hasta 4 ms | 5 % | 117 ms | 417 ms | ~0,8 ms por mensaje |
+| `park` + `unpark` en cada encolado | 10 % | 880 ms | 625 ms | ~0 |
+| Girar 5 ms, luego `park` con `unpark` (lo que queda) | 6 % | 117 ms | 420 ms | ~0 |
+
+La segunda deja de gastar pero un worker ocioso tarda hasta 4 ms en recoger trabajo nuevo. La
+tercera despierta al instante pero cada mensaje paga una llamada al sistema: el ping-pong, donde
+el otro worker estaba girando y recogía gratis, se hunde. La cuarta combina: los primeros ~5 ms
+el worker gira como siempre (el caso caliente no cambia) y solo después se apunta en la cola de
+listos y duerme; `ReadyQueue::push_back` despierta a uno. Un plazo de 2 ms sigue haciendo falta
+para atender los temporizadores y la E/S de las fibras aparcadas (M254).
+
+**Por qué `park`/`unpark` y no una `Condvar`.** El comentario original la descartaba por los
+despertares perdidos. `park` lleva un testigo: un `unpark` que llega antes del `park` no se
+pierde, y el registro del worker ocioso se hace con el mutex del scheduler tomado.
+
+**Lección.** Una regla de «unos 50 µs no queman un núcleo» es verdad por worker y falsa por nueve.
+Y el primer arreglo que quita el síntoma (alargar el intervalo) cambiaba latencia por CPU sin
+decirlo: hubo que medir el caso contrario para verlo.

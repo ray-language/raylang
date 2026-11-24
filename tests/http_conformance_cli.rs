@@ -90,6 +90,12 @@ fn launch_echo_server() -> Server {
     let mut line = String::new();
     reader.read_line(&mut line).expect("lee el puerto");
     let port: u16 = line.trim().rsplit(' ').next().and_then(|s| s.parse().ok()).unwrap_or_else(|| panic!("puerto inválido: {line:?}"));
+    // El resto del stdout se DRENA hasta que el servidor termina: soltar el lector cerraría la
+    // tubería y el servidor moriría (código 141) al escribir su siguiente línea de registro.
+    std::thread::spawn(move || {
+        let mut sink = Vec::new();
+        let _ = reader.read_to_end(&mut sink);
+    });
     Server { child, port, dir }
 }
 
@@ -103,7 +109,11 @@ struct Outcome {
 
 /// Escribe `raw` y lee hasta que el servidor cierra o calla `idle` (tope total: 8 s).
 fn exchange(port: u16, raw: &[u8], idle: Duration) -> Outcome {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("conecta");
+    // Sin servidor (murió) no hay nada que leer: la fila falla con su veredicto y el test enseña
+    // el stderr del servidor, en vez de un pánico por fila que lo tapa.
+    let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) else {
+        return Outcome { responses: Vec::new(), closed: true, raw: "(no se pudo conectar)".to_string() };
+    };
     stream.set_read_timeout(Some(idle)).ok();
     // El servidor puede cerrar a mitad de un envío grande: no es un fallo del test.
     let _ = stream.write_all(raw);
@@ -420,7 +430,12 @@ fn the_webserver_frames_requests_as_rfc_9112_says() {
     let cases = server_cases();
     let failures = run_server_cases(server.port, &cases);
     // Un error de ejecución del servidor tumba todas las filas a la vez: su stderr lo explica.
-    let stderr = std::fs::read_to_string(server.dir.join("stderr.txt")).unwrap_or_default();
+    let mut server = server;
+    let stderr = format!(
+        "{}\n(estado del proceso: {:?})",
+        std::fs::read_to_string(server.dir.join("stderr.txt")).unwrap_or_default(),
+        server.child.try_wait()
+    );
     assert!(failures.is_empty(), "{} de {} filas fallan:\n  {}\nstderr del servidor: {stderr}", failures.len(), cases.len(), failures.join("\n  "));
 }
 

@@ -1160,8 +1160,14 @@ Lo que conviene saber al montar un programa por módulos con cápsulas:
   Un `mod.ray` oculta todos los directorios que tiene debajo; `src/mod.ray` no hace nada.
 - **Pruebas.** `tests/*.ray` ven solo el contrato. Las de caja blanca van en un `*_test.ray` dentro de la
   cápsula (`src/geo/util_test.ray`): `ray test` descubre todos los `*_test.ray` de `src/`.
-- **No hay campos privados.** Un struct que la fachada exporta se puede construir y modificar desde fuera;
-  para ocultar la representación, devuelve un `dyn Trait`.
+- **Tipos opacos.** `pub from geo/formas import opaque Circulo;` reexporta el struct sin su forma: fuera de
+  la cápsula se nombra, se pasa, se compara y se usa con las funciones que la fachada exporta
+  (`c.area()`), pero no se construye con un literal, no se desestructura y sus campos no se leen ni se
+  escriben. Dentro de la cápsula es un struct corriente. Sin `opaque`, un struct exportado queda abierto
+  del todo: no hay visibilidad por campo.
+- **El contrato debe poder nombrarse.** Una función exportada que devuelve o recibe un tipo que la cápsula
+  no exporta recibe un aviso. Un alias `pub type` en la fachada solo sirve en firmas; para construir o
+  casar el tipo hay que reexportarlo con `pub from`.
 - **Herramientas.** `ray check` y `ray doc` aceptan el archivo de una fachada o de un interno; `ray doc geo`
   muestra el contrato con lo reexportado.
 

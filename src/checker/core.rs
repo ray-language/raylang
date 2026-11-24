@@ -78,6 +78,9 @@ impl Checker {
             module_bands: Vec::new(),
             capsule_surfaces: HashMap::new(),
             entry_module: String::new(),
+            opaque_types: HashMap::new(),
+            capsule_types: HashMap::new(),
+            current_fn_module: String::new(),
             shadowed_free_fns: HashSet::new(),
             root_user_fns: HashSet::new(),
             require_main: true,
@@ -97,6 +100,8 @@ impl Checker {
         if self.capsule_surfaces.is_empty() && !program.capsule_surfaces.is_empty() {
             self.capsule_surfaces = program.capsule_surfaces.clone();
             self.entry_module = program.entry_module.clone();
+            self.opaque_types = program.opaque_types.clone();
+            self.capsule_types = program.capsule_types.clone();
         }
         if self.module_bands.is_empty() && !program.module_bands.is_empty() {
             self.module_bands = program.module_bands.clone();
@@ -429,6 +434,11 @@ impl Checker {
         for f in &program.functions {
             let depth = self.scopes.len();
             self.current_fn_is_root = !f.name.contains("::") && !f.name.contains('#') && f.line < crate::prelude::LINE_BASE;
+            // El módulo de la función: el de su nombre global, o el del TIPO si es un método
+            // (`shop::model::Invoice#eq`). Un `@derive` genera código sin línea propia: su
+            // posición no dice a qué módulo pertenece, su nombre sí (rayhotel #486).
+            let owner = f.name.split('#').next().unwrap_or(&f.name);
+            self.current_fn_module = owner.rsplit_once("::").map(|(m, _)| m.to_string()).unwrap_or_default();
             if let Err(e) = self.check_function(f) {
                 let e = self.derive_error(&f.name, e);
                 if !self.accumulate {
@@ -1797,8 +1807,19 @@ impl Checker {
     pub(super) fn check_struct_lit(&mut self, name: &str, fields: &[(String, Expr)], expected: Option<&Type>, line: usize, col: usize) -> Result<Type, TypeError> {
         let declared = match self.structs.get(name) {
             Some(d) => d.clone(), // clonamos para soltar el préstamo de self
-            None => return Err(self.err(line, col, format!("struct '{}' not declared", name))),
+            None => {
+                // rayhotel #487: `billing.Invoice { … }` cuando `Invoice` es un ALIAS de la fachada
+                // (`pub type Invoice = model.Invoice;`): un alias vale en firmas, no construye.
+                let hint = self.facade_alias_hint(name);
+                return Err(self.err(line, col, format!("struct '{}' not declared{hint}", name)));
+            }
         };
+        if let Some(capsule) = self.opaque_outside(name, line) {
+            return Err(self.err(line, col, format!(
+                "'{}' is opaque outside the capsule '{capsule}': it cannot be constructed here (use the functions the capsule exports)",
+                name.rsplit("::").next().unwrap_or(name)
+            )));
+        }
         // M10.2f: hover/def del nombre de tipo en el literal `Nombre { … }`.
         if self.gather {
             let def = self.type_defs.get(name).copied();
@@ -2312,7 +2333,7 @@ impl Checker {
                 if *pat_enum != ty_enum {
                     // Redacción idéntica a la original (el checker auto-alojado la espeja byte a byte).
                     return Err(self.err(pat.line, pat.col, format!(
-                        "the pattern is of enum '{}', but the scrutinee is '{}'", pat_enum, ty_enum
+                        "the pattern is of enum '{}', but the scrutinee is '{}'{}", pat_enum, ty_enum, self.facade_alias_hint(pat_enum)
                     )));
                 }
                 let variants = self.enums.get(&ty_enum)
@@ -2363,6 +2384,12 @@ impl Checker {
                 if *name != sname {
                     return Err(self.err(pat.line, pat.col, format!(
                         "the pattern is of struct '{}', but the value here is of struct '{}'", name, sname
+                    )));
+                }
+                if let Some(capsule) = self.opaque_outside(&sname, pat.line) {
+                    return Err(self.err(pat.line, pat.col, format!(
+                        "'{}' is opaque outside the capsule '{capsule}': it cannot be destructured here",
+                        sname.rsplit("::").next().unwrap_or(&sname)
                     )));
                 }
                 // Fuzz (oct 2026): en `check_all` un tipo desconocido en una FIRMA se acumula y el
@@ -2604,6 +2631,12 @@ impl Checker {
                 let Some(fields) = self.structs.get(&sname) else {
                     return Err(self.err(object.line, object.col, format!("unknown type: '{}' not declared", sname)));
                 };
+                if let Some(capsule) = self.opaque_outside(&sname, object.line) {
+                    return Err(self.err(object.line, object.col, format!(
+                        "'{}' is opaque outside the capsule '{capsule}': its fields are not accessible here (field '{name}')",
+                        sname.rsplit("::").next().unwrap_or(&sname)
+                    )));
+                }
                 let (fi, fty) = match fields.iter().enumerate().find(|(_, (fname, _))| fname == name) {
                     Some((i, (_, fty))) => (i, fty.clone()),
                     None => return Err(self.err(object.line, object.col, format!("the struct '{}' has no field '{}'", sname, name))),
@@ -2987,7 +3020,8 @@ impl Checker {
                         name, name, name
                     )));
                 }
-                Err(self.err(expr.line, expr.col, format!("name '{}' not declared", name)))
+                let hint = self.facade_alias_hint(name);
+                Err(self.err(expr.line, expr.col, format!("name '{}' not declared{hint}", name)))
             }
 
             ExprKind::Unary { op, expr: inner } => {
@@ -3635,7 +3669,9 @@ impl Checker {
                     let traits = traits.clone();
                     return self.dispatch_dyn_method(&traits, name, args, line, col);
                 }
-                if let Type::Struct(sname, targs) = &recv_ty {
+                if let Type::Struct(sname, targs) = &recv_ty
+                    && self.opaque_outside(sname, line).is_none()
+                {
                     if let Some(fty) = self.struct_field_type(sname, targs, name) {
                         // M10.2g: hover del campo-función invocado (un campo no tiene declaración de fn).
                         self.record_field_hover(object.line, object.col, name, &fty, None);
@@ -3961,6 +3997,39 @@ impl Checker {
         self.root_user_fns.contains(name)
     }
 
+    /// El módulo (con `::`) del sitio de la línea `line`: el de su banda, o la identidad de la
+    /// entrada (que no se namespaca) si cae en ella.
+    fn site_module(&self, line: usize) -> &str {
+        match self.module_bands.iter().rev().find(|(start, _)| *start <= line) {
+            Some((_, p)) if !p.is_empty() => p.as_str(),
+            _ => self.entry_module.as_str(),
+        }
+    }
+
+    /// rayhotel #486: si `struct_name` es un tipo reexportado como `opaque` y el sitio de `line`
+    /// está FUERA de su cápsula, el nombre de la cápsula (con `/`). Dentro, `None`: ahí el tipo es
+    /// transparente — también para el código que un `@derive` genera en su módulo.
+    fn opaque_outside(&self, struct_name: &str, line: usize) -> Option<String> {
+        let capsule = self.opaque_types.get(struct_name)?;
+        let site = if self.current_fn_module.is_empty() { self.site_module(line) } else { self.current_fn_module.as_str() };
+        let inside = site == capsule || site.starts_with(&format!("{capsule}::"));
+        (!inside).then(|| capsule.replace("::", "/"))
+    }
+
+    /// rayhotel #487: `name` no existe como struct/enum, pero es `<cápsula>::X` y la fachada de
+    /// esa cápsula declara un ALIAS `X`: lo que hace falta es reexportar el tipo.
+    fn facade_alias_hint(&self, name: &str) -> String {
+        let Some((prefix, leaf)) = name.rsplit_once("::") else { return String::new() };
+        // Los alias ya vienen expandidos: basta con que `<cápsula>::X` no sea un tipo de verdad.
+        if self.capsule_surfaces.contains_key(prefix) && !self.structs.contains_key(name) && !self.enums.contains_key(name) {
+            return format!(
+                " (the capsule '{}' has no struct or enum '{leaf}' to build or match: a `pub type` alias only names a type in signatures — re-export the type itself with `pub from … import {leaf};`)",
+                prefix.replace("::", "/")
+            );
+        }
+        String::new()
+    }
+
     fn type_module_fn(&self, name: &str, recv_ty: &Type, line: usize) -> Option<String> {
         let tname = match recv_ty {
             Type::Struct(n, _) | Type::Enum(n, _) => n,
@@ -3973,10 +4042,7 @@ impl Checker {
         // declara sobre él. Manda la cápsula más EXTERNA que contiene al tipo y no al sitio.
         if !self.capsule_surfaces.is_empty() {
             let within = |module: &str, capsule: &str| module == capsule || module.starts_with(&format!("{capsule}::"));
-            let site = match self.module_bands.iter().rev().find(|(start, _)| *start <= line) {
-                Some((_, p)) if !p.is_empty() => p.as_str(),
-                _ => self.entry_module.as_str(),
-            };
+            let site = self.site_module(line);
             let boundary = self.capsule_surfaces.keys()
                 .filter(|c| within(prefix, c) && !within(site, c))
                 .min_by_key(|c| c.len());

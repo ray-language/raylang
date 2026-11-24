@@ -340,8 +340,16 @@ pub fn total(i: Invoice) -> int { i.amount }                       // or declare
 - Tests: `tests/*.ray` see the contract only. White-box tests go in a `*_test.ray` file INSIDE
   the capsule (`src/shop/model_test.ray`, importing `shop/model`): `ray test` discovers every
   `src/**/*_test.ray`, and `@test` functions written in a module also run.
-- Field visibility does not exist: a struct the facade exports can be built and its fields read
-  and written from outside. To hide a representation, return a `dyn Trait`.
+- Opaque types: `pub from shop/model import opaque Invoice;` re-exports the struct WITHOUT its
+  shape. Outside the capsule `Invoice` can be named in signatures, passed, compared and
+  serialized (what its module derived), and the functions the facade exports are called on it
+  (`i.total()`); it cannot be built with a literal, destructured, or have its fields read or
+  written (`'Invoice' is opaque outside the capsule 'shop'`). Inside the capsule it is an
+  ordinary struct. Without `opaque`, an exported struct is fully open: there is no per-field
+  visibility.
+- A `pub fn` of the contract that shows a type the capsule does not export gets a warning
+  (callers could not name it): re-export the type, plainly or as `opaque`. A `pub type` alias in
+  a facade only names a type in signatures; to build or match it, re-export the type itself.
 - In a package, a `mod.ray` at the root hides everything else; for several public modules, use
   one capsule per subdirectory. A package's modules import each other by the `[package] name`
   whatever key the consumer declares it under.

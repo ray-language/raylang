@@ -107,7 +107,66 @@ pub fn variadic_externs(program: &Program) -> Vec<Warning> {
 pub fn program_warnings(program: &Program) -> Vec<Warning> {
     let mut out = discarded_results(program);
     out.extend(variadic_externs(program));
+    out.extend(facade_shows_unexported(program));
     out.sort_by_key(|w| (w.line, w.col));
+    out
+}
+
+/// rayhotel #487: una función que una cápsula EXPORTA y cuya firma muestra un tipo de la cápsula
+/// que la fachada no exporta. Compila, pero quien la llama recibe un valor cuyo tipo no puede
+/// nombrar (ni en una firma ni en un campo). Se avisa en la función, una vez por tipo.
+pub fn facade_shows_unexported(program: &Program) -> Vec<Warning> {
+    use crate::ast::Type;
+    fn names(t: &Type, out: &mut Vec<String>) {
+        match t {
+            Type::Struct(n, args) | Type::Enum(n, args) => {
+                out.push(n.clone());
+                args.iter().for_each(|a| names(a, out));
+            }
+            Type::Array(inner) | Type::Channel(inner) | Type::Task(inner) => names(inner, out),
+            Type::Map(k, v) => {
+                names(k, out);
+                names(v, out);
+            }
+            Type::Tuple(ts) => ts.iter().for_each(|x| names(x, out)),
+            Type::Fn(params, ret) => {
+                params.iter().for_each(|x| names(x, out));
+                names(ret, out);
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    for (capsule, values) in &program.capsule_surfaces {
+        let exported = program.capsule_types.get(capsule);
+        let inside = format!("{capsule}::");
+        let mut globals: Vec<&String> = values.values().collect();
+        globals.sort();
+        for global in globals {
+            let Some(f) = program.functions.iter().find(|f| f.name == *global) else { continue };
+            let mut shown = Vec::new();
+            f.params.iter().for_each(|p| names(&p.ty, &mut shown));
+            names(&f.return_type, &mut shown);
+            shown.sort();
+            shown.dedup();
+            for ty in shown {
+                if !ty.starts_with(&inside) || exported.is_some_and(|e| e.contains(&ty)) {
+                    continue;
+                }
+                let leaf = ty.rsplit("::").next().unwrap_or(&ty);
+                let fn_leaf = f.name.rsplit("::").next().unwrap_or(&f.name);
+                out.push(Warning {
+                    msg: format!(
+                        "'{fn_leaf}' is exported by the capsule '{}' and shows the type '{leaf}', which the capsule does not export: callers cannot name it — re-export it with `pub from … import {leaf};` (or `opaque {leaf}`)",
+                        capsule.replace("::", "/")
+                    ),
+                    line: f.line,
+                    col: f.col,
+                    len: 1,
+                });
+            }
+        }
+    }
     out
 }
 

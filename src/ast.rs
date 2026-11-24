@@ -191,6 +191,13 @@ pub struct Program {
     /// global. Con ella el checker resuelve un UFCS hecho desde FUERA de la cápsula contra lo que
     /// la fachada exporta, y no contra el módulo interno que declara el tipo.
     pub capsule_surfaces: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    /// Metadata del **loader**: los TIPOS (nombre global) que cada cápsula exporta — los que su
+    /// fachada declara `pub` o reexporta. Para avisar de una fachada que muestra un tipo que no
+    /// exporta (rayhotel #487).
+    pub capsule_types: std::collections::HashMap<String, std::collections::HashSet<String>>,
+    /// Metadata del **loader** (rayhotel #486): struct (nombre global) reexportado como `opaque`
+    /// → prefijo de la cápsula fuera de la cual es opaco.
+    pub opaque_types: std::collections::HashMap<String, String>,
     /// Metadata del **loader**: la identidad (con `::`) del módulo de ENTRADA cuando es un módulo
     /// de dentro de una cápsula comprobado como archivo (`ray check src/shop/mod.ray`); `""` en el
     /// caso normal. La entrada no se namespaca, así que su banda no dice dónde vive.
@@ -329,6 +336,10 @@ pub struct FromImport {
 pub struct ImportName {
     pub name: String,
     pub alias: Option<String>,
+    /// `pub from M import opaque T;` (rayhotel #486): la fachada reexporta el struct `T` SIN su
+    /// forma — fuera de la cápsula se nombra y se pasa, pero no se construye, no se desestructura
+    /// y no se accede a sus campos.
+    pub opaque: bool,
     pub line: usize,
     pub col: usize,
 }

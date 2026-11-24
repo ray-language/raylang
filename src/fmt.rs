@@ -698,9 +698,12 @@ fn fmt_import(it: &ImportDecl) -> String {
 /// una línea del diff. La lista envuelta NO lleva coma final —sin llaves que cierren, el `;` quedaría
 /// colgando en su propia línea— aunque el parser sí la tolera para quien la escriba a mano.
 fn fmt_from_import(it: &FromImport) -> String {
-    let names: Vec<String> = it.names.iter().map(|n| match &n.alias {
-        Some(a) => format!("{} as {}", n.name, a),
-        None => n.name.clone(),
+    let names: Vec<String> = it.names.iter().map(|n| {
+        let opaque = if n.opaque { "opaque " } else { "" };
+        match &n.alias {
+            Some(a) => format!("{opaque}{} as {}", n.name, a),
+            None => format!("{opaque}{}", n.name),
+        }
     }).collect();
     let pref = if it.is_pub { "pub " } else { "" };
     let one_line = format!("{}from {} import {};", pref, it.module, names.join(", "));

@@ -3088,3 +3088,52 @@ instrucciones fundidas, y bajarla exige otra forma de bucle (marco cacheado entr
 no más fusiones. (2) No abrir marco para funciones diminutas — cambia las trazas de error, así
 que solo vale para cuerpos que no pueden fallar. (3) La tabla de tipos del checker sigue sin
 hacer falta; se construirá si una instrucción la necesita de verdad.
+
+## 30. La regresión del paso de mensajes en la VM (nov 2026): bisecada a los callbacks de la FFI
+
+**El síntoma.** Al cerrar 1.27.113, el ping-pong entre dos fibras por canales sin búfer (100 000
+idas y vueltas) salía un 7 % más lento que con la 1.27.111 instalada, y no era del cambio del
+scheduler de esa release.
+
+**Primero, igual con igual.** El binario instalado lo compila el CI. Compilada en local, la
+1.27.111 da lo mismo (109 ms frente a 112): la diferencia es de código.
+
+**Bisección por binarios** (un árbol por commit con `git archive`, el `target` clonado para no
+recompilar dependencias; medianas de 8 pasadas intercaladas):
+
+| Commit | Ping-pong |
+|---|---:|
+| 1.27.111 | 108 ms |
+| 07cbd188, antes de los callbacks de la FFI | 108–109 ms |
+| 4f6a9ef3, callbacks de la FFI (#684) | 114 ms |
+| 6c423d0e, release 1.27.112 | 115–116 ms |
+| main en 1.27.113 (con el scheduler de #694) | 118 ms |
+
+Gotcha de la bisección: `git archive` pone a cada archivo la fecha de su commit, y cargo, con un
+`target` clonado más reciente, no recompila nada — el binario «del commit» era el de la base. Hay
+que tocar las fuentes tras extraer, y comprobar que los binarios difieren antes de medir.
+
+**La causa.** #684 hizo que `take_current_fiber` —lo que aparca la fibra en curso, 22 sitios—
+devolviera `Result<Fiber, &str>` para negarse dentro de un callback. Una `Fiber` es grande (lleva
+su heap, su pila y sus marcos por valor) y envuelta en un `Result` con `map_err` + `?` se mueve
+una vez más en CADA cambio de fibra. La comprobación va ahora aparte (`ensure_parkable`, que
+devuelve `Result<(), &str>`) y `take_current_fiber` vuelve a devolver la fibra.
+
+| | antes de #684 | main | con el arreglo |
+|---|---:|---:|---:|
+| Ping-pong | 109 ms | 118 ms | 114 ms |
+| `actor_ask` | 174 ms | 187 ms | 180 ms |
+| `fib35` | 1060 ms | 1106 ms | 1044 ms |
+| `loop` | 347 ms | 344 ms | 328 ms |
+
+**Lo que queda y por qué no se persigue.** Los ~4 ms restantes del ping-pong y los ~6 de
+`actor_ask` son, casi todos, de #694: un worker que se durmió hay que despertarlo con una
+llamada al sistema, donde antes giraba. Es el precio de no gastar un 40 % de CPU en reposo, y la
+salida de fondo es la que §482 de DESIGN deja apuntada (bloquear en el poller). `fib35` y `loop`
+no cambian de fibra: que se muevan ±4 % entre binarios con el MISMO bucle es disposición del
+código, y fija el suelo de ruido de este método — una diferencia menor que eso entre dos commits
+no es una regresión demostrada.
+
+**Lección.** Un tipo grande que se devuelve por valor en el camino caliente no admite envoltorios
+gratis: la comprobación que puede fallar va antes y aparte.
+

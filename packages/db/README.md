@@ -212,20 +212,6 @@ fn main() -> int {
   como un script de migración, y descarta las filas de un `PRAGMA` o `SELECT`; con parámetros
   exige una sola y lo comprueba antes de ejecutar nada. Antes corría solo la primera y devolvía
   `Ok`. Si una falla, las anteriores quedan aplicadas: envuelve el script en `BEGIN; …; COMMIT;`.
-- **Esperar un candado** (0.11.0, rayhotel #491): cuando otra conexión tiene el candado de
-  escritura, la llamada REINTENTA hasta el plazo de la conexión — 5 s por defecto;
-  `sqlite.busy_timeout(c, ms)` o el habitual `exec(c, "PRAGMA busy_timeout = 2000", [])` lo
-  cambian, y 0 falla en el acto — aparcando la fibra entre intentos, y luego da `database is
-  locked`. Antes esperaba el busy handler de SQLite, dentro de la librería C y reteniendo el hilo:
-  la fibra que tenía el candado no podía terminar y todos los escritores quedaban parados hasta el
-  plazo (20 escrituras a la vez, más de 20 s). El `PRAGMA busy_timeout` —solo o dentro de un
-  script, por `exec` o por `query`— fija el plazo de la conexión. Un script que encuentra el
-  candado a mitad espera igual y sigue desde la sentencia que lo encontró (las anteriores no se
-  repiten); si vence el plazo, el error lo dice y una transacción que el script abrió sigue
-  abierta. Lo único que NO se espera es lo que esperar no arregla: una
-  transacción que ya leyó y quiere escribir mientras otra tiene el candado de escritura da
-  `database is locked (not waited for: …)`; se deshace y se reintenta, o se empieza con `BEGIN
-  IMMEDIATE`. Pide raylang 1.27.113.
 - `disconnect` libera el handle; usar la conexión después falla **limpio** (error como valor, no
   crash: el ciclo prepare→step→finalize ocurre entero dentro del host, un statement nunca escapa).
 - **`last_insert_rowid(c)`** devuelve el rowid del último INSERT (misma conexión). Para el modo

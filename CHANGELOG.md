@@ -39,22 +39,6 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   exportada muestra un tipo que la cápsula no exporta, y un consejo (`pub from`) cuando se
   intenta construir o casar un tipo por un alias `pub type` de la fachada.
 
-- **Paquete `db` 0.11.0 — `db/sqlite` espera un candado sin retener el hilo** (rayhotel #491;
-  pide raylang 1.27.113). Con varios escritores a la vez, el que esperaba el candado lo hacía
-  dentro de SQLite y dejaba parado al que lo tenía: 20 escrituras simultáneas podían dejar un
-  servidor sin responder más de 20 s, en la VM y en nativo. Ahora la conexión reintenta
-  aparcando la fibra, hasta su plazo (5 s por defecto; `sqlite.busy_timeout(c, ms)` o
-  `PRAGMA busy_timeout = N`, por `exec` o `query`, solo o dentro de un script). Las mismas 20 escrituras terminan en
-  milisegundos. Lo que conviene saber:
-  - Un script de varias sentencias que encuentra el candado a mitad espera igual y sigue desde
-    la sentencia que lo encontró; las anteriores no se repiten. Si vence el plazo, el error dice
-    que parte del script había corrido, y una transacción que el script abrió sigue abierta.
-  - Un proyecto con `db` ≤ 0.10 sobre raylang 1.27.113 se comporta como antes (espera dentro de
-    SQLite): el modo nuevo lo pide `db` 0.11 al conectar.
-  - Una transacción que ya leyó y quiere escribir mientras otra conexión tiene el candado de
-    escritura NO espera (SQLite lo detecta como interbloqueo): el error es `database is locked
-    (not waited for: …)`. Hay que deshacerla y reintentar, o empezarla con `BEGIN IMMEDIATE`.
-
 - **Cápsulas (`dir/mod.ray`) — la frontera cierra y las herramientas la entienden** (rayhotel
   #481–#490):
   - Una llamada como método desde fuera (`x.f()`) alcanzaba cualquier `pub fn` del módulo

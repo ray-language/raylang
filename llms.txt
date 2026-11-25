@@ -595,7 +595,7 @@ other systems raise it to their floor);
 (macOS/iOS; `platform()` returns `"ios"`/`"android"` on the phone) — ALSA/AAudio/WASAPI drop
 without a ramp, so write your own fade before `flush` there; `RAY_AUDIO_TRACE=1` prints `flushes N`
 and `underruns N` (times the stream ran dry before the end); `audio.device_latency_ms(h)` = the
-latency the device of an open output or input declares (macOS; 0 elsewhere) — not counted by
+latency the device of an open output or input declares (macOS; `Err` = unknown elsewhere, never assume 0) — not counted by
 `queued_ms` nor `read`, subtract both to align a recording with what was playing;
 `audio.queued_ms(h)` = what you wrote
 and has NOT sounded yet (the sample sounding now is written − queued, also after a flush or a gap —

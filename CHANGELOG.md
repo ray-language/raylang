@@ -15,7 +15,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   entrada abierta y devuelve lo que declara su dispositivo (en macOS: latencia, margen de
   seguridad y latencia del flujo según CoreAudio; las bocinas de un MacBook Pro declaran
   17 ms y unos AirPods Pro 160 ms). Un flujo sin dispositivo elegido sigue al por defecto, y
-  el valor con él. En los demás sistemas devuelve 0. La documentación de `queued_ms` y `read` dice ahora
+  el valor con él. En los demás sistemas devuelve `Err`: desconocida, no cero. La documentación de `queued_ms` y `read` dice ahora
   qué incluye cada uno.
 
 ## 1.27.114 — 2026-11-25

@@ -135,8 +135,7 @@ pub fn duck_others(on: bool) -> Result<int, string> {
 ///
 /// "Sounded" means handed to the device. It does NOT include the latency the device itself
 /// declares (its converter, its DSP, its safety margin): ask `device_latency_ms` for that one.
-/// The sample leaving the speaker right now is `written − queued − device_latency`. On Linux
-/// (ALSA) what the driver reports is already inside `queued_ms`.
+/// The sample leaving the speaker right now is `written − queued − device_latency`.
 pub fn queued_ms(h: int) -> Result<int, string> {
     let r = __audio_open(h, 0, 0, "queued");
     if (r[0] == "ok") {
@@ -159,11 +158,15 @@ pub fn queued_ms(h: int) -> Result<int, string> {
 /// reports them (`kAudioDevicePropertyLatency`, `kAudioDevicePropertySafetyOffset`,
 /// `kAudioStreamPropertyLatency`), plus one I/O buffer of the device for an output that the
 /// device serves directly (a hint below 20 ms, when the device accepts it). An output or an
-/// input opened without choosing a device follows the default device, and so does this value:
-/// ask again after `next_change`. Other systems and the test sink/source: 0 — the system does not
-/// declare one, or (ALSA) it is already in `queued_ms`. It is what the device DECLARES: an
-/// external converter or a Bluetooth link may add more than it says, so keep a manual offset
-/// for the user on top.
+/// input opened without choosing a device follows the default device, and so does this value
+/// (an input opened with a hint below 20 ms stays on the device it opened): ask when you open
+/// and again after `next_change`, not per block — every call asks the system.
+///
+/// `Err` when the latency is not known: on the other systems (iOS, Linux, Android, Windows do
+/// not report it yet) and when the device is gone. Treat `Err` as "unknown, let the user
+/// calibrate", not as 0. The test sink and source (`RAY_AUDIO_SINK=null`, `RAY_AUDIO_SOURCE`)
+/// give 0: they add none. It is what the device DECLARES: an external converter or a Bluetooth
+/// link may add more than it says, so keep a manual offset for the user on top.
 pub fn device_latency_ms(h: int) -> Result<int, string> {
     let r = __audio_open(h, 0, 0, "latency");
     if (r[0] == "ok") {
@@ -339,7 +342,8 @@ pub fn open_input(
 ///
 /// How old a sample is when `read` returns it: the latency the input device declares
 /// (`device_latency_ms(h)`), plus the block it arrived in (about a quarter of the `latency_ms`
-/// of `open_input`), plus how long the program took to call `read`. `recorded_ms` is the count
+/// of `open_input`; on macOS an input at 20 ms or more arrives in bursts of about 20 ms
+/// whatever the hint), plus how long the program took to call `read`. `recorded_ms` is the count
 /// of frames delivered so far: the last frame of a block was captured `device_latency_ms(h)`
 /// before `recorded_ms` reached it.
 pub fn read(h: int) -> Result<bytes, string> {

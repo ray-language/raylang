@@ -22374,9 +22374,17 @@ latencia del micrófono anterior al cambiar el por defecto. También sumaba el b
 entrada de baja latencia, cuando el bloque en que llega la captura ya lo cuenta quien lee, y
 usaba el tamaño del búfer de cuando se abrió, que otro flujo puede bajar después.
 
-**Límites.** Solo macOS; iOS, Linux, Android y Windows devuelven 0 (en ALSA `snd_pcm_delay` ya
-va dentro de `queued_ms`; WASAPI tiene `GetStreamLatency` y AAudio las marcas de tiempo, sin
-hacer). De un dispositivo con varios flujos en una dirección se toma la latencia del primero. Es lo
+La segunda tanda no encontró graves. De ella salió que «no se sabe» sea `Err` y no 0 (un DAW
+que resta 0 da por alineada una toma que no lo está), que el dispositivo y la marca del búfer
+viajen en un solo valor atómico, y que la documentación diga que la entrada de baja latencia no
+sigue al por defecto.
+
+**Límites.** Solo macOS; iOS, Linux, Android y Windows devuelven `Err` (WASAPI tiene
+`GetStreamLatency` y AAudio las marcas de tiempo, sin hacer). El sumidero y la fuente de pruebas
+dan 0, así que el camino de CoreAudio solo lo prueba un test unitario contra el dispositivo que
+haya, y en CI no hay ninguno. Cada llamada son hasta ocho consultas a la HAL, sin caché. Que la
+cola de ENTRADA sin dispositivo elegido siga al por defecto es lo que dice la documentación de
+AudioQueue; no se ha comprobado cambiando de micrófono a mitad de una toma. De un dispositivo con varios flujos en una dirección se toma la latencia del primero. Es lo
 que el dispositivo DECLARA: no se ha medido acústicamente contra los 75 ms del
 hallazgo, y un enlace Bluetooth o un conversor externo pueden tardar más de lo que dicen. En
 milisegundos enteros, como el resto de `std/audio`.

@@ -1714,7 +1714,8 @@ después de un `flush` o de un hueco.
 latencia del propio dispositivo (su conversor, su procesado), y lo mismo entre el micrófono y lo
 que entrega `audio.read`. `audio.device_latency_ms(h)` dice cuánta declara el dispositivo de una
 salida o de una entrada abierta; un programa que graba sobre lo que suena alinea la toma
-restando las dos. Hoy la da macOS; en los demás sistemas devuelve 0. Es lo que el dispositivo
+restando las dos. Hoy la da macOS; en los demás sistemas devuelve `Err`, que hay que leer como «desconocida», no
+como cero. Es lo que el dispositivo
 dice de sí mismo —unos auriculares Bluetooth o un conversor externo pueden tardar más—, así que
 conviene dejarle además al usuario un ajuste manual.
 

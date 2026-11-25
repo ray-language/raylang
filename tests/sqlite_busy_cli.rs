@@ -137,7 +137,15 @@ fn main() -> int {
         let rows = sqlite.query(scripted, "SELECT count(*) FROM audit", []).unwrap();
         parse_int(rows[0][0]).unwrap_or(-1)
     });
+    let setter = spawn_local(fn() -> int {
+        time.sleep(40);
+        // También espera su turno: no se pierde aunque la conexión esté reservada.
+        sqlite.busy_timeout(scripted, 2500);
+        0
+    });
     print("txn script: ${sqlite.exec(scripted, "BEGIN; INSERT INTO audit VALUES (4); INSERT INTO t VALUES (1003); COMMIT;", []).unwrap()}");
+    let _ = join(setter);
+    print("timeout set while reserved: ${sqlite.query(scripted, "PRAGMA busy_timeout", []).unwrap()[0][0]}");
     let _ = join(holder3);
     print("the other fiber waited its turn and saw: ${join(intruder)}");
     print("no transaction left open: ${sqlite.exec(scripted, "BEGIN; COMMIT;", []).is_ok()}");
@@ -183,7 +191,7 @@ fn main() -> int {
     let tried = time.monotonic();
     match (sqlite.exec(reader, "INSERT INTO t VALUES (7)", [])) {
         Result.Ok(_) => print("upgrade: unexpected ok"),
-        Result.Err(e) => print("upgrade: not waited=${e.contains("not waited for")} fast=${time.monotonic() - tried < 1000}"),
+        Result.Err(e) => print("upgrade: ${e} fast=${time.monotonic() - tried < 1000}"),
     }
     let _ = sqlite.exec(reader, "ROLLBACK", []);
     let _ = sqlite.exec(lock, "COMMIT", []);
@@ -206,6 +214,7 @@ script resumed: 3\n\
 audit rows: 3\n\
 exec_opt resumed: 2\n\
 txn script: 2\n\
+timeout set while reserved: 2500\n\
 the other fiber waited its turn and saw: 5\n\
 no transaction left open: true\n\
 script pragma: 600\n\
@@ -214,7 +223,7 @@ query pragma: 700\n\
 a column is not the pragma: 700\n\
 busy_timeout(huge): 2147483647\n\
 busy_timeout(): 0\n\
-upgrade: not waited=true fast=true\n";
+upgrade: database is locked fast=true\n";
 
 fn project(name: &str) -> std::path::PathBuf {
     let base = std::env::temp_dir().join(format!("ray_sqlite_busy_{name}_{}", std::process::id()));
@@ -239,6 +248,43 @@ fn a_locked_database_is_waited_for_without_holding_the_thread_on_the_vm() {
     let d = project("vm");
     let out = Command::new(BIN).arg("run").current_dir(&d).env("DB_PATH", d.join("busy.db")).output().unwrap();
     assert_eq!(String::from_utf8_lossy(&out.stdout), WANT, "{}", String::from_utf8_lossy(&out.stderr));
+    let _ = std::fs::remove_dir_all(d);
+}
+
+/// El intérprete (`--interp`, el oráculo de desarrollo, sin concurrencia) recibe la MISMA
+/// respuesta etiquetada que la VM: en la primera versión la componía a su manera, el `busy` le
+/// llegaba como texto de error y la conexión se quedaba reservada.
+#[cfg(feature = "interp")]
+#[test]
+fn a_locked_database_is_waited_for_on_the_interpreter_too() {
+    let d = project("interp");
+    std::fs::write(
+        d.join("src/main.ray"),
+        r#"import db/sqlite;
+import std/time;
+
+fn main() {
+    let path = env("DB_PATH").unwrap_or("busy.db");
+    let holder = sqlite.connect(path).unwrap();
+    let _ = sqlite.exec(holder, "CREATE TABLE t (n INTEGER)", []).unwrap();
+    let _ = sqlite.exec(holder, "BEGIN IMMEDIATE", []).unwrap();
+    let other = sqlite.connect(path).unwrap();
+    sqlite.busy_timeout(other, 150);
+    let asked = time.monotonic();
+    match (sqlite.exec(other, "INSERT INTO t VALUES (1)", [])) {
+        Result.Ok(_) => print("unexpected ok"),
+        Result.Err(e) => print("${e} waited=${time.monotonic() - asked >= 120}"),
+    }
+    // La reserva se soltó al vencer el plazo: la conexión sigue sirviendo.
+    print(sqlite.query(other, "SELECT 1", []).unwrap()[0][0]);
+    let _ = sqlite.exec(holder, "COMMIT", []).unwrap();
+    print(sqlite.exec(other, "INSERT INTO t VALUES (1)", []).unwrap());
+}
+"#,
+    )
+    .unwrap();
+    let out = Command::new(BIN).args(["run", "--interp"]).current_dir(&d).env("DB_PATH", d.join("busy.db")).output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "database is locked waited=true\n1\n1\n", "{}", String::from_utf8_lossy(&out.stderr));
     let _ = std::fs::remove_dir_all(d);
 }
 

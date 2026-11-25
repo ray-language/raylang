@@ -322,7 +322,9 @@ documentada:
   rayhotel #491: `crates/ray-runtime/src/sqlite.rs` llama a `sqlite3_busy_handler` por la API
   de C (un bloque `unsafe` y una función `extern "C"`): instala un handler sin estado que no
   espera y solo anota que SQLite preguntó. `Connection::busy_handler` de rusqlite pide `&mut` y
-  reserva memoria en cada instalación; aquí la conexión está prestada compartida.
+  reserva memoria en cada instalación; aquí la conexión está prestada compartida. Los prefijos `/*ray-turn:N*/` y los
+  PRAGMA `ray_busy_wait` que `db/sqlite` manda son comentarios y PRAGMA desconocidos para SQLite:
+  quien los escriba a mano en su SQL solo altera la espera de SU conexión.
   ray-daw #478: con `[native] link_dirs` en el `ray.toml` del directorio actual, la VM prueba
   PRIMERO esas carpetas del proyecto (la misma llamada a `libloading`, con una ruta): una
   biblioteca de ahí con el nombre de una del sistema la tapa. Es configuración del propio

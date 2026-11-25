@@ -35,9 +35,9 @@ import std/time;
 ///   from the statement that found it; the ones before it are not run again. If the timeout
 ///   passes, the error says that part of the script had run (a `BEGIN` it ran is still open).
 /// - A transaction that has already read and now wants to write while another connection holds
-///   the write lock is not waited for: waiting cannot help (SQLite reports it at once). The error
-///   reads `database is locked (not waited for: …)`: roll back and retry, or start such
-///   transactions with `BEGIN IMMEDIATE`.
+///   the write lock is not waited for: waiting cannot help (SQLite reports it at once, as a
+///   plain `database is locked`). Roll back and retry, or start such transactions with
+///   `BEGIN IMMEDIATE`.
 ///
 /// **A call that waits keeps its connection.** While a call is parked waiting for a lock, other
 /// fibers that share the `Conn` wait for it to finish: nothing else runs on its connection in the
@@ -78,15 +78,10 @@ pub fn connect(path: string) -> Result<Conn, string> {
 /// wait parks the fiber, so other fibers — the lock holder included — keep running. The same as
 /// `exec(c, "PRAGMA busy_timeout = <ms>", [])`.
 pub fn busy_timeout(c: Conn, ms: int) {
-    let no_args: [string] = [];
-    let _ = __sqlite_exec(c.handle, "PRAGMA busy_timeout = " + to_string(if (ms < 0) {
-        // SQLite lee un entero de 32 bits: más allá lo tomaría por 0 («falla en el acto»).
-        0
-    } else if (ms > 2147483647) {
-        2147483647
-    } else {
-        ms
-    }), no_args);
+    // SQLite lee un entero de 32 bits: más allá lo tomaría por 0 («falla en el acto»).
+    let bounded = if (ms < 0) { 0 } else if (ms > 2147483647) { 2147483647 } else { ms };
+    // Por `exec`, como cualquier otra llamada: si la conexión está reservada, espera su turno.
+    let _ = exec(c, "PRAGMA busy_timeout = " + to_string(bounded), []);
 }
 
 // El plazo de la conexión, que lleva el runtime (es quien ve cada `PRAGMA busy_timeout`, llegue
@@ -105,11 +100,13 @@ fn busy_ms(c: Conn) -> int {
 // - `["busy", C, N, prefix]`: encontró un candado que se puede esperar. Si era un script, aplicó
 //   sus primeras sentencias (N filas) y la que lo encontró empieza en el carácter C. La conexión
 //   queda RESERVADA para esta llamada, que se identifica anteponiendo `prefix` al SQL: se aparca
-//   la fibra (1, 2, 4… hasta 50 ms) y se repite con el resto del texto, hasta el plazo. Por dónde
-//   va lo guarda ESTA función, en la pila de la fibra; la conexión no recuerda el script.
+//   la fibra (1, 2, 4… hasta 50 ms) y se repite con el resto del texto. Por dónde va lo guarda
+//   ESTA función, en la pila de la fibra; la conexión no recuerda el script.
 // - `["turn"]`: otra llamada tiene la conexión reservada mientras espera: se aparca y se repite.
 // - cualquier otra cosa es la respuesta final. Un `ok` tras reanudar lleva las filas de todo el
 //   script.
+// Las dos esperas comparten el plazo de la conexión (0 = fallar en el acto), que se cuenta de
+// nuevo cada vez que el script avanza.
 fn waiting(c: Conn, sql: string, call: fn(string) -> [string], first: [string]) -> [string] {
     var r = first;
     var rest = sql;
@@ -130,28 +127,30 @@ fn waiting(c: Conn, sql: string, call: fn(string) -> [string], first: [string]) 
                 timed = false;
             }
             prefix = r[3];
-            if (!timed) {
-                timed = true;
-                deadline = time.monotonic() + busy_ms(c);
-                pause = 1;
-            }
-            if (time.monotonic() >= deadline) {
-                // Suelta la reserva: la conexión vuelve a ser de todos.
-                let no_args: [string] = [];
-                let _ = __sqlite_exec(c.handle, prefix + "PRAGMA ray_busy_wait = release", no_args);
-                if (resumed) {
-                    return [
-                        "err",
-                        "database is locked (part of the script had run; the rest did not run)"
-                    ];
-                }
-                return ["err", "database is locked"];
-            }
         } else if (r[0] != "turn") {
             if (resumed && r[0] == "ok") {
                 return ["ok", to_string(changed + parse_int(r[1]).unwrap_or(0))];
             }
             return r;
+        }
+        if (!timed) {
+            timed = true;
+            deadline = time.monotonic() + busy_ms(c);
+            pause = 1;
+        }
+        if (time.monotonic() >= deadline) {
+            if (r[0] == "busy") {
+                // Suelta la reserva: la conexión vuelve a ser de todos.
+                let no_args: [string] = [];
+                let _ = __sqlite_exec(c.handle, prefix + "PRAGMA ray_busy_wait = release", no_args);
+            }
+            if (resumed) {
+                return [
+                    "err",
+                    "database is locked (part of the script had run; the rest did not run)"
+                ];
+            }
+            return ["err", "database is locked"];
         }
         time.sleep(pause);
         if (pause < 50) {

@@ -10,41 +10,98 @@
 //! Las celdas se devuelven como texto (INTEGER/REAL → decimal, NULL → "", BLOB → hex), consistente con la
 //! API `[[string]]` del wrapper `db/sqlite`. Sin la feature `sqlite`, todo es un *stub*.
 
-/// Marcas INTERNAS de este módulo: los errores con que `Conn` dice que la llamada encontró un
-/// candado que se puede esperar (`<marca><carácter> <filas> <prefijo>`) o que la conexión está
-/// reservada por otra llamada que espera. No salen de aquí como texto de error: [`error_fields`]
-/// los convierte en las respuestas etiquetadas `busy` y `turn` del primitivo.
-#[cfg_attr(not(feature = "sqlite"), allow(dead_code))]
-const BUSY_MARK: &str = "\u{1}busy ";
-#[cfg_attr(not(feature = "sqlite"), allow(dead_code))]
-const TURN_MARK: &str = "\u{1}turn";
+/// Por qué no terminó bien una llamada a la conexión. Es un TIPO y no un texto para que nada
+/// fuera de este módulo tenga que reconocer un candado por su mensaje: los motores (VM,
+/// intérprete, binario nativo) no lo ven siquiera — llaman a los métodos `*_tagged` de [`Conn`],
+/// que devuelven ya los campos de la respuesta etiquetada del primitivo.
+#[derive(Debug, PartialEq)]
+pub enum Fail {
+    /// Un error, con su texto.
+    Message(String),
+    /// Encontró un candado que se puede esperar. Si era un script, sus primeras sentencias
+    /// quedaron aplicadas (`changed` filas) y la que lo encontró empieza en el carácter `at` del
+    /// SQL (0 = no se aplicó nada). La conexión queda RESERVADA para quien repita la llamada con
+    /// `prefix` delante del SQL.
+    Busy { at: usize, changed: i64, prefix: String },
+    /// La conexión está reservada por otra llamada que espera; repetir más tarde.
+    Turn,
+}
 
-/// Los campos de la respuesta etiquetada de un primitivo `__sqlite_*` que falló:
-/// - `["err", msg]`;
-/// - `["busy", C, N, prefijo]`: encontró un candado que se puede esperar. Si era un script, sus
-///   primeras sentencias quedaron aplicadas (`N` filas) y la que lo encontró empieza en el
-///   carácter `C` del texto enviado (`C` = 0: no se aplicó nada). La conexión queda RESERVADA
-///   para quien repita la llamada con `prefijo` delante del SQL;
-/// - `["turn"]`: la conexión está reservada por otra llamada que espera; repetir más tarde.
-///
-/// Los dos motores (VM y binario nativo) construyen su arreglo con esto: la etiqueta se decide
-/// en un solo sitio.
-pub fn error_fields(message: String) -> Vec<String> {
-    if message == TURN_MARK {
-        return vec!["turn".to_string()];
-    }
-    if let Some(rest) = message.strip_prefix(BUSY_MARK) {
-        let mut parts = rest.splitn(3, ' ');
-        if let (Some(at), Some(changed), Some(prefix)) = (parts.next(), parts.next(), parts.next()) {
-            return vec!["busy".to_string(), at.to_string(), changed.to_string(), prefix.to_string()];
+impl Fail {
+    /// Los campos de la respuesta etiquetada: `["err", msg]`, `["busy", at, changed, prefix]` o
+    /// `["turn"]`.
+    pub fn into_fields(self) -> Vec<String> {
+        match self {
+            Fail::Message(message) => tagged_err(message),
+            Fail::Busy { at, changed, prefix } => vec!["busy".to_string(), at.to_string(), changed.to_string(), prefix],
+            Fail::Turn => vec!["turn".to_string()],
         }
     }
+}
+
+impl From<String> for Fail {
+    fn from(message: String) -> Self {
+        Fail::Message(message)
+    }
+}
+
+/// La respuesta etiquetada de un error que no viene de la conexión (handle inválido, binario sin
+/// SQLite…): `["err", msg]`.
+pub fn tagged_err(message: String) -> Vec<String> {
     vec!["err".to_string(), message]
+}
+
+/// Las respuestas etiquetadas de los cuatro primitivos, compuestas en UN sitio para todos los
+/// motores: `["ok", n]`, `["ok", ncols, celdas…]`, `["ok", ncols, máscara, celdas…]`, o las de
+/// [`Fail::into_fields`].
+impl Conn {
+    pub fn exec_tagged(&self, sql: &str, params: &[String]) -> Vec<String> {
+        match self.exec(sql, params) {
+            Ok(n) => vec!["ok".to_string(), n.to_string()],
+            Err(e) => e.into_fields(),
+        }
+    }
+
+    pub fn exec_opt_tagged(&self, sql: &str, params: &[Option<String>]) -> Vec<String> {
+        match self.exec_opt(sql, params) {
+            Ok(n) => vec!["ok".to_string(), n.to_string()],
+            Err(e) => e.into_fields(),
+        }
+    }
+
+    pub fn query_tagged(&self, sql: &str, params: &[String]) -> Vec<String> {
+        match self.query(sql, params) {
+            Ok((ncols, cells)) => {
+                let mut fields = Vec::with_capacity(cells.len() + 2);
+                fields.push("ok".to_string());
+                fields.push(ncols.to_string());
+                fields.extend(cells);
+                fields
+            }
+            Err(e) => e.into_fields(),
+        }
+    }
+
+    /// M347 (rayauth R6): con una máscara de `n` (NULL) o `v` (valor) por celda delante de ellas.
+    pub fn query_nulls_tagged(&self, sql: &str, params: &[String]) -> Vec<String> {
+        match self.query_nulls(sql, params) {
+            Ok((ncols, cells)) => {
+                let mask: String = cells.iter().map(|c| if c.is_none() { 'n' } else { 'v' }).collect();
+                let mut fields = Vec::with_capacity(cells.len() + 3);
+                fields.push("ok".to_string());
+                fields.push(ncols.to_string());
+                fields.push(mask);
+                fields.extend(cells.into_iter().map(|c| c.unwrap_or_default()));
+                fields
+            }
+            Err(e) => e.into_fields(),
+        }
+    }
 }
 
 #[cfg(feature = "sqlite")]
 mod imp {
-    use super::{BUSY_MARK, TURN_MARK};
+    use super::Fail;
 
     /// Una conexión SQLite embebida, con dos modos de esperar un candado (rayhotel #491):
     /// - el de SQLite (por defecto, el de siempre): su busy handler espera dentro de la librería
@@ -72,10 +129,13 @@ mod imp {
     }
 
     struct Reservation {
-        /// `/*ray-turn:N*/`: un comentario SQL, así que lo que sigue es el SQL tal cual.
-        prefix: String,
+        id: u64,
         until: std::time::Instant,
     }
+
+    /// El prefijo de una reserva es `/*ray-turn:<id>*/`: un comentario SQL, así que lo que
+    /// sigue es el SQL tal cual.
+    const TURN_PREFIX: &str = "/*ray-turn:";
 
     /// La sentencia EXACTA con que `db/sqlite` pide el modo aparcado. Un runtime anterior se la
     /// pasa a SQLite, que ignora un PRAGMA que no conoce: el paquete sigue esperando como antes.
@@ -129,9 +189,6 @@ mod imp {
     fn is_busy(e: &rusqlite::Error) -> bool {
         matches!(e, rusqlite::Error::SqliteFailure(f, _) if f.code == rusqlite::ErrorCode::DatabaseBusy)
     }
-
-    /// El texto de un BUSY que NO se puede esperar: SQLite ni preguntó.
-    const NOT_WAITED: &str = "database is locked (not waited for: this transaction already holds a lock the other one needs — roll it back and retry, or start it with BEGIN IMMEDIATE)";
 
     /// Salta espacios y comentarios SQL (`-- …` y `/* … */`) al principio de `text`.
     fn skip_blank(mut text: &str) -> &str {
@@ -198,41 +255,48 @@ mod imp {
             install_busy_handler(&self.inner);
         }
 
-        /// Modo aparcado, al entrar en una llamada: ¿puede correr ahora? Devuelve el SQL sin el
-        /// prefijo de reserva y si quien llama es el dueño de la reserva vigente.
-        fn admit<'s>(&self, sql: &'s str) -> Result<(&'s str, bool), String> {
+        /// Modo aparcado, al entrar en una llamada: ¿puede correr ahora? Devuelve el SQL sin
+        /// prefijo de reserva y si quien llama es el dueño de la reserva vigente. El prefijo se
+        /// quita SIEMPRE, también el de una reserva que caducó: lo que sigue se mide en
+        /// caracteres del SQL y el prefijo no es parte de él.
+        fn admit<'s>(&self, sql: &'s str) -> Result<(&'s str, bool), Fail> {
+            let (claim, body) = match sql.strip_prefix(TURN_PREFIX).and_then(|rest| rest.split_once("*/")) {
+                Some((n, body)) => (Some(n), body),
+                None => (None, sql),
+            };
             let mut reserved = self.reserved.borrow_mut();
             let Some(r) = reserved.as_ref() else {
-                return Ok((sql, false));
+                return Ok((body, false));
             };
-            if let Some(rest) = sql.strip_prefix(r.prefix.as_str()) {
-                return Ok((rest, true));
+            if claim.is_some_and(|n| n.parse() == Ok(r.id)) {
+                return Ok((body, true));
             }
             if std::time::Instant::now() >= r.until {
-                *reserved = None; // caducó: su dueño ya no va a volver
-                return Ok((sql, false));
+                *reserved = None; // caducó: su dueño tardó más que el plazo en volver
+                return Ok((body, false));
             }
-            Err(TURN_MARK.to_string())
+            Err(Fail::Turn)
         }
 
         /// Modo aparcado: la llamada encontró un candado que se puede esperar. Reserva la
-        /// conexión para quien la repita (o renueva la reserva, si ya era suya) y compone el
-        /// error marcado: `at` = octetos de `sql` ya ejecutados, `changed` = filas afectadas.
-        fn reserve(&self, sql: &str, at: usize, changed: i64, owner: bool) -> String {
+        /// conexión para quien la repita (o renueva la reserva, si ya era suya): `at` = octetos de
+        /// `sql` (ya sin prefijo) ejecutados, `changed` = filas afectadas.
+        fn reserve(&self, sql: &str, at: usize, changed: i64, owner: bool) -> Fail {
             let until = std::time::Instant::now() + std::time::Duration::from_millis(self.wait_ms.get().max(0) as u64 + 1000);
             let mut reserved = self.reserved.borrow_mut();
-            match reserved.as_mut().filter(|_| owner) {
-                Some(r) => r.until = until,
-                None => {
-                    let n = self.reservations.get() + 1;
-                    self.reservations.set(n);
-                    *reserved = Some(Reservation { prefix: format!("/*ray-turn:{n}*/"), until });
+            let id = match reserved.as_mut().filter(|_| owner) {
+                Some(r) => {
+                    r.until = until;
+                    r.id
                 }
-            }
-            let prefix = reserved.as_ref().map(|r| r.prefix.as_str()).unwrap_or("");
-            // El carácter se cuenta sobre el texto que llegó SIN prefijo: quien llama guarda el
-            // SQL que queda sin él y se lo antepone en cada intento.
-            format!("{BUSY_MARK}{} {changed} {prefix}", sql[..at].chars().count())
+                None => {
+                    let id = self.reservations.get() + 1;
+                    self.reservations.set(id);
+                    *reserved = Some(Reservation { id, until });
+                    id
+                }
+            };
+            Fail::Busy { at: sql[..at].chars().count(), changed, prefix: format!("{TURN_PREFIX}{id}*/") }
         }
 
         /// La llamada del dueño de la reserva terminó (bien o con un error que no es un candado
@@ -251,12 +315,12 @@ mod imp {
         }
 
         /// Ejecuta SQL sin devolver filas; ver [`Conn::exec_opt`].
-        pub fn exec(&self, sql: &str, params: &[String]) -> Result<i64, String> {
+        pub fn exec(&self, sql: &str, params: &[String]) -> Result<i64, Fail> {
             self.run(sql, params)
         }
 
         /// Como [`Conn::exec`], con parámetros que pueden ser `NULL` (`None`).
-        pub fn exec_opt(&self, sql: &str, params: &[Option<String>]) -> Result<i64, String> {
+        pub fn exec_opt(&self, sql: &str, params: &[Option<String>]) -> Result<i64, Fail> {
             self.run(sql, params)
         }
 
@@ -268,11 +332,11 @@ mod imp {
         /// parámetros exige UNA sentencia y lo comprueba ANTES de ejecutar nada.
         ///
         /// rayhotel #491, modo aparcado. Esta llamada no espera nunca un candado. Si lo encuentra
-        /// y se puede esperar, reserva la conexión y devuelve el error marcado (`busy`, ver
-        /// `error_fields`) con lo que un script ya aplicó: `db/sqlite` aparca la fibra y llama
+        /// y se puede esperar, reserva la conexión y devuelve `Fail::Busy` con lo que un script
+        /// ya aplicó: `db/sqlite` aparca la fibra y llama
         /// otra vez con el prefijo de la reserva y el RESTO del texto. Por dónde va el script lo
         /// lleva quien llama, no la conexión.
-        fn run<P: rusqlite::ToSql>(&self, sql: &str, params: &[P]) -> Result<i64, String> {
+        fn run<P: rusqlite::ToSql>(&self, sql: &str, params: &[P]) -> Result<i64, Fail> {
             // rusqlite 0.41: `Batch` itera por el trait `FallibleIterator` (re-exportado).
             use rusqlite::fallible_iterator::FallibleIterator;
             let conn = &self.inner;
@@ -297,20 +361,19 @@ mod imp {
             let before = conn.total_changes() as i64;
             let mut batch = rusqlite::Batch::new(conn, sql);
             // El fallo de la sentencia que empieza en el octeto `at` (`None` = se perdió la cuenta).
-            let fail = |e: rusqlite::Error, at: Option<usize>, index: usize| -> String {
-                if !(parked && is_busy(&e)) {
+            let fail = |e: rusqlite::Error, at: Option<usize>, index: usize| -> Fail {
+                // Un BUSY por el que SQLite ni preguntó es un interbloqueo (una transacción que ya
+                // lee y quiere escribir mientras otra tiene el candado): esperar no lo arregla y
+                // sale con el texto de siempre, `database is locked`.
+                if !(parked && is_busy(&e) && take_asked()) {
                     self.release(owner);
-                    return e.to_string();
-                }
-                if !take_asked() {
-                    self.release(owner);
-                    return NOT_WAITED.to_string();
+                    return Fail::Message(e.to_string());
                 }
                 match at {
                     Some(at) => self.reserve(sql, at, conn.total_changes() as i64 - before, owner),
                     None => {
                         self.release(owner);
-                        format!("database is locked (after {index} statement(s) of the script had run; the rest did not run)")
+                        Fail::Message(format!("database is locked (after {index} statement(s) of the script had run; the rest did not run)"))
                     }
                 }
             };
@@ -323,9 +386,11 @@ mod imp {
                 // primera): también eso es «hay más de una».
                 if !matches!(batch.next(), Ok(None)) {
                     self.release(owner);
-                    return Err("sqlite: exec with parameters runs one statement, and the SQL has more; \
-                                run the others in their own exec (without parameters they all run)"
-                        .to_string());
+                    return Err(Fail::Message(
+                        "sqlite: exec with parameters runs one statement, and the SQL has more; \
+                         run the others in their own exec (without parameters they all run)"
+                            .to_string(),
+                    ));
                 }
                 Self::step_all(&mut stmt, params).map_err(|e| fail(e, Some(0), 0))?;
                 drop(stmt);
@@ -336,6 +401,9 @@ mod imp {
                 return Ok(conn.total_changes() as i64 - before);
             }
             let mut index = 0usize;
+            // Llevar la cuenta de dónde va el script cuesta copiar el texto de cada sentencia:
+            // solo si puede haber una segunda (un `;` que no sea el final).
+            let track = parked && sql.trim_end().trim_end_matches(';').contains(';');
             // Dónde empieza (en octetos de `sql`) la sentencia en curso; `None` si se perdió la
             // cuenta (una sentencia con `?` sin enlazar no devuelve su texto tal cual).
             let mut start = Some(0usize);
@@ -349,7 +417,7 @@ mod imp {
                     Ok(Some(mut stmt)) => {
                         // El texto de la sentencia tal como SQLite lo tomó: de donde quedó la
                         // anterior hasta su final. Sirve para saber dónde empieza la siguiente.
-                        let taken = if parked && stmt.parameter_count() == 0 { stmt.expanded_sql() } else { None };
+                        let taken = if track && stmt.parameter_count() == 0 { stmt.expanded_sql() } else { None };
                         Self::step_all(&mut stmt, NONE).map(|()| taken)
                     }
                     Err(e) => Err(e),
@@ -357,9 +425,11 @@ mod imp {
                 match outcome {
                     Ok(taken) => {
                         if watch_pragma {
-                            self.sync_busy_timeout(taken.as_deref().unwrap_or(""));
+                            // Sin cuenta (una sola sentencia), el texto es el de la llamada.
+                            self.sync_busy_timeout(taken.as_deref().unwrap_or(sql));
                         }
                         start = match (start, taken) {
+                            (Some(0), None) if !track => Some(0),
                             (Some(at), Some(t)) if sql[at..].starts_with(t.as_str()) => Some(at + t.len()),
                             _ => None,
                         };
@@ -372,13 +442,13 @@ mod imp {
 
         /// Ejecuta una consulta con filas; devuelve `(ncols, celdas)` con las celdas aplanadas fila a fila
         /// (el consumidor reconstruye el `[[string]]`). Un `NULL` es `""`.
-        pub fn query(&self, sql: &str, params: &[String]) -> Result<(usize, Vec<String>), String> {
+        pub fn query(&self, sql: &str, params: &[String]) -> Result<(usize, Vec<String>), Fail> {
             self.rows(sql, params, value_str)
         }
 
         /// M347 (rayauth R6): como `query`, pero cada celda es `None` si era `NULL` (el `""` de `query`
         /// no distingue un NULL de una cadena vacía).
-        pub fn query_nulls(&self, sql: &str, params: &[String]) -> Result<(usize, Vec<Option<String>>), String> {
+        pub fn query_nulls(&self, sql: &str, params: &[String]) -> Result<(usize, Vec<Option<String>>), Fail> {
             self.rows(sql, params, |v| if matches!(v, rusqlite::types::ValueRef::Null) { None } else { Some(value_str(v)) })
         }
 
@@ -388,7 +458,7 @@ mod imp {
             sql: &str,
             params: &[String],
             cell: impl Fn(rusqlite::types::ValueRef<'_>) -> T,
-        ) -> Result<(usize, Vec<T>), String> {
+        ) -> Result<(usize, Vec<T>), Fail> {
             let conn = &self.inner;
             // Modo aparcado, `PRAGMA busy_timeout` como consulta: leerlo da el plazo de ESTA conexión
             // (el de SQLite es 0 con nuestro handler); fijarlo lo adopta, como en `exec`.
@@ -400,13 +470,9 @@ mod imp {
             }
             let (sql, owner) = if parked { self.admit(sql)? } else { (sql, false) };
             let text = |e: rusqlite::Error| {
-                if !(parked && is_busy(&e)) {
+                if !(parked && is_busy(&e) && take_asked()) {
                     self.release(owner);
-                    return e.to_string();
-                }
-                if !take_asked() {
-                    self.release(owner);
-                    return NOT_WAITED.to_string();
+                    return Fail::Message(e.to_string());
                 }
                 self.reserve(sql, 0, 0, owner)
             };
@@ -454,7 +520,15 @@ mod imp {
 
     #[cfg(test)]
     mod tests {
-        use super::{busy_pragma, open, PARK_SWITCH};
+        use super::{busy_pragma, open, Fail, PARK_SWITCH};
+
+        fn locked() -> Fail {
+            Fail::Message("database is locked".to_string())
+        }
+
+        fn busy(at: usize, changed: i64, id: u64) -> Fail {
+            Fail::Busy { at, changed, prefix: format!("/*ray-turn:{id}*/") }
+        }
 
         /// Un `db` ≤ 0.10 no pide el modo aparcado ni sabe esperar: el runtime debe seguir
         /// esperando el candado dentro de SQLite, como hasta 1.27.112.
@@ -470,7 +544,7 @@ mod imp {
             let legacy = open(&path_text).unwrap();
             legacy.exec("PRAGMA busy_timeout = 200", &[]).unwrap();
             let asked = std::time::Instant::now();
-            assert_eq!(legacy.exec("INSERT INTO t VALUES (1)", &[]).unwrap_err(), "database is locked");
+            assert_eq!(legacy.exec("INSERT INTO t VALUES (1)", &[]).unwrap_err(), locked());
             assert!(asked.elapsed() >= std::time::Duration::from_millis(150), "SQLite no esperó: {:?}", asked.elapsed());
 
             let parked = open(&path_text).unwrap();
@@ -478,23 +552,39 @@ mod imp {
             assert_eq!(parked.query("PRAGMA busy_timeout", &[]).unwrap().1, vec!["5000".to_string()]);
             let asked = std::time::Instant::now();
             // Nada aplicado (carácter 0), y la conexión queda reservada para quien traiga el prefijo.
-            assert_eq!(parked.exec("INSERT INTO t VALUES (1)", &[]).unwrap_err(), "\u{1}busy 0 0 /*ray-turn:1*/");
+            assert_eq!(parked.exec("INSERT INTO t VALUES (1)", &[]).unwrap_err(), busy(0, 0, 1));
             assert!(asked.elapsed() < std::time::Duration::from_millis(100), "esperó dentro: {:?}", asked.elapsed());
-            assert_eq!(parked.exec("SELECT 1", &[]).unwrap_err(), "\u{1}turn");
-            assert_eq!(super::super::error_fields("\u{1}turn".to_string()), vec!["turn"]);
-            assert_eq!(super::super::error_fields("\u{1}busy 0 0 /*ray-turn:1*/".to_string()), vec!["busy", "0", "0", "/*ray-turn:1*/"]);
-            // El dueño la suelta sin ejecutar nada.
+            // Reservada: otra llamada no entra; leer el plazo sí (no ejecuta nada).
+            assert_eq!(parked.exec("SELECT 1", &[]).unwrap_err(), Fail::Turn);
+            assert_eq!(parked.exec_tagged("SELECT 1", &[]), vec!["turn"]);
+            assert_eq!(parked.query_tagged("PRAGMA busy_timeout", &[]), vec!["ok", "1", "5000"]);
+            // El dueño repite, sigue ocupada, y conserva SU reserva.
+            assert_eq!(parked.exec_tagged("/*ray-turn:1*/INSERT INTO t VALUES (1)", &[]), vec!["busy", "0", "0", "/*ray-turn:1*/"]);
+            // …y la suelta sin ejecutar nada.
             assert_eq!(parked.exec("/*ray-turn:1*/PRAGMA ray_busy_wait = release", &[]).unwrap(), 0);
-            // A mitad de un script: dice dónde seguir, y la conexión no guarda nada.
+            // A mitad de un script: dice dónde seguir, y la conexión no guarda el script.
             parked.exec("CREATE TEMP TABLE a (n INTEGER)", &[]).unwrap();
-            assert_eq!(
-                parked.exec("INSERT INTO a VALUES (1); INSERT INTO t VALUES (2);", &[]).unwrap_err(),
-                "\u{1}busy 25 1 /*ray-turn:2*/"
-            );
+            let script = "INSERT INTO a VALUES (1); INSERT INTO t VALUES (2); INSERT INTO t VALUES (3);";
+            assert_eq!(parked.exec(script, &[]).unwrap_err(), busy(25, 1, 2));
+            // Un prefijo CADUCADO (el de la reserva 1) no cuenta como SQL: quien lo trae espera su
+            // turno como cualquiera, y el carácter de reanudación se mide sin él.
+            assert_eq!(parked.exec("/*ray-turn:1*/SELECT 1", &[]).unwrap_err(), Fail::Turn);
+            assert_eq!(parked.exec(&format!("/*ray-turn:2*/{}", &script[25..]), &[]).unwrap_err(), busy(0, 0, 2));
             holder.exec("COMMIT", &[]).unwrap();
-            assert_eq!(parked.exec("/*ray-turn:2*/ INSERT INTO t VALUES (2);", &[]).unwrap(), 1);
-            // Terminó: la reserva se soltó sola.
+            assert_eq!(parked.exec(&format!("/*ray-turn:2*/{}", &script[25..]), &[]).unwrap(), 2);
+            // Terminó: la reserva se soltó sola, y un prefijo viejo se quita igual.
             assert_eq!(parked.exec("SELECT 1", &[]).unwrap(), 0);
+            assert_eq!(parked.exec("/*ray-turn:2*/SELECT 1", &[]).unwrap(), 0);
+            // Lo que esperar no arregla sale con el texto de siempre, sin reservar nada.
+            let reader = open(&path_text).unwrap();
+            reader.exec(PARK_SWITCH, &[]).unwrap();
+            reader.exec("BEGIN", &[]).unwrap();
+            reader.query("SELECT count(*) FROM t", &[]).unwrap();
+            holder.exec("BEGIN IMMEDIATE", &[]).unwrap();
+            assert_eq!(reader.exec("INSERT INTO t VALUES (9)", &[]).unwrap_err(), locked());
+            assert_eq!(reader.exec("ROLLBACK", &[]).unwrap(), 0);
+            holder.exec("COMMIT", &[]).unwrap();
+            drop(reader);
             drop((holder, legacy, parked));
             let _ = std::fs::remove_file(&path);
         }
@@ -528,16 +618,16 @@ pub use imp::{open, Conn};
 mod stub {
     pub struct Conn(std::convert::Infallible);
     impl Conn {
-        pub fn exec(&self, _sql: &str, _params: &[String]) -> Result<i64, String> {
+        pub fn exec(&self, _sql: &str, _params: &[String]) -> Result<i64, super::Fail> {
             match self.0 {}
         }
-        pub fn exec_opt(&self, _sql: &str, _params: &[Option<String>]) -> Result<i64, String> {
+        pub fn exec_opt(&self, _sql: &str, _params: &[Option<String>]) -> Result<i64, super::Fail> {
             match self.0 {}
         }
-        pub fn query(&self, _sql: &str, _params: &[String]) -> Result<(usize, Vec<String>), String> {
+        pub fn query(&self, _sql: &str, _params: &[String]) -> Result<(usize, Vec<String>), super::Fail> {
             match self.0 {}
         }
-        pub fn query_nulls(&self, _sql: &str, _params: &[String]) -> Result<(usize, Vec<Option<String>>), String> {
+        pub fn query_nulls(&self, _sql: &str, _params: &[String]) -> Result<(usize, Vec<Option<String>>), super::Fail> {
             match self.0 {}
         }
     }

@@ -225,7 +225,7 @@ fn main() -> int {
   Mientras una llamada espera, la conexión es suya: otra fibra que la comparta espera a que
   termine. Lo único que NO se espera es lo que esperar no arregla: una
   transacción que ya leyó y quiere escribir mientras otra tiene el candado de escritura da
-  `database is locked (not waited for: …)`; se deshace y se reintenta, o se empieza con `BEGIN
+  `database is locked` en el acto; se deshace y se reintenta, o se empieza con `BEGIN
   IMMEDIATE`. La espera nueva la da raylang 1.27.114; con una toolchain anterior, `db` 0.11 espera
   como siempre (dentro de SQLite).
 - `disconnect` libera el handle; usar la conexión después falla **limpio** (error como valor, no

@@ -19,8 +19,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
     lo encontró; las anteriores no se repiten.
   - Mientras una llamada espera, su conexión es suya: otra fibra que la comparta espera.
   - Una transacción que ya leyó y quiere escribir mientras otra conexión tiene el candado de
-    escritura NO espera (SQLite lo ve como interbloqueo): `database is locked (not waited for:
-    …)`. Hay que deshacerla y reintentar, o empezarla con `BEGIN IMMEDIATE`.
+    escritura NO espera (SQLite lo ve como interbloqueo): `database is locked` en el acto, en
+    vez de tras 5 s. Hay que deshacerla y reintentar, o empezarla con `BEGIN IMMEDIATE`.
   - Un proyecto con `db` ≤ 0.10 se comporta como antes, y `db` 0.11 sobre una toolchain anterior
     también.
 

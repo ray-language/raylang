@@ -22264,11 +22264,15 @@ de escribir y una condición del usuario: solo entra si la medición sale mejor.
    ray_busy_wait = park`; sin pedirlo, la conexión espera dentro de SQLite como siempre — un `db`
    ≤ 0.10 no nota el runtime nuevo, y `db` 0.11 sobre un runtime anterior manda un PRAGMA que
    SQLite ignora). Un busy handler propio no espera y anota que SQLite preguntó; si no preguntó,
-   es un interbloqueo y el error lo dice (`not waited for`).
+   es un interbloqueo: sale en el acto con el texto de siempre, `database is locked` (un texto
+   nuevo rompería a quien compara el mensaje para reintentar).
 2. *El primitivo contesta con etiqueta propia*: `["busy", C, N, prefijo]` — C = el carácter donde
    empieza la sentencia que encontró el candado (0 = no se aplicó nada), N = filas ya afectadas.
-   No es un texto de error que haya que interpretar ni que pueda llegar al usuario; la etiqueta se
-   decide en un solo sitio (`ray_runtime::sqlite::error_fields`) para los dos motores.
+   No es un texto de error que haya que interpretar ni que pueda llegar al usuario. Dentro del
+   runtime es un tipo (`Fail`), y la respuesta etiquetada de los cuatro primitivos la compone
+   `ray_runtime::sqlite::Conn` (`exec_tagged`…) para la VM, el intérprete y el binario nativo:
+   los motores solo envuelven cada campo. La primera versión lo pasaba como un texto marcado
+   que cada motor debía reconocer, y la revisión encontró el motor que no lo hacía (`--interp`).
 3. *Quien llama lleva el script*: `db/sqlite` aparca la fibra y repite con el resto del texto. La
    conexión no recuerda por dónde iba.
 4. *La reserva* — lo que faltaba en §478. En el mismo instante en que devuelve `busy` (con el
@@ -22311,9 +22315,18 @@ antes y 148 después. Y medido DETRÁS de los escenarios de 20 escritores salía
 solo — la base no corría esos escenarios (tardan 14 minutos), así que la comparación era de
 programas distintos.
 
+**Lo que corrigió la revisión.** Además del intérprete: el prefijo de una reserva que ya caducó
+se contaba como parte del SQL y el script se reanudaba unos caracteres más allá (ahora el prefijo
+se quita siempre antes de medir); una llamada que esperaba turno no respetaba el plazo de la
+conexión, ni siquiera el 0; `sqlite.busy_timeout` se perdía en silencio si la conexión estaba
+reservada; y llevar la cuenta del script copiaba el texto de cada sentencia también cuando solo
+había una.
+
 **Límites que quedan.** Una transacción repartida en varias llamadas sobre una conexión
 compartida no está protegida entre llamada y llamada (como siempre: una conexión por
 transacción). Si vence el plazo a mitad de un script que corrió un `BEGIN`, esa transacción sigue
 abierta (como con `sqlite3_exec`). Un `PRAGMA "busy_timeout" = 0` con el nombre entre comillas
-no pone el plazo a 0 (los valores distintos de 0 se adoptan se escriba como se escriba).
+no pone el plazo a 0 (los valores distintos de 0 se adoptan se escriba como se escriba). Una
+reserva caduca al plazo + 1 s: si el hilo se atasca más que eso entre dos intentos, otra fibra
+que comparta la conexión puede entrar antes de que el script termine.
 

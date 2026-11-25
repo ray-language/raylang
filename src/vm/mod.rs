@@ -3499,10 +3499,10 @@ impl<'a> Vm<'a> {
                         HeapValue::Str(s) => s.to_string(),
                         _ => unreachable!("the checker guarantees [string]"),
                     }).collect();
-                    let elems = match crate::builtins::sqlite_exec_opt(handle, &sql, &params, &nulls) {
-                        Ok(n) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(n.to_string().into())],
-                        Err(e) => crate::builtins::sqlite_error_fields(e).into_iter().map(|f| HeapValue::Str(f.into())).collect(),
-                    };
+                    let elems: Vec<HeapValue> = crate::builtins::sqlite_exec_opt_tagged(handle, &sql, &params, &nulls)
+                        .into_iter()
+                        .map(|f| HeapValue::Str(f.into()))
+                        .collect();
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }
@@ -3518,23 +3518,14 @@ impl<'a> Vm<'a> {
                         HeapValue::Str(s) => s.to_string(),
                         _ => unreachable!("the checker guarantees [string]"),
                     }).collect();
-                    let elems = if matches!(instr, OpCode::SqliteExec) {
-                        match crate::builtins::sqlite_exec(handle, &sql, &params) {
-                            Ok(n) => vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(n.to_string().into())],
-                            Err(e) => crate::builtins::sqlite_error_fields(e).into_iter().map(|f| HeapValue::Str(f.into())).collect(),
-                        }
-                    } else if matches!(instr, OpCode::SqliteQueryNulls) {
-                        crate::builtins::sqlite_query_nulls_tagged(handle, &sql, &params).into_iter().map(|c| HeapValue::Str(c.into())).collect()
-                    } else {
-                        match crate::builtins::sqlite_query(handle, &sql, &params) {
-                            Ok((ncols, cells)) => {
-                                let mut v = vec![HeapValue::Str("ok".to_string().into()), HeapValue::Str(ncols.to_string().into())];
-                                v.extend(cells.into_iter().map(|c| HeapValue::Str(c.into())));
-                                v
-                            }
-                            Err(e) => crate::builtins::sqlite_error_fields(e).into_iter().map(|f| HeapValue::Str(f.into())).collect(),
-                        }
+                    // La respuesta etiquetada llega hecha (la compone el runtime para todos los
+                    // motores): aquí solo se envuelve cada campo.
+                    let fields = match instr {
+                        OpCode::SqliteExec => crate::builtins::sqlite_exec_tagged(handle, &sql, &params),
+                        OpCode::SqliteQueryNulls => crate::builtins::sqlite_query_nulls_tagged(handle, &sql, &params),
+                        _ => crate::builtins::sqlite_query_tagged(handle, &sql, &params),
                     };
+                    let elems: Vec<HeapValue> = fields.into_iter().map(|f| HeapValue::Str(f.into())).collect();
                     let h = self.cur.heap.allocate(Obj::Array(elems));
                     self.push(HeapValue::Obj(h));
                 }

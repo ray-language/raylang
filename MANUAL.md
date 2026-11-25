@@ -2827,6 +2827,12 @@ fn main() -> int {
 }
 ```
 
+Con varios escritores sobre el mismo archivo SQLite, una llamada que encuentra el candado de otra
+conexión lo espera con la fibra aparcada —las demás siguen corriendo— hasta el plazo de la
+conexión: 5 s por defecto, `sqlite.busy_timeout(c, ms)` o `PRAGMA busy_timeout = N` para
+cambiarlo (`db` 0.11 sobre raylang 1.27.114). Una conexión por transacción, y `BEGIN IMMEDIATE`
+si la transacción va a escribir.
+
 MySQL/PostgreSQL/MongoDB hablan su protocolo wire en raylang puro, con variantes `connect_tls` (canal
 cifrado) — placeholders `?` (mysql), `$1` (postgres), documentos BSON (mongo). Demos en
 [`examples/db/`](examples/db/).

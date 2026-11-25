@@ -2689,28 +2689,35 @@ fn sqlite_conn(reg: &mut FileRegistry, h: i64) -> Result<&mut ray_runtime::sqlit
     }
 }
 
-/// Ejecuta una sentencia sin filas (INSERT/UPDATE/DDL/BEGIN/…) con parámetros posicionales (`?1`…)
-/// enlazados como texto; devuelve el número de filas afectadas (M53.3).
+// Los cuatro primitivos devuelven YA los campos de su respuesta etiquetada (`["ok", …]`,
+// `["err", msg]`, `["busy", …]`, `["turn"]`): los compone `ray_runtime::sqlite::Conn` para todos
+// los motores. Aquí no hay un `Result` que un motor pueda etiquetar a su manera.
+
+/// `__sqlite_exec`: una sentencia sin filas (INSERT/UPDATE/DDL/BEGIN/…) con parámetros posicionales
+/// (`?1`…) enlazados como texto, o un script entero sin ellos (rayreq #247). M53.3.
 #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
-pub fn sqlite_exec(h: i64, sql: &str, params: &[String]) -> Result<i64, String> {
+pub fn sqlite_exec_tagged(h: i64, sql: &str, params: &[String]) -> Vec<String> {
     let mut reg = registry().lock().unwrap();
-    let conn = sqlite_conn(&mut reg, h)?;
-    // rayreq #247: todas las sentencias sin parámetros, una sola con ellos (la misma función
-    // que el binario nativo).
-    conn.exec(sql, params)
+    match sqlite_conn(&mut reg, h) {
+        Ok(conn) => conn.exec_tagged(sql, params),
+        Err(e) => ray_runtime::sqlite::tagged_err(e),
+    }
 }
 
-/// rayreq #248: `sqlite_exec` con parámetros `NULL`: `nulls` lleva una `n` (NULL) o una `v`
-/// (valor) por parámetro, como la máscara de `sqlite_query_nulls`.
+/// `__sqlite_exec_opt` (rayreq #248): con parámetros `NULL` — `nulls` lleva una `n` (NULL) o una
+/// `v` (valor) por parámetro, como la máscara de `__sqlite_query_nulls`.
 #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
-pub fn sqlite_exec_opt(h: i64, sql: &str, params: &[String], nulls: &str) -> Result<i64, String> {
-    let opt = sqlite_opt_params(params, nulls)?;
+pub fn sqlite_exec_opt_tagged(h: i64, sql: &str, params: &[String], nulls: &str) -> Vec<String> {
+    let opt = match sqlite_opt_params(params, nulls) {
+        Ok(opt) => opt,
+        Err(e) => return ray_runtime::sqlite::tagged_err(e),
+    };
     let mut reg = registry().lock().unwrap();
-    let conn = sqlite_conn(&mut reg, h)?;
-    conn.exec_opt(sql, &opt)
+    match sqlite_conn(&mut reg, h) {
+        Ok(conn) => conn.exec_opt_tagged(sql, &opt),
+        Err(e) => ray_runtime::sqlite::tagged_err(e),
+    }
 }
-#[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
-pub fn sqlite_exec_opt(_h: i64, _sql: &str, _params: &[String], _nulls: &str) -> Result<i64, String> { Err(SQLITE_UNAVAILABLE.to_string()) }
 
 /// Los parámetros con su máscara `n`/`v` → `Option` (la comparten la VM y el nativo).
 pub fn sqlite_opt_params(params: &[String], nulls: &str) -> Result<Vec<Option<String>>, String> {
@@ -2719,27 +2726,41 @@ pub fn sqlite_opt_params(params: &[String], nulls: &str) -> Result<Vec<Option<St
     }
     Ok(params.iter().zip(nulls.bytes()).map(|(p, m)| if m == b'n' { None } else { Some(p.clone()) }).collect())
 }
-#[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
-pub fn sqlite_exec(_h: i64, _sql: &str, _params: &[String]) -> Result<i64, String> { Err(SQLITE_UNAVAILABLE.to_string()) }
 
-/// Ejecuta una consulta con filas; devuelve `(ncols, celdas)` con las celdas aplanadas fila a fila
-/// (el envoltorio raylang reconstruye el `[[string]]`) (M53.3).
+/// `__sqlite_query`: `["ok", ncols, celdas…]` con las celdas aplanadas fila a fila (el envoltorio
+/// raylang reconstruye el `[[string]]`). M53.3.
 #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
-pub fn sqlite_query(h: i64, sql: &str, params: &[String]) -> Result<(usize, Vec<String>), String> {
-    let (ncols, cells) = sqlite_query_nulls(h, sql, params)?;
-    Ok((ncols, cells.into_iter().map(|c| c.unwrap_or_default()).collect()))
-}
-/// M347 (rayauth R6): como `sqlite_query`, con `None` por cada celda `NULL`.
-#[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
-pub fn sqlite_query_nulls(h: i64, sql: &str, params: &[String]) -> Result<(usize, Vec<Option<String>>), String> {
+pub fn sqlite_query_tagged(h: i64, sql: &str, params: &[String]) -> Vec<String> {
     let mut reg = registry().lock().unwrap();
-    let conn = sqlite_conn(&mut reg, h)?;
-    conn.query_nulls(sql, params)
+    match sqlite_conn(&mut reg, h) {
+        Ok(conn) => conn.query_tagged(sql, params),
+        Err(e) => ray_runtime::sqlite::tagged_err(e),
+    }
+}
+
+/// `__sqlite_query_nulls` (M347, rayauth R6): `["ok", ncols, mask, celdas…]` — `mask` lleva una `n`
+/// (NULL) o una `v` (valor) por celda.
+#[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
+pub fn sqlite_query_nulls_tagged(h: i64, sql: &str, params: &[String]) -> Vec<String> {
+    let mut reg = registry().lock().unwrap();
+    match sqlite_conn(&mut reg, h) {
+        Ok(conn) => conn.query_nulls_tagged(sql, params),
+        Err(e) => ray_runtime::sqlite::tagged_err(e),
+    }
+}
+
+#[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
+fn sqlite_unavailable() -> Vec<String> {
+    vec!["err".to_string(), SQLITE_UNAVAILABLE.to_string()]
 }
 #[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
-pub fn sqlite_query(_h: i64, _sql: &str, _params: &[String]) -> Result<(usize, Vec<String>), String> { Err(SQLITE_UNAVAILABLE.to_string()) }
+pub fn sqlite_exec_tagged(_h: i64, _sql: &str, _params: &[String]) -> Vec<String> { sqlite_unavailable() }
 #[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
-pub fn sqlite_query_nulls(_h: i64, _sql: &str, _params: &[String]) -> Result<(usize, Vec<Option<String>>), String> { Err(SQLITE_UNAVAILABLE.to_string()) }
+pub fn sqlite_exec_opt_tagged(_h: i64, _sql: &str, _params: &[String], _nulls: &str) -> Vec<String> { sqlite_unavailable() }
+#[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
+pub fn sqlite_query_tagged(_h: i64, _sql: &str, _params: &[String]) -> Vec<String> { sqlite_unavailable() }
+#[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
+pub fn sqlite_query_nulls_tagged(_h: i64, _sql: &str, _params: &[String]) -> Vec<String> { sqlite_unavailable() }
 
 // --- Cliente TCP (M15.2) ---
 //
@@ -2896,29 +2917,6 @@ pub fn deflate_op(name: &str, data: &[u8], n: i64) -> Option<Vec<u8>> {
 #[cfg(any(not(feature = "deflate"), target_arch = "wasm32"))]
 pub fn deflate_op(_name: &str, _data: &[u8], _n: i64) -> Option<Vec<u8>> {
     None
-}
-
-/// M347 (rayauth R6): el arreglo etiquetado de `__sqlite_query_nulls`: `["ok", ncols, mask, celdas…]`
-/// (NULL → `""` en su celda y `'n'` en la máscara) o `["err", msg]`. Compartido por VM e intérprete.
-/// Los campos de la respuesta de un `__sqlite_exec*` que falló: `["err", msg]` o `["busy", C, N]`
-/// (ver `ray_runtime::sqlite::error_fields`; sin SQLite en el binario solo existe `err`).
-pub fn sqlite_error_fields(message: String) -> Vec<String> {
-    #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
-    return ray_runtime::sqlite::error_fields(message);
-    #[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]
-    return vec!["err".to_string(), message];
-}
-
-pub fn sqlite_query_nulls_tagged(h: i64, sql: &str, params: &[String]) -> Vec<String> {
-    match sqlite_query_nulls(h, sql, params) {
-        Ok((ncols, cells)) => {
-            let mask: String = cells.iter().map(|c| if c.is_none() { 'n' } else { 'v' }).collect();
-            let mut v = vec!["ok".to_string(), ncols.to_string(), mask];
-            v.extend(cells.into_iter().map(|c| c.unwrap_or_default()));
-            v
-        }
-        Err(e) => sqlite_error_fields(e),
-    }
 }
 
 /// M347 (rayauth R23): la matriz de un código QR (ver ray_runtime::qr). `None` = texto que no cabe, nivel
@@ -8183,17 +8181,25 @@ mod tests {
     #[test]
     fn sqlite_opens_executes_and_queries() {
         let h = sqlite_open(":memory:").unwrap();
-        sqlite_exec(h, "CREATE TABLE t (id INTEGER, name TEXT, nota REAL)", &[]).unwrap();
-        let n = sqlite_exec(h, "INSERT INTO t VALUES (?1, ?2, ?3)", &["1".into(), "ada".into(), "9.5".into()]).unwrap();
+        assert_eq!(sqlite_exec_tagged(h, "CREATE TABLE t (id INTEGER, name TEXT, nota REAL)", &[])[0], "ok");
+        let n: i64 = sqlite_exec_tagged(h, "INSERT INTO t VALUES (?1, ?2, ?3)", &["1".into(), "ada".into(), "9.5".into()])[1].parse().unwrap();
         assert_eq!(n, 1);
-        sqlite_exec(h, "INSERT INTO t (id, name) VALUES (?1, ?2)", &["2".into(), "grace".into()]).unwrap();
-        let (ncols, cells) = sqlite_query(h, "SELECT id, name, nota FROM t ORDER BY id", &[]).unwrap();
-        assert_eq!(ncols, 3);
-        assert_eq!(cells, vec!["1", "ada", "9.5", "2", "grace", ""]); // NULL → ""
+        assert_eq!(sqlite_exec_tagged(h, "INSERT INTO t (id, name) VALUES (?1, ?2)", &["2".into(), "grace".into()]), vec!["ok", "1"]);
+        // ["ok", ncols, celdas…]; NULL → "".
+        assert_eq!(
+            sqlite_query_tagged(h, "SELECT id, name, nota FROM t ORDER BY id", &[]),
+            vec!["ok", "3", "1", "ada", "9.5", "2", "grace", ""]
+        );
+        assert_eq!(
+            sqlite_query_nulls_tagged(h, "SELECT id, nota FROM t ORDER BY id", &[]),
+            vec!["ok", "2", "vvvn", "1", "9.5", "2", ""]
+        );
         // Error SQL = valor, no panic; handle cerrado = error claro.
-        assert!(sqlite_query(h, "SELECT * FROM no_existe", &[]).unwrap_err().contains("no_existe"));
+        let missing = sqlite_query_tagged(h, "SELECT * FROM no_existe", &[]);
+        assert!(missing[0] == "err" && missing[1].contains("no_existe"), "{missing:?}");
         close_handle(h);
-        assert!(sqlite_exec(h, "SELECT 1", &[]).unwrap_err().contains("invalid or already closed"));
+        let closed = sqlite_exec_tagged(h, "SELECT 1", &[]);
+        assert!(closed[0] == "err" && closed[1].contains("invalid or already closed"), "{closed:?}");
     }
 
     #[test]

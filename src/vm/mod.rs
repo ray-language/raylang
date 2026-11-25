@@ -1722,7 +1722,7 @@ impl<'a> Vm<'a> {
                         // (3) Cola llena (acotado) → BLOQUEAR al emisor (backpressure, M12.2). Guarda la
                         // fibra con el valor pendiente; al despertarla, `wake_sender` le deja unit (el
                         // resultado de `send`) en la pila y continúa tras el ChanSend.
-                        let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                        let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                         sh.parked.push(Parked { on: h, fiber, waiting: Waiting::Send(v) });
                         // M12.4: un emisor bloqueado vuelve al canal "listo" para un select (un recv lo
                         // tomaría); despierta a los selectores que lo esperan.
@@ -1798,7 +1798,7 @@ impl<'a> Vm<'a> {
                     } else {
                         // Bloquear: guardar la fibra actual (ip ya apunta tras el ChanRecv → al
                         // despertarla, el `wake_recv` le deja el `[T]` en la pila y continúa) y conmutar.
-                        let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                        let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                         sh.parked.push(Parked { on: h, fiber, waiting: Waiting::Recv });
                         sh.running -= 1; // este receptor se bloqueó → worker ocioso
                         drop(sh);
@@ -1941,7 +1941,7 @@ impl<'a> Vm<'a> {
                             // TaskJoin, para que al despertar (con la tarea ya Done/Failed) lo re-ejecute.
                             self.cur.stack.push(HeapValue::Task(t)); // no `self.push` (guard sostenido)
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                            let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                             sh.parked.push(Parked { on: t, fiber, waiting: Waiting::Join });
                             sh.running -= 1;
                             drop(sh);
@@ -1989,7 +1989,7 @@ impl<'a> Vm<'a> {
                             // Bloquear hasta que termine, como TaskJoin (re-empuja el handle y rebobina).
                             self.cur.stack.push(HeapValue::Task(t)); // no `self.push` (guard sostenido)
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                            let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                             sh.parked.push(Parked { on: t, fiber, waiting: Waiting::Join });
                             sh.running -= 1;
                             drop(sh);
@@ -2051,7 +2051,7 @@ impl<'a> Vm<'a> {
                         matches!(sh.task(c).map(|vt| &vt.state), Some(TaskState::Pending)));
                     if let Some(c) = pending {
                         self.cur.frames.last_mut().unwrap().ip -= 1;
-                        let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                        let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                         sh.parked.push(Parked { on: c, fiber, waiting: Waiting::Join });
                         sh.running -= 1;
                         drop(sh);
@@ -2118,7 +2118,7 @@ impl<'a> Vm<'a> {
                             // Select y aparca esperando al conjunto (el handle del arreglo va en `on`).
                             self.cur.stack.push(HeapValue::Obj(arr)); // no `self.push` (guard sostenido)
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                            let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                             sh.parked.push(Parked { on: arr, fiber, waiting: Waiting::Select });
                             sh.running -= 1;
                             drop(sh);
@@ -2191,7 +2191,7 @@ impl<'a> Vm<'a> {
                                 self.cur.stack.push(HeapValue::Obj(arr));
                                 self.cur.stack.push(HeapValue::Int(ms));
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
-                                let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                                let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                                 sh.parked.push(Parked { on: arr, fiber, waiting: Waiting::Select });
                                 sh.running -= 1;
                                 drop(sh);
@@ -2812,7 +2812,7 @@ impl<'a> Vm<'a> {
                             Ok(None) => {
                                 self.push(HeapValue::Int(handle));
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
-                                let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                                let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                                 let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                                 {
                                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
@@ -2839,7 +2839,7 @@ impl<'a> Vm<'a> {
                         Ok(None) => {
                             self.push(HeapValue::Int(handle));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                            let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
@@ -3903,7 +3903,7 @@ impl<'a> Vm<'a> {
                                 self.push(HeapValue::Int(handle));
                                 self.push(HeapValue::Int(ms));
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
-                                let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                                let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                                 let deadline = if ms > 0 {
                                     Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64))
                                 } else {
@@ -3991,7 +3991,7 @@ impl<'a> Vm<'a> {
                     } else {
                         self.push(HeapValue::Int(max));
                         self.cur.frames.last_mut().unwrap().ip -= 1;
-                        let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                        let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                         {
                             let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                             sh.io_parked.push(IoParked { fd: 0, fiber, pending_write: None, handle: crate::builtins::STDIN_PSEUDO_HANDLE, deadline: None });
@@ -4030,7 +4030,7 @@ impl<'a> Vm<'a> {
                         self.push(HeapValue::Int(max));
                         self.push(HeapValue::Int(ms));
                         self.cur.frames.last_mut().unwrap().ip -= 1;
-                        let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                        let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                         let deadline = Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64));
                         {
                             let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
@@ -4596,7 +4596,7 @@ impl<'a> Vm<'a> {
                             Ok(fd) => {
                                 self.push(HeapValue::Int(ms));
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
-                                let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                                let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                                 let deadline = if ms > 0 {
                                     Some(std::time::Instant::now() + std::time::Duration::from_millis(ms as u64))
                                 } else {
@@ -4665,7 +4665,7 @@ impl<'a> Vm<'a> {
                                 self.push(HeapValue::Int(wh));
                                 self.push(HeapValue::Int(port));
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
-                                let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                                let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                                 let fd = crate::builtins::raw_fd(wh).unwrap_or(-1);
                                 {
                                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
@@ -4719,7 +4719,7 @@ impl<'a> Vm<'a> {
                                 self.push(HeapValue::Int(port));
                                 self.push(HeapValue::Int(ms));
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
-                                let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                                let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                                 let fd = crate::builtins::raw_fd(wh).unwrap_or(-1);
                                 {
                                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
@@ -4852,7 +4852,7 @@ impl<'a> Vm<'a> {
                             // No hay datagrama: re-ejecuta el opcode al despertar (re-empuja el handle).
                             self.push(HeapValue::Int(handle));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                            let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
                                 let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
@@ -4890,7 +4890,7 @@ impl<'a> Vm<'a> {
                                 self.push(HeapValue::Int(wh));
                                 self.push(HeapValue::Int(port));
                                 self.cur.frames.last_mut().unwrap().ip -= 1;
-                                let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                                let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                                 let fd = crate::builtins::raw_fd(wh).unwrap_or(-1);
                                 {
                                     let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
@@ -5018,7 +5018,7 @@ impl<'a> Vm<'a> {
                         None => {
                             self.push(HeapValue::Int(handle));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                            let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
                                 let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
@@ -5065,7 +5065,7 @@ impl<'a> Vm<'a> {
                             // Re-empuja el handle y rebobina al SocketRead: al despertar lo re-ejecuta.
                             self.push(HeapValue::Int(handle));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                            let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
@@ -5153,7 +5153,7 @@ impl<'a> Vm<'a> {
                         Ok(None) => {
                             self.push(HeapValue::Int(handle));
                             self.cur.frames.last_mut().unwrap().ip -= 1;
-                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                            let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                             // M17: guarda el fd del socket para que el scheduler lo registre en el poller.
                             let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
                             {
@@ -5342,7 +5342,7 @@ impl<'a> Vm<'a> {
                         self.push(HeapValue::Unit);
                         if ms > 0 {
                             let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);
-                            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?;
+                            let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(pos!().0, pos!().1, m))?; Self::take_current_fiber(&mut self.cur) };
                             {
                                 let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
                                 sh.io_parked.push(IoParked { fd: -1, fiber, pending_write: None, handle: -1, deadline: Some(deadline) });

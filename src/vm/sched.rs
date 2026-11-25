@@ -526,11 +526,18 @@ impl<'a> Vm<'a> {
     /// IDEAS §131: dentro de un callback de la FFI (`floor != 0`) la fibra NO se puede aparcar —
     /// hay marcos de C en la pila del hilo, y el bucle anidado no puede ceder—: es un error de
     /// ejecución, que desenrolla el callback y relanza la llamada `extern` que lo recibió.
-    pub(super) fn take_current_fiber(cur: &mut Fiber) -> Result<Fiber, &'static str> {
+    pub(super) fn take_current_fiber(cur: &mut Fiber) -> Fiber {
+        std::mem::take(cur)
+    }
+
+    /// La comprobación previa a `take_current_fiber`, aparte: devolver la fibra dentro de un
+    /// `Result` obligaba a moverla una vez más en cada cambio de fibra (ver PERFORMANCE).
+    #[inline(always)]
+    pub(super) fn ensure_parkable(cur: &Fiber) -> Result<(), &'static str> {
         if cur.floor != 0 {
             return Err(crate::ffi::BLOCKING_IN_CALLBACK);
         }
-        Ok(std::mem::take(cur))
+        Ok(())
     }
 
     /// Cesión en `socket_write` (post-M19.4): la escritura llenó el buffer de envío y `remaining` no
@@ -542,7 +549,7 @@ impl<'a> Vm<'a> {
         let fd = crate::builtins::raw_fd(handle).unwrap_or(-1);
         {
             let mut sh = self.shared.lock().expect("the scheduler Mutex should not be poisoned");
-            let fiber = Self::take_current_fiber(&mut self.cur).map_err(|m| runtime_error(line, col, m))?;
+            let fiber = { Self::ensure_parkable(&self.cur).map_err(|m| runtime_error(line, col, m))?; Self::take_current_fiber(&mut self.cur) };
             let deadline = crate::builtins::write_deadline(handle);
             sh.io_parked.push(IoParked { fd, fiber, pending_write: Some(PendingWrite { handle, remaining, deadline }), handle, deadline });
             sh.running -= 1; // esta fibra se aparcó → este worker queda ocioso

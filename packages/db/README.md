@@ -219,10 +219,10 @@ fn main() -> int {
   locked`. Antes esperaba el busy handler de SQLite, dentro de la librería C y reteniendo el hilo:
   la fibra que tenía el candado no podía terminar y todos los escritores quedaban parados hasta el
   plazo (20 escrituras a la vez, más de 20 s). El `PRAGMA busy_timeout` —solo o dentro de un
-  script, por `exec` o por `query`— fija el plazo de la conexión. Un script cuya primera
-  sentencia ya corrió y una posterior encuentra el candado espera dentro de la llamada,
-  reteniendo el hilo (repetirla aplicaría dos veces las primeras): con contención, una sentencia
-  por `exec`. Lo único que NO se espera es lo que esperar no arregla: una
+  script, por `exec` o por `query`— fija el plazo de la conexión. Un script que encuentra el
+  candado a mitad espera igual y sigue desde la sentencia que lo encontró (las anteriores no se
+  repiten); si vence el plazo, el error lo dice y una transacción que el script abrió sigue
+  abierta. Lo único que NO se espera es lo que esperar no arregla: una
   transacción que ya leyó y quiere escribir mientras otra tiene el candado de escritura da
   `database is locked (not waited for: …)`; se deshace y se reintenta, o se empieza con `BEGIN
   IMMEDIATE`. Pide raylang 1.27.113.

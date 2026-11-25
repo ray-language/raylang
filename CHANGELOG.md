@@ -46,9 +46,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   aparcando la fibra, hasta su plazo (5 s por defecto; `sqlite.busy_timeout(c, ms)` o
   `PRAGMA busy_timeout = N`, por `exec` o `query`, solo o dentro de un script). Las mismas 20 escrituras terminan en
   milisegundos. Lo que conviene saber:
-  - Un script de varias sentencias cuya primera ya corrió y una posterior encuentra el candado
-    espera dentro de la llamada (reteniendo el hilo, como antes): repetirla aplicaría dos veces
-    las primeras. Con contención, una sentencia por `exec`.
+  - Un script de varias sentencias que encuentra el candado a mitad espera igual y sigue desde
+    la sentencia que lo encontró; las anteriores no se repiten. Si vence el plazo, el error dice
+    que parte del script había corrido, y una transacción que el script abrió sigue abierta.
+  - Un proyecto con `db` ≤ 0.10 sobre raylang 1.27.113 se comporta como antes (espera dentro de
+    SQLite): el modo nuevo lo pide `db` 0.11 al conectar.
   - Una transacción que ya leyó y quiere escribir mientras otra conexión tiene el candado de
     escritura NO espera (SQLite lo detecta como interbloqueo): el error es `database is locked
     (not waited for: …)`. Hay que deshacerla y reintentar, o empezarla con `BEGIN IMMEDIATE`.

@@ -95,32 +95,46 @@ fn main() -> int {
     }
     let audited = sqlite.query(scripted, "SELECT count(*) FROM audit", []).unwrap();
     print("audit rows: ${audited[0][0]}");
-    // La MISMA llamada otra vez es una ejecución nueva y completa (no «sigue» nada).
+    // La MISMA llamada otra vez es una ejecución nueva y completa (la conexión no recuerda nada).
     let _ = sqlite.exec(lock, "COMMIT", []).unwrap();
     print("script again: ${sqlite.exec(scripted, "INSERT INTO audit VALUES (1); INSERT INTO t VALUES (999);", []).unwrap()}");
     let audited2 = sqlite.query(scripted, "SELECT count(*) FROM audit", []).unwrap();
     print("audit rows: ${audited2[0][0]}");
 
+    // 4b. El mismo script cuando el candado SÍ se suelta —lo tiene otra fibra de este hilo, que
+    //     solo puede soltarlo si la espera no retiene el hilo—: sigue desde la sentencia que lo
+    //     encontró, sin repetir la primera, y devuelve las filas de todo el script.
+    sqlite.busy_timeout(scripted, 3000);
+    let _ = sqlite.exec(lock, "BEGIN IMMEDIATE", []).unwrap();
+    let holder = spawn_local(fn() -> int {
+        time.sleep(80);
+        sqlite.exec(lock, "COMMIT", []).unwrap()
+    });
+    print("script resumed: ${sqlite.exec(scripted, "INSERT INTO audit VALUES (2);\n-- después\nINSERT INTO t VALUES (1000); INSERT INTO t VALUES (1001);", []).unwrap()}");
+    let _ = join(holder);
+    let audited3 = sqlite.query(scripted, "SELECT count(*) FROM audit", []).unwrap();
+    print("audit rows: ${audited3[0][0]}");
+
     // 5. `PRAGMA busy_timeout`, llegue por donde llegue, fija el plazo de la conexión y la espera
     //    sigue siendo de la fibra: mientras una espera 300 ms, otra del mismo hilo avanza.
     let pragmas = open(path, 0);
-    let _ = sqlite.exec(pragmas, "PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 300;", []).unwrap();
+    let _ = sqlite.exec(pragmas, "PRAGMA synchronous = NORMAL;\n-- menos espera\nPRAGMA main.busy_timeout = 600;", []).unwrap();
     print("script pragma: ${sqlite.query(pragmas, "PRAGMA busy_timeout", []).unwrap()[0][0]}");
     let _ = sqlite.exec(lock, "BEGIN IMMEDIATE", []).unwrap();
-    var ticks = 0;
+    let asked = time.monotonic();
+    // Termina a los ~100 ms SOLO si la espera de abajo no retiene el hilo.
     let ticker = spawn_local(fn() -> int {
         var n = 0;
-        while (n < 10) {
+        while (n < 5) {
             time.sleep(20);
             n = n + 1;
         }
-        n
+        time.monotonic()
     });
-    let asked = time.monotonic();
     let refused = sqlite.exec(pragmas, "BEGIN IMMEDIATE", []).is_err();
     let waited = time.monotonic() - asked;
-    ticks = join(ticker);
-    print("waited the script's timeout: ${refused} ${waited >= 250 && waited < 2000} ticks=${ticks}");
+    let ticked = join(ticker) - asked;
+    print("waited the script's timeout: ${refused} ${waited >= 550 && waited < 3000} ticker ran meanwhile=${ticked < 500}");
     let _ = sqlite.exec(lock, "COMMIT", []).unwrap();
     // Por `query` también; y una COLUMNA con ese nombre no es el PRAGMA.
     let _ = sqlite.query(pragmas, "PRAGMA busy_timeout = 700", []).unwrap();
@@ -128,6 +142,8 @@ fn main() -> int {
     let _ = sqlite.exec(pragmas, "CREATE TABLE settings (id INTEGER, busy_timeout INTEGER)", []).unwrap();
     let _ = sqlite.exec(pragmas, "INSERT INTO settings VALUES (1, 9); UPDATE settings SET busy_timeout = 0 WHERE id = 1;", []).unwrap();
     print("a column is not the pragma: ${sqlite.query(pragmas, "PRAGMA busy_timeout", []).unwrap()[0][0]}");
+    sqlite.busy_timeout(pragmas, 9999999999);
+    print("busy_timeout(huge): ${sqlite.query(pragmas, "PRAGMA busy_timeout", []).unwrap()[0][0]}");
     sqlite.busy_timeout(pragmas, 0);
     print("busy_timeout(): ${sqlite.query(pragmas, "PRAGMA busy_timeout", []).unwrap()[0][0]}");
 
@@ -155,14 +171,17 @@ both done on time: true\n\
 writers ok: 20\n\
 writers on time: true\n\
 rows: 22\n\
-script: database is locked (after 1 statement(s) of the script had run; the rest did not run)\n\
+script: database is locked (part of the script had run; the rest did not run — a transaction it opened is still open)\n\
 audit rows: 1\n\
 script again: 2\n\
 audit rows: 2\n\
-script pragma: 300\n\
-waited the script's timeout: true true ticks=10\n\
+script resumed: 3\n\
+audit rows: 3\n\
+script pragma: 600\n\
+waited the script's timeout: true true ticker ran meanwhile=true\n\
 query pragma: 700\n\
 a column is not the pragma: 700\n\
+busy_timeout(huge): 2147483647\n\
 busy_timeout(): 0\n\
 upgrade: not waited=true fast=true\n";
 

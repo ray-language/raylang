@@ -2660,8 +2660,8 @@ pub const NET_TLS_UNAVAILABLE: &str = if cfg!(target_arch = "wasm32") {
 /// Abre (o crea) la base en `path` (`":memory:"` = en memoria) y devuelve un handle (M53.3).
 #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
 pub fn sqlite_open(path: &str) -> Result<i64, String> {
-    // La MISMA conexión que el binario nativo (`ray_runtime::sqlite::Conn`): una sola espera del
-    // candado, una sola reanudación de scripts y un solo texto de error (rayhotel #491).
+    // La MISMA conexión que el binario nativo (`ray_runtime::sqlite::Conn`): un solo trato del
+    // candado y un solo texto de error (rayhotel #491).
     let conn = ray_runtime::sqlite::open(path)?;
     let mut reg = registry().lock().unwrap();
     let id = reg.next;

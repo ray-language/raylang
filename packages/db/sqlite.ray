@@ -30,12 +30,10 @@ import std/time;
 /// usual `PRAGMA busy_timeout = 2000` (through `exec` or `query`, on its own or inside a script),
 /// 0 = fail at once — and then fails with `database is locked`. Between attempts the fiber is
 /// parked, so the fiber that holds the lock keeps running (db 0.11, raylang 1.27.113).
-/// Two cases differ:
-/// - A multi-statement script whose FIRST statement ran and a later one finds the lock waits for
-///   it inside the call, holding the thread (repeating the call would apply the first statements
-///   twice). Keep scripts for setup and migrations; under contention, one statement per `exec`.
-///   If the timeout passes, the error reads `database is locked (after N statement(s) of the
-///   script had run; the rest did not run)`.
+/// - A multi-statement script that finds the lock halfway waits the same way and then goes on
+///   from the statement that found it; the ones before it are not run again. If the timeout
+///   passes, the error says that part of the script had run — and a transaction the script
+///   opened is still open: `ROLLBACK` before using the connection again.
 /// - A transaction that has already read and now wants to write while another connection holds
 ///   the write lock is not waited for: waiting cannot help (SQLite reports it at once). The error
 ///   reads `database is locked (not waited for: …)`: roll back and retry, or start such
@@ -63,7 +61,12 @@ pub fn connect(path: string) -> Result<Conn, string> {
     if (r[0] != "ok") {
         return Result.Err(r[1]);
     }
-    Result.Ok(Conn { handle: parse_handle(r[1]) })
+    let handle = parse_handle(r[1]);
+    // Pide al runtime el modo «aparcado»: un candado deja de esperarse dentro de SQLite (reteniendo
+    // el hilo) y lo espera este módulo, aparcando la fibra (ver `Conn`).
+    let no_args: [string] = [];
+    let _ = __sqlite_exec(handle, "PRAGMA ray_busy_wait = park", no_args);
+    Result.Ok(Conn { handle: handle })
 }
 
 /// Sets how long (ms) the calls on this connection wait for a database locked by another
@@ -72,11 +75,14 @@ pub fn connect(path: string) -> Result<Conn, string> {
 /// `exec(c, "PRAGMA busy_timeout = <ms>", [])`.
 pub fn busy_timeout(c: Conn, ms: int) {
     let no_args: [string] = [];
-    let _ = __sqlite_exec(
-        c.handle,
-        "PRAGMA busy_timeout = " + to_string(if (ms > 0) { ms } else { 0 }),
-        no_args
-    );
+    let _ = __sqlite_exec(c.handle, "PRAGMA busy_timeout = " + to_string(if (ms < 0) {
+        // SQLite lee un entero de 32 bits: más allá lo tomaría por 0 («falla en el acto»).
+        0
+    } else if (ms > 2147483647) {
+        2147483647
+    } else {
+        ms
+    }), no_args);
 }
 
 // El plazo de la conexión, que lleva el runtime (es quien ve cada `PRAGMA busy_timeout`, llegue
@@ -122,14 +128,76 @@ fn retry_busy(c: Conn, call: fn() -> [string]) -> [string] {
 /// ones before it stay applied: wrap a script in `BEGIN; …; COMMIT;` to make it all-or-nothing.
 /// Needs raylang 1.27.80 (before, only the first statement ran and the call returned `Ok`).
 pub fn exec(c: Conn, sql: string, params: [string]) -> Result<int, string> {
-    let r = retry_busy(c, fn() -> [string] { __sqlite_exec(c.handle, sql, params) });
-    if (r[0] != "ok") {
-        return Result.Err(r[1]);
+    // Lo que queda por ejecutar y las filas ya afectadas: cuando un script encuentra el candado a
+    // mitad, el runtime dice dónde y esta función —no la conexión— guarda por dónde iba.
+    var rest = sql;
+    var changed = 0;
+    var resumed = false;
+    var waiting = false;
+    var deadline = 0;
+    var pause = 1;
+    while (true) {
+        let r = __sqlite_exec(c.handle, rest, params);
+        if (r[0] == "ok") {
+            return match (parse_int(r[1])) {
+                Option.Some(n) => Result.Ok(changed + n),
+                Option.None => Result.Err("corrupt SQLite response: " + r[1]),
+            };
+        }
+        var retry = r[1] == "database is locked";
+        match (resume_point(r[1])) {
+            Option.Some(point) => {
+                rest = rest.substring(point[0], rest.len());
+                changed = changed + point[1];
+                resumed = true;
+                // Otra sentencia que espera: plazo nuevo (un PRAGMA del script pudo cambiarlo).
+                waiting = false;
+                retry = true;
+            },
+            Option.None => { },
+        }
+        if (!retry) {
+            return Result.Err(r[1]);
+        }
+        if (!waiting) {
+            waiting = true;
+            deadline = time.monotonic() + busy_ms(c);
+            pause = 1;
+        }
+        if (time.monotonic() >= deadline) {
+            if (resumed) {
+                return Result.Err(
+                    "database is locked (part of the script had run; the rest did not run — a transaction it opened is still open)"
+                );
+            }
+            return Result.Err(r[1]);
+        }
+        time.sleep(pause);
+        if (pause < 50) {
+            pause = pause * 2;
+        }
     }
-    return match (parse_int(r[1])) {
-        Option.Some(n) => Result.Ok(n),
-        Option.None => Result.Err("corrupt SQLite response: " + r[1]),
-    };
+    Result.Err("unreachable")
+}
+
+// `database is locked (resume at C; changed N)` → [C, N]: el script aplicó sus primeras
+// sentencias (N filas) y la que encontró el candado empieza en el carácter C del texto enviado.
+fn resume_point(message: string) -> Option<[int]> {
+    let head = "database is locked (resume at ";
+    if (!message.starts_with(head)) {
+        return Option.None;
+    }
+    let parts = message.substring(head.len(), message.len() - 1).split("; changed ");
+    if (parts.len() != 2) {
+        return Option.None;
+    }
+    match (parse_int(parts[0])) {
+        Option.Some(at) => match (parse_int(parts[1])) {
+            Option.Some(n) => Option.Some([at, n]),
+            Option.None => Option.None,
+        },
+        Option.None => Option.None,
+    }
 }
 
 /// Like `exec`, with parameters that may be SQL `NULL`: `Option.None` binds `NULL`,

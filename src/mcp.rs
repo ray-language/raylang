@@ -1007,7 +1007,7 @@ fn project_doc_text(symbol: &str, path: &str) -> Option<String> {
             {
                 // Su `///` es la única guía de un tipo cuyos campos no se ven: va con él.
                 let source_lines: Vec<&str> = item.source.lines().collect();
-                let doc = crate::raydoc::doc_lines_above(&source_lines, s.line).map(|d| format!("{}\n", d.join(" "))).unwrap_or_default();
+                let doc = crate::raydoc::doc_above(&source_lines, s.line).map(|d| format!("{d}\n")).unwrap_or_default();
                 return Some(format!(
                     "{label}: {}\n{doc}Its fields are not part of the contract: outside the capsule it cannot be built, destructured or have its fields read; use the functions the capsule exports.\n(re-exported by {label} from {})",
                     crate::raydoc::opaque_struct(s, &item.visible),

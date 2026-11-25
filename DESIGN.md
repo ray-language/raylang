@@ -22112,32 +22112,39 @@ del usuario, la espera seguía dentro de SQLite. `connect` lo pone a 0. Para no 
 app observaba — una escritura que esperaba hasta 5 s — el plazo por defecto de la conexión es
 también 5 s, ahora cooperativo.
 
-**Lo que la revisión previa a 1.27.113 corrigió, en tres vueltas.** El reintento, puesto en el
+**Lo que la revisión previa a 1.27.113 corrigió, en cuatro vueltas.** El reintento, puesto en el
 envoltorio, repite la LLAMADA: un script que ya había aplicado sus primeras sentencias las
-aplicaba otra vez. Primera corrección: no reintentar un script a medias — rompía el patrón que
-la propia doc recomienda (`BEGIN; …; COMMIT;` en una llamada), que antes esperaba dentro de
-SQLite. Segunda: que la conexión recordara por qué sentencia iba y la misma llamada siguiera
-desde ahí — estado en un objeto que comparten varias fibras, emparejado por el texto del SQL, que
-otra llamada borraba y que un plazo vencido dejaba armado; y saltar sentencias re-preparándolas
-falla con un `CREATE TABLE` ya aplicado. Tercera, la que queda, sin estado:
+aplicaba otra vez.
 
-- La PRIMERA sentencia de una llamada que encuentra el candado devuelve `database is locked` a
-  secas. Nada se aplicó: el envoltorio repite la llamada tras aparcar la fibra. Es el caso común
-  (una sentencia por `exec`) y el único que hacía falta arreglar.
-- Una sentencia POSTERIOR de un script no puede devolver el control, así que espera dentro de la
-  llamada, reintentando ESA sentencia sobre su `Statement` ya preparado, hasta el plazo. Retiene
-  el hilo y el registro, como hacía SQLite: mismo comportamiento que antes para el caso raro.
-- Para saber si un candado se puede esperar, el runtime instala un busy handler que no espera y
-  solo anota que SQLite preguntó. Ante un interbloqueo SQLite no pregunta: `(not waited for: …)`.
-- El PLAZO vive en un solo sitio, la conexión del runtime (`ray_runtime::sqlite::Conn`, ahora la
-  misma para la VM y el nativo). Un `PRAGMA busy_timeout = N` se reconoce por sentencia — que sea
-  ese PRAGMA, no una columna con ese nombre —, lo analiza SQLite, y su valor se adopta antes de
-  devolver el handler propio. Leer el PRAGMA da ese plazo; el envoltorio lo pregunta solo cuando
-  una llamada se topa con un candado.
+1. No reintentar un script a medias — rompía el patrón que la propia doc recomienda (`BEGIN; …;
+   COMMIT;` en una llamada), que antes esperaba dentro de SQLite.
+2. Que la CONEXIÓN recordara por qué sentencia iba — estado en un objeto que comparten varias
+   fibras, emparejado por el texto del SQL, que otra llamada borraba y que un plazo vencido
+   dejaba armado; y saltar sentencias re-preparándolas falla con un `CREATE TABLE` ya aplicado.
+3. Esperar dentro de la llamada — con el registro de handles tomado, el titular del candado, si
+   es otra fibra del proceso, no puede soltarlo: #491 otra vez para ese patrón.
+4. Lo que queda: el punto de reanudación lo lleva QUIEN LLAMA. El runtime nunca espera ni guarda
+   nada; ante un candado a mitad de un script devuelve `database is locked (resume at C; changed
+   N)` —C = el carácter donde empieza la sentencia que lo encontró, que sale de sumar el texto
+   que SQLite dice haber tomado en cada sentencia— y `sqlite.exec` aparca la fibra y llama otra
+   vez con el resto del texto. La variable vive en la pila de esa fibra.
 
-**Lección.** Tres vueltas sobre la misma pieza: las dos primeras añadían un mecanismo para tapar
-la consecuencia de la anterior. La tercera quitó el mecanismo y aceptó decir en la doc qué caso no
-mejora.
+Y dos cosas más que salieron por el camino:
+
+- **El modo es opt-in.** Quitar la espera de SQLite al abrir dejaba sin espera alguna a un `db` ≤
+  0.10 sobre el runtime nuevo. La conexión abre como siempre y `db` 0.11 pide el modo aparcado
+  con una sentencia exacta, `PRAGMA ray_busy_wait = park`, que un runtime anterior pasa a SQLite
+  y SQLite ignora.
+- **El plazo vive en la conexión del runtime** (`ray_runtime::sqlite::Conn`, ahora la misma para
+  la VM y el nativo). Tras una sentencia que nombra `busy_timeout`, si SQLite tiene un plazo
+  distinto de 0 es que un PRAGMA lo fijó (instalar nuestro handler lo deja a 0): se adopta y se
+  devuelve el handler propio. Solo el `= 0` se reconoce por el texto.
+- Para saber si un candado se puede esperar, el handler propio no espera y anota que SQLite
+  preguntó. Ante un interbloqueo SQLite no pregunta: `(not waited for: …)`.
+
+**Lección.** Cuatro vueltas sobre la misma pieza. Las tres primeras buscaban dónde ESPERAR o
+dónde RECORDAR dentro del runtime; la que cierra saca las dos cosas a quien ya tenía dónde
+ponerlas — la fibra que llama.
 
 **Límite.** Dos transacciones `BEGIN` diferidas que leen y luego escriben se interbloquean en
 SQLite y una recibe `database is locked` aunque haya plazo: es de SQLite, no de la espera. La

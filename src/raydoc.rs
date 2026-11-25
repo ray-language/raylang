@@ -154,7 +154,12 @@ pub fn generate_file(path: &std::path::Path) -> Result<String, String> {
         };
         out.push_str(&format!("### `{sig}`\n\n"));
         if item.visible != item.original {
-            out.push_str(&format!("Exported as `{}`. ", item.visible));
+            // La cabecera de un opaco ya lleva el nombre exportado: aquí va el otro.
+            if item.opaque {
+                out.push_str(&format!("Named `{}` in its module. ", item.original));
+            } else {
+                out.push_str(&format!("Exported as `{}`. ", item.visible));
+            }
         }
         out.push_str(&format!("From `{}`.\n\n", item.module));
         emit_doc(&mut out, &lines, line);
@@ -329,7 +334,7 @@ pub fn field_docs(s: &StructDef, lines: &[&str]) -> Vec<(String, String, Option<
 }
 
 /// El doc-comment de `linea` como una sola línea (para el resumen de raydoc).
-fn doc_above(lines: &[&str], line: usize) -> Option<String> {
+pub fn doc_above(lines: &[&str], line: usize) -> Option<String> {
     doc_lines_above(lines, line).map(|ls| ls.join(" "))
 }
 

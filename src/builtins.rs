@@ -2917,7 +2917,7 @@ pub fn sqlite_query_nulls_tagged(h: i64, sql: &str, params: &[String]) -> Vec<St
             v.extend(cells.into_iter().map(|c| c.unwrap_or_default()));
             v
         }
-        Err(e) => vec!["err".to_string(), e],
+        Err(e) => sqlite_error_fields(e),
     }
 }
 

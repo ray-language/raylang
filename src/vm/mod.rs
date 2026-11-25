@@ -3532,7 +3532,7 @@ impl<'a> Vm<'a> {
                                 v.extend(cells.into_iter().map(|c| HeapValue::Str(c.into())));
                                 v
                             }
-                            Err(e) => vec![HeapValue::Str("err".to_string().into()), HeapValue::Str(e.into())],
+                            Err(e) => crate::builtins::sqlite_error_fields(e).into_iter().map(|f| HeapValue::Str(f.into())).collect(),
                         }
                     };
                     let h = self.cur.heap.allocate(Obj::Array(elems));

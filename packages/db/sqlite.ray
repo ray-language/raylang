@@ -38,15 +38,12 @@ import std/time;
 ///   reads `database is locked (not waited for: …)`: roll back and retry, or start such
 ///   transactions with `BEGIN IMMEDIATE`.
 ///
-/// **One call at a time per connection.** Fibers that share a `Conn` take turns: a call that is
-/// waiting for a lock keeps its turn, so nothing else runs on its connection in the middle of
-/// it. The turn is per CALL, not per transaction — a transaction spread over several calls
-/// still wants its own connection.
+/// **A call that waits keeps its connection.** While a call is parked waiting for a lock, other
+/// fibers that share the `Conn` wait for it to finish: nothing else runs on its connection in the
+/// middle of it. That holds per CALL, not per transaction — a transaction spread over several
+/// calls still wants its own connection.
 pub struct Conn {
     handle: int,
-    // El turno de la conexión: un canal de capacidad 1 con UNA ficha. Quien la saca tiene la
-    // conexión; quien no, se aparca en el `recv` (la fibra, no el hilo).
-    turn: Channel<int>,
 }
 
 fn parse_handle(s: string) -> int {
@@ -72,9 +69,7 @@ pub fn connect(path: string) -> Result<Conn, string> {
     // el hilo) y lo espera este módulo, aparcando la fibra (ver `Conn`).
     let no_args: [string] = [];
     let _ = __sqlite_exec(handle, "PRAGMA ray_busy_wait = park", no_args);
-    let turn: Channel<int> = Channel.bounded(1);
-    send(turn, 1);
-    Result.Ok(Conn { handle: handle, turn: turn })
+    Result.Ok(Conn { handle: handle })
 }
 
 /// Sets how long (ms) the calls on this connection wait for a database locked by another
@@ -104,65 +99,56 @@ fn busy_ms(c: Conn) -> int {
     parse_int(r[2]).unwrap_or(0)
 }
 
-// Hace UNA llamada a la conexión, con su turno tomado de principio a fin, esperando un candado
-// con la fibra aparcada (1, 2, 4… hasta 50 ms entre intentos) hasta el plazo de la conexión.
-// `call` recibe el SQL que queda por ejecutar y devuelve la respuesta etiquetada del primitivo:
-// - `["err", "database is locked"]` A SECAS: no aplicó nada y esperar puede servir → se repite.
-//   Los demás `database is locked (…)` llevan su motivo y no se repiten.
-// - `["busy", C, N]` (solo un script sin parámetros): aplicó sus primeras sentencias (N filas) y
-//   la que encontró el candado empieza en el carácter C → se repite con el resto del texto. Por
-//   dónde va lo guarda ESTA función, en la pila de la fibra; la conexión no recuerda nada.
-// Devuelve la respuesta final; un `ok` de un script reanudado lleva las filas de todo el script.
-fn in_turn(c: Conn, sql: string, call: fn(string) -> [string]) -> [string] {
-    // `None` = la conexión ya se cerró (`disconnect` cierra el canal): el primitivo dará su error.
-    let held = recv(c.turn).is_some();
-    // El camino de siempre —nadie tiene el candado— no entra en el bucle de espera.
-    var r = call(sql);
-    if (r[0] != "ok") {
-        r = waiting(c, sql, call, r);
-    }
-    if (held) {
-        send(c.turn, 1);
-    }
-    r
-}
-
-// `first` = la respuesta, que no fue `ok`, de la primera llamada (ya hecha).
+// La espera de una llamada cuya primera respuesta (`first`) no fue `ok`. `call` recibe el SQL a
+// ejecutar y devuelve la respuesta etiquetada del primitivo:
+// - `["busy", C, N, prefix]`: encontró un candado que se puede esperar. Si era un script, aplicó
+//   sus primeras sentencias (N filas) y la que lo encontró empieza en el carácter C. La conexión
+//   queda RESERVADA para esta llamada, que se identifica anteponiendo `prefix` al SQL: se aparca
+//   la fibra (1, 2, 4… hasta 50 ms) y se repite con el resto del texto, hasta el plazo. Por dónde
+//   va lo guarda ESTA función, en la pila de la fibra; la conexión no recuerda el script.
+// - `["turn"]`: otra llamada tiene la conexión reservada mientras espera: se aparca y se repite.
+// - cualquier otra cosa es la respuesta final. Un `ok` tras reanudar lleva las filas de todo el
+//   script.
 fn waiting(c: Conn, sql: string, call: fn(string) -> [string], first: [string]) -> [string] {
     var r = first;
     var rest = sql;
+    var prefix = "";
     var changed = 0;
     var resumed = false;
     var timed = false;
     var deadline = 0;
     var pause = 1;
     while (true) {
-        if (r[0] == "ok") {
-            if (!resumed) {
-                return r;
-            }
-            return ["ok", to_string(changed + parse_int(r[1]).unwrap_or(0))];
-        }
         if (r[0] == "busy") {
-            rest = rest.substring(parse_int(r[1]).unwrap_or(0), rest.len());
-            changed = changed + parse_int(r[2]).unwrap_or(0);
-            resumed = true;
-            // Otra sentencia que espera: plazo nuevo (un PRAGMA del script pudo cambiarlo).
-            timed = false;
-        } else if (r[1] != "database is locked") {
-            return r;
-        }
-        if (!timed) {
-            timed = true;
-            deadline = time.monotonic() + busy_ms(c);
-            pause = 1;
-        }
-        if (time.monotonic() >= deadline) {
-            if (resumed) {
-                return [
-                    "err",
-                    "database is locked (part of the script had run; the rest did not run)"
-                ];
+            let at = parse_int(r[1]).unwrap_or(0);
+            if (at > 0) {
+                rest = rest.substring(at, rest.len());
+                changed = changed + parse_int(r[2]).unwrap_or(0);
+                resumed = true;
+                // Otra sentencia que espera: plazo nuevo (un PRAGMA del script pudo cambiarlo).
+                timed = false;
+            }
+            prefix = r[3];
+            if (!timed) {
+                timed = true;
+                deadline = time.monotonic() + busy_ms(c);
+                pause = 1;
+            }
+            if (time.monotonic() >= deadline) {
+                // Suelta la reserva: la conexión vuelve a ser de todos.
+                let no_args: [string] = [];
+                let _ = __sqlite_exec(c.handle, prefix + "PRAGMA ray_busy_wait = release", no_args);
+                if (resumed) {
+                    return [
+                        "err",
+                        "database is locked (part of the script had run; the rest did not run)"
+                    ];
+                }
+                return ["err", "database is locked"];
+            }
+        } else if (r[0] != "turn") {
+            if (resumed && r[0] == "ok") {
+                return ["ok", to_string(changed + parse_int(r[1]).unwrap_or(0))];
             }
             return r;
         }
@@ -170,9 +156,44 @@ fn waiting(c: Conn, sql: string, call: fn(string) -> [string], first: [string]) 
         if (pause < 50) {
             pause = pause * 2;
         }
-        r = call(rest);
+        r = call(prefix + rest);
     }
     ["err", "unreachable"]
+}
+
+// Los cuatro primitivos, esperando (ver `waiting`). Aparte de las funciones públicas a propósito:
+// una función que contiene un cierre paga por sus variables capturadas en cada llamada, y el
+// camino de siempre —sin candado— no debe pagarlo.
+fn wait_exec(c: Conn, sql: string, params: [string], first: [string]) -> [string] {
+    waiting(c, sql, fn(rest: string) -> [string] { __sqlite_exec(c.handle, rest, params) }, first)
+}
+
+fn wait_exec_opt(
+    c: Conn,
+    sql: string,
+    values: [string],
+    mask: string,
+    first: [string]
+) -> [string] {
+    waiting(
+        c,
+        sql,
+        fn(rest: string) -> [string] { __sqlite_exec_opt(c.handle, rest, values, mask) },
+        first
+    )
+}
+
+fn wait_query(c: Conn, sql: string, params: [string], first: [string]) -> [string] {
+    waiting(c, sql, fn(rest: string) -> [string] { __sqlite_query(c.handle, rest, params) }, first)
+}
+
+fn wait_query_nulls(c: Conn, sql: string, params: [string], first: [string]) -> [string] {
+    waiting(
+        c,
+        sql,
+        fn(rest: string) -> [string] { __sqlite_query_nulls(c.handle, rest, params) },
+        first
+    )
 }
 
 /// Runs SQL that returns no rows (INSERT/UPDATE/DELETE/DDL/BEGIN/PRAGMA/…) and returns the
@@ -183,9 +204,12 @@ fn waiting(c: Conn, sql: string, call: fn(string) -> [string], first: [string]) 
 /// ones before it stay applied: wrap a script in `BEGIN; …; COMMIT;` to make it all-or-nothing.
 /// Needs raylang 1.27.80 (before, only the first statement ran and the call returned `Ok`).
 pub fn exec(c: Conn, sql: string, params: [string]) -> Result<int, string> {
-    let r = in_turn(c, sql, fn(rest: string) -> [string] { __sqlite_exec(c.handle, rest, params) });
+    var r = __sqlite_exec(c.handle, sql, params);
     if (r[0] != "ok") {
-        return Result.Err(r[1]);
+        r = wait_exec(c, sql, params, r);
+        if (r[0] != "ok") {
+            return Result.Err(r[1]);
+        }
     }
     return match (parse_int(r[1])) {
         Option.Some(n) => Result.Ok(n),
@@ -211,13 +235,12 @@ pub fn exec_opt(c: Conn, sql: string, params: [Option<string>]) -> Result<int, s
             },
         }
     }
-    let r = in_turn(
-        c,
-        sql,
-        fn(rest: string) -> [string] { __sqlite_exec_opt(c.handle, rest, values, mask) }
-    );
+    var r = __sqlite_exec_opt(c.handle, sql, values, mask);
     if (r[0] != "ok") {
-        return Result.Err(r[1]);
+        r = wait_exec_opt(c, sql, values, mask, r);
+        if (r[0] != "ok") {
+            return Result.Err(r[1]);
+        }
     }
     return match (parse_int(r[1])) {
         Option.Some(n) => Result.Ok(n),
@@ -229,13 +252,12 @@ pub fn exec_opt(c: Conn, sql: string, params: [Option<string>]) -> Result<int, s
 /// (NULL becomes `""`, BLOB becomes hex). A `NULL` is therefore indistinguishable from an empty
 /// string here: use `query_opt` when the difference matters.
 pub fn query(c: Conn, sql: string, params: [string]) -> Result<[[string]], string> {
-    let r = in_turn(
-        c,
-        sql,
-        fn(rest: string) -> [string] { __sqlite_query(c.handle, rest, params) }
-    );
+    var r = __sqlite_query(c.handle, sql, params);
     if (r[0] != "ok") {
-        return Result.Err(r[1]);
+        r = wait_query(c, sql, params, r);
+        if (r[0] != "ok") {
+            return Result.Err(r[1]);
+        }
     }
     // r = ["ok", ncols, celda0, celda1, …]: las celdas vienen aplanadas fila a fila.
     let ncols = match (parse_int(r[1])) {
@@ -267,13 +289,12 @@ pub fn query(c: Conn, sql: string, params: [string]) -> Result<[[string]], strin
 /// Like `query`, but every cell is an `Option<string>`: `None` for SQL `NULL`, `Some(text)`
 /// otherwise (same text conversion as `query`). The way to tell a NULL from an empty string.
 pub fn query_opt(c: Conn, sql: string, params: [string]) -> Result<[[Option<string>]], string> {
-    let r = in_turn(
-        c,
-        sql,
-        fn(rest: string) -> [string] { __sqlite_query_nulls(c.handle, rest, params) }
-    );
+    var r = __sqlite_query_nulls(c.handle, sql, params);
     if (r[0] != "ok") {
-        return Result.Err(r[1]);
+        r = wait_query_nulls(c, sql, params, r);
+        if (r[0] != "ok") {
+            return Result.Err(r[1]);
+        }
     }
     // r = ["ok", ncols, mask, celda0, celda1, …]; mask[k] == 'n' ⇔ la celda k era NULL.
     let ncols = match (parse_int(r[1])) {
@@ -319,9 +340,5 @@ pub fn last_insert_rowid(c: Conn) -> Result<int, string> {
 
 /// Closes the database (releases the handle; further calls on this connection fail cleanly).
 pub fn disconnect(c: Conn) {
-    // Con el turno tomado: una llamada en curso de otra fibra termina antes. El canal se cierra
-    // SIN devolver la ficha — queda cerrado y vacío, y las llamadas posteriores no esperan.
-    let _ = recv(c.turn);
     close(c.handle);
-    close(c.turn);
 }

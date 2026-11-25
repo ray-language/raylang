@@ -6,13 +6,15 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.114 — 2026-11-25
+
 - **`db/sqlite` — esperar un candado ya no deja parado el servidor** (rayhotel #491; `db` 0.11.0
   sobre este runtime). Con varios escritores a la vez, el que esperaba el candado lo hacía
   dentro de SQLite y dejaba parado al que lo tenía. Medido con 20 escritores, cada uno con su
   conexión y 10 transacciones `BEGIN IMMEDIATE; INSERT; COMMIT`: antes 14 minutos y 156 de las
   200 fallaban con `database is locked`; ahora 0,3 s en la VM y 21 ms en el binario nativo, sin
   fallos. Una llamada que no encuentra candado cuesta lo mismo que antes (30 000 inserciones:
-  37 → 38 ms en la VM, 22 → 22 ms en nativo). Lo que conviene saber:
+  38 → 38 ms en la VM, 23 → 24 ms en nativo). Lo que conviene saber:
   - El plazo es el de siempre: 5 s por defecto, `PRAGMA busy_timeout = N` (por `exec` o `query`,
     solo o dentro de un script) o `sqlite.busy_timeout(c, ms)`.
   - Un script de varias sentencias que encuentra el candado a mitad sigue desde la sentencia que

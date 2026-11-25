@@ -2693,28 +2693,30 @@ fn sqlite_conn(reg: &mut FileRegistry, h: i64) -> Result<&mut ray_runtime::sqlit
 // `["err", msg]`, `["busy", …]`, `["turn"]`): los compone `ray_runtime::sqlite::Conn` para todos
 // los motores. Aquí no hay un `Result` que un motor pueda etiquetar a su manera.
 
+/// Busca la conexión `h` en el registro y le pide una respuesta etiquetada (o da la del error
+/// del handle). El registro queda tomado durante la llamada, como siempre.
+#[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
+fn with_sqlite(h: i64, call: impl FnOnce(&ray_runtime::sqlite::Conn) -> Vec<String>) -> Vec<String> {
+    let mut reg = registry().lock().unwrap();
+    match sqlite_conn(&mut reg, h) {
+        Ok(conn) => call(conn),
+        Err(e) => ray_runtime::sqlite::tagged_err(e),
+    }
+}
+
 /// `__sqlite_exec`: una sentencia sin filas (INSERT/UPDATE/DDL/BEGIN/…) con parámetros posicionales
 /// (`?1`…) enlazados como texto, o un script entero sin ellos (rayreq #247). M53.3.
 #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
 pub fn sqlite_exec_tagged(h: i64, sql: &str, params: &[String]) -> Vec<String> {
-    let mut reg = registry().lock().unwrap();
-    match sqlite_conn(&mut reg, h) {
-        Ok(conn) => conn.exec_tagged(sql, params),
-        Err(e) => ray_runtime::sqlite::tagged_err(e),
-    }
+    with_sqlite(h, |conn| conn.exec_tagged(sql, params))
 }
 
 /// `__sqlite_exec_opt` (rayreq #248): con parámetros `NULL` — `nulls` lleva una `n` (NULL) o una
 /// `v` (valor) por parámetro, como la máscara de `__sqlite_query_nulls`.
 #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
 pub fn sqlite_exec_opt_tagged(h: i64, sql: &str, params: &[String], nulls: &str) -> Vec<String> {
-    let opt = match sqlite_opt_params(params, nulls) {
-        Ok(opt) => opt,
-        Err(e) => return ray_runtime::sqlite::tagged_err(e),
-    };
-    let mut reg = registry().lock().unwrap();
-    match sqlite_conn(&mut reg, h) {
-        Ok(conn) => conn.exec_opt_tagged(sql, &opt),
+    match sqlite_opt_params(params, nulls) {
+        Ok(opt) => with_sqlite(h, |conn| conn.exec_opt_tagged(sql, &opt)),
         Err(e) => ray_runtime::sqlite::tagged_err(e),
     }
 }
@@ -2731,22 +2733,14 @@ pub fn sqlite_opt_params(params: &[String], nulls: &str) -> Result<Vec<Option<St
 /// raylang reconstruye el `[[string]]`). M53.3.
 #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
 pub fn sqlite_query_tagged(h: i64, sql: &str, params: &[String]) -> Vec<String> {
-    let mut reg = registry().lock().unwrap();
-    match sqlite_conn(&mut reg, h) {
-        Ok(conn) => conn.query_tagged(sql, params),
-        Err(e) => ray_runtime::sqlite::tagged_err(e),
-    }
+    with_sqlite(h, |conn| conn.query_tagged(sql, params))
 }
 
 /// `__sqlite_query_nulls` (M347, rayauth R6): `["ok", ncols, mask, celdas…]` — `mask` lleva una `n`
 /// (NULL) o una `v` (valor) por celda.
 #[cfg(all(feature = "sqlite", not(target_arch = "wasm32")))]
 pub fn sqlite_query_nulls_tagged(h: i64, sql: &str, params: &[String]) -> Vec<String> {
-    let mut reg = registry().lock().unwrap();
-    match sqlite_conn(&mut reg, h) {
-        Ok(conn) => conn.query_nulls_tagged(sql, params),
-        Err(e) => ray_runtime::sqlite::tagged_err(e),
-    }
+    with_sqlite(h, |conn| conn.query_nulls_tagged(sql, params))
 }
 
 #[cfg(any(not(feature = "sqlite"), target_arch = "wasm32"))]

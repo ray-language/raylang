@@ -223,7 +223,8 @@ fn main() -> int {
   candado a mitad espera igual y sigue desde la sentencia que lo encontró (las anteriores no se
   repiten); si vence el plazo, el error lo dice (un `BEGIN` que el script corrió sigue abierto).
   Mientras una llamada espera, la conexión es suya: otra fibra que la comparta espera a que
-  termine. Lo único que NO se espera es lo que esperar no arregla: una
+  termine. Una llamada que espera puede cancelarse (un `scope` cuyo hermano falla): lo que ya
+  corrió queda corrido y esa conexión conviene cerrarla. Lo único que NO se espera es lo que esperar no arregla: una
   transacción que ya leyó y quiere escribir mientras otra tiene el candado de escritura da
   `database is locked` en el acto; se deshace y se reintenta, o se empieza con `BEGIN
   IMMEDIATE`. La espera nueva la da raylang 1.27.114; con una toolchain anterior, `db` 0.11 espera

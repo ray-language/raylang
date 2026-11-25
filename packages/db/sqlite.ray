@@ -43,6 +43,11 @@ import std/time;
 /// fibers that share the `Conn` wait for it to finish: nothing else runs on its connection in the
 /// middle of it. That holds per CALL, not per transaction — a transaction spread over several
 /// calls still wants its own connection.
+///
+/// **Cancellation.** A call that is waiting for a lock is parked, so the fiber can be cancelled
+/// there (a `scope` whose sibling failed). What the call had already run stays run — a `BEGIN`
+/// stays open — and the connection is free again for the fibers that share it within 2 s. Do not
+/// keep using a connection whose call was cancelled halfway: `disconnect` it.
 pub struct Conn {
     handle: int,
 }
@@ -80,8 +85,10 @@ pub fn connect(path: string) -> Result<Conn, string> {
 pub fn busy_timeout(c: Conn, ms: int) {
     // SQLite lee un entero de 32 bits: más allá lo tomaría por 0 («falla en el acto»).
     let bounded = if (ms < 0) { 0 } else if (ms > 2147483647) { 2147483647 } else { ms };
-    // Por `exec`, como cualquier otra llamada: si la conexión está reservada, espera su turno.
-    let _ = exec(c, "PRAGMA busy_timeout = " + to_string(bounded), []);
+    // Es configuración de la conexión: el runtime la admite aunque otra llamada la tenga
+    // reservada mientras espera, así que no puede perderse (salvo con la conexión ya cerrada).
+    let no_args: [string] = [];
+    let _ = __sqlite_exec(c.handle, "PRAGMA busy_timeout = " + to_string(bounded), no_args);
 }
 
 // El plazo de la conexión, que lleva el runtime (es quien ve cada `PRAGMA busy_timeout`, llegue
@@ -153,9 +160,7 @@ fn waiting(c: Conn, sql: string, call: fn(string) -> [string], first: [string]) 
             return ["err", "database is locked"];
         }
         time.sleep(pause);
-        if (pause < 50) {
-            pause = pause * 2;
-        }
+        pause = if (pause * 2 > 50) { 50 } else { pause * 2 };
         r = call(prefix + rest);
     }
     ["err", "unreachable"]

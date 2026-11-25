@@ -116,7 +116,8 @@ mod imp {
     /// instante en que se devuelve el `busy` (con el registro de handles aún tomado: no hay
     /// hueco), la identifica un prefijo que solo conoce quien recibió ese `busy`, y se suelta
     /// cuando su llamada termina, cuando la suelta a propósito ([`RELEASE`]) o cuando caduca
-    /// (una fibra cancelada mientras esperaba no deja la conexión cerrada para siempre). Una
+    /// ([`LEASE`] sin que el dueño vuelva: una fibra cancelada mientras esperaba no deja la
+    /// conexión cerrada para siempre). Una
     /// llamada que no encuentra candado —la de siempre— solo paga mirar que no hay reserva.
     pub struct Conn {
         inner: rusqlite::Connection,
@@ -124,16 +125,20 @@ mod imp {
         /// Modo aparcado: ms que una llamada espera un candado antes de fallar; 0 = en el acto.
         wait_ms: std::cell::Cell<i64>,
         reserved: std::cell::RefCell<Option<Reservation>>,
-        /// Para que cada reserva tenga un prefijo distinto.
-        reservations: std::cell::Cell<u64>,
     }
 
     struct Reservation {
-        id: u64,
+        /// Al azar: quien no recibió el `busy` no puede acertarla.
+        token: String,
         until: std::time::Instant,
     }
 
-    /// El prefijo de una reserva es `/*ray-turn:<id>*/`: un comentario SQL, así que lo que
+    /// Lo que dura una reserva sin que su dueño vuelva. El dueño reintenta cada 50 ms como mucho,
+    /// así que un arriendo corto y fijo —no el plazo de la conexión, que puede ser de días— basta
+    /// para él y acota lo que una fibra cancelada mientras esperaba deja cerrada la conexión.
+    const LEASE: std::time::Duration = std::time::Duration::from_secs(2);
+
+    /// El prefijo de una reserva es `/*ray-turn:<ficha>*/`: un comentario SQL, así que lo que
     /// sigue es el SQL tal cual.
     const TURN_PREFIX: &str = "/*ray-turn:";
 
@@ -159,8 +164,9 @@ mod imp {
     // ¿Preguntó SQLite a nuestro busy handler durante el intento en curso? Cuando SQLite ve que
     // esperar sería un interbloqueo (una transacción que ya lee y quiere escribir mientras otra
     // tiene el candado) devuelve BUSY SIN preguntar: ese candado no se espera.
-    // En reposo vale `false`: solo se lee —y se apaga— al ver un BUSY (`take_asked`), así el
-    // camino sin candado no toca el thread-local.
+    // Se apaga al entrar en cada llamada: un aviso que SQLite se tragó sin dar error (un
+    // `wal_checkpoint` con un lector activo devuelve una fila `busy=1`) no debe llegar a la
+    // siguiente, que lo leería como «este candado se puede esperar».
     thread_local! {
         static BUSY_ASKED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     }
@@ -259,6 +265,10 @@ mod imp {
         /// prefijo de reserva y si quien llama es el dueño de la reserva vigente. El prefijo se
         /// quita SIEMPRE, también el de una reserva que caducó: lo que sigue se mide en
         /// caracteres del SQL y el prefijo no es parte de él.
+        ///
+        /// Fijar el plazo (`PRAGMA busy_timeout = N`, una sola sentencia) entra aunque la
+        /// conexión esté reservada: es configuración de la conexión, no toca la base ni la
+        /// transacción de nadie, y así `sqlite.busy_timeout` no puede perderse.
         fn admit<'s>(&self, sql: &'s str) -> Result<(&'s str, bool), Fail> {
             let (claim, body) = match sql.strip_prefix(TURN_PREFIX).and_then(|rest| rest.split_once("*/")) {
                 Some((n, body)) => (Some(n), body),
@@ -268,11 +278,14 @@ mod imp {
             let Some(r) = reserved.as_ref() else {
                 return Ok((body, false));
             };
-            if claim.is_some_and(|n| n.parse() == Ok(r.id)) {
+            if claim == Some(r.token.as_str()) {
                 return Ok((body, true));
             }
             if std::time::Instant::now() >= r.until {
-                *reserved = None; // caducó: su dueño tardó más que el plazo en volver
+                *reserved = None; // caducó: su dueño no volvió a tiempo
+                return Ok((body, false));
+            }
+            if mentions_busy_timeout(body) && busy_pragma(body) == Some(true) && !body.trim_end().trim_end_matches(';').contains(';') {
                 return Ok((body, false));
             }
             Err(Fail::Turn)
@@ -282,21 +295,22 @@ mod imp {
         /// conexión para quien la repita (o renueva la reserva, si ya era suya): `at` = octetos de
         /// `sql` (ya sin prefijo) ejecutados, `changed` = filas afectadas.
         fn reserve(&self, sql: &str, at: usize, changed: i64, owner: bool) -> Fail {
-            let until = std::time::Instant::now() + std::time::Duration::from_millis(self.wait_ms.get().max(0) as u64 + 1000);
+            let until = std::time::Instant::now() + LEASE;
             let mut reserved = self.reserved.borrow_mut();
-            let id = match reserved.as_mut().filter(|_| owner) {
+            let token = match reserved.as_mut().filter(|_| owner) {
                 Some(r) => {
                     r.until = until;
-                    r.id
+                    r.token.clone()
                 }
                 None => {
-                    let id = self.reservations.get() + 1;
-                    self.reservations.set(id);
-                    *reserved = Some(Reservation { id, until });
-                    id
+                    // `RandomState` trae una semilla aleatoria por instancia: sin dependencia nueva.
+                    use std::hash::{BuildHasher, Hasher};
+                    let token = format!("{:016x}", std::collections::hash_map::RandomState::new().build_hasher().finish());
+                    *reserved = Some(Reservation { token: token.clone(), until });
+                    token
                 }
             };
-            Fail::Busy { at: sql[..at].chars().count(), changed, prefix: format!("{TURN_PREFIX}{id}*/") }
+            Fail::Busy { at: sql[..at].chars().count(), changed, prefix: format!("{TURN_PREFIX}{token}*/") }
         }
 
         /// La llamada del dueño de la reserva terminó (bien o con un error que no es un candado
@@ -351,6 +365,9 @@ mod imp {
             }
             let parked = self.parked.get();
             let (sql, owner) = if parked { self.admit(sql)? } else { (sql, false) };
+            if parked {
+                BUSY_ASKED.with(|b| b.set(false));
+            }
             if owner && sql == RELEASE {
                 self.release(true);
                 return Ok(0);
@@ -373,7 +390,10 @@ mod imp {
                     Some(at) => self.reserve(sql, at, conn.total_changes() as i64 - before, owner),
                     None => {
                         self.release(owner);
-                        Fail::Message(format!("database is locked (after {index} statement(s) of the script had run; the rest did not run)"))
+                        // Sin cuenta no hay por dónde seguir (SQLite no devolvió el texto de
+                        // una sentencia): el mismo aviso que da `db/sqlite` al vencer el plazo.
+                        let _ = index;
+                        Fail::Message("database is locked (part of the script had run; the rest did not run)".to_string())
                     }
                 }
             };
@@ -469,6 +489,9 @@ mod imp {
                 return Ok((1, vec![T::from(self.wait_ms.get().to_string())]));
             }
             let (sql, owner) = if parked { self.admit(sql)? } else { (sql, false) };
+            if parked {
+                BUSY_ASKED.with(|b| b.set(false));
+            }
             let text = |e: rusqlite::Error| {
                 if !(parked && is_busy(&e) && take_asked()) {
                     self.release(owner);
@@ -514,7 +537,6 @@ mod imp {
             parked: std::cell::Cell::new(false),
             wait_ms: std::cell::Cell::new(0),
             reserved: std::cell::RefCell::new(None),
-            reservations: std::cell::Cell::new(0),
         })
     }
 
@@ -526,8 +548,12 @@ mod imp {
             Fail::Message("database is locked".to_string())
         }
 
-        fn busy(at: usize, changed: i64, id: u64) -> Fail {
-            Fail::Busy { at, changed, prefix: format!("/*ray-turn:{id}*/") }
+        /// El prefijo de la reserva que trae un `Fail::Busy` con ese punto de reanudación.
+        fn prefix_of(fail: Fail, at: usize, changed: i64) -> String {
+            match fail {
+                Fail::Busy { at: a, changed: c, prefix } if a == at && c == changed => prefix,
+                other => panic!("se esperaba busy({at}, {changed}), llegó {other:?}"),
+            }
         }
 
         /// Un `db` ≤ 0.10 no pide el modo aparcado ni sabe esperar: el runtime debe seguir
@@ -552,29 +578,35 @@ mod imp {
             assert_eq!(parked.query("PRAGMA busy_timeout", &[]).unwrap().1, vec!["5000".to_string()]);
             let asked = std::time::Instant::now();
             // Nada aplicado (carácter 0), y la conexión queda reservada para quien traiga el prefijo.
-            assert_eq!(parked.exec("INSERT INTO t VALUES (1)", &[]).unwrap_err(), busy(0, 0, 1));
+            let first = prefix_of(parked.exec("INSERT INTO t VALUES (1)", &[]).unwrap_err(), 0, 0);
+            assert!(first.starts_with("/*ray-turn:") && first.ends_with("*/") && first.len() == 29, "{first}");
             assert!(asked.elapsed() < std::time::Duration::from_millis(100), "esperó dentro: {:?}", asked.elapsed());
-            // Reservada: otra llamada no entra; leer el plazo sí (no ejecuta nada).
+            // Reservada: otra llamada no entra; leer el plazo sí (no ejecuta nada), y fijarlo también.
             assert_eq!(parked.exec("SELECT 1", &[]).unwrap_err(), Fail::Turn);
             assert_eq!(parked.exec_tagged("SELECT 1", &[]), vec!["turn"]);
             assert_eq!(parked.query_tagged("PRAGMA busy_timeout", &[]), vec!["ok", "1", "5000"]);
+            assert_eq!(parked.exec("PRAGMA busy_timeout = 4000", &[]).unwrap(), 0);
+            assert_eq!(parked.query_tagged("PRAGMA busy_timeout", &[]), vec!["ok", "1", "4000"]);
+            // Una ficha que no es la suya no abre la reserva.
+            assert_eq!(parked.exec("/*ray-turn:0000000000000000*/SELECT 1", &[]).unwrap_err(), Fail::Turn);
             // El dueño repite, sigue ocupada, y conserva SU reserva.
-            assert_eq!(parked.exec_tagged("/*ray-turn:1*/INSERT INTO t VALUES (1)", &[]), vec!["busy", "0", "0", "/*ray-turn:1*/"]);
+            assert_eq!(prefix_of(parked.exec(&format!("{first}INSERT INTO t VALUES (1)"), &[]).unwrap_err(), 0, 0), first);
             // …y la suelta sin ejecutar nada.
-            assert_eq!(parked.exec("/*ray-turn:1*/PRAGMA ray_busy_wait = release", &[]).unwrap(), 0);
+            assert_eq!(parked.exec(&format!("{first}PRAGMA ray_busy_wait = release"), &[]).unwrap(), 0);
             // A mitad de un script: dice dónde seguir, y la conexión no guarda el script.
             parked.exec("CREATE TEMP TABLE a (n INTEGER)", &[]).unwrap();
             let script = "INSERT INTO a VALUES (1); INSERT INTO t VALUES (2); INSERT INTO t VALUES (3);";
-            assert_eq!(parked.exec(script, &[]).unwrap_err(), busy(25, 1, 2));
-            // Un prefijo CADUCADO (el de la reserva 1) no cuenta como SQL: quien lo trae espera su
-            // turno como cualquiera, y el carácter de reanudación se mide sin él.
-            assert_eq!(parked.exec("/*ray-turn:1*/SELECT 1", &[]).unwrap_err(), Fail::Turn);
-            assert_eq!(parked.exec(&format!("/*ray-turn:2*/{}", &script[25..]), &[]).unwrap_err(), busy(0, 0, 2));
+            let second = prefix_of(parked.exec(script, &[]).unwrap_err(), 25, 1);
+            assert_ne!(second, first);
+            // Un prefijo CADUCADO (el de la primera reserva) no cuenta como SQL: quien lo trae
+            // espera su turno como cualquiera, y el carácter de reanudación se mide sin él.
+            assert_eq!(parked.exec(&format!("{first}SELECT 1"), &[]).unwrap_err(), Fail::Turn);
+            assert_eq!(prefix_of(parked.exec(&format!("{second}{}", &script[25..]), &[]).unwrap_err(), 0, 0), second);
             holder.exec("COMMIT", &[]).unwrap();
-            assert_eq!(parked.exec(&format!("/*ray-turn:2*/{}", &script[25..]), &[]).unwrap(), 2);
+            assert_eq!(parked.exec(&format!("{second}{}", &script[25..]), &[]).unwrap(), 2);
             // Terminó: la reserva se soltó sola, y un prefijo viejo se quita igual.
             assert_eq!(parked.exec("SELECT 1", &[]).unwrap(), 0);
-            assert_eq!(parked.exec("/*ray-turn:2*/SELECT 1", &[]).unwrap(), 0);
+            assert_eq!(parked.exec(&format!("{second}SELECT 1"), &[]).unwrap(), 0);
             // Lo que esperar no arregla sale con el texto de siempre, sin reservar nada.
             let reader = open(&path_text).unwrap();
             reader.exec(PARK_SWITCH, &[]).unwrap();

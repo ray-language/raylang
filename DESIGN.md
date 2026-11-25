@@ -22278,10 +22278,13 @@ de escribir y una condición del usuario: solo entra si la medición sale mejor.
 4. *La reserva* — lo que faltaba en §478. En el mismo instante en que devuelve `busy` (con el
    registro de handles aún tomado: no hay hueco), el runtime reserva la conexión para esa
    llamada y le da un prefijo, un comentario SQL `/*ray-turn:N*/`, con el que se identifica al
-   repetir. Cualquier otra llamada sobre esa conexión recibe `["turn"]` y espera aparcada. La
+   repetir (la ficha N es aleatoria: quien no recibió ese `busy` no la acierta). Cualquier otra
+   llamada sobre esa conexión recibe `["turn"]` y espera aparcada, hasta su propio plazo. La
    reserva se suelta cuando la llamada termina, cuando el paquete la suelta al vencer su plazo, o
-   cuando caduca (plazo + 1 s: una fibra cancelada mientras esperaba no cierra la conexión para
-   siempre).
+   cuando caduca: un arriendo fijo de 2 s que el dueño renueva en cada intento (reintenta cada
+   50 ms como mucho). No depende del plazo de la conexión — que puede ser de días —, así que una
+   fibra cancelada mientras esperaba deja la conexión cerrada 2 s, no para siempre. Fijar el
+   plazo (`PRAGMA busy_timeout = N`) entra aunque haya reserva: es configuración de la conexión.
 
 **Por qué la reserva está en el runtime y no en el paquete.** La primera versión de este arco la
 puso en el paquete: un canal de capacidad 1 dentro de `Conn`, que cada llamada tomaba y soltaba.
@@ -22326,7 +22329,15 @@ había una.
 compartida no está protegida entre llamada y llamada (como siempre: una conexión por
 transacción). Si vence el plazo a mitad de un script que corrió un `BEGIN`, esa transacción sigue
 abierta (como con `sqlite3_exec`). Un `PRAGMA "busy_timeout" = 0` con el nombre entre comillas
-no pone el plazo a 0 (los valores distintos de 0 se adoptan se escriba como se escriba). Una
-reserva caduca al plazo + 1 s: si el hilo se atasca más que eso entre dos intentos, otra fibra
-que comparta la conexión puede entrar antes de que el script termine.
+no pone el plazo a 0 (los valores distintos de 0 se adoptan se escriba como se escriba). Si el
+hilo se atasca más de 2 s entre dos intentos, la reserva caduca y otra fibra que comparta la
+conexión puede entrar antes de que el script termine. Y una llamada que espera es ahora un punto
+de cancelación (antes no cedía): cancelada a mitad, lo que ya corrió queda corrido —un `BEGIN`
+sigue abierto— y esa conexión hay que cerrarla.
+
+**Segunda tanda de la revisión, sin graves.** Lo que cambió: el arriendo corto y la ficha
+aleatoria de arriba; el aviso «SQLite preguntó» se apaga al entrar en cada llamada (un
+`wal_checkpoint` con un lector activo llama al handler y devuelve una fila, no un error: el aviso
+quedaba encendido para la llamada siguiente); y el test corre la VM y el nativo en serie y
+compara órdenes, no milisegundos.
 

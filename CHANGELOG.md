@@ -4,6 +4,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 [Keep a Changelog](https://keepachangelog.com/) y el versionado es
 [SemVer](https://semver.org/) (la versión del lenguaje y la de la stdlib van juntas; ver `SPEC.md` §12).
 
+## Sin publicar
+
+- **VM — el cambio de fibra recupera lo que perdió en 1.27.112**: pasar mensajes entre fibras
+  (`send`/`recv`, `ask` a un actor) era un 5 % más lento desde los callbacks de la FFI. Medido
+  (ping-pong de 100 000 idas y vueltas): 109 ms en 1.27.111, 118 ms en 1.27.113, 114 ms ahora; lo
+  que queda es el precio de que un worker ocioso duerma (1.27.113).
+
 ## 1.27.113 — 2026-11-24
 
 - **VM — un worker ocioso deja de gastar CPU** (ray-daw #480): con `ray run`, esperar a un

@@ -22129,7 +22129,7 @@ aplicaba otra vez.
    que SQLite dice haber tomado en cada sentencia— y `sqlite.exec` aparca la fibra y llama otra
    vez con el resto del texto. La variable vive en la pila de esa fibra.
 
-Y dos cosas más que salieron por el camino:
+Y tres cosas más que salieron por el camino:
 
 - **El modo es opt-in.** Quitar la espera de SQLite al abrir dejaba sin espera alguna a un `db` ≤
   0.10 sobre el runtime nuevo. La conexión abre como siempre y `db` 0.11 pide el modo aparcado

@@ -133,7 +133,13 @@ contexts:
     # Sublime lista como símbolo (Goto Symbol, el panel de símbolos). Un USO de un tipo lleva
     # `support.type` — antes cada uso salía en la lista como si fuera otra definición
     # (ray-sublime #479).
-    - match: '\b(struct|enum|trait|type)\s+({{user_type}})'
+    - match: '\b(struct|enum|trait)\s+({{user_type}})'
+      captures:
+        1: storage.type.raylang
+        2: entity.name.type.raylang
+    # `type Alias = …` / `type Alias<T> = …`: `type` es contextual; el `=` que sigue lo distingue de
+    # una variable llamada `type`, y el alias puede ir en minúscula (igual que en VS Code).
+    - match: '\b(type)\s+([A-Za-z_][A-Za-z0-9_]*)(?=\s*(?:<[^=]*>)?\s*=)'
       captures:
         1: storage.type.raylang
         2: entity.name.type.raylang

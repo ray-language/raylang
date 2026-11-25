@@ -840,6 +840,8 @@ struct Checker {
     op_sites: HashMap<(usize, usize, String), Expr>,
     /// M418: los `(tipo, trait)` cuyo impl es SINTÉTICO (derive o prelude): `==` no despacha a ellos.
     synthetic_impls: HashSet<(String, String)>,
+    /// Los métodos (nombre global `Tipo#método`) de los impls sintéticos (`@derive`).
+    synthetic_methods: HashSet<String>,
     /// V2 (bench políglota): posiciones de los `Add` **de strings** (`string + string`). La pasada
     /// `lower_concat` (la ÚLTIMA, para no interferir con las tablas por posición de las demás) aplana
     /// cada cadena en una llamada al primitivo `__concat(a, b, …)` → opcode `ConcatN` en la VM (un
@@ -966,8 +968,6 @@ struct Checker {
     entry_module: String,
     /// rayhotel #486: structs reexportados como `opaque` → su cápsula (ver `Program::opaque_types`).
     opaque_types: HashMap<String, String>,
-    /// rayhotel #487: los tipos que cada cápsula exporta, para el consejo de `pub from`.
-    capsule_types: HashMap<String, HashSet<String>>,
     /// Exigir la función de entrada `main` (DESIGN §11). `true` por defecto (`check`/`check_all`: un
     /// programa ejecutable la necesita). El LSP la pone en `false` al analizar un **archivo de módulo**
     /// (submódulo `pub`, sin `main`): un módulo suelto es legítimo sin entrada, y esa regla es de

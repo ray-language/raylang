@@ -6743,7 +6743,9 @@ fn cmd_doc(args: &[String]) {
     // `ray_doc` del MCP: `std/ui` lista el módulo, `ui.MenuItem` o `json.parse` dan firma + doc.
     // M316 (findings #84): con el proyecto del directorio actual (el `ray.toml` más cercano hacia
     // arriba) como contexto, resuelve también sus módulos y sus dependencias de `.ray-deps`.
-    if !Path::new(path).exists() {
+    // Un DIRECTORIO con ese nombre no es un archivo que documentar: `ray doc kernel` es la
+    // cápsula `kernel/mod.ray`, también cuando `kernel/` está a la vista desde aquí.
+    if !Path::new(path).is_file() {
         let root = std::env::current_dir().ok().and_then(|d| {
             let mut d = d;
             loop {

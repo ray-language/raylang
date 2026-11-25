@@ -12,7 +12,7 @@ import std/json as j;
 
 @derive(Eq)
 //<- storage.modifier.annotation.raylang
-//      ^^ entity.name.type.raylang
+//      ^^ support.type.raylang
 pub struct Point {
 //<- storage.type.raylang
 //  ^^^^^^ storage.type.raylang
@@ -27,11 +27,19 @@ enum Shape {
 //<- storage.type.raylang
 //   ^^^^^ entity.name.type.raylang
     Circle(float),
-//  ^^^^^^ entity.name.type.raylang
+//  ^^^^^^ support.type.raylang
 //         ^^^^^ support.type.primitive.raylang
     Rect(float, float),
-//  ^^^^ entity.name.type.raylang
+//  ^^^^ support.type.raylang
 }
+
+type handler = fn(int) -> int;
+//<- storage.type.raylang
+//   ^^^^^^^ entity.name.type.raylang
+
+type Pair<T> = (T, T);
+//<- storage.type.raylang
+//   ^^^^ entity.name.type.raylang
 
 trait Show {
 //<- storage.type.raylang
@@ -46,9 +54,9 @@ trait Show {
 
 impl Show for Point {
 //<- storage.type.raylang
-//   ^^^^ entity.name.type.raylang
+//   ^^^^ support.type.raylang
 //        ^^^ keyword.control.raylang
-//            ^^^^^ entity.name.type.raylang
+//            ^^^^^ support.type.raylang
     fn show(self) -> string {
 //  ^^ storage.type.function.raylang
 //     ^^^^ entity.name.function.raylang
@@ -75,26 +83,26 @@ const PI2: float = 6.28;
 fn area(s: Shape) -> float {
 //<- storage.type.function.raylang
 // ^^^^ entity.name.function.raylang
-//         ^^^^^ entity.name.type.raylang
+//         ^^^^^ support.type.raylang
 //                   ^^^^^ support.type.primitive.raylang
     match (s) {
 //  ^^^^^ keyword.control.raylang
         Shape.Circle(r) => 3.14 * r * r,
-//      ^^^^^ entity.name.type.raylang
-//            ^^^^^^ entity.name.type.raylang
+//      ^^^^^ support.type.raylang
+//            ^^^^^^ support.type.raylang
 //                      ^^ keyword.operator.raylang
 //                         ^^^^ constant.numeric.float.raylang
 //                              ^ keyword.operator.raylang
         Shape.Rect(w, h) => w * h,
-//            ^^^^ entity.name.type.raylang
+//            ^^^^ support.type.raylang
     }
 }
 
 fn largest<T: Ord>(xs: [T], first: T) -> T {
 // ^^^^^^^ entity.name.function.raylang
-//         ^ entity.name.type.raylang
-//            ^^^ entity.name.type.raylang
-//                      ^ entity.name.type.raylang
+//         ^ support.type.raylang
+//            ^^^ support.type.raylang
+//                      ^ support.type.raylang
     var best = first;
 //  ^^^ storage.type.raylang
     for x in xs {
@@ -112,7 +120,7 @@ fn largest<T: Ord>(xs: [T], first: T) -> T {
 
 fn describe(v: dyn Show) -> string {
 //             ^^^ storage.type.raylang
-//                 ^^^^ entity.name.type.raylang
+//                 ^^^^ support.type.raylang
     v.show()
 }
 
@@ -122,7 +130,7 @@ fn main() -> int {
 //           ^^^ support.type.primitive.raylang
     let p = Point { x: 1, y: 2.5 };
 //  ^^^ storage.type.raylang
-//          ^^^^^ entity.name.type.raylang
+//          ^^^^^ support.type.raylang
 //                     ^ constant.numeric.integer.raylang
 //                           ^^^ constant.numeric.float.raylang
     let ok: bool = true && !false;
@@ -182,16 +190,16 @@ fn main() -> int {
 //                          ^^ punctuation.section.interpolation.begin.raylang
 //                               ^ punctuation.section.interpolation.end.raylang
     let ptr_ish: Option<int> = Option.Some(3);
-//               ^^^^^^ entity.name.type.raylang
+//               ^^^^^^ support.type.raylang
 //                      ^^^ support.type.primitive.raylang
-//                             ^^^^^^ entity.name.type.raylang
-//                                    ^^^^ entity.name.type.raylang
+//                             ^^^^^^ support.type.raylang
+//                                    ^^^^ support.type.raylang
 //                                         ^ constant.numeric.integer.raylang
     if let Option.Some(n) = ptr_ish {
 //  ^^ keyword.control.raylang
 //     ^^^ storage.type.raylang
-//         ^^^^^^ entity.name.type.raylang
-//                ^^^^ entity.name.type.raylang
+//         ^^^^^^ support.type.raylang
+//                ^^^^ support.type.raylang
 //                        ^ keyword.operator.raylang
         print("n = ${n}");
 //      ^^^^^ support.function.builtin.raylang
@@ -208,9 +216,9 @@ fn main() -> int {
 //                      ^^ keyword.operator.raylang
 //                                 ^ keyword.operator.raylang
     let m: Map<string, int> = Map.new();
-//         ^^^ entity.name.type.raylang
+//         ^^^ support.type.raylang
 //             ^^^^^^ support.type.primitive.raylang
-//                            ^^^ entity.name.type.raylang
+//                            ^^^ support.type.raylang
 //                                ^^^ entity.name.function.raylang
     let total = [1, 2, 3] |> sum_all;
 //                        ^^ keyword.operator.raylang
@@ -255,17 +263,17 @@ fn main() -> int {
 //      ^^^^^ support.function.builtin.raylang
     }
     let r: Result<int, string> = Result.Ok(total);
-//         ^^^^^^ entity.name.type.raylang
-//                               ^^^^^^ entity.name.type.raylang
-//                                      ^^ entity.name.type.raylang
+//         ^^^^^^ support.type.raylang
+//                               ^^^^^^ support.type.raylang
+//                                      ^^ support.type.raylang
     let v = unwrap_or_zero(r);
 //          ^^^^^^^^^^^^^^ entity.name.function.raylang
     let t = spawn(fn() -> int { area(Shape.Circle(1.0)) as int });
 //          ^^^^^ support.function.builtin.raylang
 //                ^^ storage.type.raylang
 //                              ^^^^ entity.name.function.raylang
-//                                   ^^^^^ entity.name.type.raylang
-//                                         ^^^^^^ entity.name.type.raylang
+//                                   ^^^^^ support.type.raylang
+//                                         ^^^^^^ support.type.raylang
 //                                                ^^^ constant.numeric.float.raylang
     let joined = join(t);
 //               ^^^^ support.function.builtin.raylang
@@ -293,9 +301,9 @@ fn main() -> int {
 //                                                              ^ keyword.operator.raylang
     // Convención: un nombre en mayúscula es un tipo/variante aunque se llame (Some(3), Point {…}).
     Self_like();
-//  ^^^^^^^^^ entity.name.type.raylang
+//  ^^^^^^^^^ support.type.raylang
     let q = Point { x: 2, y: 0.5 }.x;
-//          ^^^^^ entity.name.type.raylang
+//          ^^^^^ support.type.raylang
     print(to_string(largest([1, 2, 3], 0)) + j.stringify(j.parse("1").unwrap()));
 //  ^^^^^ support.function.builtin.raylang
 //        ^^^^^^^^^ support.function.builtin.raylang
@@ -313,34 +321,34 @@ fn main() -> int {
 
 fn unwrap_or_zero(r: Result<int, string>) -> int {
 // ^^^^^^^^^^^^^^ entity.name.function.raylang
-//                   ^^^^^^ entity.name.type.raylang
+//                   ^^^^^^ support.type.raylang
     match (r) { Result.Ok(v) => v, Result.Err(_) => 0 }
 //  ^^^^^ keyword.control.raylang
-//              ^^^^^^ entity.name.type.raylang
-//                     ^^ entity.name.type.raylang
+//              ^^^^^^ support.type.raylang
+//                     ^^ support.type.raylang
 //                           ^^ keyword.operator.raylang
-//                                        ^^^ entity.name.type.raylang
+//                                        ^^^ support.type.raylang
 }
 
 fn first_char(s: string) -> Result<char, string> {
 // ^^^^^^^^^^ entity.name.function.raylang
-//                          ^^^^^^ entity.name.type.raylang
+//                          ^^^^^^ support.type.raylang
 //                                 ^^^^ support.type.primitive.raylang
     let head: Option<char> = if (s.len() > 0) { Option.Some(s[0]) } else { Option.None };
-//            ^^^^^^ entity.name.type.raylang
+//            ^^^^^^ support.type.raylang
 //                   ^^^^ support.type.primitive.raylang
 //                                 ^^^ support.function.builtin.raylang
-//                                              ^^^^^^ entity.name.type.raylang
-//                                                     ^^^^ entity.name.type.raylang
-//                                                                         ^^^^^^ entity.name.type.raylang
-//                                                                                ^^^^ entity.name.type.raylang
+//                                              ^^^^^^ support.type.raylang
+//                                                     ^^^^ support.type.raylang
+//                                                                         ^^^^^^ support.type.raylang
+//                                                                                ^^^^ support.type.raylang
     let c = head.ok_or("empty")?;
 //               ^^^^^ entity.name.function.raylang
 //                     ^^^^^^^ string.quoted.double.raylang
 //                             ^ keyword.operator.raylang
     Result.Ok(c)
-//  ^^^^^^ entity.name.type.raylang
-//         ^^ entity.name.type.raylang
+//  ^^^^^^ support.type.raylang
+//         ^^ support.type.raylang
 }
 
 fn sum_all(xs: [int]) -> int {
@@ -364,8 +372,8 @@ fn area_of_rect() {
     assert_eq(area(Shape.Rect(2.0, 3.0)), 6.0);
 //  ^^^^^^^^^ support.function.builtin.raylang
 //            ^^^^ entity.name.function.raylang
-//                 ^^^^^ entity.name.type.raylang
-//                       ^^^^ entity.name.type.raylang
+//                 ^^^^^ support.type.raylang
+//                       ^^^^ support.type.raylang
 }
 
 extern "libm" {

@@ -54,6 +54,7 @@ impl Checker {
             impl_fn_self: HashMap::new(),
             impl_traits: HashSet::new(),
             synthetic_impls: HashSet::new(),
+            synthetic_methods: HashSet::new(),
             generic_impls: HashMap::new(),
             current_self: None,
             current_fn_bounds: Vec::new(),
@@ -79,7 +80,6 @@ impl Checker {
             capsule_surfaces: HashMap::new(),
             entry_module: String::new(),
             opaque_types: HashMap::new(),
-            capsule_types: HashMap::new(),
             current_fn_module: String::new(),
             shadowed_free_fns: HashSet::new(),
             root_user_fns: HashSet::new(),
@@ -101,7 +101,6 @@ impl Checker {
             self.capsule_surfaces = program.capsule_surfaces.clone();
             self.entry_module = program.entry_module.clone();
             self.opaque_types = program.opaque_types.clone();
-            self.capsule_types = program.capsule_types.clone();
         }
         if self.module_bands.is_empty() && !program.module_bands.is_empty() {
             self.module_bands = program.module_bands.clone();
@@ -434,11 +433,17 @@ impl Checker {
         for f in &program.functions {
             let depth = self.scopes.len();
             self.current_fn_is_root = !f.name.contains("::") && !f.name.contains('#') && f.line < crate::prelude::LINE_BASE;
-            // El módulo de la función: el de su nombre global, o el del TIPO si es un método
-            // (`shop::model::Invoice#eq`). Un `@derive` genera código sin línea propia: su
-            // posición no dice a qué módulo pertenece, su nombre sí (rayhotel #486).
+            // El módulo de la función (rayhotel #486). Una función: el de su nombre global. Un
+            // método de un `impl` ESCRITO A MANO: el módulo donde está el `impl`, por su
+            // posición — no el del tipo: `impl Peek for shop.Invoice` en `main.ray` está fuera
+            // de la cápsula aunque el método se llame `shop::model::Invoice#peek`. Un método de
+            // `@derive` no tiene línea propia y es código del módulo del tipo: por su nombre.
             let owner = f.name.split('#').next().unwrap_or(&f.name);
-            self.current_fn_module = owner.rsplit_once("::").map(|(m, _)| m.to_string()).unwrap_or_default();
+            self.current_fn_module = if f.name.contains('#') && !self.synthetic_methods.contains(&f.name) {
+                self.site_module(f.line).to_string()
+            } else {
+                owner.rsplit_once("::").map(|(m, _)| m.to_string()).unwrap_or_default()
+            };
             if let Err(e) = self.check_function(f) {
                 let e = self.derive_error(&f.name, e);
                 if !self.accumulate {
@@ -848,6 +853,11 @@ impl Checker {
             // Registrar que este tipo implementa este trait (M9.2: verificación de bounds).
             if imp.synthetic {
                 self.synthetic_impls.insert((key.clone(), imp.trait_name.clone()));
+                // Sus métodos, por nombre global: son código del módulo del TIPO (ver
+                // `current_fn_module`).
+                for m in &imp.methods {
+                    self.synthetic_methods.insert(format!("{}#{}", key, m.name));
+                }
             }
             self.impl_traits.insert((key, imp.trait_name.clone()));
         }

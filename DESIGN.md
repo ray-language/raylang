@@ -22090,31 +22090,45 @@ no exporta (#487) son decisiones de lenguaje: IDEAS §132. Un método de un trai
 reexportado todavía se puede llamar desde fuera (va por el paso 3, no por el 5). El checker
 auto-alojado no conoce `capsule_surfaces`.
 
-## 478. `db/sqlite`: la espera del candado es de la fibra, no del hilo (rayhotel #491, nov 2026)
+## 478. `db/sqlite`: la espera del candado — intentado y RETIRADO de 1.27.113 (rayhotel #491, nov 2026)
 
-**El fallo.** rayhotel abre una conexión por petición con `PRAGMA busy_timeout = 5000` y `BEGIN
-IMMEDIATE`, que es la receta estándar de SQLite. Veinte reservas a la vez dejaban el servidor sin
-responder más de 20 s. El busy handler de SQLite espera DENTRO de la librería C, y la llamada
-retiene el hilo y el candado global del registro de handles del runtime: la fibra que tiene el
-candado de la base — que solo necesita correr su `COMMIT` — no puede, y el que espera agota su
-plazo. La configuración recomendada empeoraba las cosas.
+**El fallo, que sigue abierto.** rayhotel abre una conexión por petición con `PRAGMA busy_timeout =
+5000` y `BEGIN IMMEDIATE`. Con varios escritores a la vez, el que espera el candado lo hace dentro
+de SQLite, con el registro de handles tomado y el hilo retenido: el que TIENE el candado, si es
+otra fibra del proceso, no puede avanzar para soltarlo. 20 escrituras simultáneas, más de 20 s.
 
-**El arreglo, en el paquete.** `Conn` lleva su plazo (`busy_ms`) y cada primitivo se llama a
-través de `retry_busy`: si responde `database is locked` y queda plazo, `time.sleep` (1, 2, 4… 50
-ms) y otra vez. La fibra se aparca; el hilo sigue. `exec(c, "PRAGMA busy_timeout = N", [])` no
-llega a SQLite: lo recoge la conexión. Va en raylang y no en el host porque los primitivos tienen
-dos implementaciones (VM y `ray-runtime`) y el contrato que importa — no esperar reteniendo el
-hilo — se cumple igual en las dos sin tocarlas.
+**Lo que no se ve.** rusqlite instala su propio busy handler de 5 s en CADA conexión que abre:
+la espera dentro de SQLite existe aunque nadie mande un PRAGMA. El primer intento no cambió nada
+por eso.
 
-**Lo que no se veía.** El binding (`rusqlite`) instala por su cuenta un busy handler de 5 s en
-cada conexión que abre. El primer intento del arreglo no cambió nada por eso: sin ningún `PRAGMA`
-del usuario, la espera seguía dentro de SQLite. `connect` lo pone a 0. Para no cambiar lo que una
-app observaba — una escritura que esperaba hasta 5 s — el plazo por defecto de la conexión es
-también 5 s, ahora cooperativo.
+**Lo que se intentó.** Que la espera fuera de la fibra: el runtime no espera, devuelve `database
+is locked`, y `db/sqlite` aparca la fibra y repite la llamada. Se fusionó (#690) y la revisión
+previa a la release lo devolvió cinco veces, siempre por lo mismo — qué hacer con un SCRIPT de
+varias sentencias que encuentra el candado a mitad:
 
-**Límite.** Dos transacciones `BEGIN` diferidas que leen y luego escriben se interbloquean en
-SQLite y una recibe `database is locked` aunque haya plazo: es de SQLite, no de la espera. La
-receta sigue siendo `BEGIN IMMEDIATE`.
+1. Repetir la llamada entera aplica dos veces las primeras sentencias.
+2. No reintentar un script a medias rompe `BEGIN; …; COMMIT;` en una llamada, que antes esperaba.
+3. Que la conexión recuerde por dónde iba es estado en un objeto que comparten varias fibras.
+4. Esperar dentro de la llamada, con el registro tomado, es el fallo original para ese patrón.
+5. Que quien llama lleve el punto de reanudación y aparque entre medias deja a otras fibras que
+   comparten la conexión entrar en la transacción abierta del script: una llamada deja de ser
+   atómica respecto al handle, que es lo que la doc de `Conn` promete.
+
+Por el camino salieron además: que quitar la espera de SQLite al abrir deja sin espera a un `db`
+anterior sobre el runtime nuevo (el modo tiene que pedirlo el paquete); que `PRAGMA busy_timeout`
+hay que reconocerlo llegue como llegue, porque devuelve el handler a SQLite; y que para distinguir
+un candado esperable de un interbloqueo sirve un busy handler propio que no espera y solo anota
+que SQLite preguntó.
+
+**Decisión.** Fuera de 1.27.113: `db/sqlite` y el runtime vuelven a su estado de 1.27.112 y `db`
+no se publica. Cinco vueltas de parches sobre una pieza dicen que falta el diseño, no un arreglo.
+
+**Para el arco que lo retome.** El punto 5 es el nudo: aparcar a mitad de una llamada y que la
+llamada siga siendo atómica respecto a la conexión piden un candado POR CONEXIÓN que una fibra
+pueda esperar aparcada (hoy el único candado es el del registro entero, y es de hilo). Con eso,
+los puntos 1–4 tienen salida. Sin eso, la alternativa honesta es arreglar solo la llamada de una
+sentencia y documentar que un script espera como siempre. Diseñar antes de escribir, y con la
+tabla de casos de arriba como prueba.
 
 ## 479. Patrones de struct en el nativo (rayhotel #489, nov 2026)
 
@@ -22211,18 +22225,28 @@ abanico de 200 000 mensajes a 4 consumidores; ráfagas con 18 ms de cómputo ent
 | 50 µs fijo (antes) | 37 % | 112 ms | 410 ms | ~0 |
 | Intervalo que crece hasta 4 ms | 5 % | 117 ms | 417 ms | ~0,8 ms por mensaje |
 | `park` + `unpark` en cada encolado | 10 % | 880 ms | 625 ms | ~0 |
-| Girar 5 ms, luego `park` con `unpark` (lo que queda) | 6 % | 117 ms | 420 ms | ~0 |
+| Girar 5 ms, luego `park` de 2 ms con `unpark` | 6 % | 117 ms | 420 ms | ~0 |
 
 La segunda deja de gastar pero un worker ocioso tarda hasta 4 ms en recoger trabajo nuevo. La
 tercera despierta al instante pero cada mensaje paga una llamada al sistema: el ping-pong, donde
 el otro worker estaba girando y recogía gratis, se hunde. La cuarta combina: los primeros ~5 ms
 el worker gira como siempre (el caso caliente no cambia) y solo después se apunta en la cola de
-listos y duerme; `ReadyQueue::push_back` despierta a uno. Un plazo de 2 ms sigue haciendo falta
-para atender los temporizadores y la E/S de las fibras aparcadas (M254).
+listos y duerme; `ReadyQueue::push_back` despierta a uno. Hace falta un plazo para atender los
+temporizadores y la E/S de las fibras aparcadas (M254). La revisión previa a la release lo bajó
+de 2 ms a 1 ms — la resolución que esos temporizadores ya tenían — a costa de CPU: 12 % en vez
+de 6 %. También hizo que fijar el resultado del programa despierte a todos los dormidos, para
+que terminar no espere ese plazo. En Windows el plazo es un `sleep` de 1 ms sin registro
+(`park_timeout` redondea al tic de ~15 ms). Queda la mejora de fondo: que el worker ocioso
+bloquee en el poller hasta el plazo más próximo, con un descriptor para despertarlo.
 
 **Por qué `park`/`unpark` y no una `Condvar`.** El comentario original la descartaba por los
 despertares perdidos. `park` lleva un testigo: un `unpark` que llega antes del `park` no se
 pierde, y el registro del worker ocioso se hace con el mutex del scheduler tomado.
+
+**Atribución.** Al cerrar la revisión el ping-pong salió un 8 % más lento que la release 1.27.111
+instalada. Compilando el árbol de justo antes de este cambio: 127 ms la 1.27.111, 136 ms antes
+del cambio, 138 ms después (medianas de seis pasadas intercaladas). El cambio del scheduler cuesta
+~1,5 %; el resto (~7 %) ya estaba — entró entre la 1.27.111 y este arco, sin localizar todavía.
 
 **Lección.** Una regla de «unos 50 µs no queman un núcleo» es verdad por worker y falsa por nueve.
 Y el primer arreglo que quita el síntoma (alargar el intervalo) cambiaba latencia por CPU sin

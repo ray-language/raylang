@@ -12,6 +12,7 @@
     { "include": "#struct-definition" },
     { "include": "#enum-definition" },
     { "include": "#trait-definition" },
+    { "include": "#type-alias-definition" },
     { "include": "#impl-definition" },
     { "include": "#function-definition" },
     { "include": "#extern" },
@@ -135,14 +136,22 @@
         "2": { "name": "entity.name.type.raylang" }
       }
     },
+    "type-alias-definition": {
+      "comment": "`type Alias = …` / `type Alias<T> = …`: el nombre que se DEFINE (los usos de un tipo llevan support.type). El `=` que sigue lo distingue de una variable llamada `type`.",
+      "match": "\\b(type)\\s+([A-Za-z_][A-Za-z0-9_]*)(?=\\s*(?:<[^=]*>)?\\s*=)",
+      "captures": {
+        "1": { "name": "storage.type.raylang" },
+        "2": { "name": "entity.name.type.raylang" }
+      }
+    },
     "impl-definition": {
       "comment": "`impl Trait for Tipo`: 'for' es contextual (no es palabra clave global), solo se colorea aquí.",
       "match": "\\b(impl)\\s+([A-Za-z_][A-Za-z0-9_]*)\\s+(for)\\s+([A-Za-z_][A-Za-z0-9_]*)",
       "captures": {
         "1": { "name": "storage.type.impl.raylang" },
-        "2": { "name": "entity.name.type.raylang" },
+        "2": { "name": "support.type.raylang" },
         "3": { "name": "keyword.control.raylang" },
-        "4": { "name": "entity.name.type.raylang" }
+        "4": { "name": "support.type.raylang" }
       }
     },
     "function-definition": {
@@ -180,7 +189,7 @@
       "match": "\\b[A-Z][A-Z0-9_]*[A-Z0-9]\\b"
     },
     "user-types": {
-      "name": "entity.name.type.raylang",
+      "name": "support.type.raylang",
       "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
     },
     "booleans": {

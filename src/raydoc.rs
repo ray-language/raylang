@@ -33,6 +33,8 @@ pub fn module_doc(src: &str) -> Option<String> {
 /// visible (`b`), el original (`a`), el módulo tal como se escribió y el archivo —con su fuente—
 /// donde el ítem se DEFINE (siguiendo las cadenas de re-export).
 pub struct Reexported {
+    /// Reexportado con `opaque`: su forma no es parte del contrato.
+    pub opaque: bool,
     pub visible: String,
     pub original: String,
     pub module: String,
@@ -100,11 +102,16 @@ pub fn reexports(src: &str, file: &std::path::Path) -> Vec<Reexported> {
     for fi in prog.from_imports.iter().filter(|fi| fi.is_pub) {
         for n in &fi.names {
             if let Some((def_file, source, original)) = definition(file, &fi.module, &n.name, 4) {
-                out.push(Reexported { visible: n.local().to_string(), original, module: fi.module.clone(), file: def_file, source });
+                out.push(Reexported { opaque: n.opaque, visible: n.local().to_string(), original, module: fi.module.clone(), file: def_file, source });
             }
         }
     }
     out
+}
+
+/// La cara de un struct reexportado como `opaque`: su nombre y sus parámetros de tipo, sin campos.
+pub fn opaque_struct(s: &StructDef, exported_as: &str) -> String {
+    format!("struct {}{} (opaque)", exported_as, generics(&s.type_params, &[], &Vec::new()))
 }
 
 /// La documentación Markdown de un ARCHIVO: la de su fuente (`generate`) más lo que re-exporta con
@@ -132,7 +139,8 @@ pub fn generate_file(path: &std::path::Path) -> Result<String, String> {
         let (sig, line) = if let Some(f) = prog.functions.iter().find(|f| f.name == name) {
             (sig_function(f), f.line)
         } else if let Some(s) = prog.structs.iter().find(|s| s.name == name) {
-            (sig_struct(s), s.line)
+            // Un tipo opaco se documenta SIN sus campos: no son parte del contrato.
+            if item.opaque { (opaque_struct(s, &item.visible), s.line) } else { (sig_struct(s), s.line) }
         } else if let Some(e) = prog.enums.iter().find(|e| e.name == name) {
             (sig_enum(e), e.line)
         } else if let Some(t) = prog.traits.iter().find(|t| t.name == name) {
@@ -146,7 +154,12 @@ pub fn generate_file(path: &std::path::Path) -> Result<String, String> {
         };
         out.push_str(&format!("### `{sig}`\n\n"));
         if item.visible != item.original {
-            out.push_str(&format!("Exported as `{}`. ", item.visible));
+            // La cabecera de un opaco ya lleva el nombre exportado: aquí va el otro.
+            if item.opaque {
+                out.push_str(&format!("Named `{}` in its module. ", item.original));
+            } else {
+                out.push_str(&format!("Exported as `{}`. ", item.visible));
+            }
         }
         out.push_str(&format!("From `{}`.\n\n", item.module));
         emit_doc(&mut out, &lines, line);
@@ -321,7 +334,7 @@ pub fn field_docs(s: &StructDef, lines: &[&str]) -> Vec<(String, String, Option<
 }
 
 /// El doc-comment de `linea` como una sola línea (para el resumen de raydoc).
-fn doc_above(lines: &[&str], line: usize) -> Option<String> {
+pub fn doc_above(lines: &[&str], line: usize) -> Option<String> {
     doc_lines_above(lines, line).map(|ls| ls.join(" "))
 }
 

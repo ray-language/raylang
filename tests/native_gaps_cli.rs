@@ -335,3 +335,30 @@ fn main() {
         "big 1:500\npaid 2:5 3xpen\nseven 9\nvoid 4 dup t\nother 5 true 8\nother 6 false 3\n9\n-9\n0\n5\n7\n",
     );
 }
+
+/// Revisión previa a 1.27.113: `map`/`filter`/`fold` evalúan el receptor ANTES que sus otros
+/// argumentos, como la VM. El arreglo del valor inicial de `fold` lo había dejado delante.
+#[test]
+fn higher_order_functions_evaluate_the_receiver_first() {
+    same_everywhere(
+        "hof_order",
+        r#"fn nums() -> [int] {
+    print("receiver");
+    [1, 2, 3]
+}
+fn start() -> int {
+    print("init");
+    10
+}
+fn add(a: int, x: int) -> int { a + x }
+fn double(x: int) -> int { x * 2 }
+fn main() {
+    print(nums().fold(start(), add));
+    print(nums().fold(start(), fn(a: int, x: int) -> int { a + x }));
+    print(nums().map(double));
+}
+"#,
+        true,
+        "receiver\ninit\n16\nreceiver\ninit\n16\nreceiver\n[2, 4, 6]\n",
+    );
+}

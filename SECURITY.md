@@ -319,6 +319,10 @@ documentada:
   firma y `CStr::from_ptr` sobre punteros no-NULL con la `CString` viva. La *carga* ya no lleva
   `unsafe` propio: la hace `libloading` (también en `library_available`, M417: abre y suelta la
   librería para saber si está; cargarla ejecuta sus inicializadores, el mismo contrato que llamarla).
+  ray-daw #478: con `[native] link_dirs` en el `ray.toml` del directorio actual, la VM prueba
+  PRIMERO esas carpetas del proyecto (la misma llamada a `libloading`, con una ruta): una
+  biblioteca de ahí con el nombre de una del sistema la tapa. Es configuración del propio
+  proyecto, del mismo nivel de confianza que su código.
   El binario nativo emite para `ffi.library_available` un `dlopen`/`dlclose` (unix) o
   `LoadLibraryA`/`FreeLibrary` (Windows) declarados a mano sobre una `CString` propia viva durante la
   llamada (`__ray_ffi_lib_available`). `read_ptr` (rayserial #394, `std/ffi.read`) hace un

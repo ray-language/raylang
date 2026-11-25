@@ -308,6 +308,94 @@ fn a_facade_showing_types_it_does_not_export_gets_a_warning_and_alias_hints() {
     let _ = std::fs::remove_dir_all(d);
 }
 
+/// Revisión previa a 1.27.113: la frontera de un tipo opaco la marca DÓNDE está escrito el
+/// código, no de quién es el método. Un `impl` para el tipo opaco escrito fuera de la cápsula no
+/// toca sus campos; un `impl` para un tipo ajeno escrito DENTRO sí construye el opaco.
+#[test]
+fn the_opaque_boundary_follows_where_an_impl_is_written() {
+    let outside = wallet_app(
+        "opaque_impl_outside",
+        "import wallet;\ntrait Peek { fn peek(self) -> int; }\nimpl Peek for wallet.Account {\n    fn peek(self) -> int {\n        self.cents = 99;\n        self.cents\n    }\n}\nfn main() {\n    print(wallet.fresh().peek());\n}\n",
+    );
+    let (out, err, code) = ray(&outside, &["run"]);
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(err.contains("'Account' is opaque outside the capsule 'wallet': its fields are not accessible here"), "{err}");
+    let _ = std::fs::remove_dir_all(outside);
+
+    let inside = tree(
+        "opaque_impl_inside",
+        &[
+            ("ray.toml", APP_TOML),
+            ("src/main.ray", "import wallet;\nimport money;\nfn main() {\n    print(wallet.from_money(money.Money { amount: 7 }).balance());\n}\n"),
+            ("src/money.ray", "pub struct Money { amount: int, }\n"),
+            ("src/wallet/core.ray", "import money;\npub struct Account { id: int, cents: int, }\npub trait Wrap { fn wrap(self) -> Account; }\nimpl Wrap for money.Money {\n    fn wrap(self) -> Account { Account { id: 1, cents: self.amount } }\n}\npub fn from_money(m: money.Money) -> Account { m.wrap() }\npub fn balance(a: Account) -> int { a.cents }\n"),
+            ("src/wallet/mod.ray", "pub from wallet/core import opaque Account, from_money, balance;\n"),
+        ],
+    );
+    let (out, err, code) = ray(&inside, &["run"]);
+    assert_eq!((out.as_str(), code), ("7\n", 0), "{err}");
+    let _ = std::fs::remove_dir_all(inside);
+}
+
+/// Revisión previa a 1.27.113: un alias `pub type` de la fachada deja nombrar el tipo, así que
+/// no hay aviso; y `ray doc` muestra un reexport opaco sin sus campos.
+#[test]
+fn an_aliased_type_is_nameable_and_an_opaque_one_is_documented_without_its_shape() {
+    let d = tree(
+        "alias_names",
+        &[
+            ("ray.toml", APP_TOML),
+            ("src/main.ray", "import shop;\nfn keep(i: shop.Bill) -> shop.Bill { i }\nfn main() {\n    print(shop.amount(keep(shop.make(3))));\n}\n"),
+            ("src/shop/model.ray", "pub struct Invoice { total: int, }\npub fn make(n: int) -> Invoice { Invoice { total: n } }\npub fn amount(i: Invoice) -> int { i.total }\n"),
+            ("src/shop/mod.ray", "import shop/model;\npub from shop/model import make, amount;\npub type Bill = model.Invoice;\n"),
+        ],
+    );
+    let (out, err, code) = ray(&d, &["run"]);
+    assert_eq!((out.as_str(), code), ("3\n", 0), "{err}");
+    assert!(!err.contains("warning at"), "un tipo con alias en la fachada se puede nombrar: {err}");
+    let _ = std::fs::remove_dir_all(d);
+
+    let d = wallet_app("opaque_doc", "import wallet;\nfn main() {\n    print(1);\n}\n");
+    let (out, err, code) = ray(&d, &["doc", "src/wallet/mod.ray"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("### `struct Account (opaque)`"), "{out}");
+    assert!(!out.contains("cents: int"), "la forma de un tipo opaco no es parte del contrato\n{out}");
+    let (out, err, code) = ray(&d, &["doc", "wallet"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("struct Account (opaque"), "{out}");
+    // Y por el símbolo, que es adonde manda el listado («Use ray_doc "wallet.<name>"»).
+    let (out, err, code) = ray(&d, &["doc", "wallet.Account"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("struct Account (opaque)") && !out.contains("cents"), "{out}");
+    let _ = std::fs::remove_dir_all(d);
+
+    // Un alias de un tipo COMPUESTO deja nombrar el compuesto, no el tipo de dentro: sigue el aviso.
+    let d = tree(
+        "alias_composite",
+        &[
+            ("ray.toml", APP_TOML),
+            ("src/main.ray", "import shop;\nfn main() {\n    print(shop.amount(shop.make(3)));\n}\n"),
+            ("src/shop/model.ray", "pub struct Invoice { total: int, }\npub fn make(n: int) -> Invoice { Invoice { total: n } }\npub fn amount(i: Invoice) -> int { i.total }\n"),
+            ("src/shop/mod.ray", "import shop/model;\npub from shop/model import make, amount;\npub type Bills = [model.Invoice];\n"),
+        ],
+    );
+    let (_, err, code) = ray(&d, &["check"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(err.contains("shows the type 'Invoice', which the capsule does not export"), "{err}");
+    let _ = std::fs::remove_dir_all(d);
+}
+
+/// Revisión previa a 1.27.113: `ray doc <dir>` con la cápsula A LA VISTA desde el directorio
+/// actual (un paquete-librería: `kernel/` está en la raíz) es la cápsula, no «un directorio».
+#[test]
+fn ray_doc_takes_a_visible_directory_as_its_capsule() {
+    let d = tree("doc_dir", LIB_FILES);
+    let (out, err, code) = ray(&d.join("lib3"), &["doc", "kernel"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("enter() -> int") && out.contains("twice(n: int) -> int  [re-exported from kit/kernel/inner]"), "{out}");
+    let _ = std::fs::remove_dir_all(d);
+}
+
 // ---------------------------------------------------------------------------------------------
 // LSP
 // ---------------------------------------------------------------------------------------------

@@ -6,13 +6,16 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.115 — 2026-11-25
+
 - **`std/audio` — `device_latency_ms(h)`: la latencia que declara el dispositivo** (ray-daw
   #475). Un programa que graba sobre lo que suena no tenía cómo saber cuánto tarda cada
   dispositivo, y la documentación no decía si `queued_ms` y `read` ya lo contaban. No lo
   cuentan: «sonado» es entregado al dispositivo. `device_latency_ms` acepta una salida o una
   entrada abierta y devuelve lo que declara su dispositivo (en macOS: latencia, margen de
   seguridad y latencia del flujo según CoreAudio; las bocinas de un MacBook Pro declaran
-  17 ms). En los demás sistemas devuelve 0. La documentación de `queued_ms` y `read` dice ahora
+  17 ms y unos AirPods Pro 160 ms). Un flujo sin dispositivo elegido sigue al por defecto, y
+  el valor con él. En los demás sistemas devuelve `Err`: desconocida, no cero. La documentación de `queued_ms` y `read` dice ahora
   qué incluye cada uno.
 
 ## 1.27.114 — 2026-11-25

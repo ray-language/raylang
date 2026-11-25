@@ -157,9 +157,10 @@ pub fn queued_ms(h: int) -> Result<int, string> {
 ///
 /// macOS: the device latency, its safety offset and the latency of its stream, as CoreAudio
 /// reports them (`kAudioDevicePropertyLatency`, `kAudioDevicePropertySafetyOffset`,
-/// `kAudioStreamPropertyLatency`), plus one I/O buffer of the device for a stream opened with
-/// a hint below 20 ms. An output opened without choosing a device follows the default device,
-/// and so does this value. Other systems and the test sink/source: 0 — the system does not
+/// `kAudioStreamPropertyLatency`), plus one I/O buffer of the device for an output that the
+/// device serves directly (a hint below 20 ms, when the device accepts it). An output or an
+/// input opened without choosing a device follows the default device, and so does this value:
+/// ask again after `next_change`. Other systems and the test sink/source: 0 — the system does not
 /// declare one, or (ALSA) it is already in `queued_ms`. It is what the device DECLARES: an
 /// external converter or a Bluetooth link may add more than it says, so keep a manual offset
 /// for the user on top.

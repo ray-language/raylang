@@ -435,6 +435,42 @@ fn queue_budget_bytes(bytes_per_sec: i64, latency_ms: i64, chunk: usize) -> i32 
 #[cfg(unix)]
 const LOW_LATENCY_BELOW_MS: i64 = 20;
 
+/// ray-daw #475: a quién preguntar la latencia de un flujo abierto. No se guarda el valor: se
+/// pregunta al dispositivo cuando el programa lo pide, porque un flujo sin dispositivo elegido
+/// sigue al por defecto del sistema y el búfer de E/S lo pueden cambiar otros flujos.
+#[derive(Default)]
+struct LatencySource {
+    /// El dispositivo del backend, `DEFAULT_DEVICE` si es el por defecto de ahora, o 0 si el
+    /// backend no sabe decir la latencia.
+    device: AtomicI64,
+    /// El flujo da por sonado lo que el dispositivo pidió: su búfer de E/S se suma.
+    io_buffer: std::sync::atomic::AtomicBool,
+}
+
+/// El flujo va con el dispositivo por defecto de su dirección, sea cual sea ahora.
+#[allow(dead_code)] // solo lo usa CoreAudio
+const DEFAULT_DEVICE: i64 = -1;
+
+impl LatencySource {
+    fn set(&self, (device, io_buffer): (i64, bool)) {
+        self.device.store(device, Ordering::SeqCst);
+        self.io_buffer.store(io_buffer, Ordering::SeqCst);
+    }
+
+    /// Lo que declara el dispositivo ahora, en µs (0 = nada, o no se sabe).
+    fn micros(&self, input: bool) -> i64 {
+        #[cfg(target_os = "macos")]
+        {
+            coreaudio::latency_us(self.device.load(Ordering::SeqCst), self.io_buffer.load(Ordering::SeqCst), input)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = input;
+            0
+        }
+    }
+}
+
 /// El control de una salida viva, para `drain`: cuántos octetos ha aceptado el alimentador que
 /// aún no ha entregado al backend, y los parámetros para estimar la latencia del dispositivo.
 pub struct Ctl {
@@ -466,10 +502,8 @@ pub struct Ctl {
     /// en otro dispositivo: el sumidero nuevo vuelve a contar desde cero.
     sounded_base: AtomicI64,
     played_base: AtomicI64,
-    /// ray-daw #475: la latencia que declara el dispositivo donde suena la salida, en µs (0 =
-    /// no declara ninguna o el backend no la sabe). La refresca el alimentador: el dispositivo
-    /// de una salida sin dispositivo elegido cambia cuando cambia el por defecto.
-    device_latency_us: AtomicI64,
+    /// ray-daw #475: a qué dispositivo preguntar la latencia de esta salida.
+    latency: LatencySource,
     /// `played_base` y `played_frames` cambian juntos al reabrir: quien los suma los lee con
     /// este cerrojo, para no ver uno nuevo y otro viejo (la posición daría un salto atrás).
     position: Mutex<()>,
@@ -489,7 +523,7 @@ impl Ctl {
             sounded_frames: AtomicI64::new(0),
             sounded_base: AtomicI64::new(0),
             played_base: AtomicI64::new(0),
-            device_latency_us: AtomicI64::new(0),
+            latency: LatencySource::default(),
             position: Mutex::new(()),
         }
     }
@@ -674,6 +708,8 @@ fn follow_device(sink: &mut Box<dyn Sink>, ctl: &Ctl, key: i64, follower: &mut F
         sink.finish();
         ctl.rebase();
         *sink = new;
+        // ray-daw #475: la latencia se pregunta desde ahora al dispositivo del sumidero nuevo.
+        ctl.latency.set(sink.latency_source());
     };
     match make_sink(follower.sample_rate, follower.channels, latency_ms, follower.fmt, ctl.played_frames.clone(), "") {
         Ok(new) => {
@@ -831,8 +867,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
         let key = fd_w as i64;
         let mut sink = sink;
         let ctl = Arc::new(Ctl::new(fd_r as i64, played_frames, sample_rate, frame_bytes as i64));
-        // ray-daw #475: disponible desde que `open` vuelve, no desde el primer giro del alimentador.
-        ctl.device_latency_us.store(sink.device_latency_us(), Ordering::SeqCst);
+        ctl.latency.set(sink.latency_source());
         register_ctl(key, &ctl);
         // El alimentador: lee el pipe (bloqueante) y empuja al backend; EOF (close del handle) →
         // drena el backend y termina.
@@ -863,7 +898,6 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
                     // El dispositivo nuevo pide otra latencia (unos auriculares Bluetooth suben
                     // el hint a 80 ms): la cola del socket se redimensiona con ella, o el total
                     // encolado se quedaría corto. En BSD manda el búfer de recepción del par.
-                    ctl_thread.device_latency_us.store(sink.device_latency_us(), Ordering::SeqCst);
                     if follower.latency_ms != latency_before {
                         let budget = if follower.latency_ms < LOW_LATENCY_BELOW_MS {
                             (bytes_per_sec * follower.latency_ms / 2000).max(chunk as i64 * 2) as i32
@@ -928,7 +962,7 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
         let key = writer.as_raw_handle() as i64;
         let mut sink = sink;
         let ctl = Arc::new(Ctl::new(reader.as_raw_handle() as i64, played_frames, sample_rate, frame_bytes as i64));
-        ctl.device_latency_us.store(sink.device_latency_us(), Ordering::SeqCst);
+        ctl.latency.set(sink.latency_source());
         register_ctl(key, &ctl);
         let ctl_thread = ctl.clone();
         let reader_handle = reader.as_raw_handle() as i64;
@@ -942,7 +976,6 @@ pub fn open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str) -> R
                     if !follow_device(&mut sink, &ctl_thread, key, &mut follower) {
                         break;
                     }
-                    ctl_thread.device_latency_us.store(sink.device_latency_us(), Ordering::SeqCst);
                     next_check = std::time::Instant::now() + DEVICE_CHECK_EVERY;
                 }
                 // M398 (rayplay #166): `flush` — vacía el pipe sin tocarlo y descarta lo del backend.
@@ -1059,12 +1092,7 @@ pub fn queued_ms(key: i64) -> Result<i64, String> {
 /// propio dispositivo, que ni `queued_ms` ni `read` cuentan. 0 = no declara ninguna, o el
 /// backend no la sabe (hoy solo la da CoreAudio en macOS).
 pub fn device_latency_ms(key: i64, input: bool) -> Result<i64, String> {
-    let us = if input {
-        let ctl = in_ctls().lock().unwrap().get(&key).cloned().ok_or_else(|| "audio: not an open audio input".to_string())?;
-        ctl.device_latency_us.load(Ordering::SeqCst)
-    } else {
-        ctl_of(key)?.device_latency_us.load(Ordering::SeqCst)
-    };
+    let us = if input { in_ctl_of(key)?.latency.micros(true) } else { ctl_of(key)?.latency.micros(false) };
     Ok((us + 500) / 1000)
 }
 
@@ -1154,9 +1182,12 @@ pub struct InCtl {
     dropped_frames: AtomicI64,
     sample_rate: i64,
     frame_bytes: usize,
-    /// ray-daw #475: la latencia que declara el dispositivo de captura, en µs (0 = ninguna o
-    /// desconocida). Se anota al abrir: una entrada no cambia de dispositivo.
-    device_latency_us: AtomicI64,
+    /// ray-daw #475: a qué dispositivo preguntar la latencia de esta entrada.
+    latency: LatencySource,
+}
+
+fn in_ctl_of(key: i64) -> Result<Arc<InCtl>, String> {
+    in_ctls().lock().unwrap().get(&key).cloned().ok_or_else(|| "audio: not an open audio input".to_string())
 }
 
 fn in_ctls() -> &'static Mutex<HashMap<i64, Arc<InCtl>>> {
@@ -1183,7 +1214,7 @@ fn forget_in_ctl(key: i64, own: &Arc<InCtl>) {
 /// El reloj de captura de la entrada `key`, en ms: cuánto audio ha entregado el dispositivo
 /// desde que se abrió. Avanza aunque el programa no lea.
 pub fn recorded_ms(key: i64) -> Result<i64, String> {
-    let ctl = in_ctls().lock().unwrap().get(&key).cloned().ok_or_else(|| "audio: not an open audio input".to_string())?;
+    let ctl = in_ctl_of(key)?;
     Ok(ctl.captured_frames.load(Ordering::SeqCst) * 1000 / ctl.sample_rate)
 }
 
@@ -1522,7 +1553,7 @@ pub fn open_input(sample_rate: i64, channels: i64, latency_ms: i64, format: &str
         dropped_frames: AtomicI64::new(0),
         sample_rate,
         frame_bytes,
-        device_latency_us: AtomicI64::new(0),
+        latency: LatencySource::default(),
     });
     let started = if test_source {
         if let Err(e) = check_test_device(device, "input") {
@@ -1626,10 +1657,10 @@ trait Sink: Send {
     fn device_state(&mut self) -> DeviceState {
         DeviceState::Present
     }
-    /// ray-daw #475: la latencia que declara el dispositivo, en µs, más lo que este sumidero
-    /// da por sonado antes de que salga del dispositivo. 0 = no se sabe.
-    fn device_latency_us(&mut self) -> i64 {
-        0
+    /// ray-daw #475: a quién preguntar la latencia (`LatencySource::set`): el dispositivo y si
+    /// este sumidero da por sonado lo que el dispositivo pidió. `(0, false)` = no se sabe.
+    fn latency_source(&mut self) -> (i64, bool) {
+        (0, false)
     }
     /// La salida deja este sumidero sin esperar a que suene lo pendiente: lo descarta, para que
     /// el `finish` que sigue no espere a un dispositivo que quizá ya no pide audio.
@@ -1742,8 +1773,8 @@ impl Sink for Convert {
     fn device_state(&mut self) -> DeviceState {
         self.inner.device_state()
     }
-    fn device_latency_us(&mut self) -> i64 {
-        self.inner.device_latency_us()
+    fn latency_source(&mut self) -> (i64, bool) {
+        self.inner.latency_source()
     }
     fn abandon(&mut self) {
         self.inner.abandon()
@@ -2128,10 +2159,11 @@ mod coreaudio {
         }
 
         /// ray-daw #475: la latencia que declara el dispositivo en una dirección, en µs: la
-        /// del dispositivo, su margen de seguridad y la de su primer flujo, más `extra_frames`
-        /// (frames al ritmo del dispositivo que quien llama ya dio por sonados o aún no vio).
+        /// del dispositivo, su margen de seguridad y la de su primer flujo (un dispositivo con
+        /// varios flujos en una dirección puede declarar otra en los demás: no se sabe en cuál
+        /// caen los canales del programa), más su búfer de E/S de ahora si `io_buffer`.
         /// 0 si el dispositivo no dice su frecuencia.
-        pub fn latency_us(device: u32, input: bool, extra_frames: u32) -> i64 {
+        pub fn latency_us(device: u32, input: bool, io_buffer: bool) -> i64 {
             const LATENCY: u32 = fourcc(b"ltnc"); // kAudioDevicePropertyLatency y kAudioStreamPropertyLatency
             const SAFETY_OFFSET: u32 = fourcc(b"saft"); // kAudioDevicePropertySafetyOffset
             const STREAMS: u32 = fourcc(b"stm#"); // kAudioDevicePropertyStreams
@@ -2149,7 +2181,8 @@ mod coreaudio {
                 .map(|b| u32::from_ne_bytes([b[0], b[1], b[2], b[3]]))
                 .next()
                 .map_or(0, |id| read(id, LATENCY, SCOPE_GLOBAL));
-            let frames = read(device, LATENCY, scope) + read(device, SAFETY_OFFSET, scope) + stream + extra_frames as u64;
+            let buffer = if io_buffer { read(device, BUFFER_FRAME_SIZE, SCOPE_GLOBAL) } else { 0 };
+            let frames = read(device, LATENCY, scope) + read(device, SAFETY_OFFSET, scope) + stream + buffer;
             (frames as f64 * 1_000_000.0 / rate) as i64
         }
 
@@ -2241,6 +2274,18 @@ mod coreaudio {
             // SAFETY: `s` lo creó `uid_string`.
             unsafe { CFRelease(s) };
         }
+    }
+
+    /// ray-daw #475: lo que declara ahora el dispositivo `device` (`DEFAULT_DEVICE` = el por
+    /// defecto de esa dirección; 0 = no se sabe), en µs.
+    #[cfg(target_os = "macos")]
+    pub fn latency_us(device: i64, io_buffer: bool, input: bool) -> i64 {
+        let id = match device {
+            0 => None,
+            super::DEFAULT_DEVICE => hal::device_id("", input),
+            id => Some(id as u32),
+        };
+        id.map_or(0, |id| hal::latency_us(id, input, io_buffer))
     }
 
     #[cfg(target_os = "macos")]
@@ -2629,9 +2674,10 @@ mod coreaudio {
                 reserved: 0,
             };
             let target = (rate as f64 * latency_ms as f64 / 4000.0) as u32;
-            let device_frames = hal::acquire_buffer_frames(device_id, (1u32 << (31 - target.max(32).leading_zeros())).max(32));
-            // ray-daw #475: un bloque llega cuando el dispositivo cierra su búfer de E/S.
-            ctl.device_latency_us.store(hal::latency_us(device_id, true, device_frames), Ordering::SeqCst);
+            hal::acquire_buffer_frames(device_id, (1u32 << (31 - target.max(32).leading_zeros())).max(32));
+            // ray-daw #475: esta entrada se queda en el dispositivo con el que abrió. El búfer
+            // de E/S no se suma: el bloque en que llega la captura ya lo cuenta quien lee.
+            ctl.latency.set((device_id as i64, false));
             let capture = Arc::new(Capture {
                 unit: std::sync::atomic::AtomicUsize::new(0),
                 fd_w,
@@ -2791,8 +2837,8 @@ mod coreaudio {
 
             /// ray-daw #475: este sumidero da por sonado lo que el dispositivo ya pidió, un
             /// búfer de E/S antes de que salga: ese búfer se suma a lo declarado.
-            fn device_latency_us(&mut self) -> i64 {
-                hal::latency_us(self.device_id, false, self.device_frames)
+            fn latency_source(&mut self) -> (i64, bool) {
+                (self.device_id as i64, true)
             }
 
             fn abandon(&mut self) {
@@ -3450,9 +3496,9 @@ mod coreaudio {
         });
         #[cfg(not(target_os = "macos"))]
         let lowered = ();
-        // ray-daw #475: lo que declara el dispositivo de captura.
+        // ray-daw #475: la cola sin dispositivo elegido sigue al por defecto del sistema.
         #[cfg(target_os = "macos")]
-        ctl.device_latency_us.store(hal::device_id(device, true).map_or(0, |id| hal::latency_us(id, true, 0)), std::sync::atomic::Ordering::SeqCst);
+        ctl.latency.set((if device.is_empty() { super::DEFAULT_DEVICE } else { hal::device_id(device, true).map_or(0, |id| id as i64) }, false));
         let state = Arc::new(InputState { fd_w, ctl: ctl.clone(), closed: std::sync::atomic::AtomicBool::new(false) });
         let user = Arc::into_raw(state.clone()) as *mut std::ffi::c_void;
         let mut q: AudioQueueRef = std::ptr::null_mut();
@@ -3606,14 +3652,14 @@ mod coreaudio {
         }
 
         /// ray-daw #475: la cola sin dispositivo elegido suena en el por defecto de ahora.
-        fn device_latency_us(&mut self) -> i64 {
+        fn latency_source(&mut self) -> (i64, bool) {
             #[cfg(target_os = "macos")]
             {
-                self.device_id.or_else(|| hal::output_device("")).map_or(0, |id| hal::latency_us(id, false, 0))
+                (self.device_id.map_or(super::DEFAULT_DEVICE, |id| id as i64), false)
             }
             #[cfg(not(target_os = "macos"))]
             {
-                0
+                (0, false)
             }
         }
 
@@ -5323,14 +5369,14 @@ mod device_tests {
     }
 }
 
-/// ray-daw #475: lo que declara un dispositivo real es una latencia creíble (menos de un
-/// segundo) y los frames que añade quien llama se suman al ritmo del dispositivo.
+/// ray-daw #475: preguntar la latencia de un dispositivo real no rompe, el búfer de E/S solo
+/// puede sumar, y «el por defecto» es el mismo dispositivo que su id.
 #[cfg(all(test, target_os = "macos"))]
 mod latency_tests {
     use super::coreaudio::hal;
 
     #[test]
-    fn a_device_declares_a_bounded_latency_and_extra_frames_add_up() {
+    fn asking_a_real_device_works_and_the_default_is_that_device() {
         for input in [false, true] {
             // Sin tarjeta (CI) no hay nada que preguntar.
             let Some(id) = hal::device_id("", input) else { continue };
@@ -5338,10 +5384,12 @@ mod latency_tests {
             if rate <= 0.0 {
                 continue;
             }
-            let declared = hal::latency_us(id, input, 0);
-            assert!((0..1_000_000).contains(&declared), "input={input}: {declared} us");
-            let with_buffer = hal::latency_us(id, input, rate as u32);
-            assert!((with_buffer - declared - 1_000_000).abs() <= 1, "one second of frames adds one second: {declared} -> {with_buffer}");
+            // Sin tope: una salida AirPlay declara segundos.
+            let declared = hal::latency_us(id, input, false);
+            assert!(declared >= 0, "input={input}: {declared} us");
+            assert!(hal::latency_us(id, input, true) >= declared, "the I/O buffer only adds");
+            assert_eq!(super::coreaudio::latency_us(super::DEFAULT_DEVICE, false, input), declared, "the default device is that device");
+            assert_eq!(super::coreaudio::latency_us(0, false, input), 0, "an unknown device declares nothing");
         }
     }
 }

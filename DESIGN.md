@@ -22363,12 +22363,20 @@ salida o de entrada. Se descartó ponerla en `Device`:
 
 En macOS es `kAudioDevicePropertyLatency` + `kAudioDevicePropertySafetyOffset` +
 `kAudioStreamPropertyLatency` del primer flujo, en la dirección del handle, convertido con la
-frecuencia del dispositivo. Para una salida lo refresca el alimentador cada vez que mira el
-dispositivo (50 ms); para una entrada se anota al abrir. Viaja por `__audio_open(h, 0, 0,
-"latency")`, como `queued`: sin builtin nuevo.
+frecuencia del dispositivo. El runtime no guarda el valor: guarda a quién preguntar (el
+dispositivo, o «el por defecto de ahora», y si se suma el búfer de E/S) y pregunta cuando el
+programa lo pide. Viaja por `__audio_open(h, 0, 0, "latency")`, como `queued`: sin builtin nuevo.
+
+**Lo que corrigió la revisión.** La primera versión guardaba el valor: el alimentador lo
+recalculaba cada 50 ms (siete consultas a la HAL en el hilo que alimenta el dispositivo) y una
+entrada lo anotaba al abrir, así que una entrada sin dispositivo elegido se quedaba con la
+latencia del micrófono anterior al cambiar el por defecto. También sumaba el búfer de E/S a la
+entrada de baja latencia, cuando el bloque en que llega la captura ya lo cuenta quien lee, y
+usaba el tamaño del búfer de cuando se abrió, que otro flujo puede bajar después.
 
 **Límites.** Solo macOS; iOS, Linux, Android y Windows devuelven 0 (en ALSA `snd_pcm_delay` ya
 va dentro de `queued_ms`; WASAPI tiene `GetStreamLatency` y AAudio las marcas de tiempo, sin
-hacer). Es lo que el dispositivo DECLARA: no se ha medido acústicamente contra los 75 ms del
+hacer). De un dispositivo con varios flujos en una dirección se toma la latencia del primero. Es lo
+que el dispositivo DECLARA: no se ha medido acústicamente contra los 75 ms del
 hallazgo, y un enlace Bluetooth o un conversor externo pueden tardar más de lo que dicen. En
 milisegundos enteros, como el resto de `std/audio`.

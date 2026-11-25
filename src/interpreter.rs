@@ -2936,10 +2936,8 @@ impl<'a> Interpreter<'a> {
                     Value::Str(s) => s.clone(),
                     _ => unreachable!("the checker guarantees [string]"),
                 }).collect();
-                let arr = match crate::builtins::sqlite_exec_opt(*h, sql, &params, nulls) {
-                    Ok(n) => vec![Value::Str("ok".to_string()), Value::Str(n.to_string())],
-                    Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
-                };
+                let arr: Vec<Value> =
+                    crate::builtins::sqlite_exec_opt_tagged(*h, sql, &params, nulls).into_iter().map(Value::Str).collect();
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             "__sqlite_exec" | "__sqlite_query" | "__sqlite_query_nulls" => {
@@ -2950,23 +2948,13 @@ impl<'a> Interpreter<'a> {
                     Value::Str(s) => s.clone(),
                     _ => unreachable!("the checker guarantees [string]"),
                 }).collect();
-                let arr = if name == "__sqlite_exec" {
-                    match crate::builtins::sqlite_exec(*h, sql, &params) {
-                        Ok(n) => vec![Value::Str("ok".to_string()), Value::Str(n.to_string())],
-                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
-                    }
-                } else if name == "__sqlite_query_nulls" {
-                    crate::builtins::sqlite_query_nulls_tagged(*h, sql, &params).into_iter().map(Value::Str).collect()
-                } else {
-                    match crate::builtins::sqlite_query(*h, sql, &params) {
-                        Ok((ncols, cells)) => {
-                            let mut v = vec![Value::Str("ok".to_string()), Value::Str(ncols.to_string())];
-                            v.extend(cells.into_iter().map(Value::Str));
-                            v
-                        }
-                        Err(e) => vec![Value::Str("err".to_string()), Value::Str(e)],
-                    }
+                // La respuesta etiquetada llega hecha (la compone el runtime para todos los motores).
+                let fields = match name {
+                    "__sqlite_exec" => crate::builtins::sqlite_exec_tagged(*h, sql, &params),
+                    "__sqlite_query_nulls" => crate::builtins::sqlite_query_nulls_tagged(*h, sql, &params),
+                    _ => crate::builtins::sqlite_query_tagged(*h, sql, &params),
                 };
+                let arr: Vec<Value> = fields.into_iter().map(Value::Str).collect();
                 Value::Array(Rc::new(RefCell::new(arr)))
             }
             "__tcp_connect" => {

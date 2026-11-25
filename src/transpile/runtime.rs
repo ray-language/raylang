@@ -1996,31 +1996,30 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     if t.needs_rt_sqlite {
         out.push_str(concat!(
             "fn __ray_sqlite_tag(v: Vec<Rc<str>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> { Rc::new(std::cell::RefCell::new(v)) }\n",
-            "fn __ray_sqlite_err(msg: String) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> { __ray_sqlite_tag(vec![Rc::<str>::from(\"err\"), Rc::<str>::from(msg)]) }\n",
+            "fn __ray_sqlite_err(msg: String) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> { __ray_sqlite_fields(ray_runtime::sqlite::tagged_err(msg)) }\n",
+            // La respuesta etiquetada de cada primitivo la compone `ray_runtime::sqlite::Conn` (la
+            // misma que usa la VM): aquí solo se envuelve cada campo.
+            "fn __ray_sqlite_fields(v: Vec<String>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> { __ray_sqlite_tag(v.into_iter().map(Rc::<str>::from).collect()) }\n",
             "fn __ray_sqlite_open(path: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    match ray_runtime::sqlite::open(path) { Ok(c) => { let id = __ray_reg_insert(__RayHandle::Sqlite(c)); __ray_sqlite_tag(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(id.to_string())]) } Err(e) => __ray_sqlite_err(e) } }\n",
             // Colecta los parámetros [string] a Vec<String> para la firma de ray_runtime::sqlite.
             "fn __ray_sqlite_params(params: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Vec<String> { params.borrow().iter().map(|s| s.to_string()).collect() }\n",
             "fn __ray_sqlite_exec(h: i64, sql: &str, params: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let p = __ray_sqlite_params(params); let reg = __ray_reg().lock().unwrap();\n",
-            "    let r = match reg.open.get(&h) { Some(__RayHandle::Sqlite(c)) => c.exec(sql, &p), Some(_) => Err(\"the handle is not a SQLite connection\".to_string()), None => Err(\"invalid or already closed handle\".to_string()) };\n",
-            "    match r { Ok(n) => __ray_sqlite_tag(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(n.to_string())]), Err(e) => __ray_sqlite_err(e) } }\n",
+            "    match reg.open.get(&h) { Some(__RayHandle::Sqlite(c)) => __ray_sqlite_fields(c.exec_tagged(sql, &p)), Some(_) => __ray_sqlite_err(\"the handle is not a SQLite connection\".to_string()), None => __ray_sqlite_err(\"invalid or already closed handle\".to_string()) } }\n",
             // rayreq #248: exec con parámetros NULL (máscara 'n'/'v' por parámetro).
             "fn __ray_sqlite_exec_opt(h: i64, sql: &str, params: &Rc<std::cell::RefCell<Vec<Rc<str>>>>, nulls: &str) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let p = __ray_sqlite_params(params); if nulls.len() != p.len() { return __ray_sqlite_err(\"sqlite: the NULL mask does not match the parameters\".to_string()); }\n",
             "    let opt: Vec<Option<String>> = p.into_iter().zip(nulls.bytes()).map(|(v, m)| if m == b'n' { None } else { Some(v) }).collect();\n",
             "    let reg = __ray_reg().lock().unwrap();\n",
-            "    let r = match reg.open.get(&h) { Some(__RayHandle::Sqlite(c)) => c.exec_opt(sql, &opt), Some(_) => Err(\"the handle is not a SQLite connection\".to_string()), None => Err(\"invalid or already closed handle\".to_string()) };\n",
-            "    match r { Ok(n) => __ray_sqlite_tag(vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(n.to_string())]), Err(e) => __ray_sqlite_err(e) } }\n",
+            "    match reg.open.get(&h) { Some(__RayHandle::Sqlite(c)) => __ray_sqlite_fields(c.exec_opt_tagged(sql, &opt)), Some(_) => __ray_sqlite_err(\"the handle is not a SQLite connection\".to_string()), None => __ray_sqlite_err(\"invalid or already closed handle\".to_string()) } }\n",
             // M347 (rayauth R6): la variante con máscara de NULL ('n'/'v' por celda), misma etiqueta que la VM.
             "fn __ray_sqlite_query_nulls(h: i64, sql: &str, params: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let p = __ray_sqlite_params(params); let reg = __ray_reg().lock().unwrap();\n",
-            "    let r = match reg.open.get(&h) { Some(__RayHandle::Sqlite(c)) => c.query_nulls(sql, &p), Some(_) => Err(\"the handle is not a SQLite connection\".to_string()), None => Err(\"invalid or already closed handle\".to_string()) };\n",
-            "    match r { Ok((ncols, cells)) => { let mask: String = cells.iter().map(|c| if c.is_none() { 'n' } else { 'v' }).collect(); let mut v = vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(ncols.to_string()), Rc::<str>::from(mask)]; for cell in cells { v.push(Rc::<str>::from(cell.unwrap_or_default())); } __ray_sqlite_tag(v) } Err(e) => __ray_sqlite_err(e) } }\n",
+            "    match reg.open.get(&h) { Some(__RayHandle::Sqlite(c)) => __ray_sqlite_fields(c.query_nulls_tagged(sql, &p)), Some(_) => __ray_sqlite_err(\"the handle is not a SQLite connection\".to_string()), None => __ray_sqlite_err(\"invalid or already closed handle\".to_string()) } }\n",
             "fn __ray_sqlite_query(h: i64, sql: &str, params: &Rc<std::cell::RefCell<Vec<Rc<str>>>>) -> Rc<std::cell::RefCell<Vec<Rc<str>>>> {\n",
             "    let p = __ray_sqlite_params(params); let reg = __ray_reg().lock().unwrap();\n",
-            "    let r = match reg.open.get(&h) { Some(__RayHandle::Sqlite(c)) => c.query(sql, &p), Some(_) => Err(\"the handle is not a SQLite connection\".to_string()), None => Err(\"invalid or already closed handle\".to_string()) };\n",
-            "    match r { Ok((ncols, cells)) => { let mut v = vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(ncols.to_string())]; for cell in cells { v.push(Rc::<str>::from(cell)); } __ray_sqlite_tag(v) } Err(e) => __ray_sqlite_err(e) } }\n",
+            "    match reg.open.get(&h) { Some(__RayHandle::Sqlite(c)) => __ray_sqlite_fields(c.query_tagged(sql, &p)), Some(_) => __ray_sqlite_err(\"the handle is not a SQLite connection\".to_string()), None => __ray_sqlite_err(\"invalid or already closed handle\".to_string()) } }\n",
         ));
     }
     // Helper de procesos del SO (M100, IDEAS §53.8), solo si el programa usa `__run`. Llama al MISMO

@@ -22251,3 +22251,93 @@ del cambio, 138 ms después (medianas de seis pasadas intercaladas). El cambio d
 **Lección.** Una regla de «unos 50 µs no queman un núcleo» es verdad por worker y falsa por nueve.
 Y el primer arreglo que quita el síntoma (alargar el intervalo) cambiaba latencia por CPU sin
 decirlo: hubo que medir el caso contrario para verlo.
+
+## 483. `db/sqlite`: la espera del candado, con diseño (rayhotel #491, nov 2026)
+
+§478 dejó el fallo abierto y el nudo señalado: aparcar a mitad de una llamada sin que la llamada
+deje de ser atómica respecto a su conexión. Esta es la segunda vez, con el diseño aprobado antes
+de escribir y una condición del usuario: solo entra si la medición sale mejor.
+
+**Las piezas.**
+
+1. *El runtime no espera nunca* (modo aparcado, que pide el paquete al conectar con `PRAGMA
+   ray_busy_wait = park`; sin pedirlo, la conexión espera dentro de SQLite como siempre — un `db`
+   ≤ 0.10 no nota el runtime nuevo, y `db` 0.11 sobre un runtime anterior manda un PRAGMA que
+   SQLite ignora). Un busy handler propio no espera y anota que SQLite preguntó; si no preguntó,
+   es un interbloqueo: sale en el acto con el texto de siempre, `database is locked` (un texto
+   nuevo rompería a quien compara el mensaje para reintentar).
+2. *El primitivo contesta con etiqueta propia*: `["busy", C, N, prefijo]` — C = el carácter donde
+   empieza la sentencia que encontró el candado (0 = no se aplicó nada), N = filas ya afectadas.
+   No es un texto de error que haya que interpretar ni que pueda llegar al usuario. Dentro del
+   runtime es un tipo (`Fail`), y la respuesta etiquetada de los cuatro primitivos la compone
+   `ray_runtime::sqlite::Conn` (`exec_tagged`…) para la VM, el intérprete y el binario nativo:
+   los motores solo envuelven cada campo. La primera versión lo pasaba como un texto marcado
+   que cada motor debía reconocer, y la revisión encontró el motor que no lo hacía (`--interp`).
+3. *Quien llama lleva el script*: `db/sqlite` aparca la fibra y repite con el resto del texto. La
+   conexión no recuerda por dónde iba.
+4. *La reserva* — lo que faltaba en §478. En el mismo instante en que devuelve `busy` (con el
+   registro de handles aún tomado: no hay hueco), el runtime reserva la conexión para esa
+   llamada y le da un prefijo, un comentario SQL `/*ray-turn:N*/`, con el que se identifica al
+   repetir (la ficha N es aleatoria: quien no recibió ese `busy` no la acierta). Cualquier otra
+   llamada sobre esa conexión recibe `["turn"]` y espera aparcada, hasta su propio plazo. La
+   reserva se suelta cuando la llamada termina, cuando el paquete la suelta al vencer su plazo, o
+   cuando caduca: un arriendo fijo de 2 s que el dueño renueva en cada intento (reintenta cada
+   50 ms como mucho). No depende del plazo de la conexión — que puede ser de días —, así que una
+   fibra cancelada mientras esperaba deja la conexión cerrada 2 s, no para siempre. Fijar el
+   plazo (`PRAGMA busy_timeout = N`) entra aunque haya reserva: es configuración de la conexión.
+
+**Por qué la reserva está en el runtime y no en el paquete.** La primera versión de este arco la
+puso en el paquete: un canal de capacidad 1 dentro de `Conn`, que cada llamada tomaba y soltaba.
+Funcionaba, y costaba: dos operaciones de canal por llamada, hubiera candado o no.
+
+| 30 000 llamadas, una conexión, sin candado | `db` 0.10.2 | turno por canal | reserva en el runtime |
+|---|---:|---:|---:|
+| VM, `INSERT` en una transacción | 37 ms | 56 ms | 38 ms |
+| VM, `SELECT` por clave | 72 ms | 94 ms | 73 ms |
+| Nativo, `INSERT` | 22 ms | 23 ms | 22 ms |
+| Nativo, `SELECT` | 50 ms | 52 ms | 49 ms |
+
+La reserva solo existe mientras alguien espera; el camino de siempre paga mirar que no la hay.
+Otras tres cosas bajaron el coste por llamada: el handler se instala una vez y no en cada
+llamada; el thread-local del aviso solo se toca al ver un BUSY; y el cierre de la espera vive en
+funciones aparte — en la VM, una función que contiene un cierre paga por sus variables
+capturadas en cada llamada, también cuando no espera (eran 5 ms de los 30 000 `SELECT`).
+
+**Con candado** (20 escritores, cada uno con su conexión, 10 transacciones `BEGIN IMMEDIATE;
+INSERT; COMMIT`):
+
+| | `db` 0.10.2 | ahora |
+|---|---|---|
+| VM, mismo hilo | 843 s, 156 de 200 fallan | 0,3 s, 0 fallan |
+| VM, entre workers | 919 s, 170 de 200 fallan | 0,15–0,4 s, 0 fallan |
+| Nativo | minutos (no medido entero) | 21–40 ms, 0 fallan |
+
+**Gotcha de medir.** El escenario de una conexión compartida por 4 fibras, sobre disco, daba de
+70 ms a 1 s en los dos lados: cada inserción en autocommit es un `fsync`. En memoria da 147 ms
+antes y 148 después. Y medido DETRÁS de los escenarios de 20 escritores salía un 12 % peor que
+solo — la base no corría esos escenarios (tardan 14 minutos), así que la comparación era de
+programas distintos.
+
+**Lo que corrigió la revisión.** Además del intérprete: el prefijo de una reserva que ya caducó
+se contaba como parte del SQL y el script se reanudaba unos caracteres más allá (ahora el prefijo
+se quita siempre antes de medir); una llamada que esperaba turno no respetaba el plazo de la
+conexión, ni siquiera el 0; `sqlite.busy_timeout` se perdía en silencio si la conexión estaba
+reservada; y llevar la cuenta del script copiaba el texto de cada sentencia también cuando solo
+había una.
+
+**Límites que quedan.** Una transacción repartida en varias llamadas sobre una conexión
+compartida no está protegida entre llamada y llamada (como siempre: una conexión por
+transacción). Si vence el plazo a mitad de un script que corrió un `BEGIN`, esa transacción sigue
+abierta (como con `sqlite3_exec`). Un `PRAGMA "busy_timeout" = 0` con el nombre entre comillas
+no pone el plazo a 0 (los valores distintos de 0 se adoptan se escriba como se escriba). Si el
+hilo se atasca más de 2 s entre dos intentos, la reserva caduca y otra fibra que comparta la
+conexión puede entrar antes de que el script termine. Y una llamada que espera es ahora un punto
+de cancelación (antes no cedía): cancelada a mitad, lo que ya corrió queda corrido —un `BEGIN`
+sigue abierto— y esa conexión hay que cerrarla.
+
+**Segunda tanda de la revisión, sin graves.** Lo que cambió: el arriendo corto y la ficha
+aleatoria de arriba; el aviso «SQLite preguntó» se apaga al entrar en cada llamada (un
+`wal_checkpoint` con un lector activo llama al handler y devuelve una fila, no un error: el aviso
+quedaba encendido para la llamada siguiente); y el test corre la VM y el nativo en serie y
+compara órdenes, no milisegundos.
+

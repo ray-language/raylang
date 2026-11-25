@@ -615,7 +615,6 @@ dependencies = [
  "mimalloc",
  "qrcode",
  "ray-runtime",
- "rusqlite",
  "rustls",
  "rustls-pki-types",
  "webpki-roots 0.26.11",

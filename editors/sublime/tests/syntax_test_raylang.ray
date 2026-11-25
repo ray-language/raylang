@@ -33,6 +33,14 @@ enum Shape {
 //  ^^^^ support.type.raylang
 }
 
+type handler = fn(int) -> int;
+//<- storage.type.raylang
+//   ^^^^^^^ entity.name.type.raylang
+
+type Pair<T> = (T, T);
+//<- storage.type.raylang
+//   ^^^^ entity.name.type.raylang
+
 trait Show {
 //<- storage.type.raylang
 //    ^^^^ entity.name.type.raylang

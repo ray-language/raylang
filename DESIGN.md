@@ -22097,6 +22097,10 @@ auto-alojado no conoce `capsule_surfaces`.
 de SQLite, con el registro de handles tomado y el hilo retenido: el que TIENE el candado, si es
 otra fibra del proceso, no puede avanzar para soltarlo. 20 escrituras simultáneas, más de 20 s.
 
+**Lo que no se ve.** rusqlite instala su propio busy handler de 5 s en CADA conexión que abre:
+la espera dentro de SQLite existe aunque nadie mande un PRAGMA. El primer intento no cambió nada
+por eso.
+
 **Lo que se intentó.** Que la espera fuera de la fibra: el runtime no espera, devuelve `database
 is locked`, y `db/sqlite` aparca la fibra y repite la llamada. Se fusionó (#690) y la revisión
 previa a la release lo devolvió cinco veces, siempre por lo mismo — qué hacer con un SCRIPT de

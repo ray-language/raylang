@@ -4956,3 +4956,23 @@ exportar `Account` compila; el llamante recibe un valor cuyo tipo no puede nombr
 el error sugiera `pub from`. Propuesta: (1) aviso del checker «`pub fn raw` shows
 `core.Account`, which the capsule does not export»; (2) el error de construir o casar por un
 alias de fachada dice «re-export it with `pub from …`».
+
+## 133. `db/sqlite`: que esperar un candado no retenga el hilo (rayhotel #491) — ABIERTO, retirado de 1.27.113
+
+Clasificación: **runtime + paquete `db`, sin cambio de lenguaje**. El fallo sigue: con varios
+escritores a la vez, el que espera el candado lo hace dentro de SQLite con el registro de handles
+tomado, y el que lo tiene —si es otra fibra del proceso— no puede soltarlo (20 escrituras
+simultáneas, más de 20 s).
+
+Se intentó en el arco de 1.27.113 y se retiró tras cinco tandas de revisión; DESIGN §478 tiene las
+cinco variantes, por qué falló cada una y los hechos que salieron por el camino. Los tests de
+aquel intento (20 escritores, script a mitad, interbloqueo no esperado) están en la historia de
+git: `tests/sqlite_busy_cli.rs` en el commit 1223c71e.
+
+**Lo que pide el diseño, antes de escribir código:** un candado POR CONEXIÓN que una fibra pueda
+esperar aparcada (hoy el único es el del registro entero, y es de hilo), para que una llamada que
+aparca a mitad siga siendo atómica respecto a su conexión. Alternativa menor: arreglar solo la
+llamada de una sentencia y documentar que un script espera como siempre.
+
+**Mientras tanto, en una app:** `PRAGMA busy_timeout = 0` y reintentar en la app con
+`time.sleep` entre intentos, que sí aparca la fibra.

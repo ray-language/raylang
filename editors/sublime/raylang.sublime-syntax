@@ -139,7 +139,7 @@ contexts:
         2: entity.name.type.raylang
     # `type Alias = …` / `type Alias<T> = …`: `type` es contextual; el `=` que sigue lo distingue de
     # una variable llamada `type`, y el alias puede ir en minúscula (igual que en VS Code).
-    - match: '\b(type)\s+([A-Za-z_][A-Za-z0-9_]*)(?=\s*(?:<[^=]*>)?\s*=)'
+    - match: '\b(type)\s+({{ident}})(?=\s*(?:<[^=]*>)?\s*=)'
       captures:
         1: storage.type.raylang
         2: entity.name.type.raylang

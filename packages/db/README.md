@@ -221,11 +221,13 @@ fn main() -> int {
   plazo (20 escrituras a la vez, más de 20 s). El `PRAGMA busy_timeout` —solo o dentro de un
   script, por `exec` o por `query`— fija el plazo de la conexión. Un script que encuentra el
   candado a mitad espera igual y sigue desde la sentencia que lo encontró (las anteriores no se
-  repiten); si vence el plazo, el error lo dice y una transacción que el script abrió sigue
-  abierta. Lo único que NO se espera es lo que esperar no arregla: una
+  repiten); si vence el plazo, el error lo dice (un `BEGIN` que el script corrió sigue abierto).
+  Mientras una llamada espera, la conexión es suya: otra fibra que la comparta espera a que
+  termine. Lo único que NO se espera es lo que esperar no arregla: una
   transacción que ya leyó y quiere escribir mientras otra tiene el candado de escritura da
   `database is locked (not waited for: …)`; se deshace y se reintenta, o se empieza con `BEGIN
-  IMMEDIATE`. Pide raylang 1.27.113.
+  IMMEDIATE`. La espera nueva la da raylang 1.27.114; con una toolchain anterior, `db` 0.11 espera
+  como siempre (dentro de SQLite).
 - `disconnect` libera el handle; usar la conexión después falla **limpio** (error como valor, no
   crash: el ciclo prepare→step→finalize ocurre entero dentro del host, un statement nunca escapa).
 - **`last_insert_rowid(c)`** devuelve el rowid del último INSERT (misma conexión). Para el modo

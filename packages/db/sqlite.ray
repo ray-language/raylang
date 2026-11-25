@@ -29,7 +29,8 @@ import std/time;
 /// the connection's busy timeout — 5 s by default; change it with `busy_timeout(c, ms)` or the
 /// usual `PRAGMA busy_timeout = 2000` (through `exec` or `query`, on its own or inside a script),
 /// 0 = fail at once — and then fails with `database is locked`. Between attempts the fiber is
-/// parked, so the fiber that holds the lock keeps running (db 0.11, raylang 1.27.114).
+/// parked, so the fiber that holds the lock keeps running (db 0.11 on raylang 1.27.114; on an
+/// older toolchain the wait is SQLite's own, as before, and holds the thread).
 /// - A multi-statement script that finds the lock halfway waits the same way and then goes on
 ///   from the statement that found it; the ones before it are not run again. If the timeout
 ///   passes, the error says that part of the script had run (a `BEGIN` it ran is still open).

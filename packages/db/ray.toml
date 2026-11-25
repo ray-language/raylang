@@ -2,7 +2,7 @@
 [package]
 name = "db"
 version = "0.11.0"
-raylang = "1.27.114"
+raylang = "1.27.110"
 license = "Apache-2.0"
 entry = "postgres.ray"
 

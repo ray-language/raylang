@@ -6,6 +6,24 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`db/sqlite` — esperar un candado ya no deja parado el servidor** (rayhotel #491; `db` 0.11.0
+  sobre este runtime). Con varios escritores a la vez, el que esperaba el candado lo hacía
+  dentro de SQLite y dejaba parado al que lo tenía. Medido con 20 escritores, cada uno con su
+  conexión y 10 transacciones `BEGIN IMMEDIATE; INSERT; COMMIT`: antes 14 minutos y 156 de las
+  200 fallaban con `database is locked`; ahora 0,3 s en la VM y 21 ms en el binario nativo, sin
+  fallos. Una llamada que no encuentra candado cuesta lo mismo que antes (30 000 inserciones:
+  37 → 38 ms en la VM, 22 → 22 ms en nativo). Lo que conviene saber:
+  - El plazo es el de siempre: 5 s por defecto, `PRAGMA busy_timeout = N` (por `exec` o `query`,
+    solo o dentro de un script) o `sqlite.busy_timeout(c, ms)`.
+  - Un script de varias sentencias que encuentra el candado a mitad sigue desde la sentencia que
+    lo encontró; las anteriores no se repiten.
+  - Mientras una llamada espera, su conexión es suya: otra fibra que la comparta espera.
+  - Una transacción que ya leyó y quiere escribir mientras otra conexión tiene el candado de
+    escritura NO espera (SQLite lo ve como interbloqueo): `database is locked (not waited for:
+    …)`. Hay que deshacerla y reintentar, o empezarla con `BEGIN IMMEDIATE`.
+  - Un proyecto con `db` ≤ 0.10 se comporta como antes, y `db` 0.11 sobre una toolchain anterior
+    también.
+
 - **VM — el cambio de fibra recupera lo que perdió en 1.27.112**: pasar mensajes entre fibras
   (`send`/`recv`, `ask` a un actor) era un 5 % más lento desde los callbacks de la FFI. Medido
   (ping-pong de 100 000 idas y vueltas): 109 ms en 1.27.111, 118 ms en 1.27.113, 114 ms ahora; lo

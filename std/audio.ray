@@ -132,12 +132,43 @@ pub fn duck_others(on: bool) -> Result<int, string> {
 /// on macOS and iOS also counts the silence the backend plays while the queue is empty — it
 /// follows the program's own samples: the sample sounding right now is `written − queued`,
 /// whatever `flush` calls or gaps happened before. Granularity: one device buffer.
+///
+/// "Sounded" means handed to the device. It does NOT include the latency the device itself
+/// declares (its converter, its DSP, its safety margin): ask `device_latency_ms` for that one.
+/// The sample leaving the speaker right now is `written − queued − device_latency`. On Linux
+/// (ALSA) what the driver reports is already inside `queued_ms`.
 pub fn queued_ms(h: int) -> Result<int, string> {
     let r = __audio_open(h, 0, 0, "queued");
     if (r[0] == "ok") {
         match (parse_int(r[1])) {
             Option.Some(ms) => Result.Ok(ms),
             Option.None => Result.Err("invalid position"),
+        }
+    } else {
+        Result.Err(r[1])
+    }
+}
+
+/// The latency the DEVICE of `h` declares, in ms (ray-daw #475). `h` is an open output or an
+/// open input. For an output it is the time from the device taking a sample to that sample
+/// leaving the speaker; for an input, from the sound reaching the microphone to the device
+/// delivering it. Neither `queued_ms` nor `read` count it, so a recorder aligns a take with
+/// what was playing by subtracting both: output latency + input latency.
+///
+/// macOS: the device latency, its safety offset and the latency of its stream, as CoreAudio
+/// reports them (`kAudioDevicePropertyLatency`, `kAudioDevicePropertySafetyOffset`,
+/// `kAudioStreamPropertyLatency`), plus one I/O buffer of the device for a stream opened with
+/// a hint below 20 ms. An output opened without choosing a device follows the default device,
+/// and so does this value. Other systems and the test sink/source: 0 — the system does not
+/// declare one, or (ALSA) it is already in `queued_ms`. It is what the device DECLARES: an
+/// external converter or a Bluetooth link may add more than it says, so keep a manual offset
+/// for the user on top.
+pub fn device_latency_ms(h: int) -> Result<int, string> {
+    let r = __audio_open(h, 0, 0, "latency");
+    if (r[0] == "ok") {
+        match (parse_int(r[1])) {
+            Option.Some(ms) => Result.Ok(ms),
+            Option.None => Result.Err("invalid latency"),
         }
     } else {
         Result.Err(r[1])
@@ -304,6 +335,12 @@ pub fn open_input(
 /// `open_input`. Parks the fiber until there is data, so a recording loop needs no clock. An
 /// empty result means the input was closed. Audio that is not read in time (about one second)
 /// is dropped, never delayed.
+///
+/// How old a sample is when `read` returns it: the latency the input device declares
+/// (`device_latency_ms(h)`), plus the block it arrived in (about a quarter of the `latency_ms`
+/// of `open_input`), plus how long the program took to call `read`. `recorded_ms` is the count
+/// of frames delivered so far: the last frame of a block was captured `device_latency_ms(h)`
+/// before `recorded_ms` reached it.
 pub fn read(h: int) -> Result<bytes, string> {
     let r = __audio_read(h);
     if (r[0] == b"ok") {

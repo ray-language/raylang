@@ -404,3 +404,48 @@ fn queued_ms_follows_what_was_written_and_not_yet_played() {
         assert_eq!(out, WANT, "nativo ≡ VM");
     }
 }
+
+/// ray-daw #475: `device_latency_ms` acepta una salida o una entrada, da 0 en el sumidero y la
+/// fuente de pruebas (no hay dispositivo que declare nada) y es `Err` sobre lo que no es audio.
+const DEVICE_LATENCY_PROG: &str = r#"import std/audio;
+
+fn main() {
+    let out = audio.open_latency(8000, 1, 200).unwrap();
+    print("output: " + to_string(audio.device_latency_ms(out).unwrap_or(-1)));
+    let low = audio.open_latency(8000, 1, 5).unwrap();
+    print("low latency output: " + to_string(audio.device_latency_ms(low).unwrap_or(-1)));
+    let input = audio.open_input(8000, 1, "s16le", 20).unwrap();
+    print("input: " + to_string(audio.device_latency_ms(input).unwrap_or(-1)));
+    let _ = close(input);
+    let _ = close(low);
+    let _ = close(out);
+    print("closed: " + to_string(audio.device_latency_ms(out).is_err()));
+    print("not audio: " + to_string(audio.device_latency_ms(987654).is_err()));
+}
+"#;
+
+#[test]
+fn device_latency_is_zero_without_a_device_and_err_on_other_handles() {
+    const WANT: &str = "output: 0\nlow latency output: 0\ninput: 0\nclosed: true\nnot audio: true\n";
+    let base = tmp("device_latency");
+    std::fs::write(base.join("prog.ray"), DEVICE_LATENCY_PROG).unwrap();
+    for engine in ["--vm", "--interp"] {
+        let (out, code, _) = run_timed(
+            Command::new(env!("CARGO_BIN_EXE_ray")).args([engine, "prog.ray"]).env("RAY_AUDIO_SOURCE", "null").current_dir(&base),
+        );
+        assert_eq!(code, 0, "{engine}: exit 0\n{out}");
+        assert_eq!(out, WANT, "{engine}: exact output");
+    }
+    if Command::new("rustc").arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+        let bin = base.join(format!("prog_bin{}", std::env::consts::EXE_SUFFIX));
+        let st = Command::new(env!("CARGO_BIN_EXE_ray"))
+            .args(["build", "prog.ray", "--native", "-o", bin.to_str().unwrap()])
+            .current_dir(&base)
+            .output()
+            .expect("build nativo");
+        assert!(st.status.success(), "build --native ok\n{}", String::from_utf8_lossy(&st.stderr));
+        let (out, code, _) = run_timed(Command::new(&bin).env("RAY_AUDIO_SOURCE", "null"));
+        assert_eq!(code, 0, "nativo: exit 0\n{out}");
+        assert_eq!(out, WANT, "nativo ≡ VM");
+    }
+}

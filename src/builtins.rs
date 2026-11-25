@@ -1654,6 +1654,16 @@ pub fn audio_open(sample_rate: i64, channels: i64, latency_ms: i64, format: &str
         };
         return ray_runtime::audio::queued_ms(key).map(|ms| ms.to_string());
     }
+    // ray-daw #475: `latency` tampoco abre nada: `sample_rate` trae el handle de una salida o
+    // de una entrada y vuelve la latencia que declara su dispositivo, en ms.
+    if format == "latency" {
+        let (key, input) = match registry().lock().unwrap().open.get(&sample_rate) {
+            Some(OpenHandle::PipeW(f)) => (audio_key(f), false),
+            Some(OpenHandle::Pipe(f)) => (audio_key(f), true),
+            _ => return Err("audio: not an open audio output or input".to_string()),
+        };
+        return ray_runtime::audio::device_latency_ms(key, input).map(|ms| ms.to_string());
+    }
     // M463 (ray-daw #422): `input:<formato>` abre una ENTRADA. Su handle es el extremo de
     // lectura del pipe (`Pipe`, como el stdout de un hijo): `__audio_read` aparca la fibra hasta
     // que el dispositivo entregue datos, y `close(h)` para la captura.

@@ -594,7 +594,10 @@ other systems raise it to their floor);
 `audio.flush(h)` (seek/pause without overlap) cuts with the anti-click ramp ONLY on CoreAudio
 (macOS/iOS; `platform()` returns `"ios"`/`"android"` on the phone) — ALSA/AAudio/WASAPI drop
 without a ramp, so write your own fade before `flush` there; `RAY_AUDIO_TRACE=1` prints `flushes N`
-and `underruns N` (times the stream ran dry before the end); `audio.queued_ms(h)` = what you wrote
+and `underruns N` (times the stream ran dry before the end); `audio.device_latency_ms(h)` = the
+latency the device of an open output or input declares (macOS; 0 elsewhere) — not counted by
+`queued_ms` nor `read`, subtract both to align a recording with what was playing;
+`audio.queued_ms(h)` = what you wrote
 and has NOT sounded yet (the sample sounding now is written − queued, also after a flush or a gap —
 `played_ms` is the device clock and on macOS/iOS also counts filler silence; under
 RAY_AUDIO_SINK=null it is a real-time clock that advances at wall-clock pace while audio is being

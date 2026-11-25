@@ -1710,6 +1710,14 @@ escrito, que es lo que hace falta para pintar el compás exacto. `audio.queued_m
 cuánto de lo escrito aún no ha sonado: la muestra que suena es «escritas − queued», también
 después de un `flush` o de un hueco.
 
+«Sonado» quiere decir entregado al dispositivo. Entre el dispositivo y el altavoz queda la
+latencia del propio dispositivo (su conversor, su procesado), y lo mismo entre el micrófono y lo
+que entrega `audio.read`. `audio.device_latency_ms(h)` dice cuánta declara el dispositivo de una
+salida o de una entrada abierta; un programa que graba sobre lo que suena alinea la toma
+restando las dos. Hoy la da macOS; en los demás sistemas devuelve 0. Es lo que el dispositivo
+dice de sí mismo —unos auriculares Bluetooth o un conversor externo pueden tardar más—, así que
+conviene dejarle además al usuario un ajuste manual.
+
 En el teléfono, una alarma o una indicación hablada suele sonar encima de la música de otra app.
 `audio.duck_others(true)` le baja el volumen a esa música mientras suena lo tuyo y
 `audio.duck_others(false)` se lo devuelve; en el escritorio no hace nada.

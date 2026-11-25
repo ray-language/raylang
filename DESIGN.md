@@ -22341,3 +22341,34 @@ aleatoria de arriba; el aviso «SQLite preguntó» se apaga al entrar en cada ll
 quedaba encendido para la llamada siguiente); y el test corre la VM y el nativo en serie y
 compara órdenes, no milisegundos.
 
+## 484. `std/audio`: la latencia que declara el dispositivo (ray-daw #475, nov 2026)
+
+**El hueco.** RayDaw alinea una toma con lo que suena: la muestra que suena es `escritas −
+queued_ms`, y la compara con los frames de `read`. Lo que queda sin compensar lo mide el usuario
+con el metrónomo (75 ms en un MacBook Pro con bocinas y micrófono integrados). Ese ajuste vale
+para el dispositivo con el que se midió: se mide con bocinas y se graba con audífonos. La
+documentación tampoco decía si `queued_ms` y `read` ya contaban la latencia del dispositivo.
+
+**Qué cuentan.** No la cuentan. La posición de una salida sale de lo que el dispositivo ya
+pidió (`AudioQueueGetCurrentTime`, o los frames servidos al callback en baja latencia), y la
+captura se cuenta cuando el dispositivo la entrega. Lo que hay entre el dispositivo y el aire
+solo lo sabe el dispositivo.
+
+**Decisión.** `audio.device_latency_ms(h) -> Result<int, string>` sobre un handle abierto, de
+salida o de entrada. Se descartó ponerla en `Device`:
+- una salida sin dispositivo elegido sigue al por defecto, y el valor debe seguirla;
+- lo que hay que sumar depende de cómo se abrió el flujo (en baja latencia la salida da por
+  sonado lo que el dispositivo pidió un búfer de E/S antes, y ese búfer se suma);
+- añadir campos a `Device` rompe a quien lo construya.
+
+En macOS es `kAudioDevicePropertyLatency` + `kAudioDevicePropertySafetyOffset` +
+`kAudioStreamPropertyLatency` del primer flujo, en la dirección del handle, convertido con la
+frecuencia del dispositivo. Para una salida lo refresca el alimentador cada vez que mira el
+dispositivo (50 ms); para una entrada se anota al abrir. Viaja por `__audio_open(h, 0, 0,
+"latency")`, como `queued`: sin builtin nuevo.
+
+**Límites.** Solo macOS; iOS, Linux, Android y Windows devuelven 0 (en ALSA `snd_pcm_delay` ya
+va dentro de `queued_ms`; WASAPI tiene `GetStreamLatency` y AAudio las marcas de tiempo, sin
+hacer). Es lo que el dispositivo DECLARA: no se ha medido acústicamente contra los 75 ms del
+hallazgo, y un enlace Bluetooth o un conversor externo pueden tardar más de lo que dicen. En
+milisegundos enteros, como el resto de `std/audio`.

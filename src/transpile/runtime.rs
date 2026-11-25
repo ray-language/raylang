@@ -1100,6 +1100,18 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "            Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
             "        }));\n",
             "    }\n",
+            // ray-daw #475: `latency` — `rate` trae el handle de una salida o de una entrada.
+            "    if format == \"latency\" {\n",
+            "        let r = match (__ray_stdin_clone(rate), __ray_pipe_clone(rate)) {\n",
+            "            (Some(f), _) => ray_runtime::audio::device_latency_ms(__ray_audio_key(&*f), false),\n",
+            "            (None, Some(f)) => ray_runtime::audio::device_latency_ms(__ray_audio_key(&*f), true),\n",
+            "            (None, None) => Err(\"audio: not an open audio output or input\".to_string()),\n",
+            "        };\n",
+            "        return Rc::new(std::cell::RefCell::new(match r {\n",
+            "            Ok(ms) => vec![Rc::<str>::from(\"ok\"), Rc::<str>::from(ms.to_string().as_str())],\n",
+            "            Err(e) => vec![Rc::<str>::from(\"err\"), Rc::<str>::from(e.as_str())],\n",
+            "        }));\n",
+            "    }\n",
             // pepa #346: `duck:on` / `duck:off` — el volumen de lo que suena en otras apps.
             "    if let Some(state) = format.strip_prefix(\"duck:\") {\n",
             "        return Rc::new(std::cell::RefCell::new(match ray_runtime::audio::duck_others(state == \"on\") {\n",

@@ -276,9 +276,9 @@ spawn(fn() { send(ch, 42); });                   // spawn returns Task<T>
 //   I/O) and never resumes: its own try_call does NOT recover it, and there is no defer — keep
 //   what must be released (a transaction, a lock) in the code that owns the scope. A task that
 //   never waits runs to its end; the scope does not wait for cancelled tasks. Native binaries
-//   (1.27.117) do the same, with two limits: a task parked on a socket is cancelled when the
-//   I/O wakes it (data, timeout, close), not before, and a TLS read or a `--without fibers`
-//   build (blocking syscalls) is not a cancellation point.
+//   (1.27.117) do the same, with limits: a task parked on a socket is cancelled when the
+//   I/O wakes it (data, timeout, close), not before; a TLS read, a `--without fibers` build
+//   (blocking syscalls) and, on Windows, pipe/console/UI-event waits are not cancellation points.
 // Native scheduler model: a fiber is pinned to its worker for life (no migration); each worker
 //   polls its own kqueue/epoll (RAYLANG_REACTOR=local, the unix default; `shared` = one reactor
 //   thread for all, the Windows model), so parking on a socket never crosses threads; a blocking

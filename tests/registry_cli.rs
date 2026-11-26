@@ -214,6 +214,11 @@ fn ray_add_takes_several_packages_or_none() {
     assert_eq!(code, 64, "{err}");
     assert!(err.contains("unknown option '--dev'"), "{err}");
 
+    // `ray remove` va de uno en uno, y lo dice en vez de ignorar el resto.
+    let (_o, err, code) = ray_idx(&app, &index, &["remove", "util", "geo"]);
+    assert_eq!(code, 64, "{err}");
+    assert!(err.contains("takes one package at a time (unexpected 'geo')"), "{err}");
+
     // Los dos, cada uno con su requisito.
     let (out, err, code) = ray_idx(&app, &index, &["add", "util", "geo@1.2.0"]);
     assert_eq!(code, 0, "{err}");

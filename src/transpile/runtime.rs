@@ -287,10 +287,11 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     }
     // rayhotel #495: la cancelación no se recupera. En la VM una fibra cancelada no vuelve a
     // correr; aquí viaja como un fallo, y un `try_call` de la tarea cancelada lo relanza en vez
-    // de devolverlo como `Err` y dejarla seguir.
+    // de devolverlo como `Err` y dejarla seguir. Solo ESE fallo: una tarea ya marcada que aún
+    // no llegó a una espera sigue recuperando sus errores corrientes, como en la VM.
     out.push_str("    Rc::new(std::cell::RefCell::new(match r {\n");
     out.push_str("        Ok(()) => Vec::new(),\n");
-    out.push_str("        Err(e) if __ray_cancelled() => std::panic::resume_unwind(e),\n");
+    out.push_str("        Err(e) if __ray_cancelled() && e.downcast_ref::<__RayErr>().is_some_and(|r| r.0 == \"task cancelled (a sibling failed)\") => std::panic::resume_unwind(e),\n");
     out.push_str("        Err(e) => {\n");
     out.push_str("            let m = match e.downcast::<__RayErr>() {\n");
     out.push_str("                Ok(r) => r.0,\n");
@@ -748,8 +749,9 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         if t.needs_concurrency {
             // M319: `parked` = la lista de esperas en la que esta tarea está aparcada (compartida con
             // su __RayTask, para que `cancel_task` la despierte al cancelarla).
-            fields.push_str(" cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>, parked: Option<__RayParked>, scopes: Vec<Vec<std::boxed::Box<dyn __RayScopeChild>>>,");
-            init.push_str(" cancel: None, parked: None, scopes: Vec::new(),");
+            // `sleep_wl` = la lista en la que la tarea duerme (`__ray_sleep`), creada la primera vez.
+            fields.push_str(" cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>, parked: Option<__RayParked>, sleep_wl: Option<ray_runtime::fibers::WaitList>, scopes: Vec<Vec<std::boxed::Box<dyn __RayScopeChild>>>,");
+            init.push_str(" cancel: None, parked: None, sleep_wl: None, scopes: Vec::new(),");
         }
         if t.needs_net {
             fields.push_str(" socks: std::collections::HashMap<i64, std::sync::Arc<std::net::TcpStream>>,");
@@ -2472,7 +2474,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "        if __ray_cancelled() { __ray_rt_err(\"task cancelled (a sibling failed)\"); }\n",
                 "        return;\n",
                 "    } };\n",
-                "    let wl = ray_runtime::fibers::WaitList::new();\n",
+                "    let wl = __ray_ctx(|c| c.sleep_wl.get_or_insert_with(ray_runtime::fibers::WaitList::new).clone());\n",
                 "    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(ms as u64);\n",
                 "    *p.lock().unwrap() = Some(wl.clone());\n",
                 "    loop {\n",
@@ -2812,6 +2814,10 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // a las tareas que la fibra lanzara después.
             "struct __RayScopeGuard;\n",
             "impl Drop for __RayScopeGuard { fn drop(&mut self) { for c in __ray_scope_pop() { c.cancel_task(); } } }\n",
+            // Y durante la UNIÓN el marco ya salió de la pila: si a la tarea la cancelan mientras
+            // espera a sus hijas, el desenrollado las cancela (transitivo, SPEC §9).
+            "struct __RayScopeJoin(Vec<std::boxed::Box<dyn __RayScopeChild>>);\n",
+            "impl Drop for __RayScopeJoin { fn drop(&mut self) { if std::thread::panicking() { for c in &self.0 { c.cancel_task(); } } } }\n",
             "fn __ray_scope<R, F: FnOnce() -> R>(body: F) -> R { __ray_scope_impl(body, |_| false) }\n",
             "fn __ray_scope_res<T, E, F: FnOnce() -> Result<T, E>>(body: F) -> Result<T, E> { __ray_scope_impl(body, |r| r.is_err()) }\n",
             "fn __ray_scope_impl<R, F: FnOnce() -> R>(body: F, failed: fn(&R) -> bool) -> R {\n",
@@ -2824,17 +2830,18 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             out.push_str("    __SCOPES.with(|s| s.borrow_mut().push(Vec::new()));\n    let guard = __RayScopeGuard;\n    let r = body();\n    std::mem::forget(guard);\n    let frame = __SCOPES.with(|s| s.borrow_mut().pop().unwrap());\n");
         }
         out.push_str(concat!(
-            "    if failed(&r) { for c in &frame { c.kill_proc(); } }\n",
+            "    let frame = __RayScopeJoin(frame);\n",
+            "    if failed(&r) { for c in &frame.0 { c.kill_proc(); } }\n",
             "    loop {\n",
             "        let act = __RAY_ACT_GEN.load(std::sync::atomic::Ordering::SeqCst);\n",
-            "        if let Some(m) = frame.iter().find_map(|c| c.failed()) {\n",
-            "            for c in &frame { c.cancel_task(); }\n",
+            "        if let Some(m) = frame.0.iter().find_map(|c| c.failed()) {\n",
+            "            for c in &frame.0 { c.cancel_task(); }\n",
             "            __ray_rt_err(&m);\n",
             "        }\n",
-            "        if frame.iter().all(|c| c.done()) { break; }\n",
+            "        if frame.0.iter().all(|c| c.done()) { break; }\n",
             "        __ray_wait_activity(act);\n",
             "    }\n",
-            "    for c in &frame { c.consume(); }\n", // M98.1: las hijas no sobreviven al scope
+            "    for c in &frame.0 { c.consume(); }\n", // M98.1: las hijas no sobreviven al scope
             "    r\n}\n",
             // select (M12.4): espera a que algún canal de la lista esté LISTO para recibir (cola no vacía
             // ∨ cerrado) y devuelve el índice del PRIMERO listo (menor índice → determinista en el índice;

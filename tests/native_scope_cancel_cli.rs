@@ -2,7 +2,9 @@
 //! el cuerpo que fallaba dejaba el marco del scope en la pila (nadie cancelaba a las hijas), y
 //! `time.sleep` y las esperas de red no notaban la cancelación: la hija seguía escribiendo después
 //! de que quien llamó la diera por terminada. Un `try_call` de la hija tampoco recupera la
-//! cancelación. Los tiempos dejan 150 ms de margen entre el fallo y el paso siguiente de la hija.
+//! cancelación. Los tiempos dejan 200 ms de margen entre el fallo y el paso siguiente de la hija, y
+//! los dos programas van en UN test, uno tras otro: en paralelo, el `rustc` de uno le quitaba la
+//! CPU al reloj del otro.
 use std::process::Command;
 
 fn has_rustc() -> bool {
@@ -37,7 +39,12 @@ fn vm_and_native(name: &str, source: &str, threads: bool, want: &str) {
 }
 
 #[test]
-fn a_failing_scope_cancels_its_sleeping_children() {
+fn a_failing_scope_cancels_its_children() {
+    sleeping_children();
+    a_child_waiting_for_a_connection();
+}
+
+fn sleeping_children() {
     vm_and_native(
         "sleep",
         r#"import std/time;
@@ -45,7 +52,7 @@ fn a_failing_scope_cancels_its_sleeping_children() {
 fn work(tag: string) -> int {
     var i = 0;
     while (i < 3) {
-        time.sleep(300);
+        time.sleep(400);
         print("${tag} step ${i}");
         i = i + 1;
     }
@@ -62,7 +69,7 @@ fn guarded(tag: string) -> int {
 fn body_fails() -> int {
     scope(fn() -> int {
         let _a = spawn(fn() -> int { work("body") });
-        time.sleep(450);
+        time.sleep(600);
         panic("body failed")
     })
 }
@@ -70,7 +77,7 @@ fn body_fails() -> int {
 fn child_fails() -> int {
     scope(fn() -> int {
         let _a = spawn(fn() -> int { work("sibling") });
-        let _b = spawn(fn() -> int { time.sleep(450); panic("child failed") });
+        let _b = spawn(fn() -> int { time.sleep(600); panic("child failed") });
         0
     })
 }
@@ -78,33 +85,50 @@ fn child_fails() -> int {
 fn guarded_child() -> int {
     scope(fn() -> int {
         let _a = spawn(fn() -> int { guarded("guarded") });
-        time.sleep(450);
+        time.sleep(600);
         panic("guarded failed")
+    })
+}
+
+// Transitiva: la hija está esperando a SUS hijas en la salida de su scope cuando la cancelan.
+fn inner() -> int {
+    scope(fn() -> int {
+        let _w = spawn(fn() -> int { work("grand") });
+        0
+    })
+}
+
+fn transitive() -> int {
+    scope(fn() -> int {
+        let _a = spawn(fn() -> int { inner() });
+        time.sleep(600);
+        panic("outer failed")
     })
 }
 
 fn main() {
     print(try_call(fn() -> int { body_fails() }));
-    time.sleep(700);
+    time.sleep(900);
     print(try_call(fn() -> int { child_fails() }));
-    time.sleep(700);
+    time.sleep(900);
     print(try_call(fn() -> int { guarded_child() }));
-    time.sleep(700);
+    time.sleep(900);
+    print(try_call(fn() -> int { transitive() }));
+    time.sleep(900);
     // Tras un scope fallido, el marco no queda en la pila: una tarea suelta se une sin más.
     let t = spawn(fn() -> int { 7 });
     print(join(t));
 }
 "#,
         true,
-        "body step 0\nResult.Err(body failed)\nsibling step 0\nResult.Err(child failed)\nguarded step 0\nResult.Err(guarded failed)\n7\n",
+        "body step 0\nResult.Err(body failed)\nsibling step 0\nResult.Err(child failed)\nguarded step 0\nResult.Err(guarded failed)\ngrand step 0\nResult.Err(outer failed)\n7\n",
     );
 }
 
 /// Una hija aparcada en `tcp_accept` cuando el scope falla: la conexión que llega después la
 /// despierta, y sale por la cancelación sin aceptarla. (Con un hilo por tarea la espera es una
 /// llamada bloqueante del sistema y no hay punto de cancelación: solo se comprueba con fibras.)
-#[test]
-fn a_child_cancelled_while_waiting_for_a_connection_does_not_accept_it() {
+fn a_child_waiting_for_a_connection() {
     vm_and_native(
         "accept",
         r#"import std/net;

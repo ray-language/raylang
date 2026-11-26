@@ -800,8 +800,24 @@ fn fix_launchers(root: string) {
                 Result.Err(_) => { },
             }
         } else if (name.ends_with(".lnk") && platform() == "windows") {
+            // rayreq #498: el acceso directo lleva el nombre VISIBLE de la app y el exe su
+            // `name`, así que ya no comparten nombre: si no hay un `<acceso>.exe`, el destino es
+            // el único `.exe` de la carpeta. Con varios y ninguno a juego, no se toca.
             let stem = name.substring(0, name.len() - 4);
-            let exe = root + "\\" + stem + ".exe";
+            var exe_name = "";
+            var exes = 0;
+            for other in entries {
+                if (other.ends_with(".exe")) {
+                    exes = exes + 1;
+                    if (other == stem + ".exe" || exe_name == "") {
+                        exe_name = other;
+                    }
+                }
+            }
+            if (exe_name != stem + ".exe" && exes != 1) {
+                continue;
+            }
+            let exe = root + "\\" + exe_name;
             let lnk = root + "\\" + name;
             let script = "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('"
                 + lnk

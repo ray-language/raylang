@@ -5867,6 +5867,12 @@ fn cmd_remove(args: &[String]) {
         eprintln!("usage: ray remove <name>");
         process::exit(64);
     };
+    // rayhotel #500: como hacía `ray add`, los argumentos de más se ignoraban en silencio.
+    // `remove` re-resuelve el grafo tras cada baja, así que va de una en una: se dice.
+    if let Some(extra) = args.get(1) {
+        eprintln!("ray remove takes one package at a time (unexpected '{extra}')\nusage: ray remove <name>");
+        process::exit(64);
+    }
     if !crate::deps::valid_package_name(name) {
         eprintln!("invalid package name '{name}': only letters, digits, '-' and '_'");
         process::exit(64);

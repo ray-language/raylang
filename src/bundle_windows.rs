@@ -207,7 +207,7 @@ fn write_shortcut(dir: &Path, name: &str, display: &str, exe: &Path) -> Result<(
         ps_quote(&abs_exe),
         ps_quote(&abs_dir),
         ps_quote(&abs_exe),
-        display.replace('\'', "''")
+        display.chars().filter(|c| !c.is_control()).collect::<String>().replace('\'', "''")
     );
     run_powershell(&script)
 }
@@ -221,7 +221,10 @@ pub fn windows_install_script(name: &str, display: &str) -> String {
     let quoted = name.replace('\'', "''");
     let stem = shortcut_stem(name, display);
     let shown = stem.replace('\'', "''");
-    let description = display.replace('\'', "''");
+    // Un carácter de control del nombre visible (un salto de línea del TOML) partiría el script.
+    let clean: String = display.chars().filter(|c| !c.is_control()).collect();
+    let description = clean.replace('\'', "''");
+    let comment = &clean;
     let drop_old = if stem == name {
         String::new()
     } else {
@@ -230,8 +233,11 @@ pub fn windows_install_script(name: &str, display: &str) -> String {
              if ((Test-Path $old) -and ((New-Object -ComObject WScript.Shell).CreateShortcut($old).TargetPath -eq $exe)) {{ Remove-Item $old -Force }}\r\n"
         )
     };
+    // El nombre visible va dentro del script: con BOM, Windows PowerShell 5.1 lo lee como UTF-8
+    // (sin él usa la página de códigos ANSI y un `Ñ` rompe las comillas). Todo lo que viene del
+    // manifiesto va entre comillas simples, donde PowerShell no expande `$` ni el acento grave.
     format!(
-        "# Installs the {display} shortcut for the current user, pointing at this directory.\r\n\
+        "\u{feff}# Installs the {comment} shortcut for the current user, pointing at this directory.\r\n\
          $ErrorActionPreference = 'Stop'\r\n\
          $here = Split-Path -Parent $MyInvocation.MyCommand.Path\r\n\
          $exe = Join-Path $here '{quoted}.exe'\r\n\
@@ -246,7 +252,7 @@ pub fn windows_install_script(name: &str, display: &str) -> String {
          New-Item -ItemType Directory -Force -Path $menu | Out-Null\r\n\
          Copy-Item $lnk (Join-Path $menu '{shown}.lnk') -Force\r\n\
          {drop_old}\
-         Write-Output \"installed: $menu\\{shown}.lnk -> $exe\"\r\n"
+         Write-Output ('installed: ' + (Join-Path $menu '{shown}.lnk') + ' -> ' + $exe)\r\n"
     )
 }
 
@@ -406,7 +412,7 @@ mod tests {
     #[test]
     fn install_script_recreates_the_shortcut_with_icon_and_copies_it_to_the_start_menu() {
         let s = windows_install_script("Probe's", "Probe's");
-        assert!(s.starts_with("# Installs the Probe's shortcut"), "{s}");
+        assert!(s.starts_with("\u{feff}# Installs the Probe's shortcut"), "con BOM: {s}");
         assert!(s.contains("$here = Split-Path -Parent $MyInvocation.MyCommand.Path"));
         assert!(s.contains("$exe = Join-Path $here 'Probe''s.exe'"), "{s}");
         assert!(s.contains("$s.IconLocation = \"$exe,0\""), "{s}");
@@ -420,7 +426,13 @@ mod tests {
     #[test]
     fn the_shortcut_is_named_after_the_display_name() {
         let s = windows_install_script("RayReq", "Ray Request");
-        assert!(s.starts_with("# Installs the Ray Request shortcut"), "{s}");
+        assert!(s.starts_with("\u{feff}# Installs the Ray Request shortcut"), "{s}");
+        assert!(s.contains("Write-Output ('installed: ' + (Join-Path $menu 'Ray Request.lnk') + ' -> ' + $exe)"), "{s}");
+        // Lo que viene del manifiesto no llega a una cadena de comillas dobles ni parte líneas.
+        let odd = windows_install_script("App", "Pay $HOME `now`\nRemove-Item x");
+        assert!(odd.contains("$s.Description = 'Pay $HOME `now`Remove-Item x'"), "{odd}");
+        assert!(!odd.contains("\nRemove-Item x"), "{odd}");
+        assert!(odd.lines().filter(|l| l.contains("$HOME")).all(|l| !l.contains('"')), "{odd}");
         assert!(s.contains("$exe = Join-Path $here 'RayReq.exe'"), "{s}");
         assert!(s.contains("$lnk = Join-Path $here 'Ray Request.lnk'"), "{s}");
         assert!(s.contains("$s.Description = 'Ray Request'"), "{s}");

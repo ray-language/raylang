@@ -1205,6 +1205,7 @@ dentro. Gestión desde el CLI:
 
 ```sh
 ray add textutils@^1.2      # añade al manifiesto y descarga
+ray add web net db          # varios a la vez: o entran todos o ninguno
 ray search json             # busca en el registro (nombre, descripción, palabras clave y módulos)
 ray update                  # re-resuelve a las más nuevas compatibles
 ray remove textutils
@@ -3049,6 +3050,13 @@ fn main() -> int {
     0
 }
 ```
+
+Cuando un `scope` falla, cancela a las tareas que lanzó. Una tarea cancelada se detiene en su
+siguiente punto de espera (un canal, `join`, `time.sleep`, E/S de socket o de tubería) y no
+vuelve a correr: su propio `try_call` no la recupera, y no hay `defer`. Lo que tenga que
+liberarse pase lo que pase (una transacción, un candado) va en el código dueño del `scope`, no
+en la hija. Una tarea que nunca espera corre hasta su final, y el `scope` no espera a las
+canceladas.
 
 ### Recuperación de errores fatales (`try_call` y `try_join`)
 

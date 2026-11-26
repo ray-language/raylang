@@ -788,6 +788,12 @@ impl Transpiler {
     }
 
     pub(super) fn declare(&mut self, name: &str, ty: Type) {
+        // rayhotel #496: `_` descarta, no nombra. Declarado, un `let _ = spawn(…)` dejaba en
+        // ámbito una Task llamada `_` y el `spawn` siguiente la pre-clonaba como captura
+        // (`let _ = _.clone();`, que Rust no admite).
+        if name == "_" {
+            return;
+        }
         let t = normalize_type(&ty);
         // Un `Struct(n)` cuyo `n` es un enum del usuario → `Enum(n)` (el parser no distingue; el checker
         // lo hace en su tabla). Así el entorno lleva el tipo correcto para el dispatch de `match`/campos.
@@ -834,9 +840,7 @@ impl Transpiler {
         let mut names = Vec::new();
         for scope in self.scopes.iter().rev() {
             for (name, ty) in scope {
-                // rayhotel #496: `let _ = spawn(…)` deja una Task llamada `_`, que no es un nombre:
-                // pre-clonarla (`let _ = _.clone();`) no compila.
-                if name != "_" && matches!(ty, Type::Channel(_) | Type::Task(_)) && seen.insert(name.clone()) {
+                if matches!(ty, Type::Channel(_) | Type::Task(_)) && seen.insert(name.clone()) {
                     names.push(name.clone());
                 }
             }

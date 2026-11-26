@@ -6,11 +6,14 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.116 — 2026-11-26
+
 - **`std/ui` — la barra `compact`/`tall` ya no tapa la página en pantalla completa** (rayreq
   #499, macOS). Una ventana `full_content` con `titlebar = "compact"` o `"tall"` dejaba en
   pantalla completa una franja del alto de la barra sobre el borde superior de la página, y
   los controles que la página pone ahí quedaban debajo. Ahora la barra se esconde como la
-  estándar y vuelve con la barra de menús al llevar el puntero arriba.
+  estándar y vuelve con la barra de menús al llevar el puntero arriba. Si el sistema deja la
+  barra de menús siempre visible en pantalla completa, la barra no se esconde.
 
 ## 1.27.115 — 2026-11-25
 

@@ -22404,13 +22404,20 @@ contrario, y ahí no vale `titlebarAppearsTransparent`: se pinta con su material
 `window:willUseFullScreenPresentationOptions:` añadiendo `NSApplicationPresentationAutoHideToolbar`
 a las opciones que AppKit propone. La toolbar se esconde con la barra de menús y vuelve con
 ella al llevar el puntero arriba, igual que la barra estándar. En una ventana sin toolbar la
-opción no cambia nada, así que se añade siempre.
+opción no cambia nada, así que no se mira si la hay. AppKit solo admite esa opción junto a
+`AutoHideMenuBar` (una combinación inválida lanza una excepción), así que se añade solo si lo
+propuesto ya la trae: con «mostrar siempre la barra de menús en pantalla completa» se devuelve
+lo propuesto tal cual.
 
 **Comprobado.** En un MacBook Pro con macOS 26: una página con una franja roja de 38 px arriba,
 `set_fullscreen(h, true)` y una captura. Con 1.27.115 la franja sale cubierta; con el cambio
-sale entera. Solo se probó `compact`; `tall` usa la misma toolbar con otro estilo.
+sale entera. La captura es solo de `compact`; con `tall` la traza (`RAY_UI_TRACE=1`) muestra que
+AppKit propone `0x405` y se devuelve `0xc05`, pero no se capturó la pantalla. Un test unitario
+cubre la regla de las opciones y que el delegate responde al selector.
 
-**Límites.** No hay test automático: hace falta una pantalla y una captura. La página sigue sin
+**Límites.** El efecto en pantalla no tiene test automático: hace falta una pantalla y una
+captura. Solo se probó en macOS 26 y con la barra de menús oculta en pantalla completa (el
+ajuste por defecto); con la barra de menús siempre visible la franja sigue ahí, sin comprobar. La página sigue sin
 saber si está en pantalla completa (no hay evento ni propiedad) y `window.ray.titlebar_height`
 no baja a 0 ahí, así que una página que reserva ese margen lo conserva vacío. Si el puntero
 revela la barra, esta cubre el borde superior mientras está a la vista, como en cualquier app.

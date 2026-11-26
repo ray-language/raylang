@@ -4835,6 +4835,41 @@ mod mac {
         if key.is_null() { 0 } else { window_id_of(key).unwrap_or(0) }
     }
 
+    /// Las opciones de presentación de una ventana en pantalla completa: las que AppKit propone
+    /// más `AutoHideToolbar`. AppKit solo admite esa opción junto a `AutoHideMenuBar` (una
+    /// combinación inválida lanza una excepción): con la barra de menús siempre visible, lo
+    /// propuesto se devuelve tal cual.
+    fn fullscreen_options(proposed: u64) -> u64 {
+        if proposed & NS_PRESENTATION_AUTO_HIDE_MENU_BAR != 0 {
+            proposed | NS_PRESENTATION_AUTO_HIDE_TOOLBAR
+        } else {
+            proposed
+        }
+    }
+
+    #[cfg(test)]
+    mod fullscreen_tests {
+        use super::*;
+
+        /// rayreq #499: la toolbar se esconde solo si la barra de menús también, y el delegate
+        /// de la ventana responde al selector por el que AppKit lo pregunta.
+        #[test]
+        fn the_toolbar_hides_in_full_screen_only_along_with_the_menu_bar() {
+            let full_screen = 1 << 10;
+            let auto_hide_dock = 1;
+            let hiding = full_screen | auto_hide_dock | NS_PRESENTATION_AUTO_HIDE_MENU_BAR;
+            assert_eq!(fullscreen_options(hiding), hiding | NS_PRESENTATION_AUTO_HIDE_TOOLBAR);
+            let menu_bar_stays = full_screen | auto_hide_dock;
+            assert_eq!(fullscreen_options(menu_bar_stays), menu_bar_stays);
+            // SAFETY: mensaje de clase estándar de NSObject sobre una clase recién registrada.
+            let responds = unsafe {
+                let responds: MsgBoolSel = std::mem::transmute(msg_send());
+                responds(delegate_class(), sel(b"instancesRespondToSelector:\0"), sel(b"window:willUseFullScreenPresentationOptions:\0"))
+            };
+            assert!(responds != 0);
+        }
+    }
+
     fn delegate_class() -> Id {
         static CLASS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
         *CLASS.get_or_init(|| {
@@ -4869,7 +4904,11 @@ mod mac {
             // una franja opaca sobre la página. Con `AutoHideToolbar` se esconde con la barra de
             // menús, igual que la barra estándar. Sin toolbar la opción no cambia nada.
             extern "C" fn fullscreen_presentation_options(_this: Id, _sel: Sel, _window: Id, proposed: u64) -> u64 {
-                proposed | NS_PRESENTATION_AUTO_HIDE_TOOLBAR
+                let options = fullscreen_options(proposed);
+                if super::ui_trace() {
+                    eprintln!("[ui] full screen options {proposed:#x} -> {options:#x}");
+                }
+                options
             }
             // M252 (ray-sublime #76): `windowDidBecomeKey:` → ("focused", id, ""). Mismo mapa
             // ventana → id que el cierre.
@@ -6515,6 +6554,8 @@ mod mac {
     const NS_FLOATING_WINDOW_LEVEL: i64 = 3;
     /// NSApplicationPresentationAutoHideToolbar.
     const NS_PRESENTATION_AUTO_HIDE_TOOLBAR: u64 = 1 << 11;
+    /// NSApplicationPresentationAutoHideMenuBar.
+    const NS_PRESENTATION_AUTO_HIDE_MENU_BAR: u64 = 1 << 2;
     const NS_WINDOW_ABOVE: i64 = 1;
     const STYLE_MASK_FULLSCREEN: u64 = 1 << 14;
 

@@ -22411,8 +22411,8 @@ lo propuesto tal cual.
 
 **Comprobado.** En un MacBook Pro con macOS 26: una página con una franja roja de 38 px arriba,
 `set_fullscreen(h, true)` y una captura. Con 1.27.115 la franja sale cubierta; con el cambio
-sale entera. La captura es solo de `compact`; con `tall` la traza (`RAY_UI_TRACE=1`) muestra que
-AppKit propone `0x405` y se devuelve `0xc05`, pero no se capturó la pantalla. Un test unitario
+sale entera, con `compact` y con `tall` (esta con una franja de 52 px). La traza
+(`RAY_UI_TRACE=1`) muestra que AppKit propone `0x405` y se devuelve `0xc05`. Un test unitario
 cubre la regla de las opciones y que el delegate responde al selector.
 
 **Límites.** El efecto en pantalla no tiene test automático: hace falta una pantalla y una

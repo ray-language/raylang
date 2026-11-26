@@ -234,6 +234,8 @@ pub(super) fn fs_wrapper_emitted(ffn: &str) -> bool {
             | "symlink" // M304: sobre __symlink
             | "read_link" | "set_mtime" // rayzip #194/#195: sobre __read_link/__set_mtime
             | "write_file_mode" | "write_file_bytes_mode" | "mkdir_mode" // raycert #382: sobre __create_mode/__mkdir_mode
+            // ray-remote #506: raylang puro sobre env/platform/mkdir_mode, con sus auxiliares privados
+            | "data_dir" | "cache_dir" | "app_folder" | "env_set" | "xdg_base" | "ensure_dir"
     )
 }
 

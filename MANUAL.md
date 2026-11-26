@@ -1989,6 +1989,23 @@ fn main() -> int {
 
 Variantes binarias: `fs.read_file_bytes`/`fs.write_file_bytes` (→ `bytes`).
 
+**Dónde guarda sus datos una app.** `fs.data_dir("MiApp")` devuelve la carpeta de datos de la app
+en el sistema donde corre, ya creada, y `fs.cache_dir("MiApp")` la de lo que se puede regenerar
+(el sistema puede vaciarla). Las dos devuelven `Result<string, string>`.
+
+| Sistema | `fs.data_dir("MiApp")` | `fs.cache_dir("MiApp")` |
+|---|---|---|
+| macOS | `~/Library/Application Support/MiApp` | `~/Library/Caches/MiApp` |
+| iOS | `<contenedor>/Library/Application Support/MiApp` | `<contenedor>/Library/Caches/MiApp` |
+| Android | `files/MiApp`, en la carpeta privada de la app | `cache/MiApp` |
+| Windows | `%APPDATA%\MiApp` | `%LOCALAPPDATA%\MiApp\Cache` |
+| Linux | `$XDG_DATA_HOME/MiApp`, o `~/.local/share/MiApp` | `$XDG_CACHE_HOME/MiApp`, o `~/.cache/MiApp` |
+
+En el teléfono (`ray bundle --ios`/`--android`) `$HOME` apunta dentro del sandbox de la app y el
+directorio actual es `/`. En iOS `$HOME` es el contenedor: su raíz es de solo lectura, y se escribe
+en `Documents/`, `Library/` y `tmp/`. En Android `$HOME` es la carpeta privada `files`, y
+`fs.temp_dir()` la de caché. Una ruta armada a mano con `$HOME/.config` falla en iOS.
+
 Un secreto (una llave privada, un token) se crea ya con sus permisos, sin una ventana en la que
 otro usuario pueda leerlo: `fs.write_file_mode(path, text, 384)` y `fs.write_file_bytes_mode`
 (384 = `0o600`), y `fs.mkdir_mode(path, 448)` para el directorio. En Windows el modo se ignora.

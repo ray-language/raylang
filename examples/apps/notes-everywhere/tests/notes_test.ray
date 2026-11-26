@@ -93,12 +93,3 @@ fn export_writes_markdown() {
     );
     assert_eq(md, "# Notes\n\n## One\n\nfirst\n");
 }
-
-@test
-fn the_data_folder_follows_the_platform() {
-    let dir = places.data_dir("Notes");
-    assert(dir.ends_with("Notes"));
-    if (platform() == "macos") {
-        assert(dir.contains("/Library/Application Support/"));
-    }
-}

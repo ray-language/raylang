@@ -22609,3 +22609,41 @@ fuera de la cápsula no se puede. La sustitución de `ray doc` es textual: un `/
 por símbolo que cite `model.Booking` también cambia, y una firma que nombre el tipo por un
 `from … import` con alias no se reconoce. `ray doc` sigue mostrando la cabecera de un struct
 re-exportado con su nombre original y «Exported as …» debajo.
+
+## 490. `fs.data_dir` y `fs.cache_dir`: la carpeta de la app en cada sistema (ray-remote #506, nov 2026)
+
+**El hueco.** ray-remote calculaba su carpeta de datos desde `env("HOME")`: Application Support si
+existe, si no `~/.config`. En el iPhone `$HOME` es el contenedor de la app, cuya raíz no se puede
+escribir, y `Library/Application Support` no existe hasta que alguien la crea: la app caía en
+`~/.config` y guardar daba «Operation not permitted». Qué es `$HOME` en el teléfono solo lo decía
+el handbook móvil; `llms.txt`, la REFERENCE y `ray doc`, que es donde busca un agente, no.
+
+**La decisión.** Dos funciones en `std/fs`, raylang puro sobre `platform()`, `env` y `mkdir_mode`:
+`data_dir(app)` y `cache_dir(app)`, que devuelven `Result<string, string>` con la carpeta **ya
+creada** (privada, 0o700, lo que ellas creen). Crearla es parte del contrato: el fallo del hallazgo
+fue justo comprobar si existía. La tabla es la de cada sistema: Application Support y Caches en
+macOS e iOS; `$HOME/<app>` y el temporal (la carpeta `cache`) en Android, donde la actividad del
+bundle fija `HOME` y `TMPDIR`; `%APPDATA%\<app>` y `%LOCALAPPDATA%\<app>\Cache` en Windows (la
+caché en una subcarpeta, porque `%LOCALAPPDATA%\<app>` suele ser también donde se instala un
+programa por usuario);
+XDG en el resto, ignorando una variable XDG relativa como manda la norma. `app` es un solo nombre
+de carpeta: vacío, `.`, `..` o con separadores es `Err`. Sin la variable que hace falta también es
+`Err`, y no un directorio relativo inventado.
+
+**En iOS va Application Support y no Documents.** `Documents/` es para archivos del usuario (la
+app Archivos los enseña si la app lo declara); los datos internos van en `Library`. El ejemplo
+`notes-mobile` sigue en `Documents/` porque enseña la ruta a mano; `notes-everywhere` pasa a
+`fs.data_dir`.
+
+**Nativo.** `std/fs` se intercepta por nombre en el transpilador; estas dos y sus auxiliares
+entran en `fs_wrapper_emitted` y se emite su cuerpo, como `copy_all`.
+
+**Comprobado.** `tests/fs_app_dirs_cli.rs`, con `HOME`/`APPDATA`/XDG apuntando a una carpeta de
+prueba: la ruta de cada sistema, que la carpeta queda creada, los nombres rechazados, la variable
+ausente, XDG absoluta y relativa, y el binario nativo. Las ramas de iOS y Android no se han
+corrido en un dispositivo: la de iOS es la ruta que ray-remote comprobó en su iPhone al rodear
+el fallo.
+
+**Límites.** No hay `config_dir` ni carpeta de documentos del usuario. En Android fuera del shell
+de `ray bundle` nadie fija `HOME`, y las funciones dan `Err`.
+

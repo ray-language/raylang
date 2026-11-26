@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/fs` — `data_dir(app)` y `cache_dir(app)`** (ray-remote #506). La carpeta de datos de la
+  app y la de caché en cada sistema, ya creadas: Application Support y Caches en macOS e iOS, la
+  carpeta privada en Android, `%APPDATA%` y `%LOCALAPPDATA%` en Windows, XDG en Linux. Antes
+  cada app armaba la ruta desde `env("HOME")`, y la forma habitual del escritorio falla en el
+  iPhone, donde la raíz del contenedor no se puede escribir. El MANUAL, la REFERENCE y `llms.txt`
+  dicen ahora qué es `$HOME` en el teléfono y dónde se puede escribir.
+
 - **`ray test` — cada prueba de una biblioteca corre una vez** (rayhotel #501). En un paquete
   sin entrada cada archivo es una suite, y la primera ejecutaba además las pruebas de los
   módulos que importa: una cadena de tres módulos con una prueba cada uno daba 5, y el

@@ -105,8 +105,13 @@ fn answer(conn: Conn, body: string) -> string {
 }
 
 fn main() -> int {
-    let dir = places.data_dir(APP);
-    let _ = fs.mkdir(dir);
+    let dir = match (places.data_dir(APP)) {
+        Result.Ok(d) => d,
+        Result.Err(e) => {
+            eprint("notes: no data folder: " + e);
+            return 1;
+        },
+    };
     let conn = match (notes.open(dir + "/notes.db")) {
         Result.Ok(c) => c,
         Result.Err(e) => {

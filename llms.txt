@@ -428,7 +428,12 @@ crosses a fiber boundary is data or a named function.
    passwords: `crypto.password_hash(p)` to store, `crypto.password_verify(p, stored)` to check
    (PBKDF2-HMAC-SHA256, never `sha256(password)`) ·
    `fs.read_file(p) fs.write_file(p, s) fs.write_file_mode(p, s, 384) (born 0o600: a private key is never world-readable; fs.mkdir_mode(p, 448) for a 0o700 folder) fs.exists(p) fs.is_dir(p) (is_dir/is_file FOLLOW symlinks; fs.stat(p).kind == "symlink" sees one) fs.list_dir(p) fs.mkdir(p) (creates missing parents, like mkdir -p; existing dir is not an error)
-   fs.copy_file(a, b) fs.copy_all(src, dst) fs.remove_all(p) fs.make_temp_dir(prefix)` ·
+   fs.copy_file(a, b) fs.copy_all(src, dst) fs.remove_all(p) fs.make_temp_dir(prefix)
+   fs.data_dir(app) fs.cache_dir(app)` (→ `Result<string, string>`: the app's own data / cache folder on
+   every platform, CREATED if missing — use it instead of building paths from `env("HOME")`. On the phone
+   `$HOME` is the app sandbox: on iOS its root is read-only and `data_dir` gives
+   `Library/Application Support/<app>`; on Android `$HOME` is the private `files` folder; the current
+   directory is `/`, never write relative paths there) ·
    `time.now() time.sleep(ms)` · `random.below(n)`. There is NO `os` module: the operating
    system is the free builtin `platform()` → `"macos"` | `"linux"` | `"windows"`.
 

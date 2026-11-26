@@ -145,6 +145,93 @@ pub fn make_temp_dir(prefix: string) -> Result<string, string> {
     if (r[0] == "ok") { Result.Ok(r[1]) } else { Result.Err(r[1]) }
 }
 
+// --- Carpetas de la app (ray-remote #506). Cada app reescribía esta tabla, y la del escritorio
+// falla en el teléfono: en iOS `$HOME` es el contenedor, su raíz no se puede escribir y
+// `Library/Application Support` no existe hasta que alguien la crea. ---
+// El nombre de la app es UNA carpeta: sin separadores ni `.`/`..`.
+fn app_folder(app: string) -> Result<string, string> {
+    if (app == "" || app == "." || app == ".." || app.contains("/") || app.contains("\\")) {
+        return Result.Err("invalid app name '" + app + "': it must be a single folder name");
+    }
+    Result.Ok(app)
+}
+
+// Una variable de entorno con valor; vacía cuenta como ausente.
+fn env_set(name: string) -> Result<string, string> {
+    match (env(name)) {
+        Option.Some(v) => if (v == "") { Result.Err(name + " is not set") } else { Result.Ok(v) },
+        Option.None => Result.Err(name + " is not set"),
+    }
+}
+
+// `$XDG_*` si es una ruta absoluta (la norma manda ignorar las relativas); si no, `$HOME/<rest>`.
+fn xdg_base(name: string, rest: string) -> Result<string, string> {
+    match (env(name)) {
+        Option.Some(v) => if (v.starts_with("/")) {
+            return Result.Ok(v);
+        },
+        Option.None => { },
+    }
+    Result.Ok(env_set("HOME")? + "/" + rest)
+}
+
+// Crea la carpeta (privada, 0o700, lo que ella cree) y devuelve su ruta.
+fn ensure_dir(dir: string) -> Result<string, string> {
+    match (mkdir_mode(dir, 448)) {
+        Result.Ok(_) => Result.Ok(dir),
+        Result.Err(e) => Result.Err("could not create " + dir + ": " + e),
+    }
+}
+
+/// The folder where the app keeps its own data on this platform, created if missing. `app` is
+/// the folder name (one path component). The data survives restarts and updates.
+///
+/// - macOS and iOS: `$HOME/Library/Application Support/<app>` (on iOS `$HOME` is the app's
+///   container, whose root is read-only).
+/// - Android: `$HOME/<app>` (`$HOME` is the app's private `files` folder).
+/// - Windows: `%APPDATA%\<app>`.
+/// - Linux and other Unix: `$XDG_DATA_HOME/<app>`, or `$HOME/.local/share/<app>`.
+///
+/// `Err` if the variable it needs is not set or the folder cannot be created.
+pub fn data_dir(app: string) -> Result<string, string> {
+    let name = app_folder(app)?;
+    let os = platform();
+    let dir = if (os == "windows") {
+        env_set("APPDATA")? + "\\" + name
+    } else if (os == "macos" || os == "ios") {
+        env_set("HOME")? + "/Library/Application Support/" + name
+    } else if (os == "android") {
+        env_set("HOME")? + "/" + name
+    } else {
+        xdg_base("XDG_DATA_HOME", ".local/share")? + "/" + name
+    };
+    ensure_dir(dir)
+}
+
+/// The folder for files the app can rebuild (downloads, thumbnails), created if missing. The
+/// system may empty it when it runs low on space, so nothing here is the only copy.
+///
+/// - macOS and iOS: `$HOME/Library/Caches/<app>`.
+/// - Android: `<temp_dir>/<app>` (the app's private `cache` folder).
+/// - Windows: `%LOCALAPPDATA%\<app>\Cache`.
+/// - Linux and other Unix: `$XDG_CACHE_HOME/<app>`, or `$HOME/.cache/<app>`.
+///
+/// `Err` if the variable it needs is not set or the folder cannot be created.
+pub fn cache_dir(app: string) -> Result<string, string> {
+    let name = app_folder(app)?;
+    let os = platform();
+    let dir = if (os == "windows") {
+        env_set("LOCALAPPDATA")? + "\\" + name + "\\Cache"
+    } else if (os == "macos" || os == "ios") {
+        env_set("HOME")? + "/Library/Caches/" + name
+    } else if (os == "android") {
+        temp_dir() + "/" + name
+    } else {
+        xdg_base("XDG_CACHE_HOME", ".cache")? + "/" + name
+    };
+    ensure_dir(dir)
+}
+
 /// Whether the path exists and is a directory (total; never fails). Follows symlinks: a symlink to
 /// a directory is a directory; `stat(path).kind` sees the link itself ("symlink").
 pub fn is_dir(path: string) -> bool {

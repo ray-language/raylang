@@ -171,6 +171,10 @@ fn data_dir() -> string {
 
 `NOTES_DIR` permite cambiar la carpeta en tests o en CI sin tocar el código.
 
+`fs.data_dir("Notes")` evita escribir esta tabla: devuelve, ya creada, la carpeta de datos de la
+app en cada sistema. En iOS es `Library/Application Support/Notes` dentro del contenedor y en
+Android `files/Notes`. El [capítulo siguiente](cross-platform.md) la usa.
+
 ## 4. El protocolo con la página
 
 Todas las peticiones pasan por una función: recibe el JSON que envió la página y devuelve el JSON

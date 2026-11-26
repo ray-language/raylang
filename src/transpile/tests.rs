@@ -1473,7 +1473,10 @@ fn transpiles_stdin_read_via_the_reactor() {
     let rust = transpile_src_fibers(src);
     assert!(rust.contains("__ray_stdin_read("), "primitivo read: {rust}");
     assert!(rust.contains("__ray_stdin_read_timeout("), "primitivo read_timeout: {rust}");
-    assert!(rust.contains("ray_runtime::fibers::wait_readable(0)"), "aparca la fibra en el reactor: {rust}");
+    // rayhotel #495: la espera pasa por `__ray_fwait_readable`, que aparca en el reactor y es un
+    // punto de cancelación.
+    assert!(rust.contains("__ray_fwait_readable(0)"), "aparca la fibra en el reactor: {rust}");
+    assert!(rust.contains("fn __ray_fwait_readable(fd: i32) { ray_runtime::fibers::wait_readable(fd); __ray_cancel_point(); }"), "{rust}");
     assert!(rust.contains("wait_readable_timeout(0,"), "plazo por el reactor: {rust}");
     // Sin lecturas de stdin, el runtime no se emite.
     let bare = transpile_src("fn main() -> int { 0 }");

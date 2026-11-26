@@ -172,8 +172,8 @@ pub trait CmdOps {
     /// child sees a real terminal (`tty`, colors, line discipline), `Proc.out` carries the
     /// terminal stream with its VT sequences, `err` is closed (the terminal merges both), keys
     /// go in with `write` (Ctrl-C is the byte `0x03`), and `resize` follows the window. Only
-    /// with `stream`; `stdin`/`merge_output` are ignored. Linux and macOS; Windows is an `Err`
-    /// until ConPTY lands.
+    /// with `stream`; `stdin`/`merge_output` are ignored. Linux, macOS and Windows (through ConPTY,
+    /// which needs Windows 10 version 1809 or later).
     fn pty(self, cols: int, rows: int) -> Cmd;
     /// Launches the command. Same promises as `process.run`.
     fn run(self) -> Result<Output, string>;

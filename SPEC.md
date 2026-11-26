@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.116** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.117** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -670,7 +670,15 @@ mensajes, no a que el buzón se vacíe. Una llamada bloqueante del sistema (`fs.
   Un programa correcto con `spawn` lo es con `spawn_local`; la afinidad es rendimiento, nunca
   corrección.
 - `scope(body: fn() -> R) -> R` **posee** las tareas lanzadas dentro: al salir las une; si una
-  falla, **cancela** a las hermanas pendientes (transitivo) y propaga el fallo original.
+  falla, **cancela** a las hermanas pendientes (transitivo) y propaga el fallo original. Un fallo
+  del propio cuerpo las cancela igual. La cancelación es cooperativa: la tarea cancelada se
+  detiene en su siguiente **punto de espera** (`send`/`recv`/`select`, `join`, la salida de un
+  `scope`, `time.sleep`, E/S de socket o de tubería) y no vuelve a ejecutarse; una tarea que
+  nunca espera corre hasta su final. El `scope` no espera a las tareas canceladas. La
+  cancelación **no es recuperable**: el `try_call` de la tarea cancelada no la convierte en `Err`.
+  En un binario nativo una tarea aparcada en E/S de socket se detiene cuando la E/S la
+  despierta (datos, plazo o cierre), no antes; las esperas de TLS, la E/S de un build sin
+  fibras y las de tubería, consola y eventos de UI en Windows no son puntos de cancelación.
 - `Channel.new() -> Channel<T>` (no acotado), `Channel.bounded(n)` (acotado; `n = 0` rendezvous).
   `send(ch, v)` bloquea con la cola llena; `recv(ch) -> Option<T>` bloquea vacío-y-abierto,
   `None` cerrado-y-vacío; `close(ch)` despierta a los receptores (reciben `None`) **y a los
@@ -726,7 +734,8 @@ sobre el que se escriben las capas 1 y 2.
   excepciones. La recuperación ocurre en la **misma fibra**: lo que `f` mutó antes de fallar
   sigue mutado (mismo compromiso que `catch_unwind` de Rust); para aislamiento real, `spawn` +
   `try_join(t) -> Result<T, string>` (§9, VM y binario nativo). `try_call` funciona en los tres
-  motores.
+  motores. No recupera la **cancelación** de la tarea por un `scope` que falla (§9): una tarea
+  cancelada no sigue.
 - **Caracteres**: `char_code(c) -> int` (code point Unicode) y `char_from_code(n) -> Option<char>`
   (su inversa; `None` si `n` no es un code point válido). — **String**: `trim split chars contains
   replace starts_with ends_with to_upper to_lower substring repeat index_of join to_bytes

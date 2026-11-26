@@ -800,21 +800,27 @@ fn fix_launchers(root: string) {
                 Result.Err(_) => { },
             }
         } else if (name.ends_with(".lnk") && platform() == "windows") {
-            let stem = name.substring(0, name.len() - 4);
-            let exe = root + "\\" + stem + ".exe";
-            let lnk = root + "\\" + name;
+            // El exe es el que el acceso directo ya nombraba (la hoja de su destino), ahora en
+            // `root`. rayreq #498: el acceso directo lleva el nombre VISIBLE de la app y el exe
+            // su `name`, así que no se puede deducir uno del otro. Si ese exe no está en `root`
+            // (un acceso directo a otra cosa), no se toca.
+            let dir = ps_single(root);
             let script = "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('"
-                + lnk
-                + "'); $s.TargetPath = '"
-                + exe
-                + "'; $s.WorkingDirectory = '"
-                + root
-                + "'; $s.IconLocation = '"
-                + exe
-                + ",0'; $s.Save()";
+                + ps_single(root + "\\" + name)
+                + "'); $e = Join-Path '"
+                + dir
+                + "' (Split-Path -Leaf $s.TargetPath); if (Test-Path -LiteralPath $e) { $s.TargetPath = $e; $s.WorkingDirectory = '"
+                + dir
+                + "'; $s.IconLocation = $e + ',0'; $s.Save() }";
             let _ = process.run("powershell", ["-NoProfile", "-Command", script]);
         }
     }
+}
+
+// El contenido de una cadena de comillas simples de PowerShell: cada comilla se dobla, también las
+// tipográficas, que PowerShell acepta como cierre.
+fn ps_single(s: string) -> string {
+    s.replace("'", "''").replace("‘", "‘‘").replace("’", "’’").replace("‚", "‚‚").replace("‛", "‛‛")
 }
 
 // Windows: copia `src` sobre `dst` archivo a archivo; un destino que no se deja sobrescribir (el

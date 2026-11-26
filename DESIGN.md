@@ -22453,3 +22453,117 @@ dan el `Err` del grupo de acceso. `cargo check` del runtime para `aarch64-apple-
 ejecutó en el emulador. El ítem usa la accesibilidad por defecto del sistema (disponible con el
 dispositivo desbloqueado) y el grupo de acceso por defecto de la app: no se comparte con
 extensiones ni con otras apps del mismo team. No hay test automático del camino de iOS.
+
+## 487. Tres arreglos pequeños: `let _ = spawn`, `ray add` con varios nombres, el `.lnk` de Windows (rayhotel #496 y #500, rayreq #498, nov 2026)
+
+**`let _ = spawn(…)` dos veces (#496).** El emisor nativo pre-clona, antes de cada `spawn`, los
+canales y las tareas que hay en ámbito, para que la closure los capture. Un `let _ = spawn(…)`
+dejaba en ámbito una tarea llamada `_`, y el segundo emitía `let _ = _.clone();`, que Rust no
+admite. `_` no es un nombre: `declare` ya no lo registra.
+
+**`ray add a b c` (#500).** `cmd_add` leía solo el primer argumento. Ahora los recorre todos y
+resuelve cada uno contra el índice ANTES de escribir: o entran todos o `ray.toml` no se toca,
+que es lo que ya hacía con uno. Un nombre repetido y un argumento que empieza por `-` son error
+de uso; antes una opción se habría leído como nombre de paquete. `ray remove` tenía el mismo
+defecto; como re-resuelve el grafo tras cada baja sigue yendo de una en una, pero ahora rechaza
+los argumentos de más en vez de ignorarlos.
+
+**El acceso directo de Windows (#498).** El exe ya llevaba `display_name` en `ProductName`, pero
+el archivo `.lnk`, que es lo que enseñan el menú Inicio y la búsqueda, se llamaba `<name>.lnk`.
+Ahora se llama como el nombre visible. La carpeta y el exe siguen con `name`, porque de ellos
+dependen los instaladores y la auto-actualización. Un nombre visible que Windows no admite como
+archivo (`<>:"/\|?*`, un carácter de control, o acabado en punto o espacio) deja el acceso
+directo con `name` y solo cambia su descripción. `install.ps1` borra del menú Inicio el
+`<name>.lnk` de una versión anterior, solo si su destino es este mismo exe.
+
+El cambio rompía otra pieza, y lo encontró la revisión: `fix_launchers` de `std/update` rehace
+el `.lnk` tras una auto-actualización y deducía el exe del nombre del acceso directo
+(`<acceso>.exe`). Ahora toma la hoja del destino que el propio acceso directo ya tenía y la busca
+en la carpeta instalada, como hace la rama del `.desktop` con su `Exec=`; si ese exe no está, no
+toca nada. Tras una auto-actualización desde una versión anterior, el `<name>.lnk` viejo se
+queda en la carpeta junto al nuevo y el menú Inicio conserva el viejo: la actualización no borra
+archivos ni toca el menú Inicio; el cambio de nombre solo lo aplica `install.ps1`.
+
+Como el nombre visible va ahora dentro de `install.ps1`, el script se escribe con BOM (Windows
+PowerShell 5.1 lee como ANSI un script UTF-8 sin él, y una `Ñ` rompía las comillas), lo que
+viene del manifiesto va siempre entre comillas simples, y se le quitan los caracteres de
+control. Las comillas simples se doblan, y también las tipográficas (U+2018, U+2019, U+201A,
+U+201B), que PowerShell acepta como cierre de cadena; lo mismo en el script de `fix_launchers`.
+
+**Comprobado.** #496: test en `native_gaps_cli` (VM y nativo). #500: test en `registry_cli` con
+un índice local (uno que no existe, uno repetido, una opción, y dos válidos). #498: tests
+unitarios, que solo compilan en Windows, corridos en la VM de Windows arm64; allí mismo un
+`ray bundle` de un proyecto con `display_name = "Lnk Probe"` deja `Lnk Probe.lnk` y
+`LnkProbe.exe`, y su `install.ps1` instala el nuevo y quita el antiguo; con
+`display_name = "Café Ñandú $5"` el menú Inicio recibe ese nombre exacto. Y la
+auto-actualización: con `display_name = "Ray’s Probe"`, el bundle copiado a otra carpeta y su zip
+aplicado con `update.apply_at`, el acceso directo pasa de apuntar a la carpeta de construcción a
+`<instalada>\LnkProbe.exe`, y `install.ps1` deja en el menú Inicio el nombre con su U+2019.
+
+**De paso.** La aserción de CRLF del test de `install.ps1` usaba `lines()`, que quita el `\r`, así
+que no podía pasar; el CI no corre ese módulo (`cfg(windows)`, tests de la librería). Corregida.
+
+## 488. Nativo: un `scope` que falla cancela a sus hijas (rayhotel #495 y #492, nov 2026)
+
+**Qué fallaba.** En un binario nativo, las tareas lanzadas dentro de un `scope` seguían corriendo
+después de que el `scope` propagara un fallo. La VM las cancela. El repro: una hija que duerme e
+imprime cuatro veces, y un `scope` que falla entre el primer paso y el segundo; la VM imprime
+un paso y el nativo los cuatro.
+
+**Por qué.** Eran tres cosas.
+
+1. Si fallaba el CUERPO del `scope`, el desenrollado se saltaba el pop del marco del scope, y
+   solo el envoltorio de una tarea limpiaba los marcos huérfanos al terminar. En `main`, o con
+   un `try_call` que recupera el fallo, nadie cancelaba a las hijas. El marco se quedaba en la
+   pila y adoptaba a las tareas que esa fibra lanzara después.
+2. `time.sleep` no era un punto de cancelación. Lo eran los canales, `join`, `select` y el
+   cierre del scope; una hija dormida despertaba y seguía.
+3. La cancelación viaja como un fallo, y un `try_call` de la hija lo devolvía como `Err`: la
+   hija seguía hasta su siguiente espera.
+
+**Qué se hizo.**
+
+- `__ray_scope_impl` arma una guarda mientras corre el cuerpo; si el cuerpo falla, saca el marco
+  y cancela a las hijas. Si vuelve bien, el marco sale de la pila y otra guarda lo cubre
+  durante la unión: si a la tarea la cancelan mientras espera a sus hijas, las cancela
+  (transitivo). Esto último lo encontró la revisión.
+- `time.sleep` se emite como `__ray_sleep`. En una tarea con fibras duerme en una lista de
+  esperas propia con plazo, anotada en `parked`, así que `cancel_task` la despierta y sale sin
+  agotar el plazo. Con un hilo por tarea duerme en tramos de 10 ms. `main`, un programa sin
+  tareas y un callback de la FFI duermen como antes. La lista es una por tarea, creada la
+  primera vez que duerme.
+- `__ray_try_call` relanza el fallo si la tarea está cancelada Y el fallo es el de cancelación.
+  Una tarea ya marcada que aún no llegó a una espera sigue recuperando sus errores corrientes.
+- Las esperas del reactor que emite el runtime (socket, UDP, tubería, entrada estándar, cola de
+  eventos de UI) pasan por `__ray_fwait_*`, que comprueba la cancelación al despertar. Lo
+  destapó una hija aparcada en `tcp_accept`: cancelada, aceptaba la conexión siguiente.
+
+**Lo que NO se hizo: despertar a la hija aparcada en un socket.** La VM la retira de las colas en
+el momento. Aquí sale al despertar por datos, por el plazo o por el cierre del descriptor, porque
+el reactor de `ray_runtime::fibers` no sabe soltar una espera de un descriptor, y enseñárselo
+toca el camino caliente del scheduler. La hija ya no actúa sobre lo que llegue (no lee, no
+acepta), pero la fibra y su socket siguen vivos hasta entonces.
+
+**El scope no espera a las canceladas**, igual que la VM. Una tarea que nunca espera corre hasta
+su final en los dos motores.
+
+**Comprobado.** `tests/native_scope_cancel_cli.rs`: falla el cuerpo, falla otra hija, la hija
+espera dentro de su `try_call`, y una hija cancelada mientras espera a las suyas; VM, nativo con
+fibras y nativo con un hilo por tarea dan la misma salida. La hija avisa por un canal tras su
+primer paso y el fallo espera ese aviso; queda una sola carrera, con 400 ms de margen. Otro caso con una hija en `tcp_accept` (VM y fibras). Los dos programas van
+en un solo test, uno tras otro. El binario 1.27.116 reproduce el fallo con los mismos programas.
+Suites `native_fibers_cli`, `native_gaps_cli` y `cli_cli` en verde.
+
+**Límites.** Las lecturas y escrituras TLS esperan dentro de `ray_runtime::tls`, fuera del
+runtime emitido, y no comprueban la cancelación. Con `--without fibers` (y en Windows arm64, que
+no tiene fibras) la E/S es una llamada bloqueante sin punto de cancelación. En Windows con
+fibras, las esperas de tubería, consola y eventos de UI van por `run_blocking` o por un sondeo y
+tampoco la comprueban. Una espera con plazo cancelada antes de tiempo deja su entrada en el
+reactor hasta que vence el plazo original. La espera de un
+candado de SQLite (`db/sqlite`, §483) tampoco se miró. No se midió el coste del `__ray_sleep`
+nuevo; con un hilo por tarea duerme en tramos de 10 ms, que son cien despertares por segundo
+por tarea dormida. El envoltorio de la tarea conserva su limpieza de marcos huérfanos, que con
+las guardas ya no encuentra nada. Que una tarea cancelada sin llegar a una espera siga
+recuperando sus errores no tiene test: depende de quién arranca antes.
+No hay `defer`: un recurso que la hija tenía abierto al cancelarse no se libera hasta que el
+sistema lo recoge (#492 queda en documentación).

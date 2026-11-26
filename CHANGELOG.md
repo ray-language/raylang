@@ -6,6 +6,33 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.117 — 2026-11-26
+
+- **Nativo — un `scope` que falla cancela a sus hijas, como la VM** (rayhotel #495). En un
+  binario nativo las hijas seguían corriendo después de que el `scope` devolviera el fallo:
+  si fallaba el cuerpo nadie las cancelaba, `time.sleep` no notaba la cancelación y un
+  `try_call` de la hija la recuperaba. Ahora la hija se detiene en su siguiente punto de
+  espera (canal, `join`, `time.sleep`, E/S de socket o tubería) y no vuelve a correr. Quedan
+  dos límites: una hija aparcada en un socket se cancela cuando la E/S la despierta, no antes,
+  y una lectura TLS o un build `--without fibers` no notan la cancelación en la red. La
+  documentación de `scope` y `try_call` dice ahora qué hace la cancelación (rayhotel #492).
+- **Nativo — dos `let _ = spawn(…)` en un bloque compilan** (rayhotel #496). El Rust generado
+  intentaba capturar `_` y `rustc` lo rechazaba.
+- **`ray add` acepta varios paquetes** (rayhotel #500). `ray add web net db` añadía solo el
+  primero, callaba sobre el resto y salía con 0. Ahora los añade todos, cada uno con su
+  `@versión` si la lleva; si uno no está en el índice no se añade ninguno y `ray.toml` no se
+  toca. Un nombre repetido o una opción desconocida son error de uso (64). `ray remove` sigue
+  quitando una por llamada, pero rechaza los argumentos de más en vez de ignorarlos.
+- **`ray bundle` en Windows — el acceso directo lleva `display_name`** (rayreq #498). El menú
+  Inicio y la búsqueda mostraban `[app] name`. El `.lnk` se llama ahora como el nombre
+  visible; la carpeta y el `.exe` conservan `name`. `install.ps1` quita del menú Inicio el
+  acceso directo antiguo si apunta al mismo `.exe`, y va con BOM para que un nombre con
+  acentos o `Ñ` llegue bien a Windows PowerShell 5.1. `std/update` rehace ese acceso directo
+  tras una auto-actualización aunque ya no se llame como el `.exe`.
+- **`std/process` — el raydoc de `Cmd.pty` decía que no funciona en Windows** (ray-sublime
+  #505). Funciona desde la 1.16.1, por ConPTY (Windows 10 1809 o posterior); la frase se
+  había quedado vieja.
+
 - **`std/keychain` funciona en iOS** (ray-remote #504, #503). En un iPhone o en el simulador,
   `get`, `set` y `delete` caían en el backend de Linux y devolvían siempre el error de
   libsecret. Ahora usan Keychain Services, como en macOS. La app tiene que ir firmada: un build

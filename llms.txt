@@ -272,6 +272,13 @@ spawn(fn() { send(ch, 42); });                   // spawn returns Task<T>
 //   starts with spawn/spawn_local INHERIT its domain and share its sockets.
 // scope(f) waits for every task started inside it, spawn_local ones included; a panic in the
 //   body (or in a child) cancels the remaining children before it propagates.
+//   A cancelled task stops at its next waiting point (channel, join, time.sleep, socket/pipe
+//   I/O) and never resumes: its own try_call does NOT recover it, and there is no defer — keep
+//   what must be released (a transaction, a lock) in the code that owns the scope. A task that
+//   never waits runs to its end; the scope does not wait for cancelled tasks. Native binaries
+//   (1.27.117) do the same, with limits: a task parked on a socket is cancelled when the
+//   I/O wakes it (data, timeout, close), not before; a TLS read, a `--without fibers` build
+//   (blocking syscalls) and, on Windows, pipe/console/UI-event waits are not cancellation points.
 // Native scheduler model: a fiber is pinned to its worker for life (no migration); each worker
 //   polls its own kqueue/epoll (RAYLANG_REACTOR=local, the unix default; `shared` = one reactor
 //   thread for all, the Windows model), so parking on a socket never crosses threads; a blocking
@@ -785,7 +792,7 @@ up to 20 diagnostics per run.
 ray run file.ray            # type-check + run on the VM (exit code = main's int)
 ray dev file.ray            # run + auto-restart on saved changes (hot reload; std/ui windows reload too)
 ray dev --device            # don't run here: push the source to linked devices (phone dev library / `ray dev-client <url> <dir>`) on every compiling change; the link (port + token) is saved in `.ray-dev` at the project root — keep it out of git (`ray new` already ignores it)
-ray bundle [--ios|--android] # package the app: name/icon/id from `[app] name/icon/id` of ray.toml (`--name/--icon/--id` override). `[app] display_name = "Ray Sublime"` is the VISIBLE name when it differs from the identifier (the `.app` folder, menu bar and Dock on macOS, `Name=` of the .desktop, the exe's product name, the label on iOS/Android); the binary, the default id and the release zips keep the name. `icon` = a square PNG, 1024x1024 recommended, scaled to every size; for the macOS .app it may also be a hand-made `.icns` or `.iconset` (one PNG per size, e.g. a simplified 16/32 px version), and `[app.macos] icon` gives macOS its own while the other systems keep the PNG. On iOS/Android the process subsystem is always excluded: `process.run`/`stream`/`spawn_detached` (and `update.relaunch`/`apply`) return `Err` there, so shared code can import `std/process` and `std/update`
+ray bundle [--ios|--android] # package the app: name/icon/id from `[app] name/icon/id` of ray.toml (`--name/--icon/--id` override). `[app] display_name = "Ray Sublime"` is the VISIBLE name when it differs from the identifier (the `.app` folder, menu bar and Dock on macOS, `Name=` of the .desktop, the exe's product name and (1.27.117) the Windows Start Menu shortcut `<display_name>.lnk`, the label on iOS/Android); the binary, the default id and the release zips keep the name. `icon` = a square PNG, 1024x1024 recommended, scaled to every size; for the macOS .app it may also be a hand-made `.icns` or `.iconset` (one PNG per size, e.g. a simplified 16/32 px version), and `[app.macos] icon` gives macOS its own while the other systems keep the PNG. On iOS/Android the process subsystem is always excluded: `process.run`/`stream`/`spawn_detached` (and `update.relaunch`/`apply`) return `Err` there, so shared code can import `std/process` and `std/update`
 ray bundle --ios --dev      # the DEVELOPMENT shell (<id>.dev; also --android --dev): toolchain + VM inside; install once, scan the QR `ray dev --device` prints, reload on every save
 ray profile file.ray        # run on the VM + per-function profile on exit (self/incl time, calls; --json --out f)
 ray build file.ray          # check only (also: ray build --native for a machine binary)

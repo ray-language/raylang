@@ -1138,15 +1138,10 @@ impl Transpiler {
             "sleep" => {
                 // F2 (--fibers): dentro de una fibra, dormir el HILO retendría un worker; se
                 // duerme la fibra (timer del reactor). Fuera de fibra (main), duerme el hilo.
-                if self.fibers {
-                    out.push_str("ray_runtime::fibers::sleep_ms((");
-                    self.emit_expr(out, eff[0])?;
-                    out.push_str(").max(0))");
-                } else {
-                    out.push_str("std::thread::sleep(std::time::Duration::from_millis((");
-                    self.emit_expr(out, eff[0])?;
-                    out.push_str(").max(0) as u64))");
-                }
+                // rayhotel #495: y es un punto de cancelación (`__ray_sleep`, en el runtime).
+                out.push_str("__ray_sleep((");
+                self.emit_expr(out, eff[0])?;
+                out.push_str(").max(0))");
             }
             _ => return Err(format!("std::time::{} is not supported", tfn)),
         }

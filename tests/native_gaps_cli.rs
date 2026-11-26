@@ -362,3 +362,26 @@ fn main() {
         "receiver\ninit\n16\nreceiver\ninit\n16\nreceiver\n[2, 4, 6]\n",
     );
 }
+
+/// rayhotel #496: dos `let _ = spawn(…)` en un bloque. La primera dejaba en ámbito una Task
+/// llamada `_`, y la segunda la pre-clonaba como captura (`let _ = _.clone();`): Rust no compila.
+#[test]
+fn two_discarded_spawns_in_one_block() {
+    same_everywhere(
+        "discarded_spawns",
+        r#"fn f() -> int { 1 }
+fn main() {
+    let _ = spawn(fn() -> int { f() });
+    let _ = spawn(fn() -> int { f() });
+    let r = scope(fn() -> int {
+        let _ = spawn(fn() -> int { f() });
+        let _ = spawn(fn() -> int { f() });
+        2
+    });
+    print(r);
+}
+"#,
+        false,
+        "2\n",
+    );
+}

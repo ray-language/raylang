@@ -157,7 +157,7 @@ Project:
   serve [dir]       serve a directory of static files over HTTP (preview; default . on 127.0.0.1:8000) [--host H] [--port N]
 
 Packages:
-  add <name>[@req]  add a dependency from the index to ray.toml and download it
+  add <name>[@req]... add dependencies from the index to ray.toml and download them
   remove <name>     remove a dependency from ray.toml (and its cache if nobody else uses it)
   update            re-resolve the index dependencies to the newest compatible ones
   search [pattern]  list the index packages (that contain the pattern)
@@ -2358,7 +2358,7 @@ instead of the compiled program; install it once, pair it with the link `ray dev
 change reloads the program on the phone (files, keychain, network and audio are the phone's).\n\
   name/icon/id default to [app] name/icon/id of ray.toml (icon relative to the project root); \
 [app] display_name is the visible name when it differs from the identifier (the .app folder, the menu bar, the .desktop Name, \
-the exe's product name, the label on iOS/Android), while the binary, the default id and the release zips keep the name; \
+the exe's product name and its Start Menu shortcut, the label on iOS/Android), while the binary, the default id and the release zips keep the name; \
 the flags override them. [app.plist] keys go verbatim into the macOS and iOS Info.plist; \
 NSLocalNetworkUsageDescription is added when the program imports std/net, std/udp or net.";
 
@@ -5747,27 +5747,42 @@ fn discover_test_files(dir: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// `ray add <nombre>[@<req>]`: añade una dependencia **del índice** (por nombre) a `ray.toml` y la
-/// descarga (M51a). Sin `@<req>`, usa la versión más alta publicada como `^<latest>` (compatible,
-/// estilo cargo); con `@<req>`, lo respeta (`1.2.0` exacta, `^1.2`, `~1.2.3`, `*`). Valida que la
-/// versión exista en el índice **antes** de tocar el manifiesto (fail-fast ante un typo).
+/// `ray add <nombre>[@<req>]…`: añade una o varias dependencias **del índice** (por nombre) a
+/// `ray.toml` y las descarga (M51a). Sin `@<req>`, usa la versión más alta publicada como
+/// `^<latest>` (compatible, estilo cargo); con `@<req>`, lo respeta (`1.2.0` exacta, `^1.2`,
+/// `~1.2.3`, `*`). Valida TODOS los nombres y versiones contra el índice **antes** de tocar el
+/// manifiesto (fail-fast ante un typo): o entran todas o ninguna (rayhotel #500 — antes solo se
+/// miraba el primer argumento y el resto se ignoraba en silencio).
 fn cmd_add(args: &[String]) {
-    let Some(spec) = args.first().map(String::as_str) else {
-        eprintln!("usage: ray add <name>[@<version>]");
-        process::exit(64);
-    };
-    let (name, req_opt) = match spec.split_once('@') {
-        Some((n, r)) => (n, Some(r)),
-        None => (spec, None),
-    };
-    if name.is_empty() {
-        eprintln!("usage: ray add <name>[@<version>]");
+    const USAGE: &str = "usage: ray add <name>[@<version>]...";
+    if args.is_empty() {
+        eprintln!("{USAGE}");
         process::exit(64);
     }
-    // M51d: el nombre construye rutas (caché, archivo del índice) — validarlo antes de nada.
-    if !crate::deps::valid_package_name(name) {
-        eprintln!("invalid package name '{name}': only letters, digits, '-' and '_'");
-        process::exit(64);
+    let mut specs: Vec<(&str, Option<&str>)> = Vec::new();
+    for spec in args {
+        if spec.starts_with('-') {
+            eprintln!("ray add: unknown option '{spec}'\n{USAGE}");
+            process::exit(64);
+        }
+        let (name, req_opt) = match spec.split_once('@') {
+            Some((n, r)) => (n, Some(r)),
+            None => (spec.as_str(), None),
+        };
+        if name.is_empty() {
+            eprintln!("{USAGE}");
+            process::exit(64);
+        }
+        // M51d: el nombre construye rutas (caché, archivo del índice) — validarlo antes de nada.
+        if !crate::deps::valid_package_name(name) {
+            eprintln!("invalid package name '{name}': only letters, digits, '-' and '_'");
+            process::exit(64);
+        }
+        if specs.iter().any(|(n, _)| *n == name) {
+            eprintln!("ray add: '{name}' is listed twice");
+            process::exit(64);
+        }
+        specs.push((name, req_opt));
     }
     let Some(m) = load_manifest() else {
         eprintln!("no project: missing 'ray.toml' (create one with 'ray new')");
@@ -5791,38 +5806,46 @@ fn cmd_add(args: &[String]) {
     };
     // M298 (#8): `ray add` pregunta al índice por la última versión → refresco best-effort.
     crate::deps::refresh_index_best_effort(&m);
-    // Requisito: el dado, o `^<latest>` si no se especifica versión.
-    let req = match req_opt {
-        Some(r) => r.to_string(),
-        None => match crate::index::latest(&index, name) {
-            Ok(v) => format!("^{v}"),
-            Err(e) => {
-                eprintln!("{e}");
-                process::exit(65);
-            }
-        },
-    };
-    // Fail-fast: valida que la versión exista antes de escribir el manifiesto.
-    if let Err(e) = crate::index::resolve(&index, name, &req) {
-        eprintln!("{e}");
-        process::exit(65);
+    let mut resolved: Vec<(&str, String)> = Vec::new();
+    for (name, req_opt) in &specs {
+        // Requisito: el dado, o `^<latest>` si no se especifica versión.
+        let req = match req_opt {
+            Some(r) => r.to_string(),
+            None => match crate::index::latest(&index, name) {
+                Ok(v) => format!("^{v}"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    process::exit(65);
+                }
+            },
+        };
+        // Fail-fast: valida que la versión exista antes de escribir el manifiesto.
+        if let Err(e) = crate::index::resolve(&index, name, &req) {
+            eprintln!("{e}");
+            process::exit(65);
+        }
+        resolved.push((name, req));
     }
     // Edición mínima del ray.toml (inserta/reemplaza en [dependencies]).
     let toml_path = m.root.join("ray.toml");
-    let src = match fs::read_to_string(&toml_path) {
+    let mut src = match fs::read_to_string(&toml_path) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("could not read '{}': {e}", toml_path.display());
             process::exit(66);
         }
     };
-    let updated = crate::manifest::upsert_dependency(&src, name, &req);
-    if let Err(e) = fs::write(&toml_path, &updated) {
+    for (name, req) in &resolved {
+        src = crate::manifest::upsert_dependency(&src, name, req);
+    }
+    if let Err(e) = fs::write(&toml_path, &src) {
         eprintln!("could not write '{}': {e}", toml_path.display());
         process::exit(73);
     }
-    println!("added dependency '{name} = \"{req}\"'");
-    // Descarga (recarga el manifiesto para que `ensure` vea la nueva dep).
+    for (name, req) in &resolved {
+        println!("added dependency '{name} = \"{req}\"'");
+    }
+    // Descarga (recarga el manifiesto para que `ensure` vea las nuevas deps).
     match crate::manifest::Manifest::load(&m.root) {
         Ok(Some(m2)) => match crate::deps::ensure(&m2) {
             Ok(_) => println!("dependencies up to date"),
@@ -5844,6 +5867,12 @@ fn cmd_remove(args: &[String]) {
         eprintln!("usage: ray remove <name>");
         process::exit(64);
     };
+    // rayhotel #500: como hacía `ray add`, los argumentos de más se ignoraban en silencio.
+    // `remove` re-resuelve el grafo tras cada baja, así que va de una en una: se dice.
+    if let Some(extra) = args.get(1) {
+        eprintln!("ray remove takes one package at a time (unexpected '{extra}')\nusage: ray remove <name>");
+        process::exit(64);
+    }
     if !crate::deps::valid_package_name(name) {
         eprintln!("invalid package name '{name}': only letters, digits, '-' and '_'");
         process::exit(64);

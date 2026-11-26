@@ -52,12 +52,12 @@ pub fn bundle(out_dir: &Path, name: &str, display: &str, version: &str, copyrigh
     }
     sys::update_resources(&exe, &resources)?;
 
-    if let Err(e) = write_shortcut(&dir, name, &exe) {
+    if let Err(e) = write_shortcut(&dir, name, display, &exe) {
         eprintln!("bundle: warning: could not write the shortcut ({e}); continuing without it");
     }
     // M394 (#119): el `.lnk` recién escrito apunta a ESTE directorio; quien descomprime el zip de
     // `ray release` en otra máquina lo rehace con `install.ps1` (destino, cwd e icono reales).
-    if let Err(e) = fs::write(dir.join("install.ps1"), windows_install_script(name)) {
+    if let Err(e) = fs::write(dir.join("install.ps1"), windows_install_script(name, display)) {
         eprintln!("bundle: warning: could not write install.ps1 ({e}); continuing without it");
     }
     // M249: firma Authenticode con signtool (sujeto del certificado en el almacén, o un .pfx).
@@ -182,11 +182,23 @@ fn resize_png(src: &Path, dst: &Path, size: u32) -> Result<(), String> {
     run_powershell(&script).map_err(|e| format!("could not resize the icon to {size}x{size}: {e}"))
 }
 
+/// rayreq #498: el nombre de archivo del acceso directo. Es lo que muestran el menú Inicio y la
+/// búsqueda de Windows, así que lleva el nombre VISIBLE (`[app] display_name`); la carpeta y el
+/// exe siguen con `name`, del que dependen los instaladores y la auto-actualización. Un nombre
+/// visible que no vale como archivo en Windows deja el acceso directo con `name`.
+pub fn shortcut_stem<'a>(name: &'a str, display: &'a str) -> &'a str {
+    let invalid = display.is_empty()
+        || display.ends_with('.')
+        || display.ends_with(' ')
+        || display.chars().any(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'));
+    if invalid { name } else { display }
+}
+
 /// El acceso directo, por `WScript.Shell` (COM): destino y cwd absolutos, icono = el del exe.
-fn write_shortcut(dir: &Path, name: &str, exe: &Path) -> Result<(), String> {
+fn write_shortcut(dir: &Path, name: &str, display: &str, exe: &Path) -> Result<(), String> {
     let abs_dir = plain(&dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf()));
     let abs_exe = plain(&exe.canonicalize().unwrap_or_else(|_| exe.to_path_buf()));
-    let lnk = abs_dir.join(format!("{name}.lnk"));
+    let lnk = abs_dir.join(format!("{}.lnk", shortcut_stem(name, display)));
     let script = format!(
         "$s = (New-Object -ComObject WScript.Shell).CreateShortcut('{}'); \
          $s.TargetPath = '{}'; $s.WorkingDirectory = '{}'; $s.IconLocation = '{},0'; \
@@ -195,32 +207,52 @@ fn write_shortcut(dir: &Path, name: &str, exe: &Path) -> Result<(), String> {
         ps_quote(&abs_exe),
         ps_quote(&abs_dir),
         ps_quote(&abs_exe),
-        name.replace('\'', "''")
+        ps_single(&display.chars().filter(|c| !c.is_control()).collect::<String>())
     );
     run_powershell(&script)
 }
 
-/// M394 (ray-sublime #119): el `install.ps1` del bundle — rehace `<name>.lnk` junto al exe con destino,
-/// cwd e icono en la ubicación REAL y lo copia al menú Inicio del usuario. Se ejecuta con
+/// M394 (ray-sublime #119): el `install.ps1` del bundle — rehace el acceso directo junto al exe con
+/// destino, cwd e icono en la ubicación REAL y lo copia al menú Inicio del usuario. Se ejecuta con
 /// `powershell -ExecutionPolicy Bypass -File install.ps1`. Pura (testeable en cualquier host).
-pub fn windows_install_script(name: &str) -> String {
-    let quoted = name.replace('\'', "''");
+/// rayreq #498: el acceso directo se llama como el nombre visible; el que dejó una versión
+/// anterior con `name` se quita del menú Inicio si apunta a este mismo exe.
+pub fn windows_install_script(name: &str, display: &str) -> String {
+    let quoted = ps_single(name);
+    let stem = shortcut_stem(name, display);
+    let shown = ps_single(stem);
+    // Un carácter de control del nombre visible (un salto de línea del TOML) partiría el script.
+    let clean: String = display.chars().filter(|c| !c.is_control()).collect();
+    let description = ps_single(&clean);
+    let comment = &clean;
+    let drop_old = if stem == name {
+        String::new()
+    } else {
+        format!(
+            "$old = Join-Path $menu '{quoted}.lnk'\r\n\
+             if ((Test-Path $old) -and ((New-Object -ComObject WScript.Shell).CreateShortcut($old).TargetPath -eq $exe)) {{ Remove-Item $old -Force }}\r\n"
+        )
+    };
+    // El nombre visible va dentro del script: con BOM, Windows PowerShell 5.1 lo lee como UTF-8
+    // (sin él usa la página de códigos ANSI y un `Ñ` rompe las comillas). Todo lo que viene del
+    // manifiesto va entre comillas simples, donde PowerShell no expande `$` ni el acento grave.
     format!(
-        "# Installs the {name} shortcut for the current user, pointing at this directory.\r\n\
+        "\u{feff}# Installs the {comment} shortcut for the current user, pointing at this directory.\r\n\
          $ErrorActionPreference = 'Stop'\r\n\
          $here = Split-Path -Parent $MyInvocation.MyCommand.Path\r\n\
          $exe = Join-Path $here '{quoted}.exe'\r\n\
-         $lnk = Join-Path $here '{quoted}.lnk'\r\n\
+         $lnk = Join-Path $here '{shown}.lnk'\r\n\
          $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)\r\n\
          $s.TargetPath = $exe\r\n\
          $s.WorkingDirectory = $here\r\n\
          $s.IconLocation = \"$exe,0\"\r\n\
-         $s.Description = '{quoted}'\r\n\
+         $s.Description = '{description}'\r\n\
          $s.Save()\r\n\
          $menu = Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs'\r\n\
          New-Item -ItemType Directory -Force -Path $menu | Out-Null\r\n\
-         Copy-Item $lnk (Join-Path $menu '{quoted}.lnk') -Force\r\n\
-         Write-Output \"installed: $menu\\{quoted}.lnk -> $exe\"\r\n"
+         Copy-Item $lnk (Join-Path $menu '{shown}.lnk') -Force\r\n\
+         {drop_old}\
+         Write-Output ('installed: ' + (Join-Path $menu '{shown}.lnk') + ' -> ' + $exe)\r\n"
     )
 }
 
@@ -245,7 +277,21 @@ fn plain(p: &Path) -> PathBuf {
 
 /// Ruta entre comillas simples de PowerShell (`'` se dobla).
 fn ps_quote(p: &Path) -> String {
-    plain(p).to_string_lossy().replace('\'', "''")
+    ps_single(&plain(p).to_string_lossy())
+}
+
+/// El contenido de una cadena de comillas simples de PowerShell: cada comilla se dobla. PowerShell
+/// cierra la cadena también con las tipográficas (U+2018, U+2019, U+201A, U+201B), que un nombre
+/// visible puede llevar (`Ray’s Notes`); doblada, cada una vale por sí misma.
+pub fn ps_single(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        out.push(c);
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}') {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// El bloque VS_VERSIONINFO completo: raíz con VS_FIXEDFILEINFO + StringFileInfo (tabla
@@ -379,14 +425,48 @@ mod tests {
     // con icono, y lo copia al menú Inicio; un `'` del nombre se dobla.
     #[test]
     fn install_script_recreates_the_shortcut_with_icon_and_copies_it_to_the_start_menu() {
-        let s = windows_install_script("Probe's");
-        assert!(s.starts_with("# Installs the Probe's shortcut"), "{s}");
+        let s = windows_install_script("Probe's", "Probe's");
+        assert!(s.starts_with("\u{feff}# Installs the Probe's shortcut"), "con BOM: {s}");
         assert!(s.contains("$here = Split-Path -Parent $MyInvocation.MyCommand.Path"));
         assert!(s.contains("$exe = Join-Path $here 'Probe''s.exe'"), "{s}");
         assert!(s.contains("$s.IconLocation = \"$exe,0\""), "{s}");
         assert!(s.contains("Start Menu\\Programs") && s.contains("Copy-Item $lnk (Join-Path $menu 'Probe''s.lnk') -Force"), "{s}");
         assert!(!s.contains("\\\\?\\") && !s.contains("Temp"), "sin rutas de esta máquina: {s}");
-        assert!(s.lines().all(|l| l.ends_with('\r')), "CRLF para el Bloc de notas: {s:?}");
+        assert!(s.split('\n').filter(|l| !l.is_empty()).all(|l| l.ends_with('\r')), "CRLF para el Bloc de notas: {s:?}");
+        assert!(!s.contains("$old"), "sin nombre visible distinto no hay acceso directo viejo que quitar: {s}");
+    }
+
+    // rayreq #498: el acceso directo lleva el nombre visible; la carpeta y el exe, el `name`.
+    #[test]
+    fn the_shortcut_is_named_after_the_display_name() {
+        let s = windows_install_script("RayReq", "Ray Request");
+        assert!(s.starts_with("\u{feff}# Installs the Ray Request shortcut"), "{s}");
+        assert!(s.contains("Write-Output ('installed: ' + (Join-Path $menu 'Ray Request.lnk') + ' -> ' + $exe)"), "{s}");
+        // Lo que viene del manifiesto no llega a una cadena de comillas dobles ni parte líneas.
+        let odd = windows_install_script("App", "Pay $HOME `now`\nRemove-Item x");
+        assert!(odd.contains("$s.Description = 'Pay $HOME `now`Remove-Item x'"), "{odd}");
+        assert!(!odd.contains("\nRemove-Item x"), "{odd}");
+        assert!(odd.lines().filter(|l| l.contains("$HOME")).all(|l| !l.contains('"')), "{odd}");
+        assert!(s.contains("$exe = Join-Path $here 'RayReq.exe'"), "{s}");
+        assert!(s.contains("$lnk = Join-Path $here 'Ray Request.lnk'"), "{s}");
+        assert!(s.contains("$s.Description = 'Ray Request'"), "{s}");
+        assert!(s.contains("Copy-Item $lnk (Join-Path $menu 'Ray Request.lnk') -Force"), "{s}");
+        // El de la versión anterior se quita solo si apunta a este exe.
+        assert!(s.contains("$old = Join-Path $menu 'RayReq.lnk'"), "{s}");
+        assert!(s.contains("CreateShortcut($old).TargetPath -eq $exe)) { Remove-Item $old -Force }"), "{s}");
+        assert!(s.split('\n').filter(|l| !l.is_empty()).all(|l| l.ends_with('\r')), "{s:?}");
+        // Un nombre visible que Windows no admite como archivo: el acceso directo usa `name`,
+        // y la descripción sigue siendo el nombre visible.
+        assert_eq!(shortcut_stem("App", "What? Now"), "App");
+        assert_eq!(shortcut_stem("App", "Trailing."), "App");
+        assert_eq!(shortcut_stem("App", "Ray Request"), "Ray Request");
+        // PowerShell también cierra una cadena con las comillas tipográficas: se doblan.
+        let curly = windows_install_script("App", "Ray\u{2019}s Notes");
+        assert!(curly.contains("$lnk = Join-Path $here 'Ray\u{2019}\u{2019}s Notes.lnk'"), "{curly}");
+        assert!(curly.contains("$s.Description = 'Ray\u{2019}\u{2019}s Notes'"), "{curly}");
+        let s = windows_install_script("App", "What? Now");
+        assert!(s.contains("$lnk = Join-Path $here 'App.lnk'") && s.contains("$s.Description = 'What? Now'"), "{s}");
+        assert!(!s.contains("$old"), "{s}");
     }
 
     #[test]

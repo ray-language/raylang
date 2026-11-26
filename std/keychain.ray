@@ -1,14 +1,17 @@
 // std/keychain (M266, ray-sublime §96) — secretos en el LLAVERO DEL SISTEMA.
 //
-// Sobre el primitivo __keychain del runtime: Keychain Services en macOS, Secret Service (libsecret,
-// gnome-keyring/KWallet) en Linux, Credential Manager en Windows. Un secreto se identifica por
+// Sobre el primitivo __keychain del runtime: Keychain Services en macOS e iOS, Secret Service
+// (libsecret, gnome-keyring/KWallet) en Linux, Credential Manager en Windows; en Android todavía
+// no hay backend y todo devuelve Err. Un secreto se identifica por
 // (service, account) — "mi-app" + "anthropic_api_key" — y es texto UTF-8: tokens, claves de API,
 // contraseñas. Con RAY_KEYCHAIN_FILE=<ruta> en el entorno, un archivo plano (0600) hace de llavero:
 // la vía de los tests y del CI, nunca de producción.
 
 /// Reads the secret stored under `service`/`account`: `Ok(Some(secret))`, or `Ok(None)` when there
 /// is none. `Err` when the system keychain is unavailable (no Secret Service daemon on Linux, a
-/// slim build) or refuses the access.
+/// slim build, Android — not supported yet) or refuses the access. Backends: Keychain Services on
+/// macOS and iOS (on iOS the app must be code signed: a simulator build made with
+/// `CODE_SIGNING_ALLOWED=NO` gets `Err`), Secret Service on Linux, Credential Manager on Windows.
 pub fn get(service: string, account: string) -> Result<Option<string>, string> {
     let r = __keychain("get", service, account, "");
     if (r[0] == "ok") {

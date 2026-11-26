@@ -22423,3 +22423,33 @@ ajuste por defecto); con la barra de menús siempre visible la franja sigue ahí
 saber si está en pantalla completa (no hay evento ni propiedad) y `window.ray.titlebar_height`
 no baja a 0 ahí, así que una página que reserva ese margen lo conserva vacío. Si el puntero
 revela la barra, esta cubre el borde superior mientras está a la vista, como en cualquier app.
+
+## 486. `std/keychain` en iOS y Android (ray-remote #504 y #503, nov 2026)
+
+**Qué fallaba.** El backend de Keychain Services estaba bajo `target_os = "macos"` y el de
+libsecret bajo «unix que no es macOS», así que iOS y Android compilaban el de Linux: las tres
+operaciones devolvían «libsecret-1.so.0 is not available». `ray bundle --ios` no avisaba y la
+documentación no nombraba las plataformas móviles.
+
+**Qué se hizo.** El backend de Keychain Services pasa a `target_vendor = "apple"`: es la misma
+API `SecItem*` en macOS e iOS, sin cambios de código. El proyecto Xcode generado enlaza
+`Security.framework`. Android tiene un backend propio que devuelve `keychain: not supported on
+Android yet`; el Keystore exige JNI y no se hizo. El de libsecret queda para el resto de unix.
+
+**La firma.** En iOS el llavero se reparte por grupo de acceso, y el grupo sale de la firma. Una
+app sin firmar no tiene ninguno y `SecItem*` devuelve `errSecMissingEntitlement` (−34018). El
+comando de simulador que sugiere `ray bundle` lleva `CODE_SIGNING_ALLOWED=NO`, así que ese
+estado se traduce a un mensaje que dice qué falta. No se cambió el comando sugerido: sin el
+flag Xcode firma en local sin pedir team, pero es lo que usan los proyectos que no tocan el
+llavero.
+
+**Comprobado.** En el simulador (iPhone 15, iOS 17.5), un programa que lee, guarda, reemplaza,
+borra dos veces y vuelve a leer: con la app firmada en local da `none`, `ok`, `some s3cret`,
+`ok`, `some other`, `true`, `false`, `none`, igual que en macOS; sin firmar, las ocho llamadas
+dan el `Err` del grupo de acceso. `cargo check` del runtime para `aarch64-apple-ios-sim` y
+`aarch64-linux-android`.
+
+**Límites.** No se probó en un iPhone físico. El backend de Android solo se compiló, no se
+ejecutó en el emulador. El ítem usa la accesibilidad por defecto del sistema (disponible con el
+dispositivo desbloqueado) y el grupo de acceso por defecto de la app: no se comparte con
+extensiones ni con otras apps del mismo team. No hay test automático del camino de iOS.

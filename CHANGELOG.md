@@ -23,7 +23,7 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   recuento no coincidía con las pruebas que hay. Ahora una prueba importada cuyo archivo es
   otra suite corre solo allí. Pidiendo un archivo (`ray test a/contract.ray`) sus importados
   siguen entrando, y un filtro calificado con el módulo (`ray test scan.`) encuentra la prueba
-  en la suite de su archivo.
+  en la suite de su archivo, también con el paquete delante (`kit.a.scan.t_scan`).
 - **Cápsulas — un trait interno no da métodos fuera** (rayhotel #481). `shop.make(4).peek()`
   compilaba aunque `peek` fuera de un trait que la fachada no exporta. Ahora es un error de
   tipos, como ya lo eran las funciones internas; el método de un trait que la fachada sí

@@ -3698,16 +3698,19 @@ impl Checker {
                 // struct. El sitio se registra apuntando a la función **manglada**.
                 // Revisión de 1.27.109: `q.to_string()` sobre un tipo con `Show` es `q.show()`, como
                 // `to_string(q)`; sin esto caía en el builtin y mostraba la forma por defecto.
+                // rayhotel #481: un trait interno de una cápsula, que su fachada no exporta, no da
+                // métodos fuera de ella. Se descarta ANTES del respaldo de `to_string`: un
+                // `to_string` interno no debe tapar el `Show` del tipo.
+                let visible = |method: &str, key: &str| {
+                    self.methods.get(&(key.to_string(), method.to_string())).filter(|mangled| !self.trait_hidden_by_capsule(mangled, line)).cloned()
+                };
                 let trait_method = type_key_of(&recv_ty).and_then(|key| {
-                    self.methods.get(&(key.clone(), name.clone())).cloned().or_else(|| {
+                    visible(name, &key).or_else(|| {
                         (name == "to_string" && args.is_empty() && matches!(recv_ty, Type::Struct(_, _) | Type::Enum(_, _)))
-                            .then(|| self.methods.get(&(key, "show".to_string())).cloned())
+                            .then(|| visible("show", &key))
                             .flatten()
                     })
                 });
-                // rayhotel #481: un trait interno de una cápsula, que su fachada no exporta, no da
-                // métodos fuera de ella.
-                let trait_method = trait_method.filter(|mangled| !self.trait_hidden_by_capsule(mangled, line));
                 if let Some(mangled) = trait_method {
                     let mut all = Vec::with_capacity(args.len() + 1);
                     all.push((**object).clone());

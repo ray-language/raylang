@@ -537,9 +537,16 @@ fn std_trait_method_doc(symbol: &str) -> Option<String> {
 /// El núcleo del doc por-fuente: firma (fn pública o método de trait público) + las `///`
 /// contiguas. Lo comparten la stdlib embebida y los fuentes de un PROYECTO (modo `path`).
 fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
+    source_symbol_doc_with(mod_name, src, func, &std::collections::HashMap::new())
+}
+
+/// `source_symbol_doc` de un ítem que una fachada re-exporta: `renames` nombra sus tipos como el
+/// contrato (`raydoc::contract_renames`), y esos ya no se califican con su módulo interno.
+fn source_symbol_doc_with(mod_name: &str, src: &str, func: &str, renames: &std::collections::HashMap<String, String>) -> Option<String> {
     {
         let Ok(tokens) = crate::lexer::lex(src) else { return None };
-        let Ok(prog) = crate::parser::parse(tokens) else { return None };
+        let Ok(mut prog) = crate::parser::parse(tokens) else { return None };
+        crate::raydoc::rename_types(&mut prog, renames);
         // Función pública top-level o, si no, un MÉTODO DE TRAIT público (dogfood raydesk:
         // la superficie de std/kv son los métodos de StoreOps — `s.get(k)`, `s.set(k, v)` —
         // y ray_doc los negaba; la firma sale del MethodSig, la doc del mismo escaneo de ///).
@@ -552,6 +559,7 @@ fn source_symbol_doc(mod_name: &str, src: &str, func: &str) -> Option<String> {
             .from_imports
             .iter()
             .flat_map(|fi| fi.names.iter().map(move |n| (n.alias.clone().unwrap_or_else(|| n.name.clone()), format!("{}.{}", fi.module, n.name))))
+            .filter(|(local, _)| !renames.contains_key(local))
             .collect();
         let sig = if let Some(f) = prog.functions.iter().find(|f| f.is_pub && f.name == func) {
             let mut f = f.clone();
@@ -797,7 +805,10 @@ fn reexport_lines(src: &str, file: &std::path::Path) -> Vec<String> {
     let items = crate::raydoc::reexports(src, file);
     for item in &items {
         let Ok(tokens) = crate::lexer::lex(&item.source) else { continue };
-        let Ok(prog) = crate::parser::parse(tokens) else { continue };
+        let Ok(mut prog) = crate::parser::parse(tokens) else { continue };
+        // Los tipos, como los nombra el contrato (`model.Booking` → `Booking`).
+        let renames = crate::raydoc::contract_renames(&prog, item, &items);
+        crate::raydoc::rename_types(&mut prog, &renames);
         let name = item.original.as_str();
         let sig = if let Some(f) = prog.functions.iter().find(|f| f.name == name) {
             fn_signature(f)
@@ -813,8 +824,6 @@ fn reexport_lines(src: &str, file: &std::path::Path) -> Vec<String> {
         } else {
             continue;
         };
-        // Los tipos, como los nombra el contrato (`model.Booking` → `Booking`).
-        let sig = crate::raydoc::contract_names(&sig, item, &items);
         if item.visible == item.original {
             lines.push(format!("{sig}  [re-exported from {}]", item.module));
         } else {
@@ -1018,8 +1027,12 @@ fn project_doc_text(symbol: &str, path: &str) -> Option<String> {
                     item.module
                 ));
             }
-            if let Some(text) = source_symbol_doc(&label, &item.source, &item.original) {
-                let text = crate::raydoc::contract_names(&text, item, &items);
+            let renames = crate::lexer::lex(&item.source)
+                .ok()
+                .and_then(|t| crate::parser::parse(t).ok())
+                .map(|prog| crate::raydoc::contract_renames(&prog, item, &items))
+                .unwrap_or_default();
+            if let Some(text) = source_symbol_doc_with(&label, &item.source, &item.original, &renames) {
                 return Some(format!("{text}\n(re-exported by {label} from {})", item.module));
             }
         }

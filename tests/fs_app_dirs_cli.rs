@@ -24,6 +24,9 @@ fn main() {
     show(fs.data_dir(" "));
     show(fs.data_dir("App."));
     show(fs.cache_dir("a:b"));
+    show(fs.data_dir("a\tb"));
+    show(fs.data_dir("con"));
+    show(fs.cache_dir("COM1.cache"));
 }
 "#;
 
@@ -52,7 +55,7 @@ fn run(dir: &Path, vm: bool, set: &[(&str, &Path)]) -> Vec<String> {
     String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect()
 }
 
-const REJECTED: [&str; 7] = [
+const REJECTED: [&str; 10] = [
     "err invalid app name '': it must be a single folder name",
     "err invalid app name '..': it must be a single folder name",
     "err invalid app name 'a/b': it must be a single folder name",
@@ -60,6 +63,9 @@ const REJECTED: [&str; 7] = [
     "err invalid app name ' ': it must be a single folder name",
     "err invalid app name 'App.': it must be a single folder name",
     "err invalid app name 'a:b': it must be a single folder name",
+    "err invalid app name 'a\tb': it must be a single folder name",
+    "err invalid app name 'con': it must be a single folder name",
+    "err invalid app name 'COM1.cache': it must be a single folder name",
 ];
 
 fn ok(path: PathBuf) -> String {

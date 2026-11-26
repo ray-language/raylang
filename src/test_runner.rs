@@ -250,12 +250,27 @@ fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign:
     // El archivo del módulo de una función, por la banda de líneas del programa fusionado
     // (`modules` va ordenado por `start_line`).
     let module_path = |line: usize| loaded.modules.iter().rev().find(|m| m.start_line <= line).map(|m| m.path.as_path());
-    // El nombre del módulo de un archivo como se escribe al importarlo: `scan` para `a/scan.ray`,
-    // `a` para `a/mod.ray`.
-    let module_stem = |line: usize| {
-        let path = module_path(line)?;
-        let stem = path.file_stem()?.to_str()?;
-        if stem == "mod" { path.parent()?.file_name()?.to_str().map(str::to_string) } else { Some(stem.to_string()) }
+    // Los nombres calificados del módulo de un archivo, como los escribiría quien lo importa:
+    // `a.scan` (por su ruta dentro del paquete, sin `src/` ni `mod`) y `kit.a.scan` (con el
+    // nombre del paquete delante).
+    let module_names = |line: usize| -> Vec<String> {
+        let Some(path) = module_path(line) else { return Vec::new() };
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let root = path.ancestors().skip(1).find(|d| d.join("ray.toml").is_file());
+        let rel = root.and_then(|r| path.strip_prefix(r).ok()).unwrap_or_else(|| Path::new(path.file_name().unwrap_or_default()));
+        let mut parts: Vec<String> = rel.with_extension("").components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+        if parts.first().is_some_and(|p| p == "src") {
+            parts.remove(0);
+        }
+        if parts.len() > 1 && parts.last().is_some_and(|p| p == "mod") {
+            parts.pop();
+        }
+        let local = parts.join(".");
+        let package = root.and_then(|r| crate::manifest::Manifest::load(r).ok().flatten()).map(|m| m.name);
+        match package {
+            Some(pkg) => vec![format!("{pkg}.{local}"), local],
+            None => vec![local],
+        }
     };
     let is_foreign = |f: &crate::ast::Function| {
         module_path(f.line).is_some_and(|p| {
@@ -282,10 +297,10 @@ fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign:
             let Some(p) = filter else { return true };
             // El separador interno `::` del loader vuelve al `.` que escribe el usuario.
             let display = f.name.replace("::", ".");
-            // Un filtro calificado (`scan.`, `lex.t_lex`) casa también con una prueba de la propia
+            // Un filtro calificado (`scan.`, `lex.t_lex`, `kit.a.scan.t_scan`) casa también con una prueba de la propia
             // suite, que se muestra sin módulo: en una biblioteca cada prueba corre en la suite de
             // su archivo (rayhotel #501) y `ray test scan.` debe seguir encontrándola.
-            display.contains(p) || (p.contains('.') && !f.name.contains("::") && module_stem(f.line).is_some_and(|m| format!("{m}.{display}").contains(p)))
+            display.contains(p) || (p.contains('.') && !f.name.contains("::") && module_names(f.line).iter().any(|m| format!("{m}.{display}").contains(p)))
         })
         .map(|f| Test {
             global: f.name.clone(),

@@ -149,14 +149,31 @@ pub fn make_temp_dir(prefix: string) -> Result<string, string> {
 // falla en el teléfono: en iOS `$HOME` es el contenedor, su raíz no se puede escribir y
 // `Library/Application Support` no existe hasta que alguien la crea. ---
 // El nombre de la app es UNA carpeta, escrita igual en todos los sistemas: sin separadores, sin
-// los caracteres que Windows reserva, y sin espacio en los extremos ni punto final (Windows los
-// quita, y `"App."` y `"App"` serían la misma carpeta; `" "` sería la raíz compartida).
+// los caracteres ni los nombres de dispositivo que Windows reserva, y sin espacio en los extremos
+// ni punto final (Windows los quita, y `"App."` y `"App"` serían la misma carpeta; `" "` sería la
+// raíz compartida).
 fn app_folder(app: string) -> Result<string, string> {
     var ok = app != "" && app.trim() == app && !app.ends_with(".");
     for c in ["/", "\\", ":", "*", "?", "\"", "<", ">", "|"] {
         if (app.contains(c)) {
             ok = false;
         }
+    }
+    // Los caracteres de control no valen en un nombre de Windows.
+    for c in app.chars() {
+        if (c < ' ') {
+            ok = false;
+        }
+    }
+    // Ni los nombres de dispositivo, con o sin extensión: `CON`, `nul.txt`, `COM1`…
+    let stem = app.split(".")[0].to_upper();
+    let devices = ["CON", "PRN", "AUX", "NUL"];
+    let numbered = (stem.starts_with("COM") || stem.starts_with("LPT"))
+        && stem.len() == 4
+        && stem.substring(3, 4) >= "1"
+        && stem.substring(3, 4) <= "9";
+    if (devices.contains(stem) || numbered) {
+        ok = false;
     }
     if (!ok) {
         return Result.Err("invalid app name '" + app + "': it must be a single folder name");
@@ -167,7 +184,11 @@ fn app_folder(app: string) -> Result<string, string> {
 // Una ruta absoluta: `/…` en Unix; `C:\…` o `\\servidor\…` en Windows.
 fn is_absolute(path: string) -> bool {
     if (platform() == "windows") {
-        return path.starts_with("\\\\") || (path.len() > 2 && path.substring(1, 2) == ":");
+        // `C:datos` es relativa al directorio actual de la unidad: hace falta el separador.
+        let rooted = path.len() > 2
+            && path.substring(1, 2) == ":"
+            && (path.substring(2, 3) == "\\" || path.substring(2, 3) == "/");
+        return path.starts_with("\\\\") || rooted;
     }
     path.starts_with("/")
 }
@@ -186,8 +207,11 @@ fn env_dir(name: string) -> Result<string, string> {
     if (!is_absolute(v)) {
         return Result.Err(name + " is not an absolute path: " + v);
     }
+    // `\` solo separa en Windows (en Unix es un carácter más del nombre). La raíz `/` queda en
+    // "", y lo que se le añade empieza por separador.
+    let windows = platform() == "windows";
     var dir = v;
-    while (dir.len() > 1 && (dir.ends_with("/") || dir.ends_with("\\"))) {
+    while (dir.ends_with("/") || (windows && dir.ends_with("\\"))) {
         dir = dir.substring(0, dir.len() - 1);
     }
     Result.Ok(dir)
@@ -222,8 +246,9 @@ fn ensure_dir(dir: string) -> Result<string, string> {
 /// - Linux and other Unix: `$XDG_DATA_HOME/<app>`, or `$HOME/.local/share/<app>`.
 ///
 /// `Err` if `app` is not a folder name valid on every system (no separators, no `: * ? " < > |`,
-/// no leading or trailing space, no trailing dot), if the variable it needs is not set or is not
-/// an absolute path, or if the folder cannot be created.
+/// no control characters, no leading or trailing space, no trailing dot, not a Windows device
+/// name such as `CON`), if the variable it needs is not set or is not an absolute path, or if the
+/// folder cannot be created.
 pub fn data_dir(app: string) -> Result<string, string> {
     let name = app_folder(app)?;
     let os = platform();
@@ -247,9 +272,7 @@ pub fn data_dir(app: string) -> Result<string, string> {
 /// - Windows: `%LOCALAPPDATA%\<app>\Cache`.
 /// - Linux and other Unix: `$XDG_CACHE_HOME/<app>`, or `$HOME/.cache/<app>`.
 ///
-/// `Err` if `app` is not a folder name valid on every system (no separators, no `: * ? " < > |`,
-/// no leading or trailing space, no trailing dot), if the variable it needs is not set or is not
-/// an absolute path, or if the folder cannot be created.
+/// `Err` in the same cases as `data_dir`.
 pub fn cache_dir(app: string) -> Result<string, string> {
     let name = app_folder(app)?;
     let os = platform();

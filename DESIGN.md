@@ -22589,41 +22589,44 @@ y `Show` siguen igual.
 
 **`ray doc` mostraba nombres que no se pueden escribir (#485).** La firma de un ítem re-exportado
 se imprime desde el AST de su módulo, donde el tipo de un hermano es `model.Booking`.
-`raydoc::contract_names` cambia cada `alias.Tipo` por el nombre con que la fachada lo exporta,
-si el módulo de ese alias y el nombre coinciden con uno de sus re-exports; y cada tipo suelto del
-propio módulo que la fachada exporta con otro nombre. Es una sustitución sobre el texto de la
-firma, por nombres enteros. Lo que la fachada no exporta se deja como está: de eso ya avisa
-`ray check` (#487). La usan `ray doc <archivo>`, y en el MCP y `ray doc <módulo>` las líneas de
-re-export y la consulta por símbolo. Un trait re-exportado lista sus métodos en el Markdown,
-como uno declarado en el archivo.
+`raydoc::contract_renames` arma, para el módulo del ítem, la tabla de cada tipo que la fachada
+re-exporta tal como ese módulo lo escribe (`alias.Tipo` de un `import`, el nombre suelto de un
+`from … import`, un tipo propio exportado con otro nombre) → su nombre visible, y
+`raydoc::rename_types` la aplica sobre el AST antes de imprimir: a los tipos de parámetros,
+retornos, campos, cargas de variantes, constantes y alias, y a nada más. Lo que la fachada no
+exporta se deja como está: de eso ya avisa `ray check` (#487). Lo usan `ray doc <archivo>`, y en
+el MCP y `ray doc <módulo>` las líneas de re-export y la consulta por símbolo. Un trait
+re-exportado lista sus métodos en el Markdown, como uno declarado en el archivo.
 
 **Comprobado.** Tests en `tests/capsules_cli.rs`: la biblioteca de tres módulos da 3 pruebas, cada
 una una vez, y 3 al pedir el archivo que importa a los otros; el método del trait interno no
 compila fuera y el del exportado sí (VM e intérprete); `ray doc` por archivo, por módulo y por
-símbolo. Unitario de la sustitución de nombres. El binario 1.27.116 daba 5 pruebas y compilaba
+símbolo. Unitario del renombrado de tipos. El binario 1.27.116 daba 5 pruebas y compilaba
 el `peek()`.
 
-**Revisión antes de la 1.27.118.** Cuatro correcciones. (1) La sustitución de `ray doc` cambiaba
-cualquier re-export renombrado, también funciones: `total as booking_total` reescribía el campo
-`total` y el parámetro `total`. Ahora solo cambia tipos (`Reexported::is_type`), y un nombre suelto
-seguido de `:` (un campo o un parámetro que se llama igual) se deja. (2) Un tipo traído con
-`from … import` no se renombraba en dos vistas y en la tercera salía `booking/Reservation`: se
-reconocen las tres formas de nombrarlo (`alias.Tipo`, `ruta/modulo.Tipo`, suelto), y `/` no es
-límite de un calificador. (3) En una biblioteca `ray test scan.` dejó de encontrar la prueba, que
-ya no se llama `kit.a.scan.t_scan` sino `t_scan` en su suite, y salía con código 0 sin correr
-nada: un filtro con `.` casa también con `<módulo>.<prueba>` de la propia suite. (4) El completion
-del LSP seguía ofreciendo el método del trait interno: `enumerate_members` pasa por el mismo
-filtro que `check_call`.
+**Revisión antes de la 1.27.118.** La primera versión de `ray doc` sustituía sobre el TEXTO de
+la firma, y dos tandas de revisión le encontraron fallos de la misma clase: renombraba campos y
+parámetros que se llamaban como una función re-exportada (`total as booking_total`), nombres de
+variantes (`Event.Booking`), el valor de una constante (`"Booking"`) y la prosa; dos exports
+cruzados (`A as B, B as A`) se pisaban; y un tipo traído con `from … import` salía sin renombrar
+o como `booking/Reservation`. Se rehízo sobre el AST, que quita la clase entera. Otras tres
+correcciones: (1) en una biblioteca `ray test scan.` dejó de encontrar la prueba, que ya no se
+llama `kit.a.scan.t_scan` sino `t_scan` en su suite, y salía con código 0 sin correr nada: un
+filtro con `.` casa también con el nombre calificado de la prueba en su propia suite (`scan.`,
+`a.scan.`, `kit.a.scan.t_scan`). (2) El completion del LSP seguía ofreciendo el método del trait
+interno: `enumerate_members` pasa por el mismo filtro que `check_call`. (3) Un `to_string` de un
+trait interno tapaba fuera el `Show` del tipo, porque el filtro corría después de decidir el
+respaldo `to_string` → `show`: ahora cada candidato se filtra antes.
 
 **Límites.** El nombre del método de un trait interno sigue ocupando su entrada en la tabla
 `methods`: quien usa la cápsula no puede dar ese nombre a un método de un trait propio sobre el
 mismo tipo («method ambiguous»), igual que antes de este arco; quitarlo pide que la tabla admita
-varios métodos por nombre. El espejo selfhost del checker no conoce las cápsulas (tampoco antes). El método de
-un trait interno sigue alcanzable por un genérico con bound si el trait se puede nombrar, que
-fuera de la cápsula no se puede. La sustitución de `ray doc` es textual: un `///` re-exportado
-por símbolo que cite `model.Booking` también cambia, y una firma que nombre el tipo por un
-`from … import` con alias no se reconoce. `ray doc` sigue mostrando la cabecera de un struct
-re-exportado con su nombre original y «Exported as …» debajo.
+varios métodos por nombre. El espejo selfhost del checker no conoce las cápsulas (tampoco antes).
+El método de un trait interno sigue alcanzable por un genérico con bound si el trait se puede
+nombrar, que fuera de la cápsula no se puede. La prosa de un `///` que cite `model.Booking` no
+se renombra. `ray doc` sigue mostrando la cabecera de un struct re-exportado con su nombre
+original y «Exported as …» debajo. La frontera de cápsula se calcula en tres sitios del checker
+(`trait_hidden_by_capsule`, `type_module_fn`, `opaque_outside`), sin un helper común.
 
 ## 490. `fs.data_dir` y `fs.cache_dir`: la carpeta de la app en cada sistema (ray-remote #506, nov 2026)
 
@@ -22645,8 +22648,11 @@ XDG en el resto, ignorando una variable XDG relativa como manda la norma. `app` 
 de carpeta que se escribe igual en todos los sistemas: vacío, con separadores, con un carácter
 que Windows reserva (`: * ? " < > |`), con espacio en los extremos o con punto final es `Err`
 (Windows quita puntos y espacios finales: `"App."` sería `"App"`, y `" "` la raíz compartida).
+Tampoco valen los caracteres de control ni un nombre de dispositivo de Windows (`CON`, `NUL`,
+`COM1`…, con o sin extensión).
 La variable que hace falta debe estar y ser una ruta absoluta; si no, `Err`, y no una carpeta
-relativa que cambia según desde dónde se lance el programa. El separador final se quita.
+relativa que cambia según desde dónde se lance el programa; en Windows `C:datos` cuenta como
+relativa. El separador final se quita (`\` solo en Windows).
 
 **En iOS va Application Support y no Documents.** `Documents/` es para archivos del usuario (la
 app Archivos los enseña si la app lo declara); los datos internos van en `Library`. El ejemplo
@@ -22662,6 +22668,8 @@ ausente, XDG absoluta y relativa, y el binario nativo. Las ramas de iOS y Androi
 corrido en un dispositivo: la de iOS es la ruta que ray-remote comprobó en su iPhone al rodear
 el fallo.
 
-**Límites.** No hay `config_dir` ni carpeta de documentos del usuario. En Android fuera del shell
+**Límites.** No hay `config_dir` ni carpeta de documentos del usuario. El transpilador lista por
+nombre los auxiliares privados de `std/fs` cuyo cuerpo emite: uno nuevo que no se añada a
+`fs_wrapper_emitted` solo falla en `ray build --native` (lo vigila el test nativo, en Unix). En Android fuera del shell
 de `ray bundle` nadie fija `HOME`, y las funciones dan `Err`.
 

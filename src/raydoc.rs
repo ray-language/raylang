@@ -119,67 +119,101 @@ pub fn reexports(src: &str, file: &std::path::Path) -> Vec<Reexported> {
     out
 }
 
-/// rayhotel #485: la firma de un ítem re-exportado, con los tipos como los nombra el CONTRATO. En
-/// su módulo la firma dice `model.Booking` (el tipo de un hermano, por el nombre con que lo
-/// importa); quien lee la documentación de la fachada no puede escribir eso: para él es el
-/// `Booking` que la fachada re-exporta. Solo se cambian TIPOS que la fachada re-exporta, por
-/// cualquiera de las formas en que el módulo del ítem los nombra: `alias.Tipo` (de un `import`),
-/// `ruta/modulo.Tipo` y el nombre suelto (de un `from … import`), y un tipo del propio módulo que
-/// la fachada exporta con otro nombre. Lo que la fachada no exporta se deja como está (de eso
-/// avisa `ray check`).
-pub fn contract_names(text: &str, item: &Reexported, all: &[Reexported]) -> String {
-    let Some(prog) = crate::lexer::lex(&item.source).ok().and_then(|t| crate::parser::parse(t).ok()) else {
-        return text.to_string();
-    };
-    let mut out = text.to_string();
+/// rayhotel #485: los tipos de un ítem re-exportado, como los nombra el CONTRATO. En su módulo la
+/// firma dice `model.Booking` (el tipo de un hermano, por el nombre con que lo importa); quien lee
+/// la documentación de la fachada no puede escribir eso: para él es el `Booking` que la fachada
+/// re-exporta. Devuelve, para el módulo `prog` del ítem, el nombre de cada TIPO que la fachada
+/// re-exporta tal como ese módulo lo escribe → su nombre visible: `alias.Tipo` (de un `import`), el
+/// nombre suelto (de un `from … import`, también cuando no cambia) y un tipo del propio módulo que
+/// se exporta con otro nombre. Lo que la fachada no exporta no está en la tabla: se deja como
+/// está (de eso avisa `ray check`).
+pub fn contract_renames(prog: &crate::ast::Program, item: &Reexported, all: &[Reexported]) -> std::collections::HashMap<String, String> {
     fn types_in<'a>(all: &'a [Reexported], file: &'a std::path::Path) -> impl Iterator<Item = &'a Reexported> {
         all.iter().filter(move |r| r.is_type && r.file == file)
     }
-    // Un tipo del PROPIO módulo del ítem, sin calificar, que la fachada exporta con otro nombre.
-    for other in types_in(all, &item.file).filter(|r| r.visible != r.original && r.original != item.original) {
-        out = replace_qualified(&out, "", &other.original, &other.visible);
+    let mut renames = std::collections::HashMap::new();
+    for other in types_in(all, &item.file).filter(|r| r.visible != r.original) {
+        renames.insert(other.original.clone(), other.visible.clone());
     }
     let module_file = |module: &str| locate_module(&item.file, module).map(|f| f.canonicalize().unwrap_or(f));
     for imp in &prog.imports {
         let Some(file) = module_file(&imp.module) else { continue };
         for other in types_in(all, &file) {
-            out = replace_qualified(&out, &imp.module, &other.original, &other.visible);
-            out = replace_qualified(&out, imp.leaf(), &other.original, &other.visible);
+            renames.insert(format!("{}.{}", imp.leaf(), other.original), other.visible.clone());
         }
     }
     for fi in &prog.from_imports {
         let Some(file) = module_file(&fi.module) else { continue };
         for n in &fi.names {
-            let Some(other) = types_in(all, &file).find(|r| r.original == n.name) else { continue };
-            out = replace_qualified(&out, &fi.module, &other.original, &other.visible);
-            if n.local() != other.visible {
-                out = replace_qualified(&out, "", n.local(), &other.visible);
+            if let Some(other) = types_in(all, &file).find(|r| r.original == n.name) {
+                renames.insert(n.local().to_string(), other.visible.clone());
             }
         }
     }
-    out
+    renames
 }
 
-/// Cambia cada `qualifier.name` de `text` (o cada `name` suelto, con `qualifier` vacío) por
-/// `with`, solo donde es un nombre entero (ni `xqualifier.name`, ni `a.qualifier.name`, ni
-/// `dir/qualifier.name`, ni `qualifier.names`). Un nombre suelto seguido de `:` es un campo o un
-/// parámetro que se llama igual, no el tipo: se deja.
-fn replace_qualified(text: &str, qualifier: &str, name: &str, with: &str) -> String {
-    let needle = if qualifier.is_empty() { name.to_string() } else { format!("{qualifier}.{name}") };
-    let ident = |c: char| c.is_alphanumeric() || c == '_';
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    while let Some(at) = rest.find(&needle) {
-        let before_ok = !rest[..at].chars().next_back().is_some_and(|c| ident(c) || c == '.' || c == '/');
-        let after = &rest[at + needle.len()..];
-        let declares = qualifier.is_empty() && after.trim_start().starts_with(':');
-        let after_ok = !after.chars().next().is_some_and(ident) && !declares;
-        out.push_str(&rest[..at]);
-        out.push_str(if before_ok && after_ok { with } else { &needle });
-        rest = after;
+/// Aplica `renames` a cada TIPO que aparece en las firmas de `prog`: parámetros y retornos de
+/// funciones y de métodos de trait, campos, cargas de variantes, constantes y alias. Es un
+/// renombrado sobre el AST, de una pasada: no toca nombres de campos, de variantes ni de
+/// parámetros, ni valores, ni la prosa, y dos exports cruzados (`A as B, B as A`) no se pisan.
+pub fn rename_types(prog: &mut crate::ast::Program, renames: &std::collections::HashMap<String, String>) {
+    use crate::ast::Type;
+    if renames.is_empty() {
+        return;
     }
-    out.push_str(rest);
-    out
+    fn walk(t: &mut Type, renames: &std::collections::HashMap<String, String>) {
+        match t {
+            Type::Struct(n, args) | Type::Enum(n, args) => {
+                if let Some(to) = renames.get(n.as_str()) {
+                    *n = to.clone();
+                }
+                args.iter_mut().for_each(|a| walk(a, renames));
+            }
+            Type::Array(e) | Type::Channel(e) | Type::Task(e) => walk(e, renames),
+            Type::Tuple(ts) => ts.iter_mut().for_each(|x| walk(x, renames)),
+            Type::Map(k, v) => {
+                walk(k, renames);
+                walk(v, renames);
+            }
+            Type::Fn(ps, r) => {
+                ps.iter_mut().for_each(|x| walk(x, renames));
+                walk(r, renames);
+            }
+            Type::Dyn(traits) => {
+                for name in traits.iter_mut() {
+                    if let Some(to) = renames.get(name.as_str()) {
+                        *name = to.clone();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for f in &mut prog.functions {
+        f.params.iter_mut().for_each(|p| walk(&mut p.ty, renames));
+        walk(&mut f.return_type, renames);
+    }
+    for t in &mut prog.traits {
+        for m in &mut t.methods {
+            m.params.iter_mut().for_each(|p| walk(&mut p.ty, renames));
+            walk(&mut m.return_type, renames);
+        }
+    }
+    for st in &mut prog.structs {
+        st.fields.iter_mut().for_each(|(_, ty)| walk(ty, renames));
+    }
+    for e in &mut prog.enums {
+        for v in &mut e.variants {
+            v.payload.iter_mut().for_each(|ty| walk(ty, renames));
+        }
+    }
+    for c in &mut prog.consts {
+        walk(&mut c.ty, renames);
+    }
+    for a in &mut prog.type_aliases {
+        walk(&mut a.target, renames);
+    }
 }
 
 /// La cara de un struct reexportado como `opaque`: su nombre y sus parámetros de tipo, sin campos.
@@ -206,7 +240,10 @@ pub fn generate_file(path: &std::path::Path) -> Result<String, String> {
     out.push_str("## Re-exports\n\n");
     for item in &items {
         let Ok(tokens) = crate::lexer::lex(&item.source) else { continue };
-        let Ok(prog) = crate::parser::parse(tokens) else { continue };
+        let Ok(mut prog) = crate::parser::parse(tokens) else { continue };
+        // Los tipos, como los nombra el contrato (`model.Booking` → `Booking`).
+        let renames = contract_renames(&prog, item, &items);
+        rename_types(&mut prog, &renames);
         let lines: Vec<&str> = item.source.lines().collect();
         let name = item.original.as_str();
         let mut methods: Vec<String> = Vec::new();
@@ -219,7 +256,7 @@ pub fn generate_file(path: &std::path::Path) -> Result<String, String> {
             (sig_enum(e), e.line)
         } else if let Some(t) = prog.traits.iter().find(|t| t.name == name) {
             // Un trait re-exportado lleva sus métodos, como uno declarado en el archivo.
-            methods = t.methods.iter().map(|m| contract_names(&sig_method(m), item, &items)).collect();
+            methods = t.methods.iter().map(sig_method).collect();
             (sig_trait(t), t.line)
         } else if let Some(c) = prog.consts.iter().find(|c| c.name == name) {
             (const_signature(c), c.line)
@@ -228,7 +265,6 @@ pub fn generate_file(path: &std::path::Path) -> Result<String, String> {
         } else {
             continue;
         };
-        let sig = contract_names(&sig, item, &items);
         out.push_str(&format!("### `{sig}`\n\n"));
         if item.visible != item.original {
             // La cabecera de un opaco ya lleva el nombre exportado: aquí va el otro.
@@ -485,17 +521,19 @@ fn sig_trait(t: &TraitDef) -> String {
 mod tests {
     use super::*;
 
-    // rayhotel #485: solo nombres enteros, calificados o sueltos.
+    // rayhotel #485: el renombrado va por el AST: solo tipos, y de una pasada.
     #[test]
-    fn replace_qualified_only_touches_whole_names() {
-        assert_eq!(replace_qualified("-> Result<[model.Booking], string>", "model", "Booking", "Booking"), "-> Result<[Booking], string>");
-        assert_eq!(replace_qualified("a: model.Booking, b: model.Bookings", "model", "Booking", "R"), "a: R, b: model.Bookings");
-        assert_eq!(replace_qualified("x: supermodel.Booking, y: a.model.Booking", "model", "Booking", "R"), "x: supermodel.Booking, y: a.model.Booking");
-        assert_eq!(replace_qualified("other: Booking, n: Bookings, m: x.Booking", "", "Booking", "R"), "other: R, n: Bookings, m: x.Booking");
-        // Un campo o un parámetro que se llama como el tipo no es el tipo; ni la ruta de un módulo.
-        assert_eq!(replace_qualified("total: int, t: total", "", "total", "R"), "total: int, t: R");
-        assert_eq!(replace_qualified("[booking/model.Booking]", "model", "Booking", "R"), "[booking/model.Booking]");
-        assert_eq!(replace_qualified("[booking/model.Booking]", "booking/model", "Booking", "R"), "[R]");
+    fn rename_types_touches_types_only_and_in_one_pass() {
+        let src = "pub enum Event { Booking(Booking), Cancel(Cancel), }\n\
+pub const KIND: string = \"Booking\";\n\
+pub fn swap(Booking: int, a: Booking, b: [model.Cancel]) -> Map<string, Booking> { panic(\"x\") }\n";
+        let mut prog = crate::parser::parse(crate::lexer::lex(src).unwrap()).unwrap();
+        let renames: std::collections::HashMap<String, String> =
+            [("Booking", "Cancel"), ("Cancel", "Booking"), ("model.Cancel", "Gone")].iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
+        rename_types(&mut prog, &renames);
+        assert_eq!(sig_enum(&prog.enums[0]), "enum Event { Booking(Cancel), Cancel(Booking) }");
+        assert_eq!(const_signature(&prog.consts[0]), "const KIND: string = \"Booking\"");
+        assert_eq!(sig_function(&prog.functions[0]), "fn swap(Booking: int, a: Cancel, b: [Gone]) -> Map<string, Cancel>");
     }
 
     /// M376: `//!` al principio del archivo = doc de módulo; un `//` corriente la cierra; sin `//!`, nada.

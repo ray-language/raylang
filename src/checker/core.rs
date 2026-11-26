@@ -84,6 +84,7 @@ impl Checker {
             opaque_types: HashMap::new(),
             current_fn_module: String::new(),
             current_fn_site: None,
+            current_fn_is_default_clone: false,
             default_method_modules: HashMap::new(),
             shadowed_free_fns: HashSet::new(),
             root_user_fns: HashSet::new(),
@@ -446,6 +447,7 @@ impl Checker {
             let owner = f.name.split('#').next().unwrap_or(&f.name);
             // Un método por defecto heredado: su cuerpo es código del módulo del TRAIT (su clon
             // tampoco tiene línea propia).
+            self.current_fn_is_default_clone = self.default_method_modules.contains_key(&f.name);
             self.current_fn_module = if let Some(module) = self.default_method_modules.get(&f.name) {
                 module.clone()
             } else if f.name.contains('#') && !self.synthetic_methods.contains(&f.name) {
@@ -470,6 +472,7 @@ impl Checker {
             }
         }
         self.current_fn_site = None;
+        self.current_fn_is_default_clone = false;
         Ok(())
     }
 
@@ -4143,12 +4146,12 @@ impl Checker {
     /// debe resolver al `get` del prelude. `None` en la entrada (prefijo `""`), fuera de banda
     /// (prelude) o sin bandas (archivo único).
     fn module_local_fn(&self, name: &str, line: usize, recv_ty: &Type) -> Option<String> {
-        // El módulo del código que llama, no el de la banda de la línea: el cuerpo clonado de un
-        // método por defecto lleva líneas sintéticas y caía en el último módulo cargado.
-        let prefix = match &self.current_fn_site {
-            Some(module) if module != &self.entry_module => module.as_str(),
-            Some(_) => return None,
-            None => self.module_bands.iter().rev().find(|(start, _)| *start <= line).map(|(_, p)| p.as_str())?,
+        // La banda de la línea dice el módulo, salvo en el cuerpo clonado de un método por
+        // defecto: lleva líneas sintéticas y caía en el último módulo cargado.
+        let prefix = if self.current_fn_is_default_clone {
+            self.current_fn_module.as_str()
+        } else {
+            self.module_bands.iter().rev().find(|(start, _)| *start <= line).map(|(_, p)| p.as_str())?
         };
         if prefix.is_empty() {
             return None;

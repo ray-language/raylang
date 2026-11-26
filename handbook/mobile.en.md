@@ -171,6 +171,10 @@ fn data_dir() -> string {
 
 `NOTES_DIR` lets tests or CI change the folder without touching the code.
 
+`fs.data_dir("Notes")` saves you this table: it returns the app's data folder on each system,
+already created. On iOS it is `Library/Application Support/Notes` inside the container, and on
+Android `files/Notes`. The [next chapter](cross-platform.en.md) uses it.
+
 ## 4. The protocol with the page
 
 Every request goes through one function: it receives the JSON the page sent and returns the JSON
@@ -570,5 +574,5 @@ And what is declared in `ray.toml`:
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:e42aea4b5963 -->
-<!-- sync: sha256:e42aea4b5963 -->
+<!-- sync: sha256:f014dfb3c68c -->
+<!-- sync: sha256:f014dfb3c68c -->

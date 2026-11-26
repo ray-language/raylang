@@ -900,6 +900,17 @@ struct Checker {
     current_fn_is_root: bool,
     /// El módulo (con `::`) de la función que se está comprobando; `""` en la entrada.
     current_fn_module: String,
+    /// El módulo (como lo da `site_module`) donde está ESCRITO el código de la función que se
+    /// comprueba; `None` fuera de una función. No sale de la línea: el cuerpo de un método por
+    /// defecto clonado o de un `@derive` lleva líneas sintéticas, que no caen en la banda de su
+    /// módulo.
+    current_fn_site: Option<String>,
+    /// La función que se comprueba es el clon de un método por defecto: su cuerpo lleva líneas
+    /// sintéticas, que no dicen en qué módulo está escrito.
+    current_fn_is_default_clone: bool,
+    /// Los métodos por defecto que un impl hereda (nombre global `Tipo#método`) → el módulo del
+    /// TRAIT, que es donde está escrito su cuerpo.
+    default_method_modules: HashMap<String, String>,
     /// #356: mientras se validan los destinos de los alias de tipo, un parámetro de tipo puede
     /// ser clave de `Map` sin bound (un alias no los declara; lo valida cada uso).
     key_params_allowed: bool,

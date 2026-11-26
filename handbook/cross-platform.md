@@ -113,32 +113,20 @@ y `DELETE`.
 ## 2. La carpeta de datos de cada sistema
 
 Una app de escritorio no debe escribir en la carpeta Documentos del usuario. Cada sistema tiene la
-suya para datos de aplicaciones, y `platform()` dice en cuál estás:
+suya para datos de aplicaciones, y `fs.data_dir` la devuelve ya creada:
 
 <!-- check: project=examples/apps/notes-everywhere -->
 ```rust
-/// The folder for the app's data on this platform. `NOTES_DIR` overrides it (tests, CI).
-pub fn data_dir(app: string) -> string {
+/// The folder for the app's data on this platform, created if missing. `NOTES_DIR` overrides
+/// it (tests, CI).
+pub fn data_dir(app: string) -> Result<string, string> {
     match (env("NOTES_DIR")) {
-        Option.Some(d) => return d,
-        Option.None => { },
+        Option.Some(d) => {
+            fs.mkdir(d)?;
+            Result.Ok(d)
+        },
+        Option.None => fs.data_dir(app),
     }
-    let home = env("HOME").unwrap_or(".");
-    let os = platform();
-    if (os == "macos") {
-        return home + "/Library/Application Support/" + app;
-    }
-    if (os == "windows") {
-        return env("APPDATA").unwrap_or(home) + "\\" + app;
-    }
-    if (os == "linux") {
-        return match (env("XDG_DATA_HOME")) {
-            Option.Some(d) => d + "/" + app,
-            Option.None => home + "/.local/share/" + app,
-        };
-    }
-    // iOS and Android
-    home + "/Documents/" + app
 }
 ```
 
@@ -147,9 +135,12 @@ pub fn data_dir(app: string) -> string {
 | macOS | `~/Library/Application Support/Notes` |
 | Linux | `$XDG_DATA_HOME/Notes`, o `~/.local/share/Notes` |
 | Windows | `%APPDATA%\Notes` |
-| iOS y Android | dentro del sandbox de la app, como en el capítulo móvil |
+| iOS | `<contenedor>/Library/Application Support/Notes` |
+| Android | `files/Notes`, en la carpeta privada de la app |
 
-`fs.mkdir` crea las carpetas intermedias que falten.
+Si falta la variable de la que depende (`HOME`, `APPDATA`) o la carpeta no se puede crear, devuelve
+`Err`. Para lo que la app puede volver a generar, como miniaturas o descargas, está
+`fs.cache_dir(app)`: el sistema puede vaciar esa carpeta cuando le falta espacio.
 
 ## 3. Menús nativos
 

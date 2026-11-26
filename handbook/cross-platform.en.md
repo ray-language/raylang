@@ -112,32 +112,20 @@ module (`save`, `remove`) has the same shape as in the mobile version, with `INS
 ## 2. Each system's data folder
 
 A desktop app should not write into the user's Documents folder. Each system has its own place for
-application data, and `platform()` tells you which one you are on:
+application data, and `fs.data_dir` returns it, already created:
 
 <!-- check: project=examples/apps/notes-everywhere -->
 ```rust
-/// The folder for the app's data on this platform. `NOTES_DIR` overrides it (tests, CI).
-pub fn data_dir(app: string) -> string {
+/// The folder for the app's data on this platform, created if missing. `NOTES_DIR` overrides
+/// it (tests, CI).
+pub fn data_dir(app: string) -> Result<string, string> {
     match (env("NOTES_DIR")) {
-        Option.Some(d) => return d,
-        Option.None => { },
+        Option.Some(d) => {
+            fs.mkdir(d)?;
+            Result.Ok(d)
+        },
+        Option.None => fs.data_dir(app),
     }
-    let home = env("HOME").unwrap_or(".");
-    let os = platform();
-    if (os == "macos") {
-        return home + "/Library/Application Support/" + app;
-    }
-    if (os == "windows") {
-        return env("APPDATA").unwrap_or(home) + "\\" + app;
-    }
-    if (os == "linux") {
-        return match (env("XDG_DATA_HOME")) {
-            Option.Some(d) => d + "/" + app,
-            Option.None => home + "/.local/share/" + app,
-        };
-    }
-    // iOS and Android
-    home + "/Documents/" + app
 }
 ```
 
@@ -146,9 +134,12 @@ pub fn data_dir(app: string) -> string {
 | macOS | `~/Library/Application Support/Notes` |
 | Linux | `$XDG_DATA_HOME/Notes`, or `~/.local/share/Notes` |
 | Windows | `%APPDATA%\Notes` |
-| iOS and Android | inside the app sandbox, as in the mobile chapter |
+| iOS | `<container>/Library/Application Support/Notes` |
+| Android | `files/Notes`, in the app's private folder |
 
-`fs.mkdir` creates any missing parent folders.
+If the variable it depends on (`HOME`, `APPDATA`) is missing, or the folder cannot be created, it
+returns `Err`. For what the app can build again, such as thumbnails or downloads, there is
+`fs.cache_dir(app)`: the system may empty that folder when it runs low on space.
 
 ## 3. Native menus
 
@@ -400,4 +391,4 @@ together with automatic updates.
 [**Windows in depth**](windows.en.md): everything else `std/ui` offers a desktop app, with a text
 editor as the example.
 
-<!-- sync: sha256:c99a4675f09b -->
+<!-- sync: sha256:4c9f3e75880a -->

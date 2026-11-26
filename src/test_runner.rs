@@ -108,10 +108,11 @@ pub(crate) fn run_with(suite_paths: &[PathBuf], dep_roots: &loader::DepRoots, fi
     // corrían dos veces. Cada `@test` corre una vez, en la suite de su archivo.
     let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let other_suites: Vec<PathBuf> = suite_paths.iter().skip(1).map(|p| canon(p)).collect();
+    let mut moved = Vec::new();
     for (i, path) in suite_paths.iter().enumerate() {
         match loader::load_with_deps(path, dep_roots) {
             Ok(loaded) => {
-                let tests = collect_tests(&loaded, filter, i > 0, &foreign, &other_suites);
+                let tests = collect_tests(&loaded, filter, i > 0, &foreign, &other_suites, &mut moved);
                 suites.push(Suite { display: display_path(path), path: path.clone(), loaded, tests });
             }
             Err(e) => {
@@ -245,7 +246,12 @@ pub(crate) fn run_with(suite_paths: &[PathBuf], dep_roots: &loader::DepRoots, fi
 /// Recolecta las funciones `@test` del programa fusionado, en orden de declaración, aplicando el
 /// filtro por subcadena sobre el nombre de cara al usuario (`math.double_ok`). Con `own_only`,
 /// solo las del módulo de entrada de la suite (las importadas llevan nombre namespaceado `::`).
-fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign: &[PathBuf], other_suites: &[PathBuf]) -> Vec<Test> {
+///
+/// `moved` lleva las pruebas que la primera suite importa y que corren en la suite de su propio
+/// archivo (rayhotel #501): (archivo, nombre pelado, nombre calificado que tenían en la primera).
+/// La primera suite la llena y las demás la leen, para que el filtro siga casando con ese nombre
+/// calificado (`ray test scan.`, `ray test kit.a.scan.t_scan`) aunque la prueba ya no se muestre así.
+fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign: &[PathBuf], other_suites: &[PathBuf], moved: &mut Vec<(PathBuf, String, String)>) -> Vec<Test> {
     let program = &loaded.program;
     // El archivo del módulo de una función, por la banda de líneas del programa fusionado
     // (`modules` va ordenado por `start_line`).
@@ -256,29 +262,32 @@ fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign:
             foreign.iter().any(|d| p.starts_with(d))
         })
     };
-    // Una prueba IMPORTADA cuyo archivo es otra suite: ya corre allí (rayhotel #501).
-    let runs_in_its_own_suite = |f: &crate::ast::Function| {
-        f.name.contains("::")
-            && module_path(f.line).is_some_and(|p| {
-                let p = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-                other_suites.contains(&p)
-            })
-    };
-    program
-        .functions
-        .iter()
-        .filter(|f| f.annotations.iter().any(|a| a.name == "test"))
-        .filter(|f| !(own_only && f.name.contains("::")))
-        .filter(|f| !is_foreign(f))
-        .filter(|f| !runs_in_its_own_suite(f))
-        .map(|f| Test {
-            global: f.name.clone(),
-            // El separador interno `::` del loader vuelve al `.` que escribe el usuario.
-            display: f.name.replace("::", "."),
-            kind: if f.return_type == Type::Bool { Kind::Bool } else { Kind::Unit },
-        })
-        .filter(|t| filter.is_none_or(|p| t.display.contains(p)))
-        .collect()
+    let canon_module = |line: usize| module_path(line).map(|p| p.canonicalize().unwrap_or_else(|_| p.to_path_buf()));
+    let mut tests = Vec::new();
+    for f in program.functions.iter().filter(|f| f.annotations.iter().any(|a| a.name == "test")) {
+        let imported = f.name.contains("::");
+        if (own_only && imported) || is_foreign(f) {
+            continue;
+        }
+        // El separador interno `::` del loader vuelve al `.` que escribe el usuario.
+        let display = f.name.replace("::", ".");
+        let file = canon_module(f.line);
+        // Una prueba IMPORTADA cuyo archivo es otra suite: ya corre allí (rayhotel #501).
+        if imported && file.as_ref().is_some_and(|p| other_suites.contains(p)) {
+            let bare = f.name.rsplit("::").next().unwrap_or(&f.name).to_string();
+            moved.push((file.unwrap_or_default(), bare, display));
+            continue;
+        }
+        if let Some(p) = filter {
+            // El nombre calificado con que esta prueba se mostraba en la primera suite.
+            let qualified = || !imported && moved.iter().any(|(path, bare, was)| Some(path) == file.as_ref() && bare == &f.name && was.contains(p));
+            if !display.contains(p) && !qualified() {
+                continue;
+            }
+        }
+        tests.push(Test { global: f.name.clone(), display, kind: if f.return_type == Type::Bool { Kind::Bool } else { Kind::Unit } });
+    }
+    tests
 }
 
 /// M390 (ray-remote #149): los directorios cuyos módulos NO son del proyecto — cada paquete por

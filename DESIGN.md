@@ -22589,23 +22589,109 @@ y `Show` siguen igual.
 
 **`ray doc` mostraba nombres que no se pueden escribir (#485).** La firma de un ítem re-exportado
 se imprime desde el AST de su módulo, donde el tipo de un hermano es `model.Booking`.
-`raydoc::contract_names` cambia cada `alias.Tipo` por el nombre con que la fachada lo exporta,
-si el módulo de ese alias y el nombre coinciden con uno de sus re-exports; y cada tipo suelto del
-propio módulo que la fachada exporta con otro nombre. Es una sustitución sobre el texto de la
-firma, por nombres enteros. Lo que la fachada no exporta se deja como está: de eso ya avisa
-`ray check` (#487). La usan `ray doc <archivo>`, y en el MCP y `ray doc <módulo>` las líneas de
-re-export y la consulta por símbolo. Un trait re-exportado lista sus métodos en el Markdown,
-como uno declarado en el archivo.
+`raydoc::Contract` traduce cada nombre de tipo tal como el módulo del ítem lo escribe (`alias.Tipo`
+de un `import`, el nombre suelto de un `from … import` o del propio módulo) al nombre con que la
+fachada lo exporta, siguiéndolo hasta su definición, también a través de la fachada de una cápsula
+anidada; y `raydoc::rename_types` lo aplica sobre el AST antes de imprimir: a los tipos de
+parámetros, retornos, campos, cargas de variantes, constantes y alias, a los traits de los bounds
+y supertraits, y a nada más. Un parámetro de tipo en ámbito tapa al tipo del mismo nombre. En la
+consulta por símbolo del MCP la función pasa una sola vez por «nombre del contrato y, si no lo
+hay, el módulo de su `from … import`». Lo que la fachada no
+exporta se deja como está: de eso ya avisa `ray check` (#487). Lo usan `ray doc <archivo>`, y en
+el MCP y `ray doc <módulo>` las líneas de re-export y la consulta por símbolo. Un trait
+re-exportado lista sus métodos en el Markdown, como uno declarado en el archivo.
 
 **Comprobado.** Tests en `tests/capsules_cli.rs`: la biblioteca de tres módulos da 3 pruebas, cada
 una una vez, y 3 al pedir el archivo que importa a los otros; el método del trait interno no
 compila fuera y el del exportado sí (VM e intérprete); `ray doc` por archivo, por módulo y por
-símbolo. Unitario de la sustitución de nombres. El binario 1.27.116 daba 5 pruebas y compilaba
+símbolo. Unitario del renombrado de tipos. El binario 1.27.116 daba 5 pruebas y compilaba
 el `peek()`.
 
-**Límites.** El espejo selfhost del checker no conoce las cápsulas (tampoco antes). El método de
-un trait interno sigue alcanzable por un genérico con bound si el trait se puede nombrar, que
-fuera de la cápsula no se puede. La sustitución de `ray doc` es textual: un `///` re-exportado
-por símbolo que cite `model.Booking` también cambia, y una firma que nombre el tipo por un
-`from … import` con alias no se reconoce. `ray doc` sigue mostrando la cabecera de un struct
-re-exportado con su nombre original y «Exported as …» debajo.
+**Revisión antes de la 1.27.118.** La primera versión de `ray doc` sustituía sobre el TEXTO de
+la firma, y dos tandas de revisión le encontraron fallos de la misma clase: renombraba campos y
+parámetros que se llamaban como una función re-exportada (`total as booking_total`), nombres de
+variantes (`Event.Booking`), el valor de una constante (`"Booking"`) y la prosa; dos exports
+cruzados (`A as B, B as A`) se pisaban; y un tipo traído con `from … import` salía sin renombrar
+o como `booking/Reservation`. Se rehízo sobre el AST, que quita la clase entera. Otras tres
+correcciones: (1) en una biblioteca `ray test scan.` dejó de encontrar la prueba, que ya no se
+llama `kit.a.scan.t_scan` sino `t_scan` en su suite, y salía con código 0 sin correr nada. La
+primera suite anota el nombre calificado de cada prueba que deja a la suite de su archivo, y allí
+el filtro casa con el nombre que se muestra o con ese otro: selecciona exactamente lo mismo que
+antes del arreglo (`scan`, `scan.`, `kit.a.scan.t_scan`), sin reglas nuevas. Dos intentos previos
+con una regla propia (el nombre del archivo, la ruta del módulo) dejaban fuera filtros que antes
+casaban o seleccionaban de más. (2) El completion del LSP seguía ofreciendo el método del trait
+interno: `enumerate_members` pasa por el mismo filtro que `check_call`. (3) Un `to_string` de un
+trait interno tapaba fuera el `Show` del tipo, porque el filtro corría después de decidir el
+respaldo `to_string` → `show`: ahora cada candidato se filtra antes, y lo mismo vale para el
+`show` que buscan `to_string(x)`, `print` y la interpolación (`visible_method`). (4) El sitio de una
+llamada se sacaba de su línea, y el cuerpo de un método por defecto heredado (un clon, con líneas
+sintéticas) caía en la banda del ÚLTIMO módulo cargado: `fn twice(self) { self.peek() * 2 }` en
+un trait interno dejaba de compilar según el orden de los imports. El sitio es ahora el módulo
+de la función que se comprueba (`current_fn_site`: el del trait para un método por defecto, el
+del tipo para un `@derive`), y la frontera se calcula en un solo sitio (`capsule_boundary`), que
+usan también `type_module_fn` y `opaque_outside`: el mismo fallo existía ahí desde la 1.27.112.
+`module_local_fn` (el UFCS a una función del propio módulo) tenía el mismo defecto desde antes:
+`self.size().double()` en un método por defecto llamaba al `double` del último módulo cargado si
+allí había uno. (5) El trait interno seguía alcanzable por dos puertas laterales: un `dyn Hidden`
+que una función exportada devuelve, y un bound `T: Wide` con `Wide: Hidden`. Las dos consultan
+ahora `trait_hidden_outside`.
+
+**Límites.** El nombre del método de un trait interno sigue ocupando su entrada en la tabla
+`methods`: quien usa la cápsula no puede dar ese nombre a un método de un trait propio sobre el
+mismo tipo («method ambiguous»), igual que antes de este arco; quitarlo pide que la tabla admita
+varios métodos por nombre. El espejo selfhost del checker no conoce las cápsulas (tampoco antes).
+La prosa de un `///` que cite `model.Booking` no
+se renombra. `ray doc` sigue mostrando la cabecera de un struct re-exportado con su nombre
+original y «Exported as …» debajo, y dentro de su declaración el tipo se nombra igual. Lo que la
+fachada DECLARA ella misma (`pub fn first_id(n: model.Node)`) no pasa por el renombrado: solo lo
+que re-exporta. `ray doc` localiza el módulo de un `import` probando primero el directorio más
+cercano y el loader desde la raíz: con dos módulos del mismo nombre (`util` y `booking/util`) que
+definan un tipo del mismo nombre puede atribuir el nombre del contrato al otro. `to_string(x)` y la
+interpolación buscan el método `show` por nombre y no por el trait `Show` (ya antes del arco): un
+trait propio con un método `show` cambia esas dos formas y no `print`.
+
+## 490. `fs.data_dir` y `fs.cache_dir`: la carpeta de la app en cada sistema (ray-remote #506, nov 2026)
+
+**El hueco.** ray-remote calculaba su carpeta de datos desde `env("HOME")`: Application Support si
+existe, si no `~/.config`. En el iPhone `$HOME` es el contenedor de la app, cuya raíz no se puede
+escribir, y `Library/Application Support` no existe hasta que alguien la crea: la app caía en
+`~/.config` y guardar daba «Operation not permitted». Qué es `$HOME` en el teléfono solo lo decía
+el handbook móvil; `llms.txt`, la REFERENCE y `ray doc`, que es donde busca un agente, no.
+
+**La decisión.** Dos funciones en `std/fs`, raylang puro sobre `platform()`, `env` y `mkdir_mode`:
+`data_dir(app)` y `cache_dir(app)`, que devuelven `Result<string, string>` con la carpeta **ya
+creada** (privada, 0o700, lo que ellas creen). Crearla es parte del contrato: el fallo del hallazgo
+fue justo comprobar si existía. La tabla es la de cada sistema: Application Support y Caches en
+macOS e iOS; `$HOME/<app>` y `$TMPDIR/<app>` (la carpeta `cache`) en Android, donde la actividad
+del bundle fija `HOME` y `TMPDIR`; `%APPDATA%\<app>` y `%LOCALAPPDATA%\<app>\Cache` en Windows (la
+caché en una subcarpeta, porque `%LOCALAPPDATA%\<app>` suele ser también donde se instala un
+programa por usuario);
+XDG en el resto, ignorando una variable XDG relativa como manda la norma. `app` es un solo nombre
+de carpeta que se escribe igual en todos los sistemas: vacío, con separadores, con un carácter
+que Windows reserva (`: * ? " < > |`), con espacio en los extremos o con punto final es `Err`
+(Windows quita puntos y espacios finales: `"App."` sería `"App"`, y `" "` la raíz compartida).
+Tampoco valen los caracteres de control ni un nombre de dispositivo de Windows (`CON`, `NUL`,
+`COM0`–`COM9`, `LPT¹`, `CONIN$`…, con o sin extensión).
+La variable que hace falta debe estar y ser una ruta absoluta; si no, `Err`, y no una carpeta
+relativa que cambia según desde dónde se lance el programa; en Windows `C:datos` cuenta como
+relativa. El separador final se quita (`\` solo en Windows).
+
+**En iOS va Application Support y no Documents.** `Documents/` es para archivos del usuario (la
+app Archivos los enseña si la app lo declara); los datos internos van en `Library`. El ejemplo
+`notes-mobile` sigue en `Documents/` porque enseña la ruta a mano; `notes-everywhere` pasa a
+`fs.data_dir`, sin migrar lo que una instalación anterior del ejemplo dejara en `Documents/Notes`.
+
+**Nativo.** `std/fs` se intercepta por nombre en el transpilador; estas dos y sus auxiliares
+entran en `fs_wrapper_emitted` y se emite su cuerpo, como `copy_all`.
+
+**Comprobado.** `tests/fs_app_dirs_cli.rs`, con `HOME`/`APPDATA`/XDG apuntando a una carpeta de
+prueba: la ruta de cada sistema, que la carpeta queda creada, los nombres rechazados, la variable
+ausente, XDG absoluta y relativa, y el binario nativo. Las ramas de iOS y Android no se han
+corrido en un dispositivo: la de iOS es la ruta que ray-remote comprobó en su iPhone al rodear
+el fallo.
+
+**Límites.** No hay `config_dir` ni carpeta de documentos del usuario. El transpilador lista por
+nombre los auxiliares privados de `std/fs` cuyo cuerpo emite: uno nuevo que no se añada a
+`fs_wrapper_emitted` solo falla en `ray build --native` (lo vigila el test nativo, en Unix). En Android fuera del shell
+de `ray bundle` nadie fija `HOME`, y las funciones dan `Err`.
+

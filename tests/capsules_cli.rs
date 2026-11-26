@@ -86,6 +86,90 @@ pub fn inside(i: Invoice) -> int { i.peek() }\n";
     assert!(err.contains("no field or function 'peek' applicable to shop::model::Invoice"), "{err}");
     let _ = std::fs::remove_dir_all(ok);
     let _ = std::fs::remove_dir_all(leak);
+
+    // Un `to_string` de un trait interno no tapa fuera el `Show` del tipo.
+    let shown = tree("trait_show", &[
+        ("ray.toml", APP_TOML),
+        ("src/main.ray", "import shop;\nfn main() {\n    print(shop.make(4).to_string());\n    print(shop.inside(shop.make(4)));\n}\n"),
+        ("src/shop/mod.ray", "pub from shop/model import Invoice, make, inside;\n"),
+        (
+            "src/shop/model.ray",
+            "pub struct Invoice { id: int, }\npub fn make(id: int) -> Invoice { Invoice { id: id } }\n\
+impl Show for Invoice { fn show(self) -> string { \"INV-\" + to_string(self.id) } }\n\
+pub trait Raw { fn to_string(self) -> string; }\nimpl Raw for Invoice { fn to_string(self) -> string { \"raw\" } }\n\
+pub fn inside(i: Invoice) -> string { i.to_string() }\n",
+        ),
+    ]);
+    let (out, err, code) = ray(&shown, &["run"]);
+    assert_eq!((out.as_str(), code), ("INV-4\nraw\n", 0), "{err}");
+    let _ = std::fs::remove_dir_all(shown);
+
+    // El cuerpo de un método por defecto del trait interno es código de la cápsula, cargue quien
+    // cargue después: su clon no tiene línea propia y antes se juzgaba por el último módulo.
+    let default_body = tree("trait_default", &[
+        ("ray.toml", APP_TOML),
+        ("src/main.ray", "import zeta;\nimport shop;\nfn main() {\n    print(shop.inside(shop.make(4)));\n    print(zeta.far());\n}\n"),
+        ("src/zeta.ray", "import omega/deep/far;\npub fn far() -> int { far.away() }\n"),
+        ("src/omega/deep/far.ray", "pub fn away() -> int { 7 }\n"),
+        ("src/shop/mod.ray", "pub from shop/model import Invoice, make, inside;\n"),
+        (
+            "src/shop/model.ray",
+            "pub struct Invoice { id: int, }\npub fn make(id: int) -> Invoice { Invoice { id: id } }\n\
+pub fn helper(i: Invoice) -> int { i.id }\n\
+pub trait Hidden {\n    fn peek(self) -> int;\n    fn twice(self) -> int { self.peek() * 2 }\n}\n\
+impl Hidden for Invoice { fn peek(self) -> int { self.helper() } }\n\
+pub fn inside(i: Invoice) -> int { i.twice() }\n",
+        ),
+    ]);
+    let (out, err, code) = ray(&default_body, &["run"]);
+    assert_eq!((out.as_str(), code), ("8\n7\n", 0), "{err}");
+    let _ = std::fs::remove_dir_all(default_body);
+
+    // Tampoco por un `dyn` que la fachada deja salir, ni por un bound que lo trae de supertrait.
+    let side_doors = |name: &str, main: &str| tree(name, &[
+        ("ray.toml", APP_TOML),
+        ("src/main.ray", main),
+        ("src/shop/mod.ray", "pub from shop/model import Invoice, make, as_hidden, Wide, wide_inside;\n"),
+        (
+            "src/shop/model.ray",
+            "pub struct Invoice { id: int, }\npub fn make(id: int) -> Invoice { Invoice { id: id } }\n\
+pub trait Hidden { fn peek(self) -> int; }\nimpl Hidden for Invoice { fn peek(self) -> int { self.id } }\n\
+pub trait Wide: Hidden { fn span(self) -> int; }\nimpl Wide for Invoice { fn span(self) -> int { self.id * 3 } }\n\
+pub fn as_hidden(i: Invoice) -> dyn Hidden { i }\n\
+pub fn wide_inside<T: Wide>(x: T) -> int { x.peek() + as_hidden(make(1)).peek() }\n",
+        ),
+    ]);
+    let inside = side_doors("trait_doors_ok", "import shop;\nfn g<T: shop.Wide>(x: T) -> int { x.span() }\nfn main() {\n    print(shop.wide_inside(shop.make(4)));\n    print(g(shop.make(4)));\n}\n");
+    let (out, err, code) = ray(&inside, &["run"]);
+    assert_eq!((out.as_str(), code), ("5\n12\n", 0), "{err}");
+    for (name, main) in [
+        ("trait_door_dyn", "import shop;\nfn main() {\n    print(shop.as_hidden(shop.make(4)).peek());\n}\n"),
+        ("trait_door_bound", "import shop;\nfn g<T: shop.Wide>(x: T) -> int { x.peek() }\nfn main() {\n    print(g(shop.make(4)));\n}\n"),
+    ] {
+        let d = side_doors(name, main);
+        let (out, err, code) = ray(&d, &["run"]);
+        assert_ne!(code, 0, "{name}: {out}{err}");
+        assert!(err.contains("'peek'"), "{name}: {err}");
+        let _ = std::fs::remove_dir_all(d);
+    }
+    let _ = std::fs::remove_dir_all(inside);
+
+    // Ni un `show` de un trait interno pasa por `Show` fuera: las tres formas dan lo mismo.
+    let raw_show = tree("trait_raw_show", &[
+        ("ray.toml", APP_TOML),
+        ("src/main.ray", "import shop;\nfn main() {\n    let i = shop.make(4);\n    print(i.to_string());\n    print(to_string(i));\n    print(\"${i}\");\n    print(shop.inside(i));\n}\n"),
+        ("src/shop/mod.ray", "pub from shop/model import Invoice, make, inside;\n"),
+        (
+            "src/shop/model.ray",
+            "pub struct Invoice { id: int, }\npub fn make(id: int) -> Invoice { Invoice { id: id } }\n\
+pub trait Raw { fn show(self) -> string; }\nimpl Raw for Invoice { fn show(self) -> string { \"raw\" } }\n\
+pub fn inside(i: Invoice) -> string { to_string(i) }\n",
+        ),
+    ]);
+    let (out, err, code) = ray(&raw_show, &["run"]);
+    let plain = "shop::model::Invoice { id: 4 }";
+    assert_eq!((out.as_str(), code), (format!("{plain}\n{plain}\n{plain}\nraw\n").as_str(), 0), "{err}");
+    let _ = std::fs::remove_dir_all(raw_show);
 }
 
 /// Dentro de la cápsula nada cambia: un interno llama como método a lo `pub` de su hermano.
@@ -551,5 +635,134 @@ fn ray_test_runs_each_test_of_a_library_once() {
     let (out, err, code) = ray(&d, &["test", "a/contract.ray"]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("running 3 test(s)") && out.contains("kit.a.scan.t_scan") && out.contains("kit.a.lex.t_lex"), "{out}");
+    // El filtro calificado con el módulo sigue encontrando la prueba, que ahora corre en su suite.
+    for (filter, name) in [("scan", "t_scan"), ("scan.", "t_scan"), ("lex.t_lex", "t_lex"), ("a.scan.", "t_scan"), ("kit.a.scan.t_scan", "t_scan")] {
+        let (out, err, code) = ray(&d, &["test", filter]);
+        assert_eq!(code, 0, "{out}\n{err}");
+        assert!(out.contains("running 1 test(s)") && out.contains(name), "filtro {filter}:\n{out}");
+    }
     let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Revisión de la 1.27.118: la sustitución de nombres de `ray doc` solo toca TIPOS. Una función
+/// re-exportada con otro nombre no cambia el campo ni el parámetro que se llaman como ella, y un
+/// tipo traído con `from … import` sale con el nombre del contrato en las tres vistas.
+#[test]
+fn ray_doc_renames_types_only_and_follows_from_imports() {
+    let d = tree(
+        "doc_types_only",
+        &[
+            ("ray.toml", APP_TOML),
+            ("src/main.ray", "import booking;\nfn main() { print(1); }\n"),
+            (
+                "src/booking/model.ray",
+                "pub struct Booking { id: int, total: int, next: Option<Booking>, }\n\
+/// Builds a booking with the given total.\npub fn make(id: int, total: int) -> Booking { Booking { id: id, total: total, next: Option.None } }\n\
+pub fn total(b: Booking) -> int { b.total }\n\
+pub struct Cancel { id: int, }\npub enum Event { Booking(Booking), Cancel(Cancel), }\n\
+pub const KIND: string = \"Booking\";\n",
+            ),
+            (
+                "src/booking/service.ray",
+                "import booking/model;\nfrom booking/model import Booking;\n\n\
+pub fn bookings(limit: int) -> Result<[Booking], string> { Result.Ok([model.make(limit, 0)]) }\n",
+            ),
+            (
+                "src/booking/mod.ray",
+                "pub from booking/model import Booking as Reservation, total as booking_total, make, Event, KIND;\npub from booking/service import bookings;\n",
+            ),
+        ],
+    );
+    let (out, err, code) = ray(&d, &["doc", "src/booking/mod.ray"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("### `struct Booking { id: int, total: int, next: Option<Booking> }`"), "{out}");
+    assert!(out.contains("### `fn make(id: int, total: int) -> Reservation`"), "{out}");
+    assert!(out.contains("### `fn bookings(limit: int) -> Result<[Reservation], string>`"), "{out}");
+    assert!(!out.contains("booking_total: int"), "{out}");
+    // Ni el nombre de una variante ni el valor de una constante son tipos.
+    assert!(out.contains("enum Event { Booking(Reservation), Cancel(Cancel) }"), "{out}");
+    assert!(out.contains("const KIND: string = \"Booking\""), "{out}");
+    let (out, err, code) = ray(&d, &["doc", "booking"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("bookings(limit: int) -> Result<[Reservation], string>"), "{out}");
+    let (out, err, code) = ray(&d, &["doc", "booking.bookings"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("-> Result<[Reservation], string>") && !out.contains("booking/Reservation"), "{out}");
+    // Por símbolo, un re-export con alias dice con qué nombre se exporta.
+    let (out, err, code) = ray(&d, &["doc", "booking.Reservation"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("from booking/model as Reservation)"), "{out}");
+    let (out, err, code) = ray(&d, &["doc", "booking.make"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("with the given total.") && out.contains("total: int) -> Reservation"), "{out}");
+    let _ = std::fs::remove_dir_all(d);
+}
+
+/// Revisión de la 1.27.118: el nombre del contrato también para un tipo que llega por la fachada
+/// de una cápsula anidada, y para el trait de un bound.
+#[test]
+fn ray_doc_follows_nested_facades_and_renames_bounds() {
+    let d = tree(
+        "doc_nested",
+        &[
+            ("ray.toml", APP_TOML),
+            ("src/main.ray", "import booking;\nfn main() { print(1); }\n"),
+            ("src/booking/core/inner.ray", "pub struct Deep { id: int, }\npub trait Priced { fn price(self) -> int; }\n"),
+            ("src/booking/core/mod.ray", "pub from booking/core/inner import Deep, Priced;\n"),
+            ("src/booking/audit.ray", "pub struct Item { n: int, }\n"),
+            (
+                "src/booking/service.ray",
+                "import booking/core;\nfrom booking/core import Deep, Priced;\nfrom booking/audit import Item;\n\n\
+pub fn first() -> Deep { Deep { id: 1 } }\npub fn second() -> core.Deep { Deep { id: 2 } }\n\
+pub fn log(d: Deep, i: Item) -> int { d.id + i.n }\npub fn pick<Deep>(xs: [Deep]) -> Deep { xs[0] }\n\
+pub fn cheapest<T: Priced>(xs: [T]) -> T { xs[0] }\npub fn cheapest_q<T: core.Priced>(xs: [T]) -> T { xs[0] }\n",
+            ),
+            (
+                "src/booking/mod.ray",
+                "pub from booking/core import Deep as Item, Priced as Costed;\npub from booking/service import first, second, cheapest, cheapest_q, log, pick;\n",
+            ),
+        ],
+    );
+    let (out, err, code) = ray(&d, &["doc", "src/booking/mod.ray"]);
+    assert_eq!(code, 0, "{err}");
+    for sig in ["fn first() -> Item", "fn second() -> Item", "fn cheapest<T: Costed>(xs: [T]) -> T", "fn cheapest_q<T: Costed>(xs: [T]) -> T"] {
+        assert!(out.contains(&format!("### `{sig}`")), "falta {sig}:\n{out}");
+    }
+    // Un parámetro de tipo que se llama como el tipo re-exportado no se toca.
+    assert!(out.contains("### `fn pick<Deep>(xs: [Deep]) -> Deep`"), "{out}");
+    let (out, err, code) = ray(&d, &["doc", "booking.first"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("first() -> Item"), "{out}");
+    // El nombre del contrato (`Item`) coincide con otro tipo importado y no exportado: cada uno
+    // conserva el suyo.
+    let (out, err, code) = ray(&d, &["doc", "booking.log"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("log(d: Item, i: booking/audit.Item) -> int"), "{out}");
+    let _ = std::fs::remove_dir_all(d);
+}
+
+/// Revisión de la 1.27.118: el cuerpo de un método por defecto es código del módulo de su trait.
+/// Su clon no tiene línea propia y `self.size().double()` se resolvía contra el ÚLTIMO módulo
+/// cargado: con un `double` homónimo allí, llamaba al ajeno.
+#[test]
+fn a_default_method_body_resolves_in_the_module_of_its_trait() {
+    let d = tree(
+        "default_site",
+        &[
+            ("ray.toml", APP_TOML),
+            ("src/main.ray", "import zeta;\nimport alpha;\nfn main() {\n    print(alpha.make(5).twice());\n    print(zeta.bump(1));\n}\n"),
+            (
+                "src/alpha.ray",
+                "fn double(n: int) -> int { n * 2 }\npub struct Box { n: int, }\npub fn make(n: int) -> Box { Box { n: n } }\n\
+pub trait Sized {\n    fn size(self) -> int;\n    fn twice(self) -> int { self.size().double() }\n}\n\
+impl Sized for Box { fn size(self) -> int { self.n } }\n",
+            ),
+            ("src/zeta.ray", "fn double(n: int) -> int { n + 1000 }\npub fn bump(n: int) -> int { n.double() }\n"),
+        ],
+    );
+    for engine in [&["run"][..], &["--interp", "src/main.ray"][..]] {
+        let (out, err, code) = ray(&d, engine);
+        assert_eq!((out.as_str(), code), ("10\n1001\n", 0), "{engine:?}: {err}");
+    }
+    let _ = std::fs::remove_dir_all(d);
 }

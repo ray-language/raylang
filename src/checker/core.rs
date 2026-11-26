@@ -83,6 +83,9 @@ impl Checker {
             method_trait: HashMap::new(),
             opaque_types: HashMap::new(),
             current_fn_module: String::new(),
+            current_fn_site: None,
+            current_fn_is_default_clone: false,
+            default_method_modules: HashMap::new(),
             shadowed_free_fns: HashSet::new(),
             root_user_fns: HashSet::new(),
             require_main: true,
@@ -442,11 +445,17 @@ impl Checker {
             // de la cápsula aunque el método se llame `shop::model::Invoice#peek`. Un método de
             // `@derive` no tiene línea propia y es código del módulo del tipo: por su nombre.
             let owner = f.name.split('#').next().unwrap_or(&f.name);
-            self.current_fn_module = if f.name.contains('#') && !self.synthetic_methods.contains(&f.name) {
+            // Un método por defecto heredado: su cuerpo es código del módulo del TRAIT (su clon
+            // tampoco tiene línea propia).
+            self.current_fn_is_default_clone = self.default_method_modules.contains_key(&f.name);
+            self.current_fn_module = if let Some(module) = self.default_method_modules.get(&f.name) {
+                module.clone()
+            } else if f.name.contains('#') && !self.synthetic_methods.contains(&f.name) {
                 self.site_module(f.line).to_string()
             } else {
                 owner.rsplit_once("::").map(|(m, _)| m.to_string()).unwrap_or_default()
             };
+            self.current_fn_site = Some(if self.current_fn_module.is_empty() { self.entry_module.clone() } else { self.current_fn_module.clone() });
             if let Err(e) = self.check_function(f) {
                 let e = self.derive_error(&f.name, e);
                 if !self.accumulate {
@@ -462,6 +471,8 @@ impl Checker {
                 }
             }
         }
+        self.current_fn_site = None;
+        self.current_fn_is_default_clone = false;
         Ok(())
     }
 
@@ -845,6 +856,8 @@ impl Checker {
                     }
                     self.methods.insert((key.clone(), tm.name.clone()), mangled.clone());
                     self.method_trait.insert(mangled.clone(), imp.trait_name.clone());
+                    let trait_module = imp.trait_name.rsplit_once("::").map(|(m, _)| m.to_string()).unwrap_or_default();
+                    self.default_method_modules.insert(mangled.clone(), trait_module);
                     self.impl_fn_self.insert(mangled, target.clone());
                 }
             }
@@ -2286,14 +2299,14 @@ impl Checker {
 
     /// ¿Lleva `t` un `Show` que la forma por defecto de `print` no conoce? Un struct o enum con
     /// `impl Show` (en cualquier profundidad) o un parámetro de tipo (su bound decide en `dict_for`).
-    fn has_user_show(&self, t: &Type) -> bool {
+    fn has_user_show(&self, t: &Type, line: usize) -> bool {
         match t {
             Type::Var(_) => true,
-            Type::Array(e) => self.has_user_show(e),
+            Type::Array(e) => self.has_user_show(e, line),
             Type::Struct(_, args) | Type::Enum(_, args) => {
                 let own = !matches!(t, Type::Enum(n, _) if n == "Option" || n == "Result")
-                    && type_key_of(t).is_some_and(|k| self.methods.contains_key(&(k, "show".to_string())));
-                own || args.iter().any(|a| self.has_user_show(a))
+                    && type_key_of(t).is_some_and(|k| self.visible_method(&k, "show", line).is_some());
+                own || args.iter().any(|a| self.has_user_show(a, line))
             }
             _ => false,
         }
@@ -2625,7 +2638,7 @@ impl Checker {
         // tipo del receptor ya calculado, enumeramos sus miembros en vez de dar error por miembro
         // inexistente. Devolvemos Unit para que el chequeo (best-effort) no aborte antes de recogerlo.
         if self.completing && name == COMPLETION_SENTINEL {
-            self.member_hits = self.enumerate_members(&ot);
+            self.member_hits = self.enumerate_members(&ot, object.line);
             return Ok(Type::Unit);
         }
         // Acceso a **tupla** `t.0` (M27.1): un nombre de campo numérico solo es válido sobre una tupla.
@@ -2711,7 +2724,7 @@ impl Checker {
             if b.name == "to_string"
                 && let [p] = params.as_slice()
                 && matches!(p, Type::Struct(_, _) | Type::Enum(_, _))
-                && type_key_of(p).is_some_and(|k| self.methods.contains_key(&(k, "show".to_string())))
+                && type_key_of(p).is_some_and(|k| self.visible_method(&k, "show", expr.line).is_some())
             {
                 return Err(self.err(expr.line, expr.col, format!(
                     "the builtin 'to_string' cannot be used as a value of type {expected}: {p} has its own 'show'; pass a function that calls it, e.g. 'fn(x: {p}) -> string {{ x.show() }}'"
@@ -3676,7 +3689,7 @@ impl Checker {
                 let recv_ty = self.check_expr(object)?;
                 // M45: completion de miembros cuando el reparado dejó una llamada `recv.<centinela>(…)`.
                 if self.completing && name == COMPLETION_SENTINEL {
-                    self.member_hits = self.enumerate_members(&recv_ty);
+                    self.member_hits = self.enumerate_members(&recv_ty, object.line);
                     return Ok(Type::Unit);
                 }
                 // M9.3b/M9.5: receptor `dyn A + B` → despacho dinámico por la vtable del objeto.
@@ -3698,16 +3711,16 @@ impl Checker {
                 // struct. El sitio se registra apuntando a la función **manglada**.
                 // Revisión de 1.27.109: `q.to_string()` sobre un tipo con `Show` es `q.show()`, como
                 // `to_string(q)`; sin esto caía en el builtin y mostraba la forma por defecto.
+                // rayhotel #481: un trait interno de una cápsula, que su fachada no exporta, no da
+                // métodos fuera de ella. Se descarta ANTES del respaldo de `to_string`: un
+                // `to_string` interno no debe tapar el `Show` del tipo.
                 let trait_method = type_key_of(&recv_ty).and_then(|key| {
-                    self.methods.get(&(key.clone(), name.clone())).cloned().or_else(|| {
+                    self.visible_method(&key, name, line).or_else(|| {
                         (name == "to_string" && args.is_empty() && matches!(recv_ty, Type::Struct(_, _) | Type::Enum(_, _)))
-                            .then(|| self.methods.get(&(key, "show".to_string())).cloned())
+                            .then(|| self.visible_method(&key, "show", line))
                             .flatten()
                     })
                 });
-                // rayhotel #481: un trait interno de una cápsula, que su fachada no exporta, no da
-                // métodos fuera de ella.
-                let trait_method = trait_method.filter(|mangled| !self.trait_hidden_by_capsule(mangled, line));
                 if let Some(mangled) = trait_method {
                     let mut all = Vec::with_capacity(args.len() + 1);
                     all.push((**object).clone());
@@ -3751,8 +3764,8 @@ impl Checker {
     /// struct, métodos de trait/impl (incl. `@derive`), builtins-como-método de la categoría del
     /// tipo, y funciones libres UFCS cuyo primer parámetro acepta el receptor (esto cubre
     /// `map`/`filter`/`fold`/`sort` del prelude y las UFCS del usuario). Dedup por etiqueta.
-    pub(super) fn enumerate_members(&self, rt: &Type) -> Vec<MemberItem> {
-        self.enumerate_members_impl(rt, false)
+    pub(super) fn enumerate_members(&self, rt: &Type, line: usize) -> Vec<MemberItem> {
+        self.enumerate_members_impl(rt, false, line)
     }
 
     /// Los miembros ofrecibles tras un `|>` (pipeline, M7.2), que difieren de los de `recv.`: como
@@ -3761,13 +3774,13 @@ impl Checker {
     /// builtins invocables por nombre; NO los campos ni los **métodos de trait** (`n |> show` sería
     /// `show(n)`, y no existe una función libre `show` —solo `int#show`—).
     pub(super) fn enumerate_pipeable(&self, rt: &Type) -> Vec<MemberItem> {
-        self.enumerate_members_impl(rt, true)
+        self.enumerate_members_impl(rt, true, 0)
     }
 
     /// Núcleo compartido por `enumerate_members` (para `recv.`) y `enumerate_pipeable` (para `x |>`).
     /// El flag `pipeable` cambia dos cosas: (a) omite campos y métodos de trait (no son pipeable), y
     /// (b) enumera funciones libres para todo tipo, no solo receptores compuestos.
-    pub(super) fn enumerate_members_impl(&self, rt: &Type, pipeable: bool) -> Vec<MemberItem> {
+    pub(super) fn enumerate_members_impl(&self, rt: &Type, pipeable: bool, line: usize) -> Vec<MemberItem> {
         let mut out: Vec<MemberItem> = Vec::new();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let add = |out: &mut Vec<MemberItem>, seen: &mut std::collections::HashSet<String>,
@@ -3803,7 +3816,8 @@ impl Checker {
         if !pipeable {
             if let Some(key) = type_key_of(rt) {
                 for ((k, m), mangled) in &self.methods {
-                    if k == &key {
+                    // rayhotel #481: fuera de la cápsula no se ofrece el método de un trait interno.
+                    if k == &key && !self.trait_hidden_by_capsule(mangled, line) {
                         let sig = self.functions.get(mangled);
                         let has_args = sig.map(|s| s.params.len() > 1).unwrap_or(false); // > self
                         let def = self.fn_defs.get(mangled).copied();
@@ -4024,13 +4038,30 @@ impl Checker {
         }
     }
 
+    /// El módulo del código que hace la llamada de `line`: el de la función que se comprueba
+    /// (`current_fn_site`), y fuera de una función el de la banda de la línea.
+    fn call_site(&self, line: usize) -> &str {
+        match &self.current_fn_site {
+            Some(module) => module.as_str(),
+            None => self.site_module(line),
+        }
+    }
+
+    /// La cápsula más EXTERNA que contiene al módulo `prefix` y no al sitio de `line`: la
+    /// frontera que una llamada desde ese sitio cruza para alcanzar algo de `prefix`.
+    fn capsule_boundary(&self, prefix: &str, line: usize) -> Option<&String> {
+        let within = |module: &str, capsule: &str| module == capsule || module.strip_prefix(capsule).is_some_and(|rest| rest.starts_with("::"));
+        let site = self.call_site(line);
+        self.capsule_surfaces.keys().filter(|c| within(prefix, c) && !within(site, c)).min_by_key(|c| c.len())
+    }
+
     /// rayhotel #486: si `struct_name` es un tipo reexportado como `opaque` y el sitio de `line`
     /// está FUERA de su cápsula, el nombre de la cápsula (con `/`). Dentro, `None`: ahí el tipo es
     /// transparente — también para el código que un `@derive` genera en su módulo.
     fn opaque_outside(&self, struct_name: &str, line: usize) -> Option<String> {
         let capsule = self.opaque_types.get(struct_name)?;
-        let site = if self.current_fn_module.is_empty() { self.site_module(line) } else { self.current_fn_module.as_str() };
-        let inside = site == capsule || site.starts_with(&format!("{capsule}::"));
+        let site = self.call_site(line);
+        let inside = site == capsule || site.strip_prefix(capsule.as_str()).is_some_and(|rest| rest.starts_with("::"));
         (!inside).then(|| capsule.replace("::", "/"))
     }
 
@@ -4048,6 +4079,12 @@ impl Checker {
         String::new()
     }
 
+    /// El método de trait `method` del tipo `key` (su función manglada), si se alcanza desde el
+    /// sitio de `line`: el de un trait interno de una cápsula no se ve fuera de ella.
+    fn visible_method(&self, key: &str, method: &str, line: usize) -> Option<String> {
+        self.methods.get(&(key.to_string(), method.to_string())).filter(|mangled| !self.trait_hidden_by_capsule(mangled, line)).cloned()
+    }
+
     /// rayhotel #481: ¿el método manglado es de un trait declarado DENTRO de una cápsula que no lo
     /// exporta, y el sitio está fuera de ella? Manda la cápsula más externa que contiene al trait
     /// y no al sitio, como en `type_module_fn`. Un trait de fuera de toda cápsula (el prelude, el
@@ -4056,12 +4093,18 @@ impl Checker {
         if self.capsule_surfaces.is_empty() {
             return false;
         }
-        let Some(trait_name) = self.method_trait.get(mangled) else { return false };
+        self.method_trait.get(mangled).is_some_and(|trait_name| self.trait_hidden_outside(trait_name, line))
+    }
+
+    /// ¿`trait_name` se declara dentro de una cápsula que no lo exporta, y el sitio de `line`
+    /// está fuera de ella? Sus métodos no se alcanzan desde ahí por ninguna vía: ni por el tipo
+    /// concreto, ni por un `dyn`, ni por un bound que lo traiga como supertrait.
+    fn trait_hidden_outside(&self, trait_name: &str, line: usize) -> bool {
+        if self.capsule_surfaces.is_empty() {
+            return false;
+        }
         let Some((prefix, _)) = trait_name.rsplit_once("::") else { return false };
-        let within = |module: &str, capsule: &str| module == capsule || module.starts_with(&format!("{capsule}::"));
-        let site = self.site_module(line);
-        let boundary = self.capsule_surfaces.keys().filter(|c| within(prefix, c) && !within(site, c)).min_by_key(|c| c.len());
-        boundary.is_some_and(|capsule| !self.capsule_types.get(capsule).is_some_and(|t| t.contains(trait_name)))
+        self.capsule_boundary(prefix, line).is_some_and(|capsule| !self.capsule_types.get(capsule).is_some_and(|t| t.contains(trait_name)))
     }
 
     fn type_module_fn(&self, name: &str, recv_ty: &Type, line: usize) -> Option<String> {
@@ -4075,12 +4118,7 @@ impl Checker {
         // declara — que eran alcanzables por aquí y solo por aquí — y sí los que la fachada
         // declara sobre él. Manda la cápsula más EXTERNA que contiene al tipo y no al sitio.
         if !self.capsule_surfaces.is_empty() {
-            let within = |module: &str, capsule: &str| module == capsule || module.starts_with(&format!("{capsule}::"));
-            let site = self.site_module(line);
-            let boundary = self.capsule_surfaces.keys()
-                .filter(|c| within(prefix, c) && !within(site, c))
-                .min_by_key(|c| c.len());
-            if let Some(capsule) = boundary {
+            if let Some(capsule) = self.capsule_boundary(prefix, line) {
                 let global = self.capsule_surfaces[capsule].get(name)?;
                 let sig = self.functions.get(global)?;
                 let mut sigma: HashMap<String, Type> = HashMap::new();
@@ -4108,7 +4146,13 @@ impl Checker {
     /// debe resolver al `get` del prelude. `None` en la entrada (prefijo `""`), fuera de banda
     /// (prelude) o sin bandas (archivo único).
     fn module_local_fn(&self, name: &str, line: usize, recv_ty: &Type) -> Option<String> {
-        let (_, prefix) = self.module_bands.iter().rev().find(|(start, _)| *start <= line)?;
+        // La banda de la línea dice el módulo, salvo en el cuerpo clonado de un método por
+        // defecto: lleva líneas sintéticas y caía en el último módulo cargado.
+        let prefix = if self.current_fn_is_default_clone {
+            self.current_fn_module.as_str()
+        } else {
+            self.module_bands.iter().rev().find(|(start, _)| *start <= line).map(|(_, p)| p.as_str())?
+        };
         if prefix.is_empty() {
             return None;
         }
@@ -4141,7 +4185,7 @@ impl Checker {
             let at = self.check_expr(&args[0])?;
             if matches!(at, Type::Struct(_, _) | Type::Enum(_, _))
                 && let Some(key) = type_key_of(&at)
-                && let Some(show) = self.methods.get(&(key, "show".to_string())).cloned()
+                && let Some(show) = self.visible_method(&key, "show", line)
             {
                 let ty = self.check_named_call_recv(&show, args, line, col, expected, &at)?;
                 self.ufcs_sites.insert((line, col, name.to_string(), super::lowering::rename_site_depth(args, name, line, col)), show);
@@ -4165,7 +4209,7 @@ impl Checker {
             let at = self.check_expr(&args[0])?;
             // #359: lo mismo si el tipo lleva un `Show` del usuario (o es un `P: Show`): `print`
             // mostraba la forma por defecto (`Plain { n: 1 }`) e ignoraba el `impl Show`.
-            if (type_contains_tuple(&at) || self.has_user_show(&at))
+            if (type_contains_tuple(&at) || self.has_user_show(&at, line))
                 && let Ok(dict) = self.dict_for(&at, "Show", "show", line, col)
             {
                 self.print_show_sites.insert((line, col), dict);
@@ -4444,6 +4488,7 @@ impl Checker {
         let hits: Vec<String> = self.current_fn_bounds.iter()
             .filter(|(bp, _)| bp == tp)
             .filter(|(_, tr)| self.traits.get(tr).is_some_and(|ms| ms.iter().any(|m| m.name == method)))
+            .filter(|(_, tr)| !self.trait_hidden_outside(tr, line))
             .map(|(_, tr)| tr.clone())
             .collect();
         if hits.is_empty() {
@@ -4503,6 +4548,7 @@ impl Checker {
         // Busca el método entre **todos** los traits del conjunto (la unicidad ya la garantizó
         // `ensure_type`: ningún método se repite entre los traits de un `dyn A + B`).
         let sig = match traits.iter()
+            .filter(|tr| !self.trait_hidden_outside(tr, line))
             .find_map(|tr| self.traits.get(tr).and_then(|ms| ms.iter().find(|m| m.name == method)))
         {
             Some(m) => m.clone(),

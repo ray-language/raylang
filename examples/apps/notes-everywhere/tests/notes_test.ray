@@ -5,7 +5,6 @@ import std/json;
 import db/sqlite;
 import notes;
 import api;
-import places;
 from db/sqlite import Conn;
 
 fn fresh(name: string) -> Conn {
@@ -92,13 +91,4 @@ fn export_writes_markdown() {
         [notes.Note { id: "a", title: "One", body: "first\n", updated_ms: 1 }]
     );
     assert_eq(md, "# Notes\n\n## One\n\nfirst\n");
-}
-
-@test
-fn the_data_folder_follows_the_platform() {
-    let dir = places.data_dir("Notes");
-    assert(dir.ends_with("Notes"));
-    if (platform() == "macos") {
-        assert(dir.contains("/Library/Application Support/"));
-    }
 }

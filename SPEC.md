@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.117** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.118** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -501,7 +501,7 @@ prelude (`Option`, `Result`, `Map`…) ni a primitivos, ni alcanza funciones pri
 función libre en el ámbito con ese nombre (paso 4) sigue ganando. Si `M` es interno a una
 **cápsula** y la llamada está FUERA de ella, el paso 5 mira la cara pública de la cápsula (la más
 externa que contiene al tipo y no a la llamada): alcanza lo que la fachada declara o reexporta y
-nada más — los `pub` de un módulo interno son públicos dentro de su cápsula, no fuera. Todo se resuelve
+nada más — los `pub` de un módulo interno son públicos dentro de su cápsula, no fuera. Lo mismo rige el paso 3: el método de un **trait declarado dentro de una cápsula que su fachada no exporta** no se alcanza desde fuera de ella (el de un trait que la fachada exporta, o de un trait de fuera de la cápsula, sí). Todo se resuelve
 **estáticamente** en el checker (salvo el despacho de `dyn`, que es una llamada a través del objeto).
 
 Dos precisiones sobre el paso 4 (M344): **un local solo tapa al método si es una función** —
@@ -779,7 +779,7 @@ Va **embebida en el binario**: `import std/math;` funciona sin que `std/` exista
 
 | Módulo | Qué cubre |
 |---|---|
-| `std/fs` | disco: leer/escribir (texto y `bytes`), `append`, `exists`, `list_dir`, metadatos, copiar/renombrar/borrar, directorios, handles con `read_line`/`write`/`write_bytes`/`read_bytes`/`seek`/`sync` (durabilidad: fsync) candados consultivos `try_lock`/`unlock` (flock), `stat` (lstat: detecta symlinks), `chmod`, y `watch`/`next_event` (cambios por eventos de kernel; la fibra aparca) |
+| `std/fs` | disco: leer/escribir (texto y `bytes`), `append`, `exists`, `list_dir`, metadatos, copiar/renombrar/borrar, directorios, la carpeta de datos y la de caché de la app en cada sistema (`data_dir`/`cache_dir`), handles con `read_line`/`write`/`write_bytes`/`read_bytes`/`seek`/`sync` (durabilidad: fsync) candados consultivos `try_lock`/`unlock` (flock), `stat` (lstat: detecta symlinks), `chmod`, y `watch`/`next_event` (cambios por eventos de kernel; la fibra aparca) |
 | `std/net` | transporte: TCP (`tcp_connect`/`tcp_listen`/`tcp_accept`/`local_port`), I/O de sockets en texto y `bytes`, TLS (`tls_connect`/`tls_accept`/`tls_upgrade`) |
 | `std/process` | ejecución de procesos del SO **sin shell** (argv tipado): `run`, el builder `cmd` y el modo *streaming* `stream` —con stdin escribible sobre un hijo vivo (`stdin_pipe`/`write`/`close_stdin`) para sesiones persistentes— (§ REFERENCE.md §10) |
 | `std/math` | `PI`/`E`, `sqrt pow sin cos tan asin acos atan atan2 ln log2 log10 exp floor ceil round trunc`, y `abs`/`min`/`max` genéricos |

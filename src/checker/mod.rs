@@ -966,6 +966,11 @@ struct Checker {
     /// `Program::capsule_surfaces` / `Program::entry_module`).
     capsule_surfaces: HashMap<String, HashMap<String, String>>,
     entry_module: String,
+    /// rayhotel #481: los tipos y traits (nombre global) que cada cápsula exporta, y el trait
+    /// (nombre global) de cada método de impl manglado. Con los dos, un método de un trait que la
+    /// fachada no exporta no se alcanza por `recv.m()` desde fuera de la cápsula.
+    capsule_types: HashMap<String, std::collections::HashSet<String>>,
+    method_trait: HashMap<String, String>,
     /// rayhotel #486: structs reexportados como `opaque` → su cápsula (ver `Program::opaque_types`).
     opaque_types: HashMap<String, String>,
     /// Exigir la función de entrada `main` (DESIGN §11). `true` por defecto (`check`/`check_all`: un

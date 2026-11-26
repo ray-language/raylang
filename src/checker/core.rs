@@ -79,6 +79,8 @@ impl Checker {
             module_bands: Vec::new(),
             capsule_surfaces: HashMap::new(),
             entry_module: String::new(),
+            capsule_types: HashMap::new(),
+            method_trait: HashMap::new(),
             opaque_types: HashMap::new(),
             current_fn_module: String::new(),
             shadowed_free_fns: HashSet::new(),
@@ -99,6 +101,7 @@ impl Checker {
         // UFCS contra las funciones PROPIAS de su módulo por posición.
         if self.capsule_surfaces.is_empty() && !program.capsule_surfaces.is_empty() {
             self.capsule_surfaces = program.capsule_surfaces.clone();
+            self.capsule_types = program.capsule_types.clone();
             self.entry_module = program.entry_module.clone();
             self.opaque_types = program.opaque_types.clone();
         }
@@ -822,6 +825,7 @@ impl Checker {
                     )));
                 }
                 self.methods.insert((key.clone(), m.name.clone()), mangled.clone());
+                self.method_trait.insert(mangled.clone(), imp.trait_name.clone());
                 // #360: los métodos de un `@derive` (sintético, fuera del prelude) recuerdan su
                 // anotación para re-anclar un error de su cuerpo generado.
                 if imp.synthetic && imp.line < crate::prelude::LINE_BASE {
@@ -840,6 +844,7 @@ impl Checker {
                         )));
                     }
                     self.methods.insert((key.clone(), tm.name.clone()), mangled.clone());
+                    self.method_trait.insert(mangled.clone(), imp.trait_name.clone());
                     self.impl_fn_self.insert(mangled, target.clone());
                 }
             }
@@ -3700,6 +3705,9 @@ impl Checker {
                             .flatten()
                     })
                 });
+                // rayhotel #481: un trait interno de una cápsula, que su fachada no exporta, no da
+                // métodos fuera de ella.
+                let trait_method = trait_method.filter(|mangled| !self.trait_hidden_by_capsule(mangled, line));
                 if let Some(mangled) = trait_method {
                     let mut all = Vec::with_capacity(args.len() + 1);
                     all.push((**object).clone());
@@ -4038,6 +4046,22 @@ impl Checker {
             );
         }
         String::new()
+    }
+
+    /// rayhotel #481: ¿el método manglado es de un trait declarado DENTRO de una cápsula que no lo
+    /// exporta, y el sitio está fuera de ella? Manda la cápsula más externa que contiene al trait
+    /// y no al sitio, como en `type_module_fn`. Un trait de fuera de toda cápsula (el prelude, el
+    /// del propio llamador) implementado para un tipo de la cápsula no se toca.
+    fn trait_hidden_by_capsule(&self, mangled: &str, line: usize) -> bool {
+        if self.capsule_surfaces.is_empty() {
+            return false;
+        }
+        let Some(trait_name) = self.method_trait.get(mangled) else { return false };
+        let Some((prefix, _)) = trait_name.rsplit_once("::") else { return false };
+        let within = |module: &str, capsule: &str| module == capsule || module.starts_with(&format!("{capsule}::"));
+        let site = self.site_module(line);
+        let boundary = self.capsule_surfaces.keys().filter(|c| within(prefix, c) && !within(site, c)).min_by_key(|c| c.len());
+        boundary.is_some_and(|capsule| !self.capsule_types.get(capsule).is_some_and(|t| t.contains(trait_name)))
     }
 
     fn type_module_fn(&self, name: &str, recv_ty: &Type, line: usize) -> Option<String> {

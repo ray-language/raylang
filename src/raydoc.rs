@@ -109,6 +109,52 @@ pub fn reexports(src: &str, file: &std::path::Path) -> Vec<Reexported> {
     out
 }
 
+/// rayhotel #485: la firma de un ítem re-exportado, con los tipos como los nombra el CONTRATO. En
+/// su módulo la firma dice `model.Booking` (el tipo de un hermano, por el nombre con que lo
+/// importa); quien lee la documentación de la fachada no puede escribir eso: para él es el
+/// `Booking` que la fachada re-exporta. Cada `alias.Tipo` cuyo módulo y nombre coinciden con un
+/// re-export de la misma fachada se cambia por su nombre visible; lo que la fachada no exporta se
+/// deja como está (de eso avisa `ray check`).
+pub fn contract_names(text: &str, item: &Reexported, all: &[Reexported]) -> String {
+    let canon = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let Some(prog) = crate::lexer::lex(&item.source).ok().and_then(|t| crate::parser::parse(t).ok()) else {
+        return text.to_string();
+    };
+    let mut out = text.to_string();
+    // Un tipo del PROPIO módulo del ítem, sin calificar, que la fachada exporta con otro nombre.
+    let own = canon(&item.file);
+    for other in all.iter().filter(|r| r.visible != r.original && r.original != item.original && canon(&r.file) == own) {
+        out = replace_qualified(&out, "", &other.original, &other.visible);
+    }
+    for imp in &prog.imports {
+        let Some(module_file) = locate_module(&item.file, &imp.module).map(|f| canon(&f)) else { continue };
+        for other in all.iter().filter(|r| canon(&r.file) == module_file) {
+            out = replace_qualified(&out, imp.leaf(), &other.original, &other.visible);
+        }
+    }
+    out
+}
+
+/// Cambia cada `qualifier.name` de `text` (o cada `name` suelto, con `qualifier` vacío) por
+/// `with`, solo donde es un nombre entero (ni `xqualifier.name`, ni `a.qualifier.name`, ni
+/// `qualifier.names`).
+fn replace_qualified(text: &str, qualifier: &str, name: &str, with: &str) -> String {
+    let needle = if qualifier.is_empty() { name.to_string() } else { format!("{qualifier}.{name}") };
+    let ident = |c: char| c.is_alphanumeric() || c == '_';
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find(&needle) {
+        let before_ok = !rest[..at].chars().next_back().is_some_and(|c| ident(c) || c == '.');
+        let after = &rest[at + needle.len()..];
+        let after_ok = !after.chars().next().is_some_and(ident);
+        out.push_str(&rest[..at]);
+        out.push_str(if before_ok && after_ok { with } else { &needle });
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// La cara de un struct reexportado como `opaque`: su nombre y sus parámetros de tipo, sin campos.
 pub fn opaque_struct(s: &StructDef, exported_as: &str) -> String {
     format!("struct {}{} (opaque)", exported_as, generics(&s.type_params, &[], &Vec::new()))
@@ -131,11 +177,12 @@ pub fn generate_file(path: &std::path::Path) -> Result<String, String> {
         return Ok(out);
     }
     out.push_str("## Re-exports\n\n");
-    for item in items {
+    for item in &items {
         let Ok(tokens) = crate::lexer::lex(&item.source) else { continue };
         let Ok(prog) = crate::parser::parse(tokens) else { continue };
         let lines: Vec<&str> = item.source.lines().collect();
         let name = item.original.as_str();
+        let mut methods: Vec<String> = Vec::new();
         let (sig, line) = if let Some(f) = prog.functions.iter().find(|f| f.name == name) {
             (sig_function(f), f.line)
         } else if let Some(s) = prog.structs.iter().find(|s| s.name == name) {
@@ -144,6 +191,8 @@ pub fn generate_file(path: &std::path::Path) -> Result<String, String> {
         } else if let Some(e) = prog.enums.iter().find(|e| e.name == name) {
             (sig_enum(e), e.line)
         } else if let Some(t) = prog.traits.iter().find(|t| t.name == name) {
+            // Un trait re-exportado lleva sus métodos, como uno declarado en el archivo.
+            methods = t.methods.iter().map(|m| contract_names(&sig_method(m), item, &items)).collect();
             (sig_trait(t), t.line)
         } else if let Some(c) = prog.consts.iter().find(|c| c.name == name) {
             (const_signature(c), c.line)
@@ -152,6 +201,7 @@ pub fn generate_file(path: &std::path::Path) -> Result<String, String> {
         } else {
             continue;
         };
+        let sig = contract_names(&sig, item, &items);
         out.push_str(&format!("### `{sig}`\n\n"));
         if item.visible != item.original {
             // La cabecera de un opaco ya lleva el nombre exportado: aquí va el otro.
@@ -163,6 +213,12 @@ pub fn generate_file(path: &std::path::Path) -> Result<String, String> {
         }
         out.push_str(&format!("From `{}`.\n\n", item.module));
         emit_doc(&mut out, &lines, line);
+        if !methods.is_empty() {
+            for m in &methods {
+                out.push_str(&format!("- `{m}`\n"));
+            }
+            out.push('\n');
+        }
     }
     Ok(out)
 }
@@ -401,6 +457,15 @@ fn sig_trait(t: &TraitDef) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // rayhotel #485: solo nombres enteros, calificados o sueltos.
+    #[test]
+    fn replace_qualified_only_touches_whole_names() {
+        assert_eq!(replace_qualified("-> Result<[model.Booking], string>", "model", "Booking", "Booking"), "-> Result<[Booking], string>");
+        assert_eq!(replace_qualified("a: model.Booking, b: model.Bookings", "model", "Booking", "R"), "a: R, b: model.Bookings");
+        assert_eq!(replace_qualified("x: supermodel.Booking, y: a.model.Booking", "model", "Booking", "R"), "x: supermodel.Booking, y: a.model.Booking");
+        assert_eq!(replace_qualified("other: Booking, n: Bookings, m: x.Booking", "", "Booking", "R"), "other: R, n: Bookings, m: x.Booking");
+    }
 
     /// M376: `//!` al principio del archivo = doc de módulo; un `//` corriente la cierra; sin `//!`, nada.
     #[test]

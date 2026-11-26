@@ -22567,3 +22567,45 @@ las guardas ya no encuentra nada. Que una tarea cancelada sin llegar a una esper
 recuperando sus errores no tiene test: depende de quién arranca antes.
 No hay `defer`: un recurso que la hija tenía abierto al cancelarse no se libera hasta que el
 sistema lo recoge (#492 queda en documentación).
+
+## 489. Cápsulas y bibliotecas: pruebas duplicadas, traits internos y nombres en `ray doc` (rayhotel #501, #481 y #485, nov 2026)
+
+**`ray test` corría pruebas dos veces (#501).** La primera suite de una corrida trae también las
+pruebas de los módulos que importa; así una app, cuya primera suite es su entrada, corre las de
+sus módulos. Las demás suites solo las suyas. En una biblioteca no hay entrada: la primera suite
+es un archivo cualquiera, y lo que importa son además suites por sí mismas. `collect_tests`
+recibe ahora los archivos de las otras suites y salta en la primera las pruebas importadas cuyo
+archivo es una de ellas. Con un solo archivo pedido no hay otras suites y nada cambia.
+
+**Un trait interno se alcanzaba por método (#481).** La ronda anterior cerró las funciones: fuera
+de la cápsula, `recv.f()` se resuelve contra lo que la fachada exporta. Los métodos de trait van
+por otra tabla (`methods`: tipo y método → función manglada) que no sabía de cápsulas. El checker
+recuerda ahora de qué trait es cada método manglado (`method_trait`) y qué tipos y traits exporta
+cada cápsula (`capsule_types`, que ya calculaba el loader), y descarta el método si su trait se
+declara dentro de una cápsula que no lo exporta y el sitio está fuera. Manda la cápsula más
+externa que contiene al trait y no al sitio, como en las funciones. Un trait de fuera (el
+prelude, el del propio llamador) implementado para un tipo de la cápsula no se toca: `@derive`
+y `Show` siguen igual.
+
+**`ray doc` mostraba nombres que no se pueden escribir (#485).** La firma de un ítem re-exportado
+se imprime desde el AST de su módulo, donde el tipo de un hermano es `model.Booking`.
+`raydoc::contract_names` cambia cada `alias.Tipo` por el nombre con que la fachada lo exporta,
+si el módulo de ese alias y el nombre coinciden con uno de sus re-exports; y cada tipo suelto del
+propio módulo que la fachada exporta con otro nombre. Es una sustitución sobre el texto de la
+firma, por nombres enteros. Lo que la fachada no exporta se deja como está: de eso ya avisa
+`ray check` (#487). La usan `ray doc <archivo>`, y en el MCP y `ray doc <módulo>` las líneas de
+re-export y la consulta por símbolo. Un trait re-exportado lista sus métodos en el Markdown,
+como uno declarado en el archivo.
+
+**Comprobado.** Tests en `tests/capsules_cli.rs`: la biblioteca de tres módulos da 3 pruebas, cada
+una una vez, y 3 al pedir el archivo que importa a los otros; el método del trait interno no
+compila fuera y el del exportado sí (VM e intérprete); `ray doc` por archivo, por módulo y por
+símbolo. Unitario de la sustitución de nombres. El binario 1.27.116 daba 5 pruebas y compilaba
+el `peek()`.
+
+**Límites.** El espejo selfhost del checker no conoce las cápsulas (tampoco antes). El método de
+un trait interno sigue alcanzable por un genérico con bound si el trait se puede nombrar, que
+fuera de la cápsula no se puede. La sustitución de `ray doc` es textual: un `///` re-exportado
+por símbolo que cite `model.Booking` también cambia, y una firma que nombre el tipo por un
+`from … import` con alias no se reconoce. `ray doc` sigue mostrando la cabecera de un struct
+re-exportado con su nombre original y «Exported as …» debajo.

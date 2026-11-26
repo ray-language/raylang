@@ -6,6 +6,22 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`ray test` — cada prueba de una biblioteca corre una vez** (rayhotel #501). En un paquete
+  sin entrada cada archivo es una suite, y la primera ejecutaba además las pruebas de los
+  módulos que importa: una cadena de tres módulos con una prueba cada uno daba 5, y el
+  recuento no coincidía con las pruebas que hay. Ahora una prueba importada cuyo archivo es
+  otra suite corre solo allí. Pidiendo un archivo (`ray test a/contract.ray`) sus importados
+  siguen entrando.
+- **Cápsulas — un trait interno no da métodos fuera** (rayhotel #481). `shop.make(4).peek()`
+  compilaba aunque `peek` fuera de un trait que la fachada no exporta. Ahora es un error de
+  tipos, como ya lo eran las funciones internas; el método de un trait que la fachada sí
+  exporta se llama igual, y dentro de la cápsula nada cambia.
+- **`ray doc` — las firmas de una fachada nombran los tipos como el contrato** (rayhotel
+  #485). Lo re-exportado se mostraba con la firma de su módulo interno
+  (`-> Result<[model.Booking], string>`), que quien usa la cápsula no puede escribir. Ahora
+  sale el nombre que la fachada exporta (`Booking`, o su alias). Un trait re-exportado lista
+  sus métodos. Igual en `ray doc <módulo>`, `ray doc <módulo>.<símbolo>` y el `ray_doc` del MCP.
+
 ## 1.27.117 — 2026-11-26
 
 - **Nativo — un `scope` que falla cancela a sus hijas, como la VM** (rayhotel #495). En un

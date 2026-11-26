@@ -794,7 +794,8 @@ fn module_surface(src: &str) -> Option<Vec<String>> {
 /// fachada `dir/mod.ray`), con el nombre con que se exporta si cambia.
 fn reexport_lines(src: &str, file: &std::path::Path) -> Vec<String> {
     let mut lines = Vec::new();
-    for item in crate::raydoc::reexports(src, file) {
+    let items = crate::raydoc::reexports(src, file);
+    for item in &items {
         let Ok(tokens) = crate::lexer::lex(&item.source) else { continue };
         let Ok(prog) = crate::parser::parse(tokens) else { continue };
         let name = item.original.as_str();
@@ -812,6 +813,8 @@ fn reexport_lines(src: &str, file: &std::path::Path) -> Vec<String> {
         } else {
             continue;
         };
+        // Los tipos, como los nombra el contrato (`model.Booking` → `Booking`).
+        let sig = crate::raydoc::contract_names(&sig, item, &items);
         if item.visible == item.original {
             lines.push(format!("{sig}  [re-exported from {}]", item.module));
         } else {
@@ -999,7 +1002,8 @@ fn project_doc_text(symbol: &str, path: &str) -> Option<String> {
         }
         // rayhotel #485: `kernel.enter` cuando `enter` llega a la fachada por `pub from`: la firma
         // y la doc son las de su definición.
-        if let Some(item) = crate::raydoc::reexports(&src, f).into_iter().find(|r| r.visible == func) {
+        let items = crate::raydoc::reexports(&src, f);
+        if let Some(item) = items.iter().find(|r| r.visible == func) {
             // Un struct reexportado `opaque` se documenta sin campos también por aquí.
             if item.opaque
                 && let Some(def) = crate::lexer::lex(&item.source).ok().and_then(|t| crate::parser::parse(t).ok())
@@ -1015,6 +1019,7 @@ fn project_doc_text(symbol: &str, path: &str) -> Option<String> {
                 ));
             }
             if let Some(text) = source_symbol_doc(&label, &item.source, &item.original) {
+                let text = crate::raydoc::contract_names(&text, item, &items);
                 return Some(format!("{text}\n(re-exported by {label} from {})", item.module));
             }
         }

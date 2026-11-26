@@ -428,7 +428,10 @@ whole app.
 
 With `full_content`, on macOS, the page reserves the title bar strip with
 `window.ray.titlebar_height` and marks the element that drags the window with the `data-ray-drag`
-attribute. On Linux and Windows it behaves like `document`.
+attribute. In full screen the bar hides and comes back with the menu bar when the pointer
+reaches the top (a `compact`/`tall` bar may stay in view if the system keeps the menu bar always
+visible); `titlebar_height` does not change. On Linux and Windows it behaves like
+`document`.
 
 ## 9. The rest of the system
 
@@ -480,4 +483,4 @@ subsystem out of a binary that opens no windows.
 
 The notes leave the device: a [**server-rendered site**](ssr.en.md).
 
-<!-- sync: sha256:4bd4c1b06f9c -->
+<!-- sync: sha256:a9faed379277 -->

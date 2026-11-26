@@ -139,7 +139,9 @@ pub fn open(title: string, url: string, width: int, height: int) -> Result<int, 
 /// `center` and `autosave`. `titlebar` (#270, macOS, with `kind: "full_content"`) makes the title
 /// bar taller so the traffic lights center on a taller header: `""` (the standard one, ≈ 32 pt on macOS 26),
 /// `"compact"` (≈ 40 pt) or `"tall"` (≈ 52 pt) — `window.ray.titlebar_height` gives the real
-/// height; Linux/Windows ignore it. Build it with `ui.options(width, height)` and tweak the fields you need.
+/// height; in full screen the bar hides and comes back with the menu bar when the pointer
+/// reaches the top (a compact/tall bar may stay if the system keeps the menu bar always visible),
+/// and `titlebar_height` does not change; Linux/Windows ignore it. Build it with `ui.options(width, height)` and tweak the fields you need.
 pub struct WindowOptions {
     width: int,
     height: int,

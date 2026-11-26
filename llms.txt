@@ -674,8 +674,10 @@ wire it from the page's `contextmenu` via `window.ray.send`); window kinds: `o.k
 title bar — macOS: transparent bar, hidden title, traffic lights over the page; reserve
 `window.ray.titlebar_height` px and mark the drag handle with `data-ray-drag`; the traffic lights
 center on the bar: standard ≈ 32 pt on macOS 26, or `o.titlebar = "compact"` (≈ 40 pt) /
-`"tall"` (≈ 52 pt) for a taller header (1.27.81); in full screen the bar hides (it comes back
-with the menu bar on hover), nothing covers the page and `titlebar_height` does not change;
+`"tall"` (≈ 52 pt) for a taller header (1.27.81); in full screen the bar hides (1.27.116;
+it comes back with the menu bar on hover and covers the top of the page only then;
+`titlebar_height` does not change; a compact/tall bar may stay if the system keeps the menu bar
+visible in full screen);
 Linux/Windows = document for now), `o.always_on_top`, `o.parent = h` (owned window);
 live geometry: `ui.set_fullscreen(h, bool)`, `ui.set_always_on_top`, `ui.set_size(h, w, hh)`,
 `ui.set_position(h, x, y)`, `ui.center(h)`, `ui.minimize(h)`, `ui.maximize(h)` (`center` —

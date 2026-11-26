@@ -22453,3 +22453,86 @@ dan el `Err` del grupo de acceso. `cargo check` del runtime para `aarch64-apple-
 ejecutó en el emulador. El ítem usa la accesibilidad por defecto del sistema (disponible con el
 dispositivo desbloqueado) y el grupo de acceso por defecto de la app: no se comparte con
 extensiones ni con otras apps del mismo team. No hay test automático del camino de iOS.
+
+## 487. Tres arreglos pequeños: `let _ = spawn`, `ray add` con varios nombres, el `.lnk` de Windows (rayhotel #496 y #500, rayreq #498, nov 2026)
+
+**`let _ = spawn(…)` dos veces (#496).** El emisor nativo pre-clona, antes de cada `spawn`, los
+canales y las tareas que hay en ámbito, para que la closure los capture. Un `let _ = spawn(…)`
+dejaba en ámbito una tarea llamada `_`, y el segundo emitía `let _ = _.clone();`, que Rust no
+admite. `_` no es un nombre: `in_scope_channels` lo salta.
+
+**`ray add a b c` (#500).** `cmd_add` leía solo el primer argumento. Ahora los recorre todos y
+resuelve cada uno contra el índice ANTES de escribir: o entran todos o `ray.toml` no se toca,
+que es lo que ya hacía con uno. Un nombre repetido y un argumento que empieza por `-` son error
+de uso; antes una opción se habría leído como nombre de paquete.
+
+**El acceso directo de Windows (#498).** El exe ya llevaba `display_name` en `ProductName`, pero
+el archivo `.lnk`, que es lo que enseñan el menú Inicio y la búsqueda, se llamaba `<name>.lnk`.
+Ahora se llama como el nombre visible. La carpeta y el exe siguen con `name`, porque de ellos
+dependen los instaladores y la auto-actualización. Un nombre visible que Windows no admite como
+archivo (`<>:"/\|?*`, un carácter de control, o acabado en punto o espacio) deja el acceso
+directo con `name` y solo cambia su descripción. `install.ps1` borra del menú Inicio el
+`<name>.lnk` de una versión anterior, solo si su destino es este mismo exe.
+
+**Comprobado.** #496: test en `native_gaps_cli` (VM y nativo). #500: test en `registry_cli` con
+un índice local (uno que no existe, uno repetido, una opción, y dos válidos). #498: tests
+unitarios, que solo compilan en Windows, corridos en la VM de Windows arm64; allí mismo un
+`ray bundle` de un proyecto con `display_name = "Lnk Probe"` deja `Lnk Probe.lnk` y
+`LnkProbe.exe`, y su `install.ps1` instala el nuevo y quita el antiguo.
+
+**De paso.** La aserción de CRLF del test de `install.ps1` usaba `lines()`, que quita el `\r`, así
+que no podía pasar; el CI no corre ese módulo (`cfg(windows)`, tests de la librería). Corregida.
+
+## 488. Nativo: un `scope` que falla cancela a sus hijas (rayhotel #495 y #492, nov 2026)
+
+**Qué fallaba.** En un binario nativo, las tareas lanzadas dentro de un `scope` seguían corriendo
+después de que el `scope` propagara un fallo. La VM las cancela. El repro: una hija que duerme e
+imprime cuatro veces, y un `scope` que falla entre el primer paso y el segundo; la VM imprime
+un paso y el nativo los cuatro.
+
+**Por qué.** Eran tres cosas.
+
+1. Si fallaba el CUERPO del `scope`, el desenrollado se saltaba el pop del marco del scope, y
+   solo el envoltorio de una tarea limpiaba los marcos huérfanos al terminar. En `main`, o con
+   un `try_call` que recupera el fallo, nadie cancelaba a las hijas. El marco se quedaba en la
+   pila y adoptaba a las tareas que esa fibra lanzara después.
+2. `time.sleep` no era un punto de cancelación. Lo eran los canales, `join`, `select` y el
+   cierre del scope; una hija dormida despertaba y seguía.
+3. La cancelación viaja como un fallo, y un `try_call` de la hija lo devolvía como `Err`: la
+   hija seguía hasta su siguiente espera.
+
+**Qué se hizo.**
+
+- `__ray_scope_impl` arma una guarda mientras corre el cuerpo; si el cuerpo falla, saca el marco
+  y cancela a las hijas. Si vuelve bien, la guarda se olvida y el cierre sigue como antes.
+- `time.sleep` se emite como `__ray_sleep`. En una tarea con fibras duerme en una lista de
+  esperas propia con plazo, anotada en `parked`, así que `cancel_task` la despierta y sale sin
+  agotar el plazo. Con un hilo por tarea duerme en tramos de 10 ms. `main`, un programa sin
+  tareas y un callback de la FFI duermen como antes.
+- `__ray_try_call` relanza el fallo si la tarea está cancelada.
+- Las esperas del reactor que emite el runtime (socket, UDP, tubería, entrada estándar, cola de
+  eventos de UI) pasan por `__ray_fwait_*`, que comprueba la cancelación al despertar. Lo
+  destapó una hija aparcada en `tcp_accept`: cancelada, aceptaba la conexión siguiente.
+
+**Lo que NO se hizo: despertar a la hija aparcada en un socket.** La VM la retira de las colas en
+el momento. Aquí sale al despertar por datos, por el plazo o por el cierre del descriptor, porque
+el reactor de `ray_runtime::fibers` no sabe soltar una espera de un descriptor, y enseñárselo
+toca el camino caliente del scheduler. La hija ya no actúa sobre lo que llegue (no lee, no
+acepta), pero la fibra y su socket siguen vivos hasta entonces.
+
+**El scope no espera a las canceladas**, igual que la VM. Una tarea que nunca espera corre hasta
+su final en los dos motores.
+
+**Comprobado.** `tests/native_scope_cancel_cli.rs`: falla el cuerpo, falla otra hija, y la hija
+espera dentro de su `try_call`; VM, nativo con fibras y nativo con un hilo por tarea dan la misma
+salida, con 150 ms de margen entre el fallo y el paso siguiente. Otro caso con una hija en
+`tcp_accept` (VM y fibras). El binario 1.27.116 reproduce el fallo con los mismos programas.
+Suites `native_fibers_cli`, `native_gaps_cli` y `cli_cli` en verde.
+
+**Límites.** Las lecturas y escrituras TLS esperan dentro de `ray_runtime::tls`, fuera del
+runtime emitido, y no comprueban la cancelación. Con `--without fibers` (y en Windows arm64, que
+no tiene fibras) la E/S es una llamada bloqueante sin punto de cancelación. La espera de un
+candado de SQLite (`db/sqlite`, §483) tampoco se miró. No se midió el coste del `__ray_sleep`
+nuevo; aloja una lista de esperas por llamada dentro de una tarea. Los tests dependen del reloj.
+No hay `defer`: un recurso que la hija tenía abierto al cancelarse no se libera hasta que el
+sistema lo recoge (#492 queda en documentación).

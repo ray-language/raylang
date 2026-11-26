@@ -22388,3 +22388,29 @@ AudioQueue; no se ha comprobado cambiando de micrófono a mitad de una toma. De 
 que el dispositivo DECLARA: no se ha medido acústicamente contra los 75 ms del
 hallazgo, y un enlace Bluetooth o un conversor externo pueden tardar más de lo que dicen. En
 milisegundos enteros, como el resto de `std/audio`.
+
+## 485. `std/ui`: la barra `compact`/`tall` en pantalla completa (rayreq #499, nov 2026)
+
+**Qué fallaba.** Una ventana `full_content` con `titlebar = "compact"` (o `"tall"`) mostraba en
+pantalla completa una franja del alto de la barra sobre el borde superior de la página. La
+página conserva su tamaño y posición, así que los controles que pone en esos píxeles quedaban
+debajo y nada se lo decía. Con la barra estándar no pasaba.
+
+**Por qué.** La barra más alta es una `NSToolbar` vacía (#270). En pantalla completa
+AppKit esconde la barra de título, pero deja la toolbar a la vista salvo que la ventana pida lo
+contrario, y ahí no vale `titlebarAppearsTransparent`: se pinta con su material sobre la página.
+
+**Qué se hizo.** El delegate de la ventana responde a
+`window:willUseFullScreenPresentationOptions:` añadiendo `NSApplicationPresentationAutoHideToolbar`
+a las opciones que AppKit propone. La toolbar se esconde con la barra de menús y vuelve con
+ella al llevar el puntero arriba, igual que la barra estándar. En una ventana sin toolbar la
+opción no cambia nada, así que se añade siempre.
+
+**Comprobado.** En un MacBook Pro con macOS 26: una página con una franja roja de 38 px arriba,
+`set_fullscreen(h, true)` y una captura. Con 1.27.115 la franja sale cubierta; con el cambio
+sale entera. Solo se probó `compact`; `tall` usa la misma toolbar con otro estilo.
+
+**Límites.** No hay test automático: hace falta una pantalla y una captura. La página sigue sin
+saber si está en pantalla completa (no hay evento ni propiedad) y `window.ray.titlebar_height`
+no baja a 0 ahí, así que una página que reserva ese margen lo conserva vacío. Si el puntero
+revela la barra, esta cubre el borde superior mientras está a la vista, como en cualquier app.

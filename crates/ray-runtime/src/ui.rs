@@ -4864,6 +4864,13 @@ mod mac {
                     window_frame_changed(this, sel_, notification);
                 }
             }
+            // rayreq #499: en pantalla completa AppKit esconde la barra de título pero deja la
+            // toolbar a la vista, y la barra `compact`/`tall` ES una toolbar vacía: quedaba como
+            // una franja opaca sobre la página. Con `AutoHideToolbar` se esconde con la barra de
+            // menús, igual que la barra estándar. Sin toolbar la opción no cambia nada.
+            extern "C" fn fullscreen_presentation_options(_this: Id, _sel: Sel, _window: Id, proposed: u64) -> u64 {
+                proposed | NS_PRESENTATION_AUTO_HIDE_TOOLBAR
+            }
             // M252 (ray-sublime #76): `windowDidBecomeKey:` → ("focused", id, ""). Mismo mapa
             // ventana → id que el cierre.
             extern "C" fn window_did_become_key(_this: Id, _sel: Sel, notification: Id) {
@@ -5283,6 +5290,12 @@ mod mac {
                     sel(b"windowDidResize:\0"),
                     window_did_resize as extern "C" fn(Id, Sel, Id) as *const c_void,
                     c"v@:@".as_ptr(),
+                );
+                class_addMethod(
+                    cls_new,
+                    sel(b"window:willUseFullScreenPresentationOptions:\0"),
+                    fullscreen_presentation_options as extern "C" fn(Id, Sel, Id, u64) -> u64 as *const c_void,
+                    c"Q@:@Q".as_ptr(),
                 );
                 class_addMethod(
                     cls_new,
@@ -6500,6 +6513,8 @@ mod mac {
     }
 
     const NS_FLOATING_WINDOW_LEVEL: i64 = 3;
+    /// NSApplicationPresentationAutoHideToolbar.
+    const NS_PRESENTATION_AUTO_HIDE_TOOLBAR: u64 = 1 << 11;
     const NS_WINDOW_ABOVE: i64 = 1;
     const STYLE_MASK_FULLSCREEN: u64 = 1 << 14;
 

@@ -207,7 +207,7 @@ fn write_shortcut(dir: &Path, name: &str, display: &str, exe: &Path) -> Result<(
         ps_quote(&abs_exe),
         ps_quote(&abs_dir),
         ps_quote(&abs_exe),
-        display.chars().filter(|c| !c.is_control()).collect::<String>().replace('\'', "''")
+        ps_single(&display.chars().filter(|c| !c.is_control()).collect::<String>())
     );
     run_powershell(&script)
 }
@@ -218,12 +218,12 @@ fn write_shortcut(dir: &Path, name: &str, display: &str, exe: &Path) -> Result<(
 /// rayreq #498: el acceso directo se llama como el nombre visible; el que dejó una versión
 /// anterior con `name` se quita del menú Inicio si apunta a este mismo exe.
 pub fn windows_install_script(name: &str, display: &str) -> String {
-    let quoted = name.replace('\'', "''");
+    let quoted = ps_single(name);
     let stem = shortcut_stem(name, display);
-    let shown = stem.replace('\'', "''");
+    let shown = ps_single(stem);
     // Un carácter de control del nombre visible (un salto de línea del TOML) partiría el script.
     let clean: String = display.chars().filter(|c| !c.is_control()).collect();
-    let description = clean.replace('\'', "''");
+    let description = ps_single(&clean);
     let comment = &clean;
     let drop_old = if stem == name {
         String::new()
@@ -277,7 +277,21 @@ fn plain(p: &Path) -> PathBuf {
 
 /// Ruta entre comillas simples de PowerShell (`'` se dobla).
 fn ps_quote(p: &Path) -> String {
-    plain(p).to_string_lossy().replace('\'', "''")
+    ps_single(&plain(p).to_string_lossy())
+}
+
+/// El contenido de una cadena de comillas simples de PowerShell: cada comilla se dobla. PowerShell
+/// cierra la cadena también con las tipográficas (U+2018, U+2019, U+201A, U+201B), que un nombre
+/// visible puede llevar (`Ray’s Notes`); doblada, cada una vale por sí misma.
+pub fn ps_single(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        out.push(c);
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201a}' | '\u{201b}') {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// El bloque VS_VERSIONINFO completo: raíz con VS_FIXEDFILEINFO + StringFileInfo (tabla
@@ -446,6 +460,10 @@ mod tests {
         assert_eq!(shortcut_stem("App", "What? Now"), "App");
         assert_eq!(shortcut_stem("App", "Trailing."), "App");
         assert_eq!(shortcut_stem("App", "Ray Request"), "Ray Request");
+        // PowerShell también cierra una cadena con las comillas tipográficas: se doblan.
+        let curly = windows_install_script("App", "Ray\u{2019}s Notes");
+        assert!(curly.contains("$lnk = Join-Path $here 'Ray\u{2019}\u{2019}s Notes.lnk'"), "{curly}");
+        assert!(curly.contains("$s.Description = 'Ray\u{2019}\u{2019}s Notes'"), "{curly}");
         let s = windows_install_script("App", "What? Now");
         assert!(s.contains("$lnk = Join-Path $here 'App.lnk'") && s.contains("$s.Description = 'What? Now'"), "{s}");
         assert!(!s.contains("$old"), "{s}");

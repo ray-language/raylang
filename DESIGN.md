@@ -22478,22 +22478,27 @@ directo con `name` y solo cambia su descripción. `install.ps1` borra del menú 
 
 El cambio rompía otra pieza, y lo encontró la revisión: `fix_launchers` de `std/update` rehace
 el `.lnk` tras una auto-actualización y deducía el exe del nombre del acceso directo
-(`<acceso>.exe`). Ahora, si ese exe no existe, toma el único `.exe` de la carpeta; con varios y
-ninguno a juego no toca nada. El `<name>.lnk` de la versión anterior se queda en la carpeta de
-la app, junto al nuevo: la actualización no borra archivos.
+(`<acceso>.exe`). Ahora toma la hoja del destino que el propio acceso directo ya tenía y la busca
+en la carpeta instalada, como hace la rama del `.desktop` con su `Exec=`; si ese exe no está, no
+toca nada. Tras una auto-actualización desde una versión anterior, el `<name>.lnk` viejo se
+queda en la carpeta junto al nuevo y el menú Inicio conserva el viejo: la actualización no borra
+archivos ni toca el menú Inicio; el cambio de nombre solo lo aplica `install.ps1`.
 
 Como el nombre visible va ahora dentro de `install.ps1`, el script se escribe con BOM (Windows
 PowerShell 5.1 lee como ANSI un script UTF-8 sin él, y una `Ñ` rompía las comillas), lo que
 viene del manifiesto va siempre entre comillas simples, y se le quitan los caracteres de
-control.
+control. Las comillas simples se doblan, y también las tipográficas (U+2018, U+2019, U+201A,
+U+201B), que PowerShell acepta como cierre de cadena; lo mismo en el script de `fix_launchers`.
 
 **Comprobado.** #496: test en `native_gaps_cli` (VM y nativo). #500: test en `registry_cli` con
 un índice local (uno que no existe, uno repetido, una opción, y dos válidos). #498: tests
 unitarios, que solo compilan en Windows, corridos en la VM de Windows arm64; allí mismo un
 `ray bundle` de un proyecto con `display_name = "Lnk Probe"` deja `Lnk Probe.lnk` y
 `LnkProbe.exe`, y su `install.ps1` instala el nuevo y quita el antiguo; con
-`display_name = "Café Ñandú $5"` el menú Inicio recibe ese nombre exacto. El cambio de
-`fix_launchers` solo pasó el chequeo de tipos: no se ejecutó una auto-actualización en Windows.
+`display_name = "Café Ñandú $5"` el menú Inicio recibe ese nombre exacto. Y la
+auto-actualización: con `display_name = "Ray’s Probe"`, el bundle copiado a otra carpeta y su zip
+aplicado con `update.apply_at`, el acceso directo pasa de apuntar a la carpeta de construcción a
+`<instalada>\LnkProbe.exe`, y `install.ps1` deja en el menú Inicio el nombre con su U+2019.
 
 **De paso.** La aserción de CRLF del test de `install.ps1` usaba `lines()`, que quita el `\r`, así
 que no podía pasar; el CI no corre ese módulo (`cfg(windows)`, tests de la librería). Corregida.
@@ -22544,8 +22549,8 @@ su final en los dos motores.
 
 **Comprobado.** `tests/native_scope_cancel_cli.rs`: falla el cuerpo, falla otra hija, la hija
 espera dentro de su `try_call`, y una hija cancelada mientras espera a las suyas; VM, nativo con
-fibras y nativo con un hilo por tarea dan la misma salida, con 200 ms de margen entre el fallo y
-el paso siguiente. Otro caso con una hija en `tcp_accept` (VM y fibras). Los dos programas van
+fibras y nativo con un hilo por tarea dan la misma salida. La hija avisa por un canal tras su
+primer paso y el fallo espera ese aviso; queda una sola carrera, con 400 ms de margen. Otro caso con una hija en `tcp_accept` (VM y fibras). Los dos programas van
 en un solo test, uno tras otro. El binario 1.27.116 reproduce el fallo con los mismos programas.
 Suites `native_fibers_cli`, `native_gaps_cli` y `cli_cli` en verde.
 
@@ -22556,7 +22561,9 @@ fibras, las esperas de tubería, consola y eventos de UI van por `run_blocking` 
 tampoco la comprueban. Una espera con plazo cancelada antes de tiempo deja su entrada en el
 reactor hasta que vence el plazo original. La espera de un
 candado de SQLite (`db/sqlite`, §483) tampoco se miró. No se midió el coste del `__ray_sleep`
-nuevo. Los tests dependen del reloj. Que una tarea cancelada sin llegar a una espera siga
+nuevo; con un hilo por tarea duerme en tramos de 10 ms, que son cien despertares por segundo
+por tarea dormida. El envoltorio de la tarea conserva su limpieza de marcos huérfanos, que con
+las guardas ya no encuentra nada. Que una tarea cancelada sin llegar a una espera siga
 recuperando sus errores no tiene test: depende de quién arranca antes.
 No hay `defer`: un recurso que la hija tenía abierto al cancelarse no se libera hasta que el
 sistema lo recoge (#492 queda en documentación).

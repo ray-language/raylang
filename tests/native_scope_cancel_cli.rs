@@ -2,9 +2,9 @@
 //! el cuerpo que fallaba dejaba el marco del scope en la pila (nadie cancelaba a las hijas), y
 //! `time.sleep` y las esperas de red no notaban la cancelación: la hija seguía escribiendo después
 //! de que quien llamó la diera por terminada. Un `try_call` de la hija tampoco recupera la
-//! cancelación. Los tiempos dejan 200 ms de margen entre el fallo y el paso siguiente de la hija, y
-//! los dos programas van en UN test, uno tras otro: en paralelo, el `rustc` de uno le quitaba la
-//! CPU al reloj del otro.
+//! cancelación. La hija avisa por un canal tras su primer paso y el fallo espera ese aviso, así
+//! que solo queda una carrera: el fallo tiene 400 ms para llegar antes del paso siguiente. Los dos
+//! programas van en UN test, uno tras otro, para que el `rustc` de uno no le quite la CPU al otro.
 use std::process::Command;
 
 fn has_rustc() -> bool {
@@ -49,8 +49,12 @@ fn sleeping_children() {
         "sleep",
         r#"import std/time;
 
-fn work(tag: string) -> int {
-    var i = 0;
+// La hija avisa por `ready` tras su primer paso, y quien falla espera ese aviso: el fallo llega
+// siempre entre el paso 0 y el 1, sin depender de cuánto tarde en arrancar la hija.
+fn work(tag: string, ready: Channel<int>) -> int {
+    print("${tag} step 0");
+    send(ready, 1);
+    var i = 1;
     while (i < 3) {
         time.sleep(400);
         print("${tag} step ${i}");
@@ -60,48 +64,52 @@ fn work(tag: string) -> int {
 }
 
 // La hija espera dentro de su propio try_call: la cancelación no se recupera.
-fn guarded(tag: string) -> int {
-    let r = try_call(fn() -> int { work(tag) });
+fn guarded(tag: string, ready: Channel<int>) -> int {
+    let r = try_call(fn() -> int { work(tag, ready) });
     print("${tag} survived try_call");
     0
 }
 
 fn body_fails() -> int {
+    let ready: Channel<int> = Channel.new();
     scope(fn() -> int {
-        let _a = spawn(fn() -> int { work("body") });
-        time.sleep(600);
+        let _a = spawn(fn() -> int { work("body", ready) });
+        let _go = recv(ready);
         panic("body failed")
     })
 }
 
 fn child_fails() -> int {
+    let ready: Channel<int> = Channel.new();
     scope(fn() -> int {
-        let _a = spawn(fn() -> int { work("sibling") });
-        let _b = spawn(fn() -> int { time.sleep(600); panic("child failed") });
+        let _a = spawn(fn() -> int { work("sibling", ready) });
+        let _b = spawn(fn() -> int { let _go = recv(ready); panic("child failed") });
         0
     })
 }
 
 fn guarded_child() -> int {
+    let ready: Channel<int> = Channel.new();
     scope(fn() -> int {
-        let _a = spawn(fn() -> int { guarded("guarded") });
-        time.sleep(600);
+        let _a = spawn(fn() -> int { guarded("guarded", ready) });
+        let _go = recv(ready);
         panic("guarded failed")
     })
 }
 
 // Transitiva: la hija está esperando a SUS hijas en la salida de su scope cuando la cancelan.
-fn inner() -> int {
+fn inner(ready: Channel<int>) -> int {
     scope(fn() -> int {
-        let _w = spawn(fn() -> int { work("grand") });
+        let _w = spawn(fn() -> int { work("grand", ready) });
         0
     })
 }
 
 fn transitive() -> int {
+    let ready: Channel<int> = Channel.new();
     scope(fn() -> int {
-        let _a = spawn(fn() -> int { inner() });
-        time.sleep(600);
+        let _a = spawn(fn() -> int { inner(ready) });
+        let _go = recv(ready);
         panic("outer failed")
     })
 }
@@ -129,6 +137,10 @@ fn main() {
 /// despierta, y sale por la cancelación sin aceptarla. (Con un hilo por tarea la espera es una
 /// llamada bloqueante del sistema y no hay punto de cancelación: solo se comprueba con fibras.)
 fn a_child_waiting_for_a_connection() {
+    // Windows arm64 no tiene fibras: el nativo por defecto es de un hilo por tarea.
+    if cfg!(all(windows, target_arch = "aarch64")) {
+        return;
+    }
     vm_and_native(
         "accept",
         r#"import std/net;

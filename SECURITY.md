@@ -200,8 +200,10 @@ shell del usuario, como hace un editor con terminal integrado.
 ### El llavero del sistema (`std/keychain`, M266)
 
 `keychain.get`/`set`/`delete(service, account)` guardan secretos en el almacén que el sistema ya
-protege con la sesión del usuario: Keychain Services (macOS), Secret Service por libsecret (Linux;
-gnome-keyring/KWallet) y Credential Manager (Windows). raylang no cifra ni guarda nada por su
+protege con la sesión del usuario: Keychain Services (macOS e iOS), Secret Service por libsecret
+(Linux; gnome-keyring/KWallet) y Credential Manager (Windows). En iOS el ítem queda en el grupo
+de acceso de la app, que sale de su firma: una app sin firmar no tiene llavero (`Err`, OSStatus
+−34018) y otra app no lo lee. En Android no hay backend: las tres operaciones devuelven `Err`. raylang no cifra ni guarda nada por su
 cuenta: hereda la política de acceso de cada llavero (en macOS, el ítem lo crea y lo lee el propio
 binario; otro programa que lo pida pasa por el diálogo del sistema). `RAY_KEYCHAIN_FILE` sustituye
 el llavero por un archivo plano (0600 en unix) SOLO para tests y CI: quien lo ponga en producción
@@ -505,7 +507,8 @@ documentada:
     `CString` propias vivas durante la llamada. En Windows, `SHAddToRecentDocs(SHARD_PATHW, …)`
     con un búfer UTF-16 propio terminado en NUL.
 - **`crates/ray-runtime/src/keychain.rs`** — el llavero del sistema (`std/keychain`, M266), **sin
-  crates**: en macOS, `SecItemAdd`/`SecItemCopyMatching`/`SecItemUpdate`/`SecItemDelete` con
+  crates**: en macOS e iOS (`target_vendor = "apple"`, el mismo código desde 1.27.117),
+  `SecItemAdd`/`SecItemCopyMatching`/`SecItemUpdate`/`SecItemDelete` con
   diccionarios CoreFoundation propios (RAII sobre `CFRelease`, lectura de los estáticos `kSec*`);
   en Linux, `dlopen("libsecret-1.so.0")` + `transmute` de `secret_password_{store,lookup,clear}_sync`
   a sus firmas variádicas (lista de atributos terminada en NULL) y liberación con

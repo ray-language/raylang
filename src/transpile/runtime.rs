@@ -191,6 +191,9 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // Enums de valor (datos escalares): `Copy`, con la forma de uso de `Rc` (`::new`, `Deref`).
     out.push_str("#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)] struct __RayVal<T>(T);\nimpl<T> __RayVal<T> { #[inline(always)] fn new(v: T) -> Self { __RayVal(v) } }\nimpl<T> std::ops::Deref for __RayVal<T> { type Target = T; #[inline(always)] fn deref(&self) -> &T { &self.0 } }\n");
     out.push_str("#[cold] fn __ray_rt_err(msg: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string(), None)) }\n");
+    // El fallo con el que sale una tarea cancelada. Un solo texto: `__ray_try_call` lo reconoce
+    // para no recuperarlo (rayhotel #495), y es el que la VM pone en la tarea.
+    out.push_str("#[allow(dead_code)]\nconst __RAY_TASK_CANCELLED: &str = \"task cancelled (a sibling failed)\";\n");
     out.push_str("#[cold] fn __ray_rt_err_at(msg: &str, at: &str) -> ! { std::panic::panic_any(__RayErr(msg.to_string(), Some(at.to_string()))) }\n");
     // §101 #16→#14: el índice fuera de rango es un error de runtime de raylang con el texto de la VM
     // (`index 3 out of range (length 0)`), no el bounds check de Rust. `__ray_idx` hace UNA comparación
@@ -291,7 +294,7 @@ pub(super) fn emit_core_runtime(out: &mut String, fast: bool, ahash: bool, fiber
     // no llegó a una espera sigue recuperando sus errores corrientes, como en la VM.
     out.push_str("    Rc::new(std::cell::RefCell::new(match r {\n");
     out.push_str("        Ok(()) => Vec::new(),\n");
-    out.push_str("        Err(e) if __ray_cancelled() && e.downcast_ref::<__RayErr>().is_some_and(|r| r.0 == \"task cancelled (a sibling failed)\") => std::panic::resume_unwind(e),\n");
+    out.push_str("        Err(e) if __ray_cancelled() && e.downcast_ref::<__RayErr>().is_some_and(|r| r.0 == __RAY_TASK_CANCELLED) => std::panic::resume_unwind(e),\n");
     out.push_str("        Err(e) => {\n");
     out.push_str("            let m = match e.downcast::<__RayErr>() {\n");
     out.push_str("                Ok(r) => r.0,\n");
@@ -2288,7 +2291,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // soltar una espera, y no sabe. La VM sí retira a la fibra en el momento.
     if t.fibers {
         out.push_str(concat!(
-            "#[allow(dead_code)]\nfn __ray_cancel_point() { if __ray_cancelled() { __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "#[allow(dead_code)]\nfn __ray_cancel_point() { if __ray_cancelled() { __ray_rt_err(__RAY_TASK_CANCELLED); } }\n",
             "#[allow(dead_code)]\nfn __ray_fwait_readable(fd: i32) { ray_runtime::fibers::wait_readable(fd); __ray_cancel_point(); }\n",
             "#[allow(dead_code)]\nfn __ray_fwait_writable(fd: i32) { ray_runtime::fibers::wait_writable(fd); __ray_cancel_point(); }\n",
             "#[allow(dead_code)]\nfn __ray_fwait_readable_timeout(fd: i32, ms: i64) -> bool { let r = ray_runtime::fibers::wait_readable_timeout(fd, ms); __ray_cancel_point(); r }\n",
@@ -2341,18 +2344,18 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        if st.cap == Some(0) {\n",
             "            if __ray_in_ffi_callback() { drop(st); __ray_rt_err(__RAY_FFI_CALLBACK_WAIT); }\n",
             "            st.senders += 1;\n",
-            "            while !st.closed && !st.q.is_empty() { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "            while !st.closed && !st.q.is_empty() { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(__RAY_TASK_CANCELLED); } }\n",
             "            if st.closed { st.senders -= 1; drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             "            st.q.push_back(v);\n",
             "            let my = st.taken + 1; __ray_notify(&self.inner); __ray_bump();\n",
-            "            while !st.closed && st.taken < my { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { if st.taken < my { st.q.pop_back(); } st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "            while !st.closed && st.taken < my { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { if st.taken < my { st.q.pop_back(); } st.senders -= 1; drop(st); __ray_rt_err(__RAY_TASK_CANCELLED); } }\n",
             "            st.senders -= 1;\n",
             "            if st.taken < my { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             "            return;\n",
             "        }\n",
             "        if st.cap.map_or(false, |c| st.q.len() >= c) && __ray_in_ffi_callback() { drop(st); __ray_rt_err(__RAY_FFI_CALLBACK_WAIT); }\n",
             "        st.senders += 1;\n",
-            "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "        while !st.closed && st.cap.map_or(false, |c| st.q.len() >= c) { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { st.senders -= 1; drop(st); __ray_rt_err(__RAY_TASK_CANCELLED); } }\n",
             "        st.senders -= 1;\n",
             "        if st.closed { drop(st); __ray_rt_err(\"send on a closed channel\"); }\n",
             "        st.q.push_back(v); __ray_notify(&self.inner); st.ops = st.ops.wrapping_add(1); let coop = st.ops & 31 == 0; drop(st); __ray_bump(); if coop { __ray_coop(); }\n",
@@ -2363,7 +2366,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             // operación costaba un 20 % en actor_shard.
             "    fn recv(&self) -> Option<T> {\n",
             "        let mut st = self.inner.0.lock().unwrap();\n",
-            "        while st.q.is_empty() && !st.closed { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "        while st.q.is_empty() && !st.closed { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { drop(st); __ray_rt_err(__RAY_TASK_CANCELLED); } }\n",
             "        let v = st.q.pop_front(); if v.is_some() { st.taken += 1; __ray_notify(&self.inner); } st.ops = st.ops.wrapping_add(1); let coop = st.ops & 31 == 0; drop(st); if coop { __ray_coop(); } v\n",
             "    }\n",
             // M116: recepción NO bloqueante. Got(v) drena y despierta a un emisor (como recv); vacío y
@@ -2471,7 +2474,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    let p = __ray_ctx(|c| c.parked.clone());\n",
                 "    let p = match p { Some(p) if ms > 0 && ray_runtime::fibers::in_fiber() && !__ray_in_ffi_callback() => p, _ => {\n",
                 "        ray_runtime::fibers::sleep_ms(ms);\n",
-                "        if __ray_cancelled() { __ray_rt_err(\"task cancelled (a sibling failed)\"); }\n",
+                "        __ray_cancel_point();\n",
                 "        return;\n",
                 "    } };\n",
                 "    let wl = __ray_ctx(|c| c.sleep_wl.get_or_insert_with(ray_runtime::fibers::WaitList::new).clone());\n",
@@ -2485,7 +2488,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "        ray_runtime::fibers::block_on_timeout_for(&wl, seen, deadline - now);\n",
                 "    }\n",
                 "    *p.lock().unwrap() = None;\n",
-                "    if __ray_cancelled() { __ray_rt_err(\"task cancelled (a sibling failed)\"); }\n",
+                "    __ray_cancel_point();\n",
                 "}\n",
             ));
         } else {
@@ -2499,7 +2502,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
                 "    if !__RAY_CANCEL.with(|c| c.borrow().is_some()) { std::thread::sleep(d); return; }\n",
                 "    let deadline = std::time::Instant::now() + d;\n",
                 "    loop {\n",
-                "        if __ray_cancelled() { __ray_rt_err(\"task cancelled (a sibling failed)\"); }\n",
+                "        if __ray_cancelled() { __ray_rt_err(__RAY_TASK_CANCELLED); }\n",
                 "        let now = std::time::Instant::now();\n",
                 "        if now >= deadline { return; }\n",
                 "        std::thread::sleep((deadline - now).min(std::time::Duration::from_millis(10)));\n",
@@ -2570,7 +2573,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             out.push_str("        g = __RAY_ACT_CV.wait_timeout(g, std::time::Duration::from_millis(10)).unwrap().0;\n");
         }
         out.push_str(concat!(
-            "        if __ray_cancelled() { drop(g); __RAY_ACT_WAITERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst); __ray_rt_err(\"task cancelled (a sibling failed)\"); }\n",
+            "        if __ray_cancelled() { drop(g); __RAY_ACT_WAITERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst); __ray_rt_err(__RAY_TASK_CANCELLED); }\n",
             "    }\n",
             "    drop(g);\n",
             "    __RAY_ACT_WAITERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);\n",
@@ -2603,7 +2606,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
         }
         out.push_str(concat!(
             "    } else { drop(g); }\n",
-            "    if __ray_cancelled() { __RAY_ACT_WAITERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst); __ray_rt_err(\"task cancelled (a sibling failed)\"); }\n",
+            "    if __ray_cancelled() { __RAY_ACT_WAITERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst); __ray_rt_err(__RAY_TASK_CANCELLED); }\n",
             "    __RAY_ACT_WAITERS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);\n",
             "}\n",
             // Structured concurrency (M12.3) + contención de fallos (H21-N1) + cancelación de hermanas
@@ -2628,7 +2631,7 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "impl<T: Send + Clone + 'static> __RayTask<T> {\n",
             "    fn wait(&self) -> Result<T, String> {\n",
             "        let mut st = self.inner.0.lock().unwrap();\n",
-            "        while st.result.is_none() { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { drop(st); __ray_rt_err(\"task cancelled (a sibling failed)\"); } }\n",
+            "        while st.result.is_none() { st = __ray_cv_wait(&self.inner, st); if __ray_cancelled() { drop(st); __ray_rt_err(__RAY_TASK_CANCELLED); } }\n",
             "        st.result.clone().unwrap()\n",
             "    }\n",
             // try_join: consume la tarea entera (Ok y Err) — es la observación + la unión en una.

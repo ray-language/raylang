@@ -452,3 +452,30 @@ fn the_lsp_checks_capsule_files_with_their_real_identity() {
     assert!(out.contains("no field or function 'secret_wipe'"), "main.ray está fuera de la cápsula\n{out}");
     let _ = std::fs::remove_dir_all(d);
 }
+
+/// rayhotel #501: en una biblioteca (sin entrada) cada archivo es una suite. La primera traía
+/// también las pruebas de los módulos que importa, que volvían a correr en sus propias suites: una
+/// cadena de tres módulos con una prueba cada uno daba 5. Cada `@test` corre una vez, en la suite
+/// de su archivo. Pidiendo UN archivo, sus importados siguen entrando (no son otra suite).
+#[test]
+fn ray_test_runs_each_test_of_a_library_once() {
+    let d = tree(
+        "testonce",
+        &[
+            ("ray.toml", "[package]\nname = \"kit\"\nversion = \"0.1.0\"\n"),
+            ("a/lex.ray", "pub fn lex() -> int { 1 }\n\n@test\nfn t_lex() { assert_eq(lex(), 1); }\n"),
+            ("a/scan.ray", "import kit/a/lex;\n\npub fn scan() -> int { lex.lex() + 1 }\n\n@test\nfn t_scan() { assert_eq(scan(), 2); }\n"),
+            ("a/contract.ray", "import kit/a/scan;\n\npub fn contract() -> int { scan.scan() + 1 }\n\n@test\nfn t_contract() { assert_eq(contract(), 3); }\n"),
+        ],
+    );
+    let (out, err, code) = ray(&d, &["test"]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("running 3 test(s)") && out.contains("result: 3 test(s), all passed"), "{out}");
+    for name in ["t_contract", "t_scan", "t_lex"] {
+        assert_eq!(out.matches(name).count(), 1, "{name} corre una vez:\n{out}");
+    }
+    let (out, err, code) = ray(&d, &["test", "a/contract.ray"]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("running 3 test(s)") && out.contains("kit.a.scan.t_scan") && out.contains("kit.a.lex.t_lex"), "{out}");
+    let _ = std::fs::remove_dir_all(&d);
+}

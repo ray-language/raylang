@@ -340,7 +340,8 @@ pub fn total(i: Invoice) -> int { i.amount }                       // or declare
   An internal may import its own facade; two capsules may import each other.
 - From outside, method-call style (`x.f()`) on a capsule's type reaches what the facade
   exports — declared or re-exported — and nothing else. A `pub fn` of an internal module is
-  public inside its capsule only.
+  public inside its capsule only, and so are the methods of a trait the facade does not
+  re-export (1.27.118).
 - Nesting: `shop/tax/mod.ray` is internal to `shop`; code in `shop` uses it through its facade,
   and its own internals see `shop`'s. A `mod.ray` hides EVERY directory below it; `src/mod.ray`
   does nothing; `x.ray` next to `x/mod.ray` is an ambiguity error.

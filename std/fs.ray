@@ -148,31 +148,60 @@ pub fn make_temp_dir(prefix: string) -> Result<string, string> {
 // --- Carpetas de la app (ray-remote #506). Cada app reescribía esta tabla, y la del escritorio
 // falla en el teléfono: en iOS `$HOME` es el contenedor, su raíz no se puede escribir y
 // `Library/Application Support` no existe hasta que alguien la crea. ---
-// El nombre de la app es UNA carpeta: sin separadores ni `.`/`..`.
+// El nombre de la app es UNA carpeta, escrita igual en todos los sistemas: sin separadores, sin
+// los caracteres que Windows reserva, y sin espacio en los extremos ni punto final (Windows los
+// quita, y `"App."` y `"App"` serían la misma carpeta; `" "` sería la raíz compartida).
 fn app_folder(app: string) -> Result<string, string> {
-    if (app == "" || app == "." || app == ".." || app.contains("/") || app.contains("\\")) {
+    var ok = app != "" && app.trim() == app && !app.ends_with(".");
+    for c in ["/", "\\", ":", "*", "?", "\"", "<", ">", "|"] {
+        if (app.contains(c)) {
+            ok = false;
+        }
+    }
+    if (!ok) {
         return Result.Err("invalid app name '" + app + "': it must be a single folder name");
     }
     Result.Ok(app)
 }
 
-// Una variable de entorno con valor; vacía cuenta como ausente.
-fn env_set(name: string) -> Result<string, string> {
-    match (env(name)) {
-        Option.Some(v) => if (v == "") { Result.Err(name + " is not set") } else { Result.Ok(v) },
-        Option.None => Result.Err(name + " is not set"),
+// Una ruta absoluta: `/…` en Unix; `C:\…` o `\\servidor\…` en Windows.
+fn is_absolute(path: string) -> bool {
+    if (platform() == "windows") {
+        return path.starts_with("\\\\") || (path.len() > 2 && path.substring(1, 2) == ":");
     }
+    path.starts_with("/")
+}
+
+// Una variable de entorno que nombra una carpeta por su ruta absoluta, sin separador final.
+// Vacía cuenta como ausente; relativa es un error (daría una carpeta distinta según desde dónde
+// se lance el programa).
+fn env_dir(name: string) -> Result<string, string> {
+    let v = match (env(name)) {
+        Option.Some(v) => v,
+        Option.None => "",
+    };
+    if (v == "") {
+        return Result.Err(name + " is not set");
+    }
+    if (!is_absolute(v)) {
+        return Result.Err(name + " is not an absolute path: " + v);
+    }
+    var dir = v;
+    while (dir.len() > 1 && (dir.ends_with("/") || dir.ends_with("\\"))) {
+        dir = dir.substring(0, dir.len() - 1);
+    }
+    Result.Ok(dir)
 }
 
 // `$XDG_*` si es una ruta absoluta (la norma manda ignorar las relativas); si no, `$HOME/<rest>`.
 fn xdg_base(name: string, rest: string) -> Result<string, string> {
     match (env(name)) {
         Option.Some(v) => if (v.starts_with("/")) {
-            return Result.Ok(v);
+            return env_dir(name);
         },
         Option.None => { },
     }
-    Result.Ok(env_set("HOME")? + "/" + rest)
+    Result.Ok(env_dir("HOME")? + "/" + rest)
 }
 
 // Crea la carpeta (privada, 0o700, lo que ella cree) y devuelve su ruta.
@@ -192,16 +221,18 @@ fn ensure_dir(dir: string) -> Result<string, string> {
 /// - Windows: `%APPDATA%\<app>`.
 /// - Linux and other Unix: `$XDG_DATA_HOME/<app>`, or `$HOME/.local/share/<app>`.
 ///
-/// `Err` if the variable it needs is not set or the folder cannot be created.
+/// `Err` if `app` is not a folder name valid on every system (no separators, no `: * ? " < > |`,
+/// no leading or trailing space, no trailing dot), if the variable it needs is not set or is not
+/// an absolute path, or if the folder cannot be created.
 pub fn data_dir(app: string) -> Result<string, string> {
     let name = app_folder(app)?;
     let os = platform();
     let dir = if (os == "windows") {
-        env_set("APPDATA")? + "\\" + name
+        env_dir("APPDATA")? + "\\" + name
     } else if (os == "macos" || os == "ios") {
-        env_set("HOME")? + "/Library/Application Support/" + name
+        env_dir("HOME")? + "/Library/Application Support/" + name
     } else if (os == "android") {
-        env_set("HOME")? + "/" + name
+        env_dir("HOME")? + "/" + name
     } else {
         xdg_base("XDG_DATA_HOME", ".local/share")? + "/" + name
     };
@@ -216,14 +247,16 @@ pub fn data_dir(app: string) -> Result<string, string> {
 /// - Windows: `%LOCALAPPDATA%\<app>\Cache`.
 /// - Linux and other Unix: `$XDG_CACHE_HOME/<app>`, or `$HOME/.cache/<app>`.
 ///
-/// `Err` if the variable it needs is not set or the folder cannot be created.
+/// `Err` if `app` is not a folder name valid on every system (no separators, no `: * ? " < > |`,
+/// no leading or trailing space, no trailing dot), if the variable it needs is not set or is not
+/// an absolute path, or if the folder cannot be created.
 pub fn cache_dir(app: string) -> Result<string, string> {
     let name = app_folder(app)?;
     let os = platform();
     let dir = if (os == "windows") {
-        env_set("LOCALAPPDATA")? + "\\" + name + "\\Cache"
+        env_dir("LOCALAPPDATA")? + "\\" + name + "\\Cache"
     } else if (os == "macos" || os == "ios") {
-        env_set("HOME")? + "/Library/Caches/" + name
+        env_dir("HOME")? + "/Library/Caches/" + name
     } else if (os == "android") {
         temp_dir() + "/" + name
     } else {

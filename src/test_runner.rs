@@ -250,6 +250,13 @@ fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign:
     // El archivo del módulo de una función, por la banda de líneas del programa fusionado
     // (`modules` va ordenado por `start_line`).
     let module_path = |line: usize| loaded.modules.iter().rev().find(|m| m.start_line <= line).map(|m| m.path.as_path());
+    // El nombre del módulo de un archivo como se escribe al importarlo: `scan` para `a/scan.ray`,
+    // `a` para `a/mod.ray`.
+    let module_stem = |line: usize| {
+        let path = module_path(line)?;
+        let stem = path.file_stem()?.to_str()?;
+        if stem == "mod" { path.parent()?.file_name()?.to_str().map(str::to_string) } else { Some(stem.to_string()) }
+    };
     let is_foreign = |f: &crate::ast::Function| {
         module_path(f.line).is_some_and(|p| {
             let p = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
@@ -271,13 +278,20 @@ fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign:
         .filter(|f| !(own_only && f.name.contains("::")))
         .filter(|f| !is_foreign(f))
         .filter(|f| !runs_in_its_own_suite(f))
+        .filter(|f| {
+            let Some(p) = filter else { return true };
+            // El separador interno `::` del loader vuelve al `.` que escribe el usuario.
+            let display = f.name.replace("::", ".");
+            // Un filtro calificado (`scan.`, `lex.t_lex`) casa también con una prueba de la propia
+            // suite, que se muestra sin módulo: en una biblioteca cada prueba corre en la suite de
+            // su archivo (rayhotel #501) y `ray test scan.` debe seguir encontrándola.
+            display.contains(p) || (p.contains('.') && !f.name.contains("::") && module_stem(f.line).is_some_and(|m| format!("{m}.{display}").contains(p)))
+        })
         .map(|f| Test {
             global: f.name.clone(),
-            // El separador interno `::` del loader vuelve al `.` que escribe el usuario.
             display: f.name.replace("::", "."),
             kind: if f.return_type == Type::Bool { Kind::Bool } else { Kind::Unit },
         })
-        .filter(|t| filter.is_none_or(|p| t.display.contains(p)))
         .collect()
 }
 

@@ -22603,7 +22603,22 @@ compila fuera y el del exportado sí (VM e intérprete); `ray doc` por archivo, 
 símbolo. Unitario de la sustitución de nombres. El binario 1.27.116 daba 5 pruebas y compilaba
 el `peek()`.
 
-**Límites.** El espejo selfhost del checker no conoce las cápsulas (tampoco antes). El método de
+**Revisión antes de la 1.27.118.** Cuatro correcciones. (1) La sustitución de `ray doc` cambiaba
+cualquier re-export renombrado, también funciones: `total as booking_total` reescribía el campo
+`total` y el parámetro `total`. Ahora solo cambia tipos (`Reexported::is_type`), y un nombre suelto
+seguido de `:` (un campo o un parámetro que se llama igual) se deja. (2) Un tipo traído con
+`from … import` no se renombraba en dos vistas y en la tercera salía `booking/Reservation`: se
+reconocen las tres formas de nombrarlo (`alias.Tipo`, `ruta/modulo.Tipo`, suelto), y `/` no es
+límite de un calificador. (3) En una biblioteca `ray test scan.` dejó de encontrar la prueba, que
+ya no se llama `kit.a.scan.t_scan` sino `t_scan` en su suite, y salía con código 0 sin correr
+nada: un filtro con `.` casa también con `<módulo>.<prueba>` de la propia suite. (4) El completion
+del LSP seguía ofreciendo el método del trait interno: `enumerate_members` pasa por el mismo
+filtro que `check_call`.
+
+**Límites.** El nombre del método de un trait interno sigue ocupando su entrada en la tabla
+`methods`: quien usa la cápsula no puede dar ese nombre a un método de un trait propio sobre el
+mismo tipo («method ambiguous»), igual que antes de este arco; quitarlo pide que la tabla admita
+varios métodos por nombre. El espejo selfhost del checker no conoce las cápsulas (tampoco antes). El método de
 un trait interno sigue alcanzable por un genérico con bound si el trait se puede nombrar, que
 fuera de la cápsula no se puede. La sustitución de `ray doc` es textual: un `///` re-exportado
 por símbolo que cite `model.Booking` también cambia, y una firma que nombre el tipo por un
@@ -22627,13 +22642,16 @@ bundle fija `HOME` y `TMPDIR`; `%APPDATA%\<app>` y `%LOCALAPPDATA%\<app>\Cache` 
 caché en una subcarpeta, porque `%LOCALAPPDATA%\<app>` suele ser también donde se instala un
 programa por usuario);
 XDG en el resto, ignorando una variable XDG relativa como manda la norma. `app` es un solo nombre
-de carpeta: vacío, `.`, `..` o con separadores es `Err`. Sin la variable que hace falta también es
-`Err`, y no un directorio relativo inventado.
+de carpeta que se escribe igual en todos los sistemas: vacío, con separadores, con un carácter
+que Windows reserva (`: * ? " < > |`), con espacio en los extremos o con punto final es `Err`
+(Windows quita puntos y espacios finales: `"App."` sería `"App"`, y `" "` la raíz compartida).
+La variable que hace falta debe estar y ser una ruta absoluta; si no, `Err`, y no una carpeta
+relativa que cambia según desde dónde se lance el programa. El separador final se quita.
 
 **En iOS va Application Support y no Documents.** `Documents/` es para archivos del usuario (la
 app Archivos los enseña si la app lo declara); los datos internos van en `Library`. El ejemplo
 `notes-mobile` sigue en `Documents/` porque enseña la ruta a mano; `notes-everywhere` pasa a
-`fs.data_dir`.
+`fs.data_dir`, sin migrar lo que una instalación anterior del ejemplo dejara en `Documents/Notes`.
 
 **Nativo.** `std/fs` se intercepta por nombre en el transpilador; estas dos y sus auxiliares
 entran en `fs_wrapper_emitted` y se emite su cuerpo, como `copy_all`.

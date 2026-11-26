@@ -40,6 +40,8 @@ pub struct Reexported {
     pub module: String,
     pub file: std::path::PathBuf,
     pub source: String,
+    /// Lo definido es un tipo (struct, enum, trait o alias), no una función ni una constante.
+    pub is_type: bool,
 }
 
 /// El archivo de un módulo importado desde `from_file`: `<base>/<módulo>.ray` o
@@ -82,12 +84,19 @@ pub fn reexports(src: &str, file: &std::path::Path) -> Vec<Reexported> {
         crate::parser::parse(crate::lexer::lex(src).ok()?).ok()
     }
     // Sigue `name` desde `file` hasta el archivo que lo define (tope de saltos: sin ciclos).
-    fn definition(file: &std::path::Path, module: &str, name: &str, hops: usize) -> Option<(std::path::PathBuf, String, String)> {
+    fn is_type(prog: &crate::ast::Program, name: &str) -> bool {
+        prog.structs.iter().any(|s| s.name == name)
+            || prog.enums.iter().any(|e| e.name == name)
+            || prog.traits.iter().any(|t| t.name == name)
+            || prog.type_aliases.iter().any(|a| a.name == name)
+    }
+    fn definition(file: &std::path::Path, module: &str, name: &str, hops: usize) -> Option<(std::path::PathBuf, String, String, bool)> {
         let target = locate_module(file, module)?;
         let source = std::fs::read_to_string(&target).ok()?;
         let prog = parse(&source)?;
         if defines(&prog, name) {
-            return Some((target, source, name.to_string()));
+            let is_type = is_type(&prog, name);
+            return Some((target, source, name.to_string(), is_type));
         }
         if hops == 0 {
             return None;
@@ -101,8 +110,9 @@ pub fn reexports(src: &str, file: &std::path::Path) -> Vec<Reexported> {
     let mut out = Vec::new();
     for fi in prog.from_imports.iter().filter(|fi| fi.is_pub) {
         for n in &fi.names {
-            if let Some((def_file, source, original)) = definition(file, &fi.module, &n.name, 4) {
-                out.push(Reexported { opaque: n.opaque, visible: n.local().to_string(), original, module: fi.module.clone(), file: def_file, source });
+            if let Some((def_file, source, original, is_type)) = definition(file, &fi.module, &n.name, 4) {
+                let def_file = def_file.canonicalize().unwrap_or(def_file);
+                out.push(Reexported { opaque: n.opaque, visible: n.local().to_string(), original, module: fi.module.clone(), file: def_file, source, is_type });
             }
         }
     }
@@ -112,24 +122,39 @@ pub fn reexports(src: &str, file: &std::path::Path) -> Vec<Reexported> {
 /// rayhotel #485: la firma de un ítem re-exportado, con los tipos como los nombra el CONTRATO. En
 /// su módulo la firma dice `model.Booking` (el tipo de un hermano, por el nombre con que lo
 /// importa); quien lee la documentación de la fachada no puede escribir eso: para él es el
-/// `Booking` que la fachada re-exporta. Cada `alias.Tipo` cuyo módulo y nombre coinciden con un
-/// re-export de la misma fachada se cambia por su nombre visible; lo que la fachada no exporta se
-/// deja como está (de eso avisa `ray check`).
+/// `Booking` que la fachada re-exporta. Solo se cambian TIPOS que la fachada re-exporta, por
+/// cualquiera de las formas en que el módulo del ítem los nombra: `alias.Tipo` (de un `import`),
+/// `ruta/modulo.Tipo` y el nombre suelto (de un `from … import`), y un tipo del propio módulo que
+/// la fachada exporta con otro nombre. Lo que la fachada no exporta se deja como está (de eso
+/// avisa `ray check`).
 pub fn contract_names(text: &str, item: &Reexported, all: &[Reexported]) -> String {
-    let canon = |p: &std::path::Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let Some(prog) = crate::lexer::lex(&item.source).ok().and_then(|t| crate::parser::parse(t).ok()) else {
         return text.to_string();
     };
     let mut out = text.to_string();
+    fn types_in<'a>(all: &'a [Reexported], file: &'a std::path::Path) -> impl Iterator<Item = &'a Reexported> {
+        all.iter().filter(move |r| r.is_type && r.file == file)
+    }
     // Un tipo del PROPIO módulo del ítem, sin calificar, que la fachada exporta con otro nombre.
-    let own = canon(&item.file);
-    for other in all.iter().filter(|r| r.visible != r.original && r.original != item.original && canon(&r.file) == own) {
+    for other in types_in(all, &item.file).filter(|r| r.visible != r.original && r.original != item.original) {
         out = replace_qualified(&out, "", &other.original, &other.visible);
     }
+    let module_file = |module: &str| locate_module(&item.file, module).map(|f| f.canonicalize().unwrap_or(f));
     for imp in &prog.imports {
-        let Some(module_file) = locate_module(&item.file, &imp.module).map(|f| canon(&f)) else { continue };
-        for other in all.iter().filter(|r| canon(&r.file) == module_file) {
+        let Some(file) = module_file(&imp.module) else { continue };
+        for other in types_in(all, &file) {
+            out = replace_qualified(&out, &imp.module, &other.original, &other.visible);
             out = replace_qualified(&out, imp.leaf(), &other.original, &other.visible);
+        }
+    }
+    for fi in &prog.from_imports {
+        let Some(file) = module_file(&fi.module) else { continue };
+        for n in &fi.names {
+            let Some(other) = types_in(all, &file).find(|r| r.original == n.name) else { continue };
+            out = replace_qualified(&out, &fi.module, &other.original, &other.visible);
+            if n.local() != other.visible {
+                out = replace_qualified(&out, "", n.local(), &other.visible);
+            }
         }
     }
     out
@@ -137,16 +162,18 @@ pub fn contract_names(text: &str, item: &Reexported, all: &[Reexported]) -> Stri
 
 /// Cambia cada `qualifier.name` de `text` (o cada `name` suelto, con `qualifier` vacío) por
 /// `with`, solo donde es un nombre entero (ni `xqualifier.name`, ni `a.qualifier.name`, ni
-/// `qualifier.names`).
+/// `dir/qualifier.name`, ni `qualifier.names`). Un nombre suelto seguido de `:` es un campo o un
+/// parámetro que se llama igual, no el tipo: se deja.
 fn replace_qualified(text: &str, qualifier: &str, name: &str, with: &str) -> String {
     let needle = if qualifier.is_empty() { name.to_string() } else { format!("{qualifier}.{name}") };
     let ident = |c: char| c.is_alphanumeric() || c == '_';
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(at) = rest.find(&needle) {
-        let before_ok = !rest[..at].chars().next_back().is_some_and(|c| ident(c) || c == '.');
+        let before_ok = !rest[..at].chars().next_back().is_some_and(|c| ident(c) || c == '.' || c == '/');
         let after = &rest[at + needle.len()..];
-        let after_ok = !after.chars().next().is_some_and(ident);
+        let declares = qualifier.is_empty() && after.trim_start().starts_with(':');
+        let after_ok = !after.chars().next().is_some_and(ident) && !declares;
         out.push_str(&rest[..at]);
         out.push_str(if before_ok && after_ok { with } else { &needle });
         rest = after;
@@ -465,6 +492,10 @@ mod tests {
         assert_eq!(replace_qualified("a: model.Booking, b: model.Bookings", "model", "Booking", "R"), "a: R, b: model.Bookings");
         assert_eq!(replace_qualified("x: supermodel.Booking, y: a.model.Booking", "model", "Booking", "R"), "x: supermodel.Booking, y: a.model.Booking");
         assert_eq!(replace_qualified("other: Booking, n: Bookings, m: x.Booking", "", "Booking", "R"), "other: R, n: Bookings, m: x.Booking");
+        // Un campo o un parámetro que se llama como el tipo no es el tipo; ni la ruta de un módulo.
+        assert_eq!(replace_qualified("total: int, t: total", "", "total", "R"), "total: int, t: R");
+        assert_eq!(replace_qualified("[booking/model.Booking]", "model", "Booking", "R"), "[booking/model.Booking]");
+        assert_eq!(replace_qualified("[booking/model.Booking]", "booking/model", "Booking", "R"), "[R]");
     }
 
     /// M376: `//!` al principio del archivo = doc de módulo; un `//` corriente la cierra; sin `//!`, nada.

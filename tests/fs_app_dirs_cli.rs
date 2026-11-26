@@ -21,6 +21,9 @@ fn main() {
     show(fs.data_dir(".."));
     show(fs.cache_dir("a/b"));
     show(fs.data_dir("a\\b"));
+    show(fs.data_dir(" "));
+    show(fs.data_dir("App."));
+    show(fs.cache_dir("a:b"));
 }
 "#;
 
@@ -49,11 +52,14 @@ fn run(dir: &Path, vm: bool, set: &[(&str, &Path)]) -> Vec<String> {
     String::from_utf8_lossy(&out.stdout).lines().map(str::to_string).collect()
 }
 
-const REJECTED: [&str; 4] = [
+const REJECTED: [&str; 7] = [
     "err invalid app name '': it must be a single folder name",
     "err invalid app name '..': it must be a single folder name",
     "err invalid app name 'a/b': it must be a single folder name",
     "err invalid app name 'a\\b': it must be a single folder name",
+    "err invalid app name ' ': it must be a single folder name",
+    "err invalid app name 'App.': it must be a single folder name",
+    "err invalid app name 'a:b': it must be a single folder name",
 ];
 
 fn ok(path: PathBuf) -> String {
@@ -99,6 +105,16 @@ fn app_dirs_fail_without_the_variable() {
     let lines = run(&dir, true, &[]);
     let var = if cfg!(windows) { "APPDATA" } else { "HOME" };
     assert_eq!(lines[0], format!("err {var} is not set"));
+    // Relativa: daría una carpeta distinta según desde dónde se lance el programa.
+    let lines = run(&dir, true, &[(var, Path::new("rel"))]);
+    assert_eq!(lines[0], format!("err {var} is not an absolute path: rel"));
+    // Con separador final: la ruta no lleva `//`.
+    let home = dir.join("home");
+    let mut slashed = home.clone().into_os_string();
+    slashed.push(std::path::MAIN_SEPARATOR_STR);
+    let lines = run(&dir, true, &[("HOME", Path::new(&slashed)), ("APPDATA", Path::new(&slashed))]);
+    assert!(lines[0].starts_with(&format!("ok {}{}", home.display(), std::path::MAIN_SEPARATOR)), "{lines:?}");
+    assert!(!lines[0].contains("//") && !lines[0].contains("\\\\"), "{lines:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

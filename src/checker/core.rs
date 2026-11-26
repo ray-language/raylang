@@ -2625,7 +2625,7 @@ impl Checker {
         // tipo del receptor ya calculado, enumeramos sus miembros en vez de dar error por miembro
         // inexistente. Devolvemos Unit para que el chequeo (best-effort) no aborte antes de recogerlo.
         if self.completing && name == COMPLETION_SENTINEL {
-            self.member_hits = self.enumerate_members(&ot);
+            self.member_hits = self.enumerate_members(&ot, object.line);
             return Ok(Type::Unit);
         }
         // Acceso a **tupla** `t.0` (M27.1): un nombre de campo numérico solo es válido sobre una tupla.
@@ -3676,7 +3676,7 @@ impl Checker {
                 let recv_ty = self.check_expr(object)?;
                 // M45: completion de miembros cuando el reparado dejó una llamada `recv.<centinela>(…)`.
                 if self.completing && name == COMPLETION_SENTINEL {
-                    self.member_hits = self.enumerate_members(&recv_ty);
+                    self.member_hits = self.enumerate_members(&recv_ty, object.line);
                     return Ok(Type::Unit);
                 }
                 // M9.3b/M9.5: receptor `dyn A + B` → despacho dinámico por la vtable del objeto.
@@ -3751,8 +3751,8 @@ impl Checker {
     /// struct, métodos de trait/impl (incl. `@derive`), builtins-como-método de la categoría del
     /// tipo, y funciones libres UFCS cuyo primer parámetro acepta el receptor (esto cubre
     /// `map`/`filter`/`fold`/`sort` del prelude y las UFCS del usuario). Dedup por etiqueta.
-    pub(super) fn enumerate_members(&self, rt: &Type) -> Vec<MemberItem> {
-        self.enumerate_members_impl(rt, false)
+    pub(super) fn enumerate_members(&self, rt: &Type, line: usize) -> Vec<MemberItem> {
+        self.enumerate_members_impl(rt, false, line)
     }
 
     /// Los miembros ofrecibles tras un `|>` (pipeline, M7.2), que difieren de los de `recv.`: como
@@ -3761,13 +3761,13 @@ impl Checker {
     /// builtins invocables por nombre; NO los campos ni los **métodos de trait** (`n |> show` sería
     /// `show(n)`, y no existe una función libre `show` —solo `int#show`—).
     pub(super) fn enumerate_pipeable(&self, rt: &Type) -> Vec<MemberItem> {
-        self.enumerate_members_impl(rt, true)
+        self.enumerate_members_impl(rt, true, 0)
     }
 
     /// Núcleo compartido por `enumerate_members` (para `recv.`) y `enumerate_pipeable` (para `x |>`).
     /// El flag `pipeable` cambia dos cosas: (a) omite campos y métodos de trait (no son pipeable), y
     /// (b) enumera funciones libres para todo tipo, no solo receptores compuestos.
-    pub(super) fn enumerate_members_impl(&self, rt: &Type, pipeable: bool) -> Vec<MemberItem> {
+    pub(super) fn enumerate_members_impl(&self, rt: &Type, pipeable: bool, line: usize) -> Vec<MemberItem> {
         let mut out: Vec<MemberItem> = Vec::new();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let add = |out: &mut Vec<MemberItem>, seen: &mut std::collections::HashSet<String>,
@@ -3803,7 +3803,8 @@ impl Checker {
         if !pipeable {
             if let Some(key) = type_key_of(rt) {
                 for ((k, m), mangled) in &self.methods {
-                    if k == &key {
+                    // rayhotel #481: fuera de la cápsula no se ofrece el método de un trait interno.
+                    if k == &key && !self.trait_hidden_by_capsule(mangled, line) {
                         let sig = self.functions.get(mangled);
                         let has_args = sig.map(|s| s.params.len() > 1).unwrap_or(false); // > self
                         let def = self.fn_defs.get(mangled).copied();

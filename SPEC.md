@@ -1,6 +1,6 @@
 # Especificación del lenguaje raylang
 
-**Versión del lenguaje: 1.27.117** (esta especificación versiona con el lenguaje; ver §12).
+**Versión del lenguaje: 1.27.118** (esta especificación versiona con el lenguaje; ver §12).
 
 Este documento es **normativo**: define qué es un programa raylang válido y qué hace. Los otros
 dos documentos del proyecto no lo son: [DESIGN.md](DESIGN.md) es la *crónica de diseño* (el
@@ -501,7 +501,7 @@ prelude (`Option`, `Result`, `Map`…) ni a primitivos, ni alcanza funciones pri
 función libre en el ámbito con ese nombre (paso 4) sigue ganando. Si `M` es interno a una
 **cápsula** y la llamada está FUERA de ella, el paso 5 mira la cara pública de la cápsula (la más
 externa que contiene al tipo y no a la llamada): alcanza lo que la fachada declara o reexporta y
-nada más — los `pub` de un módulo interno son públicos dentro de su cápsula, no fuera. Todo se resuelve
+nada más — los `pub` de un módulo interno son públicos dentro de su cápsula, no fuera. Lo mismo rige el paso 3: el método de un **trait declarado dentro de una cápsula que su fachada no exporta** no se alcanza desde fuera de ella (el de un trait que la fachada exporta, o de un trait de fuera de la cápsula, sí). Todo se resuelve
 **estáticamente** en el checker (salvo el despacho de `dyn`, que es una llamada a través del objeto).
 
 Dos precisiones sobre el paso 4 (M344): **un local solo tapa al método si es una función** —

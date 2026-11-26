@@ -6,27 +6,34 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.118 — 2026-11-26
+
 - **`std/fs` — `data_dir(app)` y `cache_dir(app)`** (ray-remote #506). La carpeta de datos de la
   app y la de caché en cada sistema, ya creadas: Application Support y Caches en macOS e iOS, la
   carpeta privada en Android, `%APPDATA%` y `%LOCALAPPDATA%` en Windows, XDG en Linux. Antes
   cada app armaba la ruta desde `env("HOME")`, y la forma habitual del escritorio falla en el
-  iPhone, donde la raíz del contenedor no se puede escribir. El MANUAL, la REFERENCE y `llms.txt`
-  dicen ahora qué es `$HOME` en el teléfono y dónde se puede escribir.
+  iPhone, donde la raíz del contenedor no se puede escribir. `app` es un solo nombre de carpeta
+  válido en todos los sistemas, y la variable de la que depende debe ser una ruta absoluta; si
+  no, `Err`. El MANUAL, la REFERENCE y `llms.txt` dicen ahora qué es `$HOME` en el teléfono y
+  dónde se puede escribir.
 
 - **`ray test` — cada prueba de una biblioteca corre una vez** (rayhotel #501). En un paquete
   sin entrada cada archivo es una suite, y la primera ejecutaba además las pruebas de los
   módulos que importa: una cadena de tres módulos con una prueba cada uno daba 5, y el
   recuento no coincidía con las pruebas que hay. Ahora una prueba importada cuyo archivo es
   otra suite corre solo allí. Pidiendo un archivo (`ray test a/contract.ray`) sus importados
-  siguen entrando.
+  siguen entrando, y un filtro calificado con el módulo (`ray test scan.`) encuentra la prueba
+  en la suite de su archivo.
 - **Cápsulas — un trait interno no da métodos fuera** (rayhotel #481). `shop.make(4).peek()`
   compilaba aunque `peek` fuera de un trait que la fachada no exporta. Ahora es un error de
   tipos, como ya lo eran las funciones internas; el método de un trait que la fachada sí
-  exporta se llama igual, y dentro de la cápsula nada cambia.
+  exporta se llama igual, y dentro de la cápsula nada cambia. El editor tampoco lo ofrece al
+  completar.
 - **`ray doc` — las firmas de una fachada nombran los tipos como el contrato** (rayhotel
   #485). Lo re-exportado se mostraba con la firma de su módulo interno
   (`-> Result<[model.Booking], string>`), que quien usa la cápsula no puede escribir. Ahora
-  sale el nombre que la fachada exporta (`Booking`, o su alias). Un trait re-exportado lista
+  sale el nombre que la fachada exporta (`Booking`, o su alias), se nombre el tipo por un
+  `import` o por un `from … import`. Un trait re-exportado lista
   sus métodos. Igual en `ray doc <módulo>`, `ray doc <módulo>.<símbolo>` y el `ray_doc` del MCP.
 
 ## 1.27.117 — 2026-11-26

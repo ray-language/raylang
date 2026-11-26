@@ -551,5 +551,56 @@ fn ray_test_runs_each_test_of_a_library_once() {
     let (out, err, code) = ray(&d, &["test", "a/contract.ray"]);
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("running 3 test(s)") && out.contains("kit.a.scan.t_scan") && out.contains("kit.a.lex.t_lex"), "{out}");
+    // El filtro calificado con el módulo sigue encontrando la prueba, que ahora corre en su suite.
+    for (filter, name) in [("scan.", "t_scan"), ("lex.t_lex", "t_lex")] {
+        let (out, err, code) = ray(&d, &["test", filter]);
+        assert_eq!(code, 0, "{out}\n{err}");
+        assert!(out.contains("running 1 test(s)") && out.contains(name), "filtro {filter}:\n{out}");
+    }
     let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Revisión de la 1.27.118: la sustitución de nombres de `ray doc` solo toca TIPOS. Una función
+/// re-exportada con otro nombre no cambia el campo ni el parámetro que se llaman como ella, y un
+/// tipo traído con `from … import` sale con el nombre del contrato en las tres vistas.
+#[test]
+fn ray_doc_renames_types_only_and_follows_from_imports() {
+    let d = tree(
+        "doc_types_only",
+        &[
+            ("ray.toml", APP_TOML),
+            ("src/main.ray", "import booking;\nfn main() { print(1); }\n"),
+            (
+                "src/booking/model.ray",
+                "pub struct Booking { id: int, total: int, }\n\
+/// Builds a booking with the given total.\npub fn make(id: int, total: int) -> Booking { Booking { id: id, total: total } }\n\
+pub fn total(b: Booking) -> int { b.total }\n",
+            ),
+            (
+                "src/booking/service.ray",
+                "import booking/model;\nfrom booking/model import Booking;\n\n\
+pub fn bookings(limit: int) -> Result<[Booking], string> { Result.Ok([model.make(limit, 0)]) }\n",
+            ),
+            (
+                "src/booking/mod.ray",
+                "pub from booking/model import Booking as Reservation, total as booking_total, make;\npub from booking/service import bookings;\n",
+            ),
+        ],
+    );
+    let (out, err, code) = ray(&d, &["doc", "src/booking/mod.ray"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("### `struct Booking { id: int, total: int }`"), "{out}");
+    assert!(out.contains("### `fn make(id: int, total: int) -> Reservation`"), "{out}");
+    assert!(out.contains("### `fn bookings(limit: int) -> Result<[Reservation], string>`"), "{out}");
+    assert!(!out.contains("booking_total: int"), "{out}");
+    let (out, err, code) = ray(&d, &["doc", "booking"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("bookings(limit: int) -> Result<[Reservation], string>"), "{out}");
+    let (out, err, code) = ray(&d, &["doc", "booking.bookings"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("-> Result<[Reservation], string>") && !out.contains("booking/Reservation"), "{out}");
+    let (out, err, code) = ray(&d, &["doc", "booking.make"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("with the given total.") && out.contains("total: int) -> Reservation"), "{out}");
+    let _ = std::fs::remove_dir_all(d);
 }

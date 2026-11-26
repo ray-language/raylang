@@ -5,7 +5,6 @@ import std/json;
 import db/sqlite;
 import notes;
 import api;
-import places;
 from db/sqlite import Conn;
 
 fn fresh(name: string) -> Conn {

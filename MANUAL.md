@@ -2212,8 +2212,10 @@ el portapapeles, "abrir con la app por defecto". Un proceso con `argv` tipado, s
 y código de salida como valor es la forma correcta — sin `unsafe`, sin cadenas de shell y sin
 depender de que el usuario tenga otra cosa instalada:
 
-El llavero ya no necesita ni eso: `std/keychain` habla con Keychain Services (macOS), Secret
-Service (Linux) y Credential Manager (Windows) directamente, con la misma firma en los tres:
+El llavero ya no necesita ni eso: `std/keychain` habla con Keychain Services (macOS e iOS), Secret
+Service (Linux) y Credential Manager (Windows) directamente, con la misma firma en todos. En iOS
+la app tiene que ir firmada (un build de simulador con `CODE_SIGNING_ALLOWED=NO` recibe `Err`), y
+en Android todavía no hay backend: las tres funciones devuelven `Err`.
 
 ```rust
 import std/keychain;

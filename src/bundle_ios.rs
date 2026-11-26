@@ -1118,7 +1118,7 @@ fn xcconfig(name: &str, bundle_id: &str, version: &str, signing: &Signing, opts:
          // (dispositivo y simulador son ambos arm64 — jamás un lipo).\n\
          LIBRARY_SEARCH_PATHS[sdk=iphoneos*] = $(PROJECT_DIR)/libs\n\
          LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*] = $(PROJECT_DIR)/libs-sim\n\
-         OTHER_LDFLAGS = -lray_app -framework WebKit -framework AudioToolbox -framework CoreMIDI -framework MediaPlayer -framework UserNotifications{avf} -lobjc\n\
+         OTHER_LDFLAGS = -lray_app -framework WebKit -framework AudioToolbox -framework CoreMIDI -framework MediaPlayer -framework UserNotifications -framework Security{avf} -lobjc\n\
          {sign}"
     )
 }
@@ -1638,6 +1638,8 @@ mod tests {
         assert!(APP_DELEGATE_M.contains("UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionList"));
         let cfg = xcconfig("App", "org.example.app", "1.0.0", &Signing::default(), &ShellOptions::default());
         assert!(cfg.contains("-framework UserNotifications"), "{cfg}");
+        // ray-remote #504: std/keychain usa Keychain Services también en iOS.
+        assert!(cfg.contains("-framework Security"), "{cfg}");
     }
 
     #[test]

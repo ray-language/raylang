@@ -6,6 +6,13 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/keychain` funciona en iOS** (ray-remote #504, #503). En un iPhone o en el simulador,
+  `get`, `set` y `delete` caían en el backend de Linux y devolvían siempre el error de
+  libsecret. Ahora usan Keychain Services, como en macOS. La app tiene que ir firmada: un build
+  de simulador hecho con `CODE_SIGNING_ALLOWED=NO` recibe un `Err` que lo dice. En Android
+  todavía no hay backend, y las tres funciones devuelven `keychain: not supported on Android
+  yet` en vez del mensaje de libsecret. La documentación dice ahora qué hace cada plataforma.
+
 ## 1.27.116 — 2026-11-26
 
 - **`std/ui` — la barra `compact`/`tall` ya no tapa la página en pantalla completa** (rayreq

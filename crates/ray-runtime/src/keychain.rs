@@ -4,12 +4,16 @@
 //! que el sistema ya protege con la sesión del usuario, y raylang no lo exponía (la app caía a un
 //! `Secrets.json` con `chmod 0600`, que en Windows no significa nada). Tres backends A MANO, cero
 //! crates (la línea de `std/audio`/`std/ui`: sin headers de build, sin dependencias nuevas):
-//!   - macOS: Keychain Services (`SecItemAdd`/`SecItemCopyMatching`/`SecItemUpdate`/`SecItemDelete`
-//!     sobre `kSecClassGenericPassword`; Security + CoreFoundation, frameworks SIEMPRE presentes).
+//!   - macOS e iOS: Keychain Services (`SecItemAdd`/`SecItemCopyMatching`/`SecItemUpdate`/
+//!     `SecItemDelete` sobre `kSecClassGenericPassword`; Security + CoreFoundation, frameworks
+//!     SIEMPRE presentes). En iOS el ítem queda en el grupo de acceso de la app (ray-remote #504:
+//!     antes iOS caía en el backend de Linux y siempre fallaba).
 //!   - Linux: Secret Service por `libsecret-1.so.0` EN RUNTIME (`dlopen`; sin la lib o sin demonio
 //!     → `Err` claro). El esquema es de dos atributos: `service` y `account`.
 //!   - Windows: Credential Manager (`CredWriteW`/`CredReadW`/`CredDeleteW`, advapi32; credencial
 //!     genérica con target `service/account`, blob = el secreto en UTF-8).
+//!   - Android: sin backend todavía (el Keystore exige JNI); las tres operaciones dan un `Err`
+//!     que lo dice, en vez del mensaje de libsecret.
 //!   - `RAY_KEYCHAIN_FILE=<ruta>`: un archivo PLANO (líneas `service\taccount\thex(secreto)`, 0600
 //!     en unix) — la vía de los tests y del CI (sin llavero, sin diálogos). NO para producción.
 //!
@@ -162,8 +166,8 @@ mod file {
     }
 }
 
-// ── macOS: Keychain Services (Security.framework + CoreFoundation, enlazados al build) ────────
-#[cfg(target_os = "macos")]
+// ── macOS e iOS: Keychain Services (Security.framework + CoreFoundation, enlazados al build) ──
+#[cfg(target_vendor = "apple")]
 mod native {
     use std::ffi::c_void;
 
@@ -186,6 +190,8 @@ mod native {
     const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
     const ERR_SEC_ITEM_NOT_FOUND: OSStatus = -25300;
     const ERR_SEC_DUPLICATE_ITEM: OSStatus = -25299;
+    /// Una app de iOS sin firmar no tiene grupo de acceso al llavero (ray-remote #504).
+    const ERR_SEC_MISSING_ENTITLEMENT: OSStatus = -34018;
 
     #[link(name = "Security", kind = "framework")]
     #[link(name = "CoreFoundation", kind = "framework")]
@@ -264,6 +270,11 @@ mod native {
     }
 
     fn describe(status: OSStatus) -> String {
+        if status == ERR_SEC_MISSING_ENTITLEMENT {
+            return format!(
+                "keychain: the app has no keychain access group: it must be code signed (a simulator build made with CODE_SIGNING_ALLOWED=NO is not) (OSStatus {status})"
+            );
+        }
         // SAFETY: `SecCopyErrorMessageString` devuelve una referencia propia (o NULL); el buffer
         // local es del tamaño declarado.
         unsafe {
@@ -363,8 +374,26 @@ mod native {
     }
 }
 
+// ── Android: sin backend (ray-remote #504) — un `Err` que dice la plataforma ─────────────────
+#[cfg(target_os = "android")]
+mod native {
+    const UNSUPPORTED: &str = "keychain: not supported on Android yet";
+
+    pub fn get(_service: &str, _account: &str) -> Result<Option<String>, String> {
+        Err(UNSUPPORTED.to_string())
+    }
+
+    pub fn set(_service: &str, _account: &str, _secret: &str) -> Result<(), String> {
+        Err(UNSUPPORTED.to_string())
+    }
+
+    pub fn delete(_service: &str, _account: &str) -> Result<bool, String> {
+        Err(UNSUPPORTED.to_string())
+    }
+}
+
 // ── Linux: Secret Service por libsecret (dlopen en runtime; sin la lib → Err claro) ──────────
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(target_vendor = "apple"), not(target_os = "android")))]
 mod native {
     use std::ffi::{c_char, c_void, CString};
     use std::sync::OnceLock;

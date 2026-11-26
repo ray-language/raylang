@@ -334,7 +334,8 @@ ray bundle --ios
 
 `ray bundle --ios` builds the frontend, compiles the program as a static library for the iPhone
 and the simulator, and generates an Xcode project in `Notes-ios/`. The **simulator** needs no
-signing:
+signing (unless the app uses `std/keychain`: then drop `CODE_SIGNING_ALLOWED=NO`, and Xcode signs
+it locally without asking for a team):
 
 ```sh
 cd Notes-ios
@@ -569,5 +570,5 @@ And what is declared in `ray.toml`:
 The same Notes, now also on the **desktop**: macOS, Linux and Windows with native menus, dialogs
 and SQLite, in the [cross-platform app](cross-platform.en.md).
 
-<!-- sync: sha256:8a489918793c -->
-<!-- sync: sha256:8a489918793c -->
+<!-- sync: sha256:e42aea4b5963 -->
+<!-- sync: sha256:e42aea4b5963 -->

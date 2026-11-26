@@ -335,7 +335,8 @@ ray bundle --ios
 
 `ray bundle --ios` construye el frontend, compila el programa como librería estática para el
 iPhone y el simulador, y genera un proyecto Xcode en `Notes-ios/`. Para el **simulador** no hace
-falta firma:
+falta firma (salvo que la app use `std/keychain`: entonces quita `CODE_SIGNING_ALLOWED=NO`, y
+Xcode la firma en local sin pedir un team):
 
 ```sh
 cd Notes-ios

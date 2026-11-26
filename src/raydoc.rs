@@ -167,6 +167,10 @@ impl<'a> Contract<'a> {
             self.imports.iter().find(|(l, _)| l == leaf).and_then(|(_, module)| through(module, name))
         } else if let Some((module, name)) = self.from_imports.get(written) {
             through(module, name)
+        } else if written == self.item.original {
+            // El propio tipo dentro de su declaración (`next: Option<Node>`) conserva el nombre
+            // de la cabecera, que es el original («Exported as …» va debajo).
+            None
         } else {
             exported(&self.item.file, written)
         };

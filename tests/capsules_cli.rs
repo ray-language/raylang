@@ -104,6 +104,27 @@ pub fn inside(i: Invoice) -> string { i.to_string() }\n",
     assert_eq!((out.as_str(), code), ("INV-4\nraw\n", 0), "{err}");
     let _ = std::fs::remove_dir_all(shown);
 
+    // El cuerpo de un método por defecto del trait interno es código de la cápsula, cargue quien
+    // cargue después: su clon no tiene línea propia y antes se juzgaba por el último módulo.
+    let default_body = tree("trait_default", &[
+        ("ray.toml", APP_TOML),
+        ("src/main.ray", "import zeta;\nimport shop;\nfn main() {\n    print(shop.inside(shop.make(4)));\n    print(zeta.far());\n}\n"),
+        ("src/zeta.ray", "import omega/deep/far;\npub fn far() -> int { far.away() }\n"),
+        ("src/omega/deep/far.ray", "pub fn away() -> int { 7 }\n"),
+        ("src/shop/mod.ray", "pub from shop/model import Invoice, make, inside;\n"),
+        (
+            "src/shop/model.ray",
+            "pub struct Invoice { id: int, }\npub fn make(id: int) -> Invoice { Invoice { id: id } }\n\
+pub fn helper(i: Invoice) -> int { i.id }\n\
+pub trait Hidden {\n    fn peek(self) -> int;\n    fn twice(self) -> int { self.peek() * 2 }\n}\n\
+impl Hidden for Invoice { fn peek(self) -> int { self.helper() } }\n\
+pub fn inside(i: Invoice) -> int { i.twice() }\n",
+        ),
+    ]);
+    let (out, err, code) = ray(&default_body, &["run"]);
+    assert_eq!((out.as_str(), code), ("8\n7\n", 0), "{err}");
+    let _ = std::fs::remove_dir_all(default_body);
+
     // Ni un `show` de un trait interno pasa por `Show` fuera: las tres formas dan lo mismo.
     let raw_show = tree("trait_raw_show", &[
         ("ray.toml", APP_TOML),
@@ -606,8 +627,8 @@ fn ray_doc_renames_types_only_and_follows_from_imports() {
             ("src/main.ray", "import booking;\nfn main() { print(1); }\n"),
             (
                 "src/booking/model.ray",
-                "pub struct Booking { id: int, total: int, }\n\
-/// Builds a booking with the given total.\npub fn make(id: int, total: int) -> Booking { Booking { id: id, total: total } }\n\
+                "pub struct Booking { id: int, total: int, next: Option<Booking>, }\n\
+/// Builds a booking with the given total.\npub fn make(id: int, total: int) -> Booking { Booking { id: id, total: total, next: Option.None } }\n\
 pub fn total(b: Booking) -> int { b.total }\n\
 pub struct Cancel { id: int, }\npub enum Event { Booking(Booking), Cancel(Cancel), }\n\
 pub const KIND: string = \"Booking\";\n",
@@ -625,7 +646,7 @@ pub fn bookings(limit: int) -> Result<[Booking], string> { Result.Ok([model.make
     );
     let (out, err, code) = ray(&d, &["doc", "src/booking/mod.ray"]);
     assert_eq!(code, 0, "{err}");
-    assert!(out.contains("### `struct Booking { id: int, total: int }`"), "{out}");
+    assert!(out.contains("### `struct Booking { id: int, total: int, next: Option<Booking> }`"), "{out}");
     assert!(out.contains("### `fn make(id: int, total: int) -> Reservation`"), "{out}");
     assert!(out.contains("### `fn bookings(limit: int) -> Result<[Reservation], string>`"), "{out}");
     assert!(!out.contains("booking_total: int"), "{out}");

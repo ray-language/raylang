@@ -22623,7 +22623,13 @@ casaban o seleccionaban de más. (2) El completion del LSP seguía ofreciendo el
 interno: `enumerate_members` pasa por el mismo filtro que `check_call`. (3) Un `to_string` de un
 trait interno tapaba fuera el `Show` del tipo, porque el filtro corría después de decidir el
 respaldo `to_string` → `show`: ahora cada candidato se filtra antes, y lo mismo vale para el
-`show` que buscan `to_string(x)`, `print` y la interpolación (`visible_method`).
+`show` que buscan `to_string(x)`, `print` y la interpolación (`visible_method`). (4) El sitio de una
+llamada se sacaba de su línea, y el cuerpo de un método por defecto heredado (un clon, con líneas
+sintéticas) caía en la banda del ÚLTIMO módulo cargado: `fn twice(self) { self.peek() * 2 }` en
+un trait interno dejaba de compilar según el orden de los imports. El sitio es ahora el módulo
+de la función que se comprueba (`current_fn_site`: el del trait para un método por defecto, el
+del tipo para un `@derive`), y la frontera se calcula en un solo sitio (`capsule_boundary`), que
+usan también `type_module_fn` y `opaque_outside`: el mismo fallo existía ahí desde la 1.27.112.
 
 **Límites.** El nombre del método de un trait interno sigue ocupando su entrada en la tabla
 `methods`: quien usa la cápsula no puede dar ese nombre a un método de un trait propio sobre el
@@ -22632,8 +22638,11 @@ varios métodos por nombre. El espejo selfhost del checker no conoce las cápsul
 El método de un trait interno sigue alcanzable por un genérico con bound si el trait se puede
 nombrar, que fuera de la cápsula no se puede. La prosa de un `///` que cite `model.Booking` no
 se renombra. `ray doc` sigue mostrando la cabecera de un struct re-exportado con su nombre
-original y «Exported as …» debajo. La frontera de cápsula se calcula en tres sitios del checker
-(`trait_hidden_by_capsule`, `type_module_fn`, `opaque_outside`), sin un helper común. `to_string(x)` y la
+original y «Exported as …» debajo, y dentro de su declaración el tipo se nombra igual. Lo que la
+fachada DECLARA ella misma (`pub fn first_id(n: model.Node)`) no pasa por el renombrado: solo lo
+que re-exporta. `ray doc` localiza el módulo de un `import` probando primero el directorio más
+cercano y el loader desde la raíz: con dos módulos del mismo nombre (`util` y `booking/util`) que
+definan un tipo del mismo nombre puede atribuir el nombre del contrato al otro. `to_string(x)` y la
 interpolación buscan el método `show` por nombre y no por el trait `Show` (ya antes del arco): un
 trait propio con un método `show` cambia esas dos formas y no `print`.
 
@@ -22649,8 +22658,8 @@ el handbook móvil; `llms.txt`, la REFERENCE y `ray doc`, que es donde busca un 
 `data_dir(app)` y `cache_dir(app)`, que devuelven `Result<string, string>` con la carpeta **ya
 creada** (privada, 0o700, lo que ellas creen). Crearla es parte del contrato: el fallo del hallazgo
 fue justo comprobar si existía. La tabla es la de cada sistema: Application Support y Caches en
-macOS e iOS; `$HOME/<app>` y el temporal (la carpeta `cache`) en Android, donde la actividad del
-bundle fija `HOME` y `TMPDIR`; `%APPDATA%\<app>` y `%LOCALAPPDATA%\<app>\Cache` en Windows (la
+macOS e iOS; `$HOME/<app>` y `$TMPDIR/<app>` (la carpeta `cache`) en Android, donde la actividad
+del bundle fija `HOME` y `TMPDIR`; `%APPDATA%\<app>` y `%LOCALAPPDATA%\<app>\Cache` en Windows (la
 caché en una subcarpeta, porque `%LOCALAPPDATA%\<app>` suele ser también donde se instala un
 programa por usuario);
 XDG en el resto, ignorando una variable XDG relativa como manda la norma. `app` es un solo nombre

@@ -267,7 +267,7 @@ pub fn data_dir(app: string) -> Result<string, string> {
 /// system may empty it when it runs low on space, so nothing here is the only copy.
 ///
 /// - macOS and iOS: `$HOME/Library/Caches/<app>`.
-/// - Android: `<temp_dir>/<app>` (the app's private `cache` folder).
+/// - Android: `$TMPDIR/<app>` (`$TMPDIR` is the app's private `cache` folder).
 /// - Windows: `%LOCALAPPDATA%\<app>\Cache`.
 /// - Linux and other Unix: `$XDG_CACHE_HOME/<app>`, or `$HOME/.cache/<app>`.
 ///
@@ -280,7 +280,7 @@ pub fn cache_dir(app: string) -> Result<string, string> {
     } else if (os == "macos" || os == "ios") {
         env_dir("HOME")? + "/Library/Caches/" + name
     } else if (os == "android") {
-        temp_dir() + "/" + name
+        env_dir("TMPDIR")? + "/" + name
     } else {
         xdg_base("XDG_CACHE_HOME", ".cache")? + "/" + name
     };

@@ -83,6 +83,8 @@ impl Checker {
             method_trait: HashMap::new(),
             opaque_types: HashMap::new(),
             current_fn_module: String::new(),
+            current_fn_site: None,
+            default_method_modules: HashMap::new(),
             shadowed_free_fns: HashSet::new(),
             root_user_fns: HashSet::new(),
             require_main: true,
@@ -442,11 +444,16 @@ impl Checker {
             // de la cápsula aunque el método se llame `shop::model::Invoice#peek`. Un método de
             // `@derive` no tiene línea propia y es código del módulo del tipo: por su nombre.
             let owner = f.name.split('#').next().unwrap_or(&f.name);
-            self.current_fn_module = if f.name.contains('#') && !self.synthetic_methods.contains(&f.name) {
+            // Un método por defecto heredado: su cuerpo es código del módulo del TRAIT (su clon
+            // tampoco tiene línea propia).
+            self.current_fn_module = if let Some(module) = self.default_method_modules.get(&f.name) {
+                module.clone()
+            } else if f.name.contains('#') && !self.synthetic_methods.contains(&f.name) {
                 self.site_module(f.line).to_string()
             } else {
                 owner.rsplit_once("::").map(|(m, _)| m.to_string()).unwrap_or_default()
             };
+            self.current_fn_site = Some(if self.current_fn_module.is_empty() { self.entry_module.clone() } else { self.current_fn_module.clone() });
             if let Err(e) = self.check_function(f) {
                 let e = self.derive_error(&f.name, e);
                 if !self.accumulate {
@@ -462,6 +469,7 @@ impl Checker {
                 }
             }
         }
+        self.current_fn_site = None;
         Ok(())
     }
 
@@ -845,6 +853,8 @@ impl Checker {
                     }
                     self.methods.insert((key.clone(), tm.name.clone()), mangled.clone());
                     self.method_trait.insert(mangled.clone(), imp.trait_name.clone());
+                    let trait_module = imp.trait_name.rsplit_once("::").map(|(m, _)| m.to_string()).unwrap_or_default();
+                    self.default_method_modules.insert(mangled.clone(), trait_module);
                     self.impl_fn_self.insert(mangled, target.clone());
                 }
             }
@@ -4025,12 +4035,29 @@ impl Checker {
         }
     }
 
+    /// El módulo del código que hace la llamada de `line`: el de la función que se comprueba
+    /// (`current_fn_site`), y fuera de una función el de la banda de la línea.
+    fn call_site(&self, line: usize) -> &str {
+        match &self.current_fn_site {
+            Some(module) => module.as_str(),
+            None => self.site_module(line),
+        }
+    }
+
+    /// La cápsula más EXTERNA que contiene al módulo `prefix` y no al sitio de `line`: la
+    /// frontera que una llamada desde ese sitio cruza para alcanzar algo de `prefix`.
+    fn capsule_boundary(&self, prefix: &str, line: usize) -> Option<&String> {
+        let within = |module: &str, capsule: &str| module == capsule || module.strip_prefix(capsule).is_some_and(|rest| rest.starts_with("::"));
+        let site = self.call_site(line);
+        self.capsule_surfaces.keys().filter(|c| within(prefix, c) && !within(site, c)).min_by_key(|c| c.len())
+    }
+
     /// rayhotel #486: si `struct_name` es un tipo reexportado como `opaque` y el sitio de `line`
     /// está FUERA de su cápsula, el nombre de la cápsula (con `/`). Dentro, `None`: ahí el tipo es
     /// transparente — también para el código que un `@derive` genera en su módulo.
     fn opaque_outside(&self, struct_name: &str, line: usize) -> Option<String> {
         let capsule = self.opaque_types.get(struct_name)?;
-        let site = if self.current_fn_module.is_empty() { self.site_module(line) } else { self.current_fn_module.as_str() };
+        let site = self.call_site(line);
         let inside = site == capsule || site.starts_with(&format!("{capsule}::"));
         (!inside).then(|| capsule.replace("::", "/"))
     }
@@ -4065,10 +4092,7 @@ impl Checker {
         }
         let Some(trait_name) = self.method_trait.get(mangled) else { return false };
         let Some((prefix, _)) = trait_name.rsplit_once("::") else { return false };
-        let within = |module: &str, capsule: &str| module == capsule || module.starts_with(&format!("{capsule}::"));
-        let site = self.site_module(line);
-        let boundary = self.capsule_surfaces.keys().filter(|c| within(prefix, c) && !within(site, c)).min_by_key(|c| c.len());
-        boundary.is_some_and(|capsule| !self.capsule_types.get(capsule).is_some_and(|t| t.contains(trait_name)))
+        self.capsule_boundary(prefix, line).is_some_and(|capsule| !self.capsule_types.get(capsule).is_some_and(|t| t.contains(trait_name)))
     }
 
     fn type_module_fn(&self, name: &str, recv_ty: &Type, line: usize) -> Option<String> {
@@ -4082,12 +4106,7 @@ impl Checker {
         // declara — que eran alcanzables por aquí y solo por aquí — y sí los que la fachada
         // declara sobre él. Manda la cápsula más EXTERNA que contiene al tipo y no al sitio.
         if !self.capsule_surfaces.is_empty() {
-            let within = |module: &str, capsule: &str| module == capsule || module.starts_with(&format!("{capsule}::"));
-            let site = self.site_module(line);
-            let boundary = self.capsule_surfaces.keys()
-                .filter(|c| within(prefix, c) && !within(site, c))
-                .min_by_key(|c| c.len());
-            if let Some(capsule) = boundary {
+            if let Some(capsule) = self.capsule_boundary(prefix, line) {
                 let global = self.capsule_surfaces[capsule].get(name)?;
                 let sig = self.functions.get(global)?;
                 let mut sigma: HashMap<String, Type> = HashMap::new();

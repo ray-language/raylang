@@ -280,7 +280,7 @@ fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign:
         }
         if let Some(p) = filter {
             // El nombre calificado con que esta prueba se mostraba en la primera suite.
-            let qualified = || moved.iter().any(|(path, bare, was)| !imported && Some(path) == file.as_ref() && bare == &f.name && was.contains(p));
+            let qualified = || !imported && moved.iter().any(|(path, bare, was)| Some(path) == file.as_ref() && bare == &f.name && was.contains(p));
             if !display.contains(p) && !qualified() {
                 continue;
             }

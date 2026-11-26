@@ -55,6 +55,39 @@ fn method_calls_from_outside_see_the_facade_not_the_internals() {
     let _ = std::fs::remove_dir_all(contract);
 }
 
+/// rayhotel #481, el resto: un trait interno que la fachada no exporta tampoco da métodos fuera
+/// de la cápsula (antes `shop.make(4).peek()` compilaba). Uno que la fachada sí exporta se llama
+/// como siempre, y dentro de la cápsula el interno sigue valiendo.
+#[test]
+fn methods_of_a_trait_the_facade_does_not_export_stay_inside() {
+    const TRAITS: &str = "pub struct Invoice { id: int, }\n\
+pub fn make(id: int) -> Invoice { Invoice { id: id } }\n\
+pub trait Hidden { fn peek(self) -> int; }\n\
+impl Hidden for Invoice { fn peek(self) -> int { self.id } }\n\
+pub trait Shown { fn total(self) -> int; }\n\
+impl Shown for Invoice { fn total(self) -> int { self.id * 10 } }\n\
+pub fn inside(i: Invoice) -> int { i.peek() }\n";
+    let app = |name: &str, main: &str| {
+        tree(name, &[
+            ("ray.toml", APP_TOML),
+            ("src/main.ray", main),
+            ("src/shop/mod.ray", "pub from shop/model import Invoice, make, Shown, inside;\n"),
+            ("src/shop/model.ray", TRAITS),
+        ])
+    };
+    let ok = app("trait_contract", "import shop;\nfn main() {\n    let i = shop.make(4);\n    print(i.total());\n    print(shop.inside(i));\n}\n");
+    for engine in [&["run"][..], &["--interp", "src/main.ray"][..]] {
+        let (out, err, code) = ray(&ok, engine);
+        assert_eq!((out.as_str(), code), ("40\n4\n", 0), "{engine:?}: {err}");
+    }
+    let leak = app("trait_leak", "import shop;\nfn main() {\n    print(shop.make(4).peek());\n}\n");
+    let (out, err, code) = ray(&leak, &["run"]);
+    assert_ne!(code, 0, "{out}{err}");
+    assert!(err.contains("no field or function 'peek' applicable to shop::model::Invoice"), "{err}");
+    let _ = std::fs::remove_dir_all(ok);
+    let _ = std::fs::remove_dir_all(leak);
+}
+
 /// Dentro de la cápsula nada cambia: un interno llama como método a lo `pub` de su hermano.
 #[test]
 fn inside_the_capsule_internals_still_reach_each_other() {
@@ -179,6 +212,47 @@ fn ray_doc_shows_the_contract_of_a_capsule() {
     let (out, err, code) = ray(&d.join("use"), &["doc", "kernel.twice"]);
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("twice(n: int) -> int") && out.contains("Doubles a number."), "{out}");
+    let _ = std::fs::remove_dir_all(d);
+}
+
+/// rayhotel #485, el resto: la firma de lo re-exportado nombra los tipos como el CONTRATO, no
+/// como el módulo interno (`model.Booking` no se puede escribir fuera de la cápsula), y un trait
+/// re-exportado lleva sus métodos. Lo que la fachada no exporta se deja como está.
+#[test]
+fn ray_doc_names_types_as_the_contract_does() {
+    let d = tree(
+        "doc_names",
+        &[
+            ("ray.toml", APP_TOML),
+            ("src/main.ray", "import booking;\nfn main() { print(1); }\n"),
+            (
+                "src/booking/model.ray",
+                "/// A booking.\npub struct Booking { id: int, }\npub struct Draft { id: int, }\n\
+/// Things with a price.\npub trait Priced {\n    fn price(self) -> int;\n    fn same(self, other: Booking) -> bool;\n}\n\
+impl Priced for Booking {\n    fn price(self) -> int { self.id }\n    fn same(self, other: Booking) -> bool { self.id == other.id }\n}\n",
+            ),
+            (
+                "src/booking/service.ray",
+                "import booking/model;\n\n/// Lists the bookings.\n\
+pub fn bookings(limit: int) -> Result<[model.Booking], string> { Result.Ok([model.Booking { id: limit }]) }\n\
+pub fn draft(b: model.Booking) -> model.Draft { model.Draft { id: b.id } }\n",
+            ),
+            ("src/booking/mod.ray", "pub from booking/model import Booking as Reservation, Priced;\npub from booking/service import bookings, draft;\n"),
+        ],
+    );
+    let (out, err, code) = ray(&d, &["doc", "src/booking/mod.ray"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("### `fn bookings(limit: int) -> Result<[Reservation], string>`"), "{out}");
+    assert!(out.contains("### `fn draft(b: Reservation) -> model.Draft`"), "lo no exportado se queda:\n{out}");
+    assert!(out.contains("### `trait Priced`\n\nFrom `booking/model`.\n\nThings with a price.\n\n- `fn price(self) -> int`\n- `fn same(self, other: Reservation) -> bool`\n"), "{out}");
+    assert!(out.contains("### `struct Booking { id: int }`\n\nExported as `Reservation`."), "{out}");
+
+    let (out, err, code) = ray(&d, &["doc", "booking"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("bookings(limit: int) -> Result<[Reservation], string>  [re-exported from booking/service]"), "{out}");
+    let (out, err, code) = ray(&d, &["doc", "booking.bookings"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("bookings(limit: int) -> Result<[Reservation], string>") && out.contains("Lists the bookings."), "{out}");
     let _ = std::fs::remove_dir_all(d);
 }
 
@@ -451,4 +525,31 @@ fn the_lsp_checks_capsule_files_with_their_real_identity() {
     let out = lsp_open(&d.join("src/main.ray"));
     assert!(out.contains("no field or function 'secret_wipe'"), "main.ray está fuera de la cápsula\n{out}");
     let _ = std::fs::remove_dir_all(d);
+}
+
+/// rayhotel #501: en una biblioteca (sin entrada) cada archivo es una suite. La primera traía
+/// también las pruebas de los módulos que importa, que volvían a correr en sus propias suites: una
+/// cadena de tres módulos con una prueba cada uno daba 5. Cada `@test` corre una vez, en la suite
+/// de su archivo. Pidiendo UN archivo, sus importados siguen entrando (no son otra suite).
+#[test]
+fn ray_test_runs_each_test_of_a_library_once() {
+    let d = tree(
+        "testonce",
+        &[
+            ("ray.toml", "[package]\nname = \"kit\"\nversion = \"0.1.0\"\n"),
+            ("a/lex.ray", "pub fn lex() -> int { 1 }\n\n@test\nfn t_lex() { assert_eq(lex(), 1); }\n"),
+            ("a/scan.ray", "import kit/a/lex;\n\npub fn scan() -> int { lex.lex() + 1 }\n\n@test\nfn t_scan() { assert_eq(scan(), 2); }\n"),
+            ("a/contract.ray", "import kit/a/scan;\n\npub fn contract() -> int { scan.scan() + 1 }\n\n@test\nfn t_contract() { assert_eq(contract(), 3); }\n"),
+        ],
+    );
+    let (out, err, code) = ray(&d, &["test"]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("running 3 test(s)") && out.contains("result: 3 test(s), all passed"), "{out}");
+    for name in ["t_contract", "t_scan", "t_lex"] {
+        assert_eq!(out.matches(name).count(), 1, "{name} corre una vez:\n{out}");
+    }
+    let (out, err, code) = ray(&d, &["test", "a/contract.ray"]);
+    assert_eq!(code, 0, "{out}\n{err}");
+    assert!(out.contains("running 3 test(s)") && out.contains("kit.a.scan.t_scan") && out.contains("kit.a.lex.t_lex"), "{out}");
+    let _ = std::fs::remove_dir_all(&d);
 }

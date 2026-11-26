@@ -102,10 +102,16 @@ pub(crate) fn run_with(suite_paths: &[PathBuf], dep_roots: &loader::DepRoots, fi
     // no son del proyecto: sus `@test` son del paquete (corren con `ray test` dentro de él) y
     // antes entraban en la suite de la entrada que los importaba, contados como propios.
     let foreign = foreign_module_dirs(suite_paths.first().map(PathBuf::as_path), dep_roots);
+    // rayhotel #501: los archivos que son suite por sí mismos. La primera suite trae también las
+    // pruebas de lo que importa (así una app corre las de sus módulos), y si uno de esos módulos
+    // es además una suite —lo normal en una biblioteca, donde cada archivo lo es— sus pruebas
+    // corrían dos veces. Cada `@test` corre una vez, en la suite de su archivo.
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let other_suites: Vec<PathBuf> = suite_paths.iter().skip(1).map(|p| canon(p)).collect();
     for (i, path) in suite_paths.iter().enumerate() {
         match loader::load_with_deps(path, dep_roots) {
             Ok(loaded) => {
-                let tests = collect_tests(&loaded, filter, i > 0, &foreign);
+                let tests = collect_tests(&loaded, filter, i > 0, &foreign, &other_suites);
                 suites.push(Suite { display: display_path(path), path: path.clone(), loaded, tests });
             }
             Err(e) => {
@@ -239,7 +245,7 @@ pub(crate) fn run_with(suite_paths: &[PathBuf], dep_roots: &loader::DepRoots, fi
 /// Recolecta las funciones `@test` del programa fusionado, en orden de declaración, aplicando el
 /// filtro por subcadena sobre el nombre de cara al usuario (`math.double_ok`). Con `own_only`,
 /// solo las del módulo de entrada de la suite (las importadas llevan nombre namespaceado `::`).
-fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign: &[PathBuf]) -> Vec<Test> {
+fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign: &[PathBuf], other_suites: &[PathBuf]) -> Vec<Test> {
     let program = &loaded.program;
     // El archivo del módulo de una función, por la banda de líneas del programa fusionado
     // (`modules` va ordenado por `start_line`).
@@ -250,12 +256,21 @@ fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign:
             foreign.iter().any(|d| p.starts_with(d))
         })
     };
+    // Una prueba IMPORTADA cuyo archivo es otra suite: ya corre allí (rayhotel #501).
+    let runs_in_its_own_suite = |f: &crate::ast::Function| {
+        f.name.contains("::")
+            && module_path(f.line).is_some_and(|p| {
+                let p = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+                other_suites.contains(&p)
+            })
+    };
     program
         .functions
         .iter()
         .filter(|f| f.annotations.iter().any(|a| a.name == "test"))
         .filter(|f| !(own_only && f.name.contains("::")))
         .filter(|f| !is_foreign(f))
+        .filter(|f| !runs_in_its_own_suite(f))
         .map(|f| Test {
             global: f.name.clone(),
             // El separador interno `::` del loader vuelve al `.` que escribe el usuario.

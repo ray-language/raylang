@@ -12,8 +12,9 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   #499, macOS). Una ventana `full_content` con `titlebar = "compact"` o `"tall"` dejaba en
   pantalla completa una franja del alto de la barra sobre el borde superior de la página, y
   los controles que la página pone ahí quedaban debajo. Ahora la barra se esconde como la
-  estándar y vuelve con la barra de menús al llevar el puntero arriba. Si el sistema deja la
-  barra de menús siempre visible en pantalla completa, la barra no se esconde.
+  estándar y vuelve con la barra de menús al llevar el puntero arriba. Depende de que el
+  sistema esconda la barra de menús en pantalla completa (el ajuste por defecto); si la deja
+  siempre visible, la barra puede seguir a la vista.
 
 ## 1.27.115 — 2026-11-25
 

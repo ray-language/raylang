@@ -429,7 +429,8 @@ con `h = 0` vale para toda la app.
 Con `full_content`, en macOS, la página reserva la franja de la barra con
 `window.ray.titlebar_height` y marca con el atributo `data-ray-drag` el elemento que arrastra la
 ventana. En pantalla completa la barra se esconde y vuelve con la barra de menús al llevar el
-puntero arriba; `titlebar_height` no cambia. En Linux y Windows se comporta como `document`.
+puntero arriba (una barra `compact`/`tall` puede seguir a la vista si el sistema deja la barra
+de menús siempre visible); `titlebar_height` no cambia. En Linux y Windows se comporta como `document`.
 
 ## 9. El resto del sistema
 

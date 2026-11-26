@@ -4836,11 +4836,12 @@ mod mac {
     }
 
     /// Las opciones de presentación de una ventana en pantalla completa: las que AppKit propone
-    /// más `AutoHideToolbar`. AppKit solo admite esa opción junto a `AutoHideMenuBar` (una
-    /// combinación inválida lanza una excepción): con la barra de menús siempre visible, lo
-    /// propuesto se devuelve tal cual.
+    /// más `AutoHideToolbar`. AppKit solo admite esa opción junto a `FullScreen` y
+    /// `AutoHideMenuBar` (una combinación inválida lanza una excepción): si falta alguna de las
+    /// dos, lo propuesto se devuelve tal cual.
     fn fullscreen_options(proposed: u64) -> u64 {
-        if proposed & NS_PRESENTATION_AUTO_HIDE_MENU_BAR != 0 {
+        let needed = NS_PRESENTATION_FULL_SCREEN | NS_PRESENTATION_AUTO_HIDE_MENU_BAR;
+        if proposed & needed == needed {
             proposed | NS_PRESENTATION_AUTO_HIDE_TOOLBAR
         } else {
             proposed
@@ -4855,12 +4856,14 @@ mod mac {
         /// de la ventana responde al selector por el que AppKit lo pregunta.
         #[test]
         fn the_toolbar_hides_in_full_screen_only_along_with_the_menu_bar() {
-            let full_screen = 1 << 10;
+            let full_screen = NS_PRESENTATION_FULL_SCREEN;
             let auto_hide_dock = 1;
             let hiding = full_screen | auto_hide_dock | NS_PRESENTATION_AUTO_HIDE_MENU_BAR;
             assert_eq!(fullscreen_options(hiding), hiding | NS_PRESENTATION_AUTO_HIDE_TOOLBAR);
             let menu_bar_stays = full_screen | auto_hide_dock;
             assert_eq!(fullscreen_options(menu_bar_stays), menu_bar_stays);
+            let not_full_screen = auto_hide_dock | NS_PRESENTATION_AUTO_HIDE_MENU_BAR;
+            assert_eq!(fullscreen_options(not_full_screen), not_full_screen);
             // SAFETY: mensaje de clase estándar de NSObject sobre una clase recién registrada.
             let responds = unsafe {
                 let responds: MsgBoolSel = std::mem::transmute(msg_send());
@@ -4902,11 +4905,19 @@ mod mac {
             // rayreq #499: en pantalla completa AppKit esconde la barra de título pero deja la
             // toolbar a la vista, y la barra `compact`/`tall` ES una toolbar vacía: quedaba como
             // una franja opaca sobre la página. Con `AutoHideToolbar` se esconde con la barra de
-            // menús, igual que la barra estándar. Sin toolbar la opción no cambia nada.
-            extern "C" fn fullscreen_presentation_options(_this: Id, _sel: Sel, _window: Id, proposed: u64) -> u64 {
-                let options = fullscreen_options(proposed);
+            // menús, igual que la barra estándar. Una ventana sin toolbar se queda con lo propuesto.
+            extern "C" fn fullscreen_presentation_options(_this: Id, _sel: Sel, window: Id, proposed: u64) -> u64 {
+                // SAFETY: AppKit entrega la ventana que entra en pantalla completa; `toolbar` es
+                // un mensaje estándar de NSWindow.
+                let has_toolbar = unsafe {
+                    let get: MsgId = std::mem::transmute(msg_send());
+                    !window.is_null() && !get(window, sel(b"toolbar\0")).is_null()
+                };
+                let options = if has_toolbar { fullscreen_options(proposed) } else { proposed };
                 if super::ui_trace() {
-                    eprintln!("[ui] full screen options {proposed:#x} -> {options:#x}");
+                    // Sin `eprintln!`: un stderr roto haría panic dentro de un callback de C.
+                    use std::io::Write;
+                    let _ = writeln!(std::io::stderr(), "[ui] full screen options {proposed:#x} -> {options:#x}");
                 }
                 options
             }
@@ -6554,6 +6565,8 @@ mod mac {
     const NS_FLOATING_WINDOW_LEVEL: i64 = 3;
     /// NSApplicationPresentationAutoHideToolbar.
     const NS_PRESENTATION_AUTO_HIDE_TOOLBAR: u64 = 1 << 11;
+    /// NSApplicationPresentationFullScreen.
+    const NS_PRESENTATION_FULL_SCREEN: u64 = 1 << 10;
     /// NSApplicationPresentationAutoHideMenuBar.
     const NS_PRESENTATION_AUTO_HIDE_MENU_BAR: u64 = 1 << 2;
     const NS_WINDOW_ABOVE: i64 = 1;

@@ -22403,10 +22403,10 @@ contrario, y ahí no vale `titlebarAppearsTransparent`: se pinta con su material
 **Qué se hizo.** El delegate de la ventana responde a
 `window:willUseFullScreenPresentationOptions:` añadiendo `NSApplicationPresentationAutoHideToolbar`
 a las opciones que AppKit propone. La toolbar se esconde con la barra de menús y vuelve con
-ella al llevar el puntero arriba, igual que la barra estándar. En una ventana sin toolbar la
-opción no cambia nada, así que no se mira si la hay. AppKit solo admite esa opción junto a
-`AutoHideMenuBar` (una combinación inválida lanza una excepción), así que se añade solo si lo
-propuesto ya la trae: con «mostrar siempre la barra de menús en pantalla completa» se devuelve
+ella al llevar el puntero arriba, igual que la barra estándar. Solo se pide en una ventana con
+toolbar: las demás se quedan con lo propuesto, para no tocar, por ejemplo, la barra de pestañas
+del sistema. AppKit solo admite esa opción junto a `FullScreen` y `AutoHideMenuBar` (una
+combinación inválida lanza una excepción), así que se añade solo si lo propuesto ya trae las dos: con «mostrar siempre la barra de menús en pantalla completa» se devuelve
 lo propuesto tal cual.
 
 **Comprobado.** En un MacBook Pro con macOS 26: una página con una franja roja de 38 px arriba,
@@ -22416,7 +22416,9 @@ AppKit propone `0x405` y se devuelve `0xc05`, pero no se capturó la pantalla. U
 cubre la regla de las opciones y que el delegate responde al selector.
 
 **Límites.** El efecto en pantalla no tiene test automático: hace falta una pantalla y una
-captura. Solo se probó en macOS 26 y con la barra de menús oculta en pantalla completa (el
+captura. El test unitario solo corre en un Mac con `--features ui`; el CI no tiene job de tests
+en macOS, así que ahí no lo ejecuta nadie. Esconder o quitar la toolbar al entrar en pantalla
+completa no dependería de las opciones de presentación; no se hizo. Solo se probó en macOS 26 y con la barra de menús oculta en pantalla completa (el
 ajuste por defecto); con la barra de menús siempre visible la franja sigue ahí, sin comprobar. La página sigue sin
 saber si está en pantalla completa (no hay evento ni propiedad) y `window.ray.titlebar_height`
 no baja a 0 ahí, así que una página que reserva ese margen lo conserva vacío. Si el puntero

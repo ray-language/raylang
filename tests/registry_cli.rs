@@ -188,6 +188,43 @@ fn package_nonexistent_da_error_claro() {
     assert!(!toml.contains("noexiste"), "no escribió la dep fallida:\n{toml}");
 }
 
+/// rayhotel #500: `ray add a b` añadía `a`, callaba sobre `b` y salía con 0.
+#[test]
+fn ray_add_takes_several_packages_or_none() {
+    let base = tmp("addmany");
+    let index = base.join("index");
+    let util = publish(&base, "util", "0.3.1", "pub fn greeting() -> string { \"hello\" }\n");
+    let geo = publish(&base, "geo", "1.2.0", "pub fn v() -> int { 120 }\n");
+    write_index(&index, "util", &[("0.3.1", &util)]);
+    write_index(&index, "geo", &[("1.2.0", &geo)]);
+    let app = app(&base, "from util import greeting;\nfrom geo import v;\nfn main() -> int { print(greeting()); print(v()); 0 }\n");
+    let before = std::fs::read_to_string(app.join("ray.toml")).unwrap();
+
+    // Uno que no existe entre los pedidos: no se añade ninguno.
+    let (_o, err, code) = ray_idx(&app, &index, &["add", "util", "nope"]);
+    assert_eq!(code, 65, "{err}");
+    assert!(err.contains("is not in the index"), "{err}");
+    assert_eq!(std::fs::read_to_string(app.join("ray.toml")).unwrap(), before, "el manifiesto no se tocó");
+
+    // Repetido, o una opción desconocida: error de uso.
+    let (_o, err, code) = ray_idx(&app, &index, &["add", "util", "util@0.3.1"]);
+    assert_eq!(code, 64, "{err}");
+    assert!(err.contains("'util' is listed twice"), "{err}");
+    let (_o, err, code) = ray_idx(&app, &index, &["add", "util", "--dev"]);
+    assert_eq!(code, 64, "{err}");
+    assert!(err.contains("unknown option '--dev'"), "{err}");
+
+    // Los dos, cada uno con su requisito.
+    let (out, err, code) = ray_idx(&app, &index, &["add", "util", "geo@1.2.0"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("added dependency 'util = \"^0.3.1\"'") && out.contains("added dependency 'geo = \"1.2.0\"'"), "{out}");
+    let toml = std::fs::read_to_string(app.join("ray.toml")).unwrap();
+    assert!(toml.contains("util = \"^0.3.1\"") && toml.contains("geo = \"1.2.0\""), "{toml}");
+    let (out, err, code) = ray_idx(&app, &index, &["run"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("hello") && out.contains("120"), "{out}\n{err}");
+}
+
 /// Un repo git "publicable" con remoto `origin` (un bare local): crea el bare, clona a un working
 /// dir con `ray.toml`+`mod.ray`, commitea, taggea `v<ver>` y empuja rama + tags. Devuelve el working dir.
 fn repo_con_origin(base: &Path, name: &str, see: &str, mod_ray: &str) -> std::path::PathBuf {

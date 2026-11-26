@@ -834,7 +834,9 @@ impl Transpiler {
         let mut names = Vec::new();
         for scope in self.scopes.iter().rev() {
             for (name, ty) in scope {
-                if matches!(ty, Type::Channel(_) | Type::Task(_)) && seen.insert(name.clone()) {
+                // rayhotel #496: `let _ = spawn(…)` deja una Task llamada `_`, que no es un nombre:
+                // pre-clonarla (`let _ = _.clone();`) no compila.
+                if name != "_" && matches!(ty, Type::Channel(_) | Type::Task(_)) && seen.insert(name.clone()) {
                     names.push(name.clone());
                 }
             }

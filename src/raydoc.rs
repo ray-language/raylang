@@ -181,6 +181,15 @@ impl<'a> Contract<'a> {
 /// nombres de campos, de variantes ni de parámetros, ni valores, ni la prosa, y dos exports
 /// cruzados (`A as B, B as A`) no se pisan.
 pub fn rename_types(prog: &mut crate::ast::Program, rename: &dyn Fn(&str) -> Option<String>) {
+    rename_in(prog, None, rename)
+}
+
+/// `rename_types` para UNA función suelta (la consulta por símbolo del MCP).
+pub fn rename_function(f: &mut crate::ast::Function, rename: &dyn Fn(&str) -> Option<String>) {
+    rename_in(&mut crate::ast::Program::default(), Some(f), rename)
+}
+
+fn rename_in(prog: &mut crate::ast::Program, only: Option<&mut crate::ast::Function>, rename: &dyn Fn(&str) -> Option<String>) {
     use crate::ast::Type;
     type Rename<'r> = &'r dyn Fn(&str) -> Option<String>;
     fn name(n: &mut String, rename: Rename) {
@@ -215,34 +224,51 @@ pub fn rename_types(prog: &mut crate::ast::Program, rename: &dyn Fn(&str) -> Opt
             args.iter_mut().for_each(|a| walk(a, rename));
         }
     }
+    // Un parámetro de tipo en ámbito tapa a un tipo del mismo nombre (el parser lo deja como
+    // `Type::Struct`): `fn first<Booking>(xs: [Booking])` no habla del `Booking` re-exportado.
+    fn scoped<'r>(type_params: Vec<String>, rename: Rename<'r>) -> impl Fn(&str) -> Option<String> + 'r {
+        move |n: &str| if type_params.iter().any(|tp| tp == n) { None } else { rename(n) }
+    }
+    fn function(f: &mut crate::ast::Function, rename: Rename) {
+        let rename = scoped(f.type_params.clone(), rename);
+        f.params.iter_mut().for_each(|p| walk(&mut p.ty, &rename));
+        walk(&mut f.return_type, &rename);
+        bounds(&mut f.bounds, &mut f.bound_args, &rename);
+    }
+    if let Some(only) = only {
+        function(only, rename);
+        return;
+    }
     for f in &mut prog.functions {
-        f.params.iter_mut().for_each(|p| walk(&mut p.ty, rename));
-        walk(&mut f.return_type, rename);
-        bounds(&mut f.bounds, &mut f.bound_args, rename);
+        function(f, rename);
     }
     for t in &mut prog.traits {
+        let of_trait = t.type_params.clone();
         t.supertraits.iter_mut().for_each(|n| name(n, rename));
         for m in &mut t.methods {
-            m.params.iter_mut().for_each(|p| walk(&mut p.ty, rename));
-            walk(&mut m.return_type, rename);
-            bounds(&mut m.bounds, &mut m.bound_args, rename);
+            let rename = scoped(of_trait.iter().chain(&m.type_params).cloned().collect(), rename);
+            m.params.iter_mut().for_each(|p| walk(&mut p.ty, &rename));
+            walk(&mut m.return_type, &rename);
+            bounds(&mut m.bounds, &mut m.bound_args, &rename);
         }
     }
     for st in &mut prog.structs {
-        st.fields.iter_mut().for_each(|(_, ty)| walk(ty, rename));
-        st.bounds.iter_mut().for_each(|(_, tr)| name(tr, rename));
+        let rename = scoped(st.type_params.clone(), rename);
+        st.fields.iter_mut().for_each(|(_, ty)| walk(ty, &rename));
+        bounds(&mut st.bounds, &mut st.bound_args, &rename);
     }
     for e in &mut prog.enums {
-        e.bounds.iter_mut().for_each(|(_, tr)| name(tr, rename));
+        let rename = scoped(e.type_params.clone(), rename);
+        bounds(&mut e.bounds, &mut e.bound_args, &rename);
         for v in &mut e.variants {
-            v.payload.iter_mut().for_each(|ty| walk(ty, rename));
+            v.payload.iter_mut().for_each(|ty| walk(ty, &rename));
         }
     }
     for c in &mut prog.consts {
         walk(&mut c.ty, rename);
     }
     for a in &mut prog.type_aliases {
-        walk(&mut a.target, rename);
+        walk(&mut a.target, &scoped(a.type_params.clone(), rename));
     }
 }
 
@@ -556,7 +582,9 @@ mod tests {
     fn rename_types_touches_types_only_and_in_one_pass() {
         let src = "pub enum Event { Booking(Booking), Cancel(Cancel), }\n\
 pub const KIND: string = \"Booking\";\n\
-pub fn swap<T: Booking>(Booking: int, a: Booking, b: [model.Cancel], t: T) -> Map<string, Booking> { panic(\"x\") }\n";
+pub fn swap<T: Booking>(Booking: int, a: Booking, b: [model.Cancel], t: T) -> Map<string, Booking> { panic(\"x\") }\n\
+pub fn first<Cancel>(xs: [Cancel]) -> Cancel { xs[0] }\n\
+pub struct Repo<S: Booking<Cancel>> { s: S, }\n";
         let mut prog = crate::parser::parse(crate::lexer::lex(src).unwrap()).unwrap();
         let renames: std::collections::HashMap<String, String> =
             [("Booking", "Cancel"), ("Cancel", "Booking"), ("model.Cancel", "Gone")].iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
@@ -564,6 +592,9 @@ pub fn swap<T: Booking>(Booking: int, a: Booking, b: [model.Cancel], t: T) -> Ma
         assert_eq!(sig_enum(&prog.enums[0]), "enum Event { Booking(Cancel), Cancel(Booking) }");
         assert_eq!(const_signature(&prog.consts[0]), "const KIND: string = \"Booking\"");
         assert_eq!(sig_function(&prog.functions[0]), "fn swap<T: Cancel>(Booking: int, a: Cancel, b: [Gone], t: T) -> Map<string, Cancel>");
+        // Un parámetro de tipo tapa al tipo del mismo nombre; el bound de un struct conserva sus argumentos.
+        assert_eq!(sig_function(&prog.functions[1]), "fn first<Cancel>(xs: [Cancel]) -> Cancel");
+        assert_eq!(sig_struct(&prog.structs[0]), "struct Repo<S: Cancel<Booking>> { s: S }");
     }
 
     /// M376: `//!` al principio del archivo = doc de módulo; un `//` corriente la cierra; sin `//!`, nada.

@@ -22594,7 +22594,9 @@ de un `import`, el nombre suelto de un `from … import` o del propio módulo) a
 fachada lo exporta, siguiéndolo hasta su definición, también a través de la fachada de una cápsula
 anidada; y `raydoc::rename_types` lo aplica sobre el AST antes de imprimir: a los tipos de
 parámetros, retornos, campos, cargas de variantes, constantes y alias, a los traits de los bounds
-y supertraits, y a nada más. Lo que la fachada no
+y supertraits, y a nada más. Un parámetro de tipo en ámbito tapa al tipo del mismo nombre. En la
+consulta por símbolo del MCP la función pasa una sola vez por «nombre del contrato y, si no lo
+hay, el módulo de su `from … import`». Lo que la fachada no
 exporta se deja como está: de eso ya avisa `ray check` (#487). Lo usan `ray doc <archivo>`, y en
 el MCP y `ray doc <módulo>` las líneas de re-export y la consulta por símbolo. Un trait
 re-exportado lista sus métodos en el Markdown, como uno declarado en el archivo.
@@ -22612,10 +22614,12 @@ variantes (`Event.Booking`), el valor de una constante (`"Booking"`) y la prosa;
 cruzados (`A as B, B as A`) se pisaban; y un tipo traído con `from … import` salía sin renombrar
 o como `booking/Reservation`. Se rehízo sobre el AST, que quita la clase entera. Otras tres
 correcciones: (1) en una biblioteca `ray test scan.` dejó de encontrar la prueba, que ya no se
-llama `kit.a.scan.t_scan` sino `t_scan` en su suite, y salía con código 0 sin correr nada: el
-filtro casa también con el nombre calificado de la prueba en su propia suite (`scan`, `a.scan.`,
-`kit.a.scan.t_scan`). En un archivo de `tests/`, que nadie importa, solo si el filtro lleva `.`:
-ahí sigue siendo por nombre de prueba y no de archivo (M205). (2) El completion del LSP seguía ofreciendo el método del trait
+llama `kit.a.scan.t_scan` sino `t_scan` en su suite, y salía con código 0 sin correr nada. La
+primera suite anota el nombre calificado de cada prueba que deja a la suite de su archivo, y allí
+el filtro casa con el nombre que se muestra o con ese otro: selecciona exactamente lo mismo que
+antes del arreglo (`scan`, `scan.`, `kit.a.scan.t_scan`), sin reglas nuevas. Dos intentos previos
+con una regla propia (el nombre del archivo, la ruta del módulo) dejaban fuera filtros que antes
+casaban o seleccionaban de más. (2) El completion del LSP seguía ofreciendo el método del trait
 interno: `enumerate_members` pasa por el mismo filtro que `check_call`. (3) Un `to_string` de un
 trait interno tapaba fuera el `Show` del tipo, porque el filtro corría después de decidir el
 respaldo `to_string` → `show`: ahora cada candidato se filtra antes, y lo mismo vale para el
@@ -22629,7 +22633,9 @@ El método de un trait interno sigue alcanzable por un genérico con bound si el
 nombrar, que fuera de la cápsula no se puede. La prosa de un `///` que cite `model.Booking` no
 se renombra. `ray doc` sigue mostrando la cabecera de un struct re-exportado con su nombre
 original y «Exported as …» debajo. La frontera de cápsula se calcula en tres sitios del checker
-(`trait_hidden_by_capsule`, `type_module_fn`, `opaque_outside`), sin un helper común.
+(`trait_hidden_by_capsule`, `type_module_fn`, `opaque_outside`), sin un helper común. `to_string(x)` y la
+interpolación buscan el método `show` por nombre y no por el trait `Show` (ya antes del arco): un
+trait propio con un método `show` cambia esas dos formas y no `print`.
 
 ## 490. `fs.data_dir` y `fs.cache_dir`: la carpeta de la app en cada sistema (ray-remote #506, nov 2026)
 
@@ -22652,7 +22658,7 @@ de carpeta que se escribe igual en todos los sistemas: vacío, con separadores, 
 que Windows reserva (`: * ? " < > |`), con espacio en los extremos o con punto final es `Err`
 (Windows quita puntos y espacios finales: `"App."` sería `"App"`, y `" "` la raíz compartida).
 Tampoco valen los caracteres de control ni un nombre de dispositivo de Windows (`CON`, `NUL`,
-`COM0`–`COM9`, `LPT¹`…, con o sin extensión).
+`COM0`–`COM9`, `LPT¹`, `CONIN$`…, con o sin extensión).
 La variable que hace falta debe estar y ser una ruta absoluta; si no, `Err`, y no una carpeta
 relativa que cambia según desde dónde se lance el programa; en Windows `C:datos` cuenta como
 relativa. El separador final se quita (`\` solo en Windows).

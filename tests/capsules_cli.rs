@@ -655,15 +655,17 @@ fn ray_doc_follows_nested_facades_and_renames_bounds() {
             ("src/main.ray", "import booking;\nfn main() { print(1); }\n"),
             ("src/booking/core/inner.ray", "pub struct Deep { id: int, }\npub trait Priced { fn price(self) -> int; }\n"),
             ("src/booking/core/mod.ray", "pub from booking/core/inner import Deep, Priced;\n"),
+            ("src/booking/audit.ray", "pub struct Item { n: int, }\n"),
             (
                 "src/booking/service.ray",
-                "import booking/core;\nfrom booking/core import Deep, Priced;\n\n\
+                "import booking/core;\nfrom booking/core import Deep, Priced;\nfrom booking/audit import Item;\n\n\
 pub fn first() -> Deep { Deep { id: 1 } }\npub fn second() -> core.Deep { Deep { id: 2 } }\n\
+pub fn log(d: Deep, i: Item) -> int { d.id + i.n }\npub fn pick<Deep>(xs: [Deep]) -> Deep { xs[0] }\n\
 pub fn cheapest<T: Priced>(xs: [T]) -> T { xs[0] }\npub fn cheapest_q<T: core.Priced>(xs: [T]) -> T { xs[0] }\n",
             ),
             (
                 "src/booking/mod.ray",
-                "pub from booking/core import Deep as Item, Priced as Costed;\npub from booking/service import first, second, cheapest, cheapest_q;\n",
+                "pub from booking/core import Deep as Item, Priced as Costed;\npub from booking/service import first, second, cheapest, cheapest_q, log, pick;\n",
             ),
         ],
     );
@@ -672,8 +674,15 @@ pub fn cheapest<T: Priced>(xs: [T]) -> T { xs[0] }\npub fn cheapest_q<T: core.Pr
     for sig in ["fn first() -> Item", "fn second() -> Item", "fn cheapest<T: Costed>(xs: [T]) -> T", "fn cheapest_q<T: Costed>(xs: [T]) -> T"] {
         assert!(out.contains(&format!("### `{sig}`")), "falta {sig}:\n{out}");
     }
+    // Un parámetro de tipo que se llama como el tipo re-exportado no se toca.
+    assert!(out.contains("### `fn pick<Deep>(xs: [Deep]) -> Deep`"), "{out}");
     let (out, err, code) = ray(&d, &["doc", "booking.first"]);
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("first() -> Item"), "{out}");
+    // El nombre del contrato (`Item`) coincide con otro tipo importado y no exportado: cada uno
+    // conserva el suyo.
+    let (out, err, code) = ray(&d, &["doc", "booking.log"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("log(d: Item, i: booking/audit.Item) -> int"), "{out}");
     let _ = std::fs::remove_dir_all(d);
 }

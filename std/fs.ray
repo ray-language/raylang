@@ -166,8 +166,8 @@ fn app_folder(app: string) -> Result<string, string> {
         }
     }
     // Ni los nombres de dispositivo, con o sin extensión: `CON`, `nul.txt`, `COM1`, `LPT¹`…
-    let stem = app.split(".")[0].to_upper();
-    let devices = ["CON", "PRN", "AUX", "NUL"];
+    let stem = app.split(".")[0].trim().to_upper();
+    let devices = ["CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"];
     let numbered = (stem.starts_with("COM") || stem.starts_with("LPT"))
         && stem.len() == 4
         && "0123456789¹²³".contains(stem.substring(3, 4));

@@ -546,9 +546,10 @@ fn source_symbol_doc_with(mod_name: &str, src: &str, func: &str, rename: &dyn Fn
     {
         let Ok(tokens) = crate::lexer::lex(src) else { return None };
         let Ok(mut prog) = crate::parser::parse(tokens) else { return None };
-        // Antes de renombrar: qué nombres sueltos de un `from … import` tienen nombre de contrato.
-        let in_contract: std::collections::HashSet<String> =
-            prog.from_imports.iter().flat_map(|fi| fi.names.iter()).map(|n| n.local().to_string()).filter(|local| rename(local).is_some()).collect();
+        // La función se toma ANTES de renombrar: sus tipos pasan una sola vez por «nombre del
+        // contrato, y si no lo hay, el módulo de su `from … import`» (dos pasadas confundirían
+        // un nombre de contrato con otro tipo importado que se llame igual).
+        let function = prog.functions.iter().find(|f| f.is_pub && f.name == func).cloned();
         crate::raydoc::rename_types(&mut prog, rename);
         // Función pública top-level o, si no, un MÉTODO DE TRAIT público (dogfood raydesk:
         // la superficie de std/kv son los métodos de StoreOps — `s.get(k)`, `s.set(k, v)` —
@@ -562,14 +563,9 @@ fn source_symbol_doc_with(mod_name: &str, src: &str, func: &str, rename: &dyn Fn
             .from_imports
             .iter()
             .flat_map(|fi| fi.names.iter().map(move |n| (n.alias.clone().unwrap_or_else(|| n.name.clone()), format!("{}.{}", fi.module, n.name))))
-            .filter(|(local, _)| !in_contract.contains(local))
             .collect();
-        let sig = if let Some(f) = prog.functions.iter().find(|f| f.is_pub && f.name == func) {
-            let mut f = f.clone();
-            f.return_type = qualify_type(&f.return_type, &imported);
-            for p in &mut f.params {
-                p.ty = qualify_type(&p.ty, &imported);
-            }
+        let sig = if let Some(mut f) = function {
+            crate::raydoc::rename_function(&mut f, &|written| rename(written).or_else(|| imported.get(written).cloned()));
             fn_signature(&f)
         } else if let Some((t, m)) = prog.traits.iter().filter(|t| t.is_pub).find_map(|t| {
             t.methods.iter().find(|m| m.name == func).map(|m| (t, m))
@@ -638,24 +634,6 @@ fn source_symbol_doc_with(mod_name: &str, src: &str, func: &str, rename: &dyn Fn
 /// constante pública); si no, la firma sin valor.
 fn const_signature(c: &crate::ast::ConstDef) -> String {
     crate::raydoc::const_signature(c) // M326: una sola firma para raydoc y el MCP
-}
-
-/// Renombra los tipos nominales de `t` que `imported` conoce (`Config` → `llm/config.Config`),
-/// recursivamente; lo demás queda igual.
-fn qualify_type(t: &crate::ast::Type, imported: &std::collections::HashMap<String, String>) -> crate::ast::Type {
-    use crate::ast::Type;
-    let q = |x: &Type| qualify_type(x, imported);
-    match t {
-        Type::Struct(n, args) => Type::Struct(imported.get(n).cloned().unwrap_or_else(|| n.clone()), args.iter().map(q).collect()),
-        Type::Enum(n, args) => Type::Enum(imported.get(n).cloned().unwrap_or_else(|| n.clone()), args.iter().map(q).collect()),
-        Type::Array(e) => Type::Array(Box::new(q(e))),
-        Type::Tuple(ts) => Type::Tuple(ts.iter().map(q).collect()),
-        Type::Map(k, v) => Type::Map(Box::new(q(k)), Box::new(q(v))),
-        Type::Channel(e) => Type::Channel(Box::new(q(e))),
-        Type::Task(e) => Type::Task(Box::new(q(e))),
-        Type::Fn(ps, r) => Type::Fn(ps.iter().map(q).collect(), Box::new(q(r))),
-        other => other.clone(),
-    }
 }
 
 /// `trait Nombre<T> { fn m(self, …) -> R; … }` (raydata #205): la forma que se implementa.

@@ -4049,16 +4049,16 @@ impl Checker {
         String::new()
     }
 
-    /// rayhotel #481: ¿el método manglado es de un trait declarado DENTRO de una cápsula que no lo
-    /// exporta, y el sitio está fuera de ella? Manda la cápsula más externa que contiene al trait
-    /// y no al sitio, como en `type_module_fn`. Un trait de fuera de toda cápsula (el prelude, el
-    /// del propio llamador) implementado para un tipo de la cápsula no se toca.
     /// El método de trait `method` del tipo `key` (su función manglada), si se alcanza desde el
     /// sitio de `line`: el de un trait interno de una cápsula no se ve fuera de ella.
     fn visible_method(&self, key: &str, method: &str, line: usize) -> Option<String> {
         self.methods.get(&(key.to_string(), method.to_string())).filter(|mangled| !self.trait_hidden_by_capsule(mangled, line)).cloned()
     }
 
+    /// rayhotel #481: ¿el método manglado es de un trait declarado DENTRO de una cápsula que no lo
+    /// exporta, y el sitio está fuera de ella? Manda la cápsula más externa que contiene al trait
+    /// y no al sitio, como en `type_module_fn`. Un trait de fuera de toda cápsula (el prelude, el
+    /// del propio llamador) implementado para un tipo de la cápsula no se toca.
     fn trait_hidden_by_capsule(&self, mangled: &str, line: usize) -> bool {
         if self.capsule_surfaces.is_empty() {
             return false;

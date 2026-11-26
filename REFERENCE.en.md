@@ -195,7 +195,7 @@ use them; each has its public wrapper in the prelude or in `std/`.
 | `worker_id` | `() -> int` | index of the worker running this task (`0..worker_count()`); stable for the task's whole life natively; 0 in the thread-per-task model (no fibers: Windows arm64, `--without fibers`) |
 | `worker_count` | `() -> int` | number of scheduler workers (cores, or `RAYLANG_THREADS`); in the thread-per-task model, the machine's available threads |
 | `join` | `(t: Task<T>) -> T` | blocks until the task finishes (re-raises its failure). *Ad-hoc*: `join(arr, sep)` is the string one |
-| `scope` | `(body: fn() -> R) -> R` | structured concurrency: on return it joins every task launched inside; if one fails, it cancels its siblings and propagates · it also waits for `spawn_local` tasks; a panic in the body cancels the children before it propagates |
+| `scope` | `(body: fn() -> R) -> R` | structured concurrency: on return it joins every task launched inside; if one fails, it cancels its siblings and propagates · it also waits for `spawn_local` tasks; a panic in the body cancels the children before it propagates · a cancelled task stops at its next waiting point (channel, `join`, `time.sleep`, socket or pipe I/O) and never runs again: its own `try_call` does not recover it, and one that never waits runs to its end; the `scope` does not wait for the cancelled ones · the same in a native binary since 1.27.117, with two limits: a task parked on a socket is cancelled when the I/O wakes it (data, timeout or close), not before, and a TLS read or a `--without fibers` build is not a cancellation point |
 | `send` | `(ch: Channel<T>, v: T) -> unit` | sends; blocks if the bounded channel is full (backpressure) |
 | `recv` | `(ch: Channel<T>) -> Option<T>` | receives; blocks while empty and open; `None` once closed and drained |
 | `select` | `(chs: [Channel<T>]) -> int` | blocks until a channel is ready; returns the lowest ready index (deterministic) |
@@ -891,4 +891,4 @@ orientations) **replaces** it; the rest are added.
 | 101 | ICE (internal compiler error — report it) |
 | 0 / 1 | `ray test` exits with 0 (all green) or 1 (there were failures); 65 if a suite does not compile |
 
-<!-- sync: sha256:bcdebf8d13f1 -->
+<!-- sync: sha256:1b23a9d60748 -->

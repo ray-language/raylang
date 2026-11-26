@@ -1507,6 +1507,9 @@ fn select_timeout<T>(chs: [Channel<T>], ms: int) -> Option<int> {
 /// Runs `f` and returns its outcome as a value: `Ok(its result)`, or `Err(message)` if it failed
 /// with a fatal error. Recovery happens in the SAME fiber (no task is spawned), so state mutated
 /// before the failure stays mutated — use `spawn` plus `try_join` when you need real isolation.
+/// It does not recover the CANCELLATION of the task by a failing `scope`: a cancelled task never
+/// resumes, so nothing after the waiting point where it was cancelled runs. Keep a resource that
+/// must be released (a transaction, a lock) in the code that owns the `scope`, not in the child.
 fn try_call<T>(f: fn() -> T) -> Result<T, string> {
     var slot: [T] = [];
     let e = __try_call(fn() {

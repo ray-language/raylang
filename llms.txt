@@ -272,6 +272,13 @@ spawn(fn() { send(ch, 42); });                   // spawn returns Task<T>
 //   starts with spawn/spawn_local INHERIT its domain and share its sockets.
 // scope(f) waits for every task started inside it, spawn_local ones included; a panic in the
 //   body (or in a child) cancels the remaining children before it propagates.
+//   A cancelled task stops at its next waiting point (channel, join, time.sleep, socket/pipe
+//   I/O) and never resumes: its own try_call does NOT recover it, and there is no defer — keep
+//   what must be released (a transaction, a lock) in the code that owns the scope. A task that
+//   never waits runs to its end; the scope does not wait for cancelled tasks. Native binaries
+//   (1.27.117) do the same, with two limits: a task parked on a socket is cancelled when the
+//   I/O wakes it (data, timeout, close), not before, and a TLS read or a `--without fibers`
+//   build (blocking syscalls) is not a cancellation point.
 // Native scheduler model: a fiber is pinned to its worker for life (no migration); each worker
 //   polls its own kqueue/epoll (RAYLANG_REACTOR=local, the unix default; `shared` = one reactor
 //   thread for all, the Windows model), so parking on a socket never crosses threads; a blocking

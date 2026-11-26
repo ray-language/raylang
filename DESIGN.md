@@ -22630,13 +22630,17 @@ un trait interno dejaba de compilar según el orden de los imports. El sitio es 
 de la función que se comprueba (`current_fn_site`: el del trait para un método por defecto, el
 del tipo para un `@derive`), y la frontera se calcula en un solo sitio (`capsule_boundary`), que
 usan también `type_module_fn` y `opaque_outside`: el mismo fallo existía ahí desde la 1.27.112.
+`module_local_fn` (el UFCS a una función del propio módulo) tenía el mismo defecto desde antes:
+`self.size().double()` en un método por defecto llamaba al `double` del último módulo cargado si
+allí había uno. (5) El trait interno seguía alcanzable por dos puertas laterales: un `dyn Hidden`
+que una función exportada devuelve, y un bound `T: Wide` con `Wide: Hidden`. Las dos consultan
+ahora `trait_hidden_outside`.
 
 **Límites.** El nombre del método de un trait interno sigue ocupando su entrada en la tabla
 `methods`: quien usa la cápsula no puede dar ese nombre a un método de un trait propio sobre el
 mismo tipo («method ambiguous»), igual que antes de este arco; quitarlo pide que la tabla admita
 varios métodos por nombre. El espejo selfhost del checker no conoce las cápsulas (tampoco antes).
-El método de un trait interno sigue alcanzable por un genérico con bound si el trait se puede
-nombrar, que fuera de la cápsula no se puede. La prosa de un `///` que cite `model.Booking` no
+La prosa de un `///` que cite `model.Booking` no
 se renombra. `ray doc` sigue mostrando la cabecera de un struct re-exportado con su nombre
 original y «Exported as …» debajo, y dentro de su declaración el tipo se nombra igual. Lo que la
 fachada DECLARA ella misma (`pub fn first_id(n: model.Node)`) no pasa por el renombrado: solo lo

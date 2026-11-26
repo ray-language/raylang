@@ -802,6 +802,9 @@ fn reexport_lines(src: &str, file: &std::path::Path) -> Vec<String> {
             trait_signature(t)
         } else if let Some(c) = prog.consts.iter().find(|c| c.name == name) {
             const_signature(c)
+        } else if let Some(a) = prog.type_aliases.iter().find(|a| a.name == name) {
+            let tparams = if a.type_params.is_empty() { String::new() } else { format!("<{}>", a.type_params.join(", ")) };
+            format!("type {}{tparams} = {}", a.name, a.target)
         } else {
             continue;
         };
@@ -1014,7 +1017,9 @@ fn project_doc_text(symbol: &str, path: &str) -> Option<String> {
                 .map(|prog| crate::raydoc::Contract::new(&prog, item, &items));
             let rename = |written: &str| contract.as_ref().and_then(|c| c.visible(written));
             if let Some(text) = source_symbol_doc_with(&label, &item.source, &item.original, &rename) {
-                return Some(format!("{text}\n(re-exported by {label} from {})", item.module));
+                // Con alias, el texto lleva el nombre de su módulo: fuera se escribe el otro.
+                let exported = if item.visible == item.original { String::new() } else { format!(" as {}", item.visible) };
+                return Some(format!("{text}\n(re-exported by {label} from {}{exported})", item.module));
             }
         }
     }

@@ -125,6 +125,35 @@ pub fn inside(i: Invoice) -> int { i.twice() }\n",
     assert_eq!((out.as_str(), code), ("8\n7\n", 0), "{err}");
     let _ = std::fs::remove_dir_all(default_body);
 
+    // Tampoco por un `dyn` que la fachada deja salir, ni por un bound que lo trae de supertrait.
+    let side_doors = |name: &str, main: &str| tree(name, &[
+        ("ray.toml", APP_TOML),
+        ("src/main.ray", main),
+        ("src/shop/mod.ray", "pub from shop/model import Invoice, make, as_hidden, Wide, wide_inside;\n"),
+        (
+            "src/shop/model.ray",
+            "pub struct Invoice { id: int, }\npub fn make(id: int) -> Invoice { Invoice { id: id } }\n\
+pub trait Hidden { fn peek(self) -> int; }\nimpl Hidden for Invoice { fn peek(self) -> int { self.id } }\n\
+pub trait Wide: Hidden { fn span(self) -> int; }\nimpl Wide for Invoice { fn span(self) -> int { self.id * 3 } }\n\
+pub fn as_hidden(i: Invoice) -> dyn Hidden { i }\n\
+pub fn wide_inside<T: Wide>(x: T) -> int { x.peek() + as_hidden(make(1)).peek() }\n",
+        ),
+    ]);
+    let inside = side_doors("trait_doors_ok", "import shop;\nfn g<T: shop.Wide>(x: T) -> int { x.span() }\nfn main() {\n    print(shop.wide_inside(shop.make(4)));\n    print(g(shop.make(4)));\n}\n");
+    let (out, err, code) = ray(&inside, &["run"]);
+    assert_eq!((out.as_str(), code), ("5\n12\n", 0), "{err}");
+    for (name, main) in [
+        ("trait_door_dyn", "import shop;\nfn main() {\n    print(shop.as_hidden(shop.make(4)).peek());\n}\n"),
+        ("trait_door_bound", "import shop;\nfn g<T: shop.Wide>(x: T) -> int { x.peek() }\nfn main() {\n    print(g(shop.make(4)));\n}\n"),
+    ] {
+        let d = side_doors(name, main);
+        let (out, err, code) = ray(&d, &["run"]);
+        assert_ne!(code, 0, "{name}: {out}{err}");
+        assert!(err.contains("'peek'"), "{name}: {err}");
+        let _ = std::fs::remove_dir_all(d);
+    }
+    let _ = std::fs::remove_dir_all(inside);
+
     // Ni un `show` de un trait interno pasa por `Show` fuera: las tres formas dan lo mismo.
     let raw_show = tree("trait_raw_show", &[
         ("ray.toml", APP_TOML),
@@ -659,6 +688,10 @@ pub fn bookings(limit: int) -> Result<[Booking], string> { Result.Ok([model.make
     let (out, err, code) = ray(&d, &["doc", "booking.bookings"]);
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("-> Result<[Reservation], string>") && !out.contains("booking/Reservation"), "{out}");
+    // Por símbolo, un re-export con alias dice con qué nombre se exporta.
+    let (out, err, code) = ray(&d, &["doc", "booking.Reservation"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("from booking/model as Reservation)"), "{out}");
     let (out, err, code) = ray(&d, &["doc", "booking.make"]);
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("with the given total.") && out.contains("total: int) -> Reservation"), "{out}");
@@ -705,5 +738,31 @@ pub fn cheapest<T: Priced>(xs: [T]) -> T { xs[0] }\npub fn cheapest_q<T: core.Pr
     let (out, err, code) = ray(&d, &["doc", "booking.log"]);
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("log(d: Item, i: booking/audit.Item) -> int"), "{out}");
+    let _ = std::fs::remove_dir_all(d);
+}
+
+/// Revisión de la 1.27.118: el cuerpo de un método por defecto es código del módulo de su trait.
+/// Su clon no tiene línea propia y `self.size().double()` se resolvía contra el ÚLTIMO módulo
+/// cargado: con un `double` homónimo allí, llamaba al ajeno.
+#[test]
+fn a_default_method_body_resolves_in_the_module_of_its_trait() {
+    let d = tree(
+        "default_site",
+        &[
+            ("ray.toml", APP_TOML),
+            ("src/main.ray", "import zeta;\nimport alpha;\nfn main() {\n    print(alpha.make(5).twice());\n    print(zeta.bump(1));\n}\n"),
+            (
+                "src/alpha.ray",
+                "fn double(n: int) -> int { n * 2 }\npub struct Box { n: int, }\npub fn make(n: int) -> Box { Box { n: n } }\n\
+pub trait Sized {\n    fn size(self) -> int;\n    fn twice(self) -> int { self.size().double() }\n}\n\
+impl Sized for Box { fn size(self) -> int { self.n } }\n",
+            ),
+            ("src/zeta.ray", "fn double(n: int) -> int { n + 1000 }\npub fn bump(n: int) -> int { n.double() }\n"),
+        ],
+    );
+    for engine in [&["run"][..], &["--interp", "src/main.ray"][..]] {
+        let (out, err, code) = ray(&d, engine);
+        assert_eq!((out.as_str(), code), ("10\n1001\n", 0), "{engine:?}: {err}");
+    }
     let _ = std::fs::remove_dir_all(d);
 }

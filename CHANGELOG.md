@@ -28,8 +28,12 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   compilaba aunque `peek` fuera de un trait que la fachada no exporta. Ahora es un error de
   tipos, como ya lo eran las funciones internas; el método de un trait que la fachada sí
   exporta se llama igual, y dentro de la cápsula nada cambia. El editor tampoco lo ofrece al
-  completar.
-- **`ray doc` — las firmas de una fachada nombran los tipos como el contrato** (rayhotel
+  completar, ni se alcanza por un `dyn` o por un bound que lo traiga de supertrait.
+- **El cuerpo de un método por defecto se resuelve en el módulo de su trait.** Una llamada
+  `x.f()` dentro de él a una función privada del módulo, o a algo interno de su cápsula, se
+  resolvía contra el último módulo cargado: según el orden de los `import` no compilaba o
+  llamaba a una función homónima de otro módulo.
+- **`ray doc` — lo que una fachada re-exporta nombra los tipos como el contrato** (rayhotel
   #485). Lo re-exportado se mostraba con la firma de su módulo interno
   (`-> Result<[model.Booking], string>`), que quien usa la cápsula no puede escribir. Ahora
   sale el nombre que la fachada exporta (`Booking`, o su alias), se nombre el tipo por un

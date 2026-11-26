@@ -4058,7 +4058,7 @@ impl Checker {
     fn opaque_outside(&self, struct_name: &str, line: usize) -> Option<String> {
         let capsule = self.opaque_types.get(struct_name)?;
         let site = self.call_site(line);
-        let inside = site == capsule || site.starts_with(&format!("{capsule}::"));
+        let inside = site == capsule || site.strip_prefix(capsule.as_str()).is_some_and(|rest| rest.starts_with("::"));
         (!inside).then(|| capsule.replace("::", "/"))
     }
 
@@ -4090,7 +4090,16 @@ impl Checker {
         if self.capsule_surfaces.is_empty() {
             return false;
         }
-        let Some(trait_name) = self.method_trait.get(mangled) else { return false };
+        self.method_trait.get(mangled).is_some_and(|trait_name| self.trait_hidden_outside(trait_name, line))
+    }
+
+    /// ¿`trait_name` se declara dentro de una cápsula que no lo exporta, y el sitio de `line`
+    /// está fuera de ella? Sus métodos no se alcanzan desde ahí por ninguna vía: ni por el tipo
+    /// concreto, ni por un `dyn`, ni por un bound que lo traiga como supertrait.
+    fn trait_hidden_outside(&self, trait_name: &str, line: usize) -> bool {
+        if self.capsule_surfaces.is_empty() {
+            return false;
+        }
         let Some((prefix, _)) = trait_name.rsplit_once("::") else { return false };
         self.capsule_boundary(prefix, line).is_some_and(|capsule| !self.capsule_types.get(capsule).is_some_and(|t| t.contains(trait_name)))
     }
@@ -4134,7 +4143,13 @@ impl Checker {
     /// debe resolver al `get` del prelude. `None` en la entrada (prefijo `""`), fuera de banda
     /// (prelude) o sin bandas (archivo único).
     fn module_local_fn(&self, name: &str, line: usize, recv_ty: &Type) -> Option<String> {
-        let (_, prefix) = self.module_bands.iter().rev().find(|(start, _)| *start <= line)?;
+        // El módulo del código que llama, no el de la banda de la línea: el cuerpo clonado de un
+        // método por defecto lleva líneas sintéticas y caía en el último módulo cargado.
+        let prefix = match &self.current_fn_site {
+            Some(module) if module != &self.entry_module => module.as_str(),
+            Some(_) => return None,
+            None => self.module_bands.iter().rev().find(|(start, _)| *start <= line).map(|(_, p)| p.as_str())?,
+        };
         if prefix.is_empty() {
             return None;
         }
@@ -4470,6 +4485,7 @@ impl Checker {
         let hits: Vec<String> = self.current_fn_bounds.iter()
             .filter(|(bp, _)| bp == tp)
             .filter(|(_, tr)| self.traits.get(tr).is_some_and(|ms| ms.iter().any(|m| m.name == method)))
+            .filter(|(_, tr)| !self.trait_hidden_outside(tr, line))
             .map(|(_, tr)| tr.clone())
             .collect();
         if hits.is_empty() {
@@ -4529,6 +4545,7 @@ impl Checker {
         // Busca el método entre **todos** los traits del conjunto (la unicidad ya la garantizó
         // `ensure_type`: ningún método se repite entre los traits de un `dyn A + B`).
         let sig = match traits.iter()
+            .filter(|tr| !self.trait_hidden_outside(tr, line))
             .find_map(|tr| self.traits.get(tr).and_then(|ms| ms.iter().find(|m| m.name == method)))
         {
             Some(m) => m.clone(),

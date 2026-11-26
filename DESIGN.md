@@ -22589,11 +22589,12 @@ y `Show` siguen igual.
 
 **`ray doc` mostraba nombres que no se pueden escribir (#485).** La firma de un ítem re-exportado
 se imprime desde el AST de su módulo, donde el tipo de un hermano es `model.Booking`.
-`raydoc::contract_renames` arma, para el módulo del ítem, la tabla de cada tipo que la fachada
-re-exporta tal como ese módulo lo escribe (`alias.Tipo` de un `import`, el nombre suelto de un
-`from … import`, un tipo propio exportado con otro nombre) → su nombre visible, y
-`raydoc::rename_types` la aplica sobre el AST antes de imprimir: a los tipos de parámetros,
-retornos, campos, cargas de variantes, constantes y alias, y a nada más. Lo que la fachada no
+`raydoc::Contract` traduce cada nombre de tipo tal como el módulo del ítem lo escribe (`alias.Tipo`
+de un `import`, el nombre suelto de un `from … import` o del propio módulo) al nombre con que la
+fachada lo exporta, siguiéndolo hasta su definición, también a través de la fachada de una cápsula
+anidada; y `raydoc::rename_types` lo aplica sobre el AST antes de imprimir: a los tipos de
+parámetros, retornos, campos, cargas de variantes, constantes y alias, a los traits de los bounds
+y supertraits, y a nada más. Lo que la fachada no
 exporta se deja como está: de eso ya avisa `ray check` (#487). Lo usan `ray doc <archivo>`, y en
 el MCP y `ray doc <módulo>` las líneas de re-export y la consulta por símbolo. Un trait
 re-exportado lista sus métodos en el Markdown, como uno declarado en el archivo.
@@ -22611,12 +22612,14 @@ variantes (`Event.Booking`), el valor de una constante (`"Booking"`) y la prosa;
 cruzados (`A as B, B as A`) se pisaban; y un tipo traído con `from … import` salía sin renombrar
 o como `booking/Reservation`. Se rehízo sobre el AST, que quita la clase entera. Otras tres
 correcciones: (1) en una biblioteca `ray test scan.` dejó de encontrar la prueba, que ya no se
-llama `kit.a.scan.t_scan` sino `t_scan` en su suite, y salía con código 0 sin correr nada: un
-filtro con `.` casa también con el nombre calificado de la prueba en su propia suite (`scan.`,
-`a.scan.`, `kit.a.scan.t_scan`). (2) El completion del LSP seguía ofreciendo el método del trait
+llama `kit.a.scan.t_scan` sino `t_scan` en su suite, y salía con código 0 sin correr nada: el
+filtro casa también con el nombre calificado de la prueba en su propia suite (`scan`, `a.scan.`,
+`kit.a.scan.t_scan`). En un archivo de `tests/`, que nadie importa, solo si el filtro lleva `.`:
+ahí sigue siendo por nombre de prueba y no de archivo (M205). (2) El completion del LSP seguía ofreciendo el método del trait
 interno: `enumerate_members` pasa por el mismo filtro que `check_call`. (3) Un `to_string` de un
 trait interno tapaba fuera el `Show` del tipo, porque el filtro corría después de decidir el
-respaldo `to_string` → `show`: ahora cada candidato se filtra antes.
+respaldo `to_string` → `show`: ahora cada candidato se filtra antes, y lo mismo vale para el
+`show` que buscan `to_string(x)`, `print` y la interpolación (`visible_method`).
 
 **Límites.** El nombre del método de un trait interno sigue ocupando su entrada en la tabla
 `methods`: quien usa la cápsula no puede dar ese nombre a un método de un trait propio sobre el
@@ -22649,7 +22652,7 @@ de carpeta que se escribe igual en todos los sistemas: vacío, con separadores, 
 que Windows reserva (`: * ? " < > |`), con espacio en los extremos o con punto final es `Err`
 (Windows quita puntos y espacios finales: `"App."` sería `"App"`, y `" "` la raíz compartida).
 Tampoco valen los caracteres de control ni un nombre de dispositivo de Windows (`CON`, `NUL`,
-`COM1`…, con o sin extensión).
+`COM0`–`COM9`, `LPT¹`…, con o sin extensión).
 La variable que hace falta debe estar y ser una ruta absoluta; si no, `Err`, y no una carpeta
 relativa que cambia según desde dónde se lance el programa; en Windows `C:datos` cuenta como
 relativa. El separador final se quita (`\` solo en Windows).

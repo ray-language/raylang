@@ -253,12 +253,14 @@ fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign:
     // Los nombres calificados del módulo de un archivo, como los escribiría quien lo importa:
     // `a.scan` (por su ruta dentro del paquete, sin `src/` ni `mod`) y `kit.a.scan` (con el
     // nombre del paquete delante).
-    let module_names = |line: usize| -> Vec<String> {
-        let Some(path) = module_path(line) else { return Vec::new() };
+    // El `bool` dice si el archivo es un MÓDULO del paquete (no vive bajo `tests/`).
+    let module_names = |line: usize| -> (Vec<String>, bool) {
+        let Some(path) = module_path(line) else { return (Vec::new(), false) };
         let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let root = path.ancestors().skip(1).find(|d| d.join("ray.toml").is_file());
         let rel = root.and_then(|r| path.strip_prefix(r).ok()).unwrap_or_else(|| Path::new(path.file_name().unwrap_or_default()));
         let mut parts: Vec<String> = rel.with_extension("").components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect();
+        let is_module = parts.first().is_none_or(|p| p != "tests");
         if parts.first().is_some_and(|p| p == "src") {
             parts.remove(0);
         }
@@ -268,9 +270,21 @@ fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign:
         let local = parts.join(".");
         let package = root.and_then(|r| crate::manifest::Manifest::load(r).ok().flatten()).map(|m| m.name);
         match package {
-            Some(pkg) => vec![format!("{pkg}.{local}"), local],
-            None => vec![local],
+            Some(pkg) => (vec![format!("{pkg}.{local}"), local], is_module),
+            None => (vec![local], is_module),
         }
+    };
+    // ¿El filtro casa con el nombre calificado de una prueba de la PROPIA suite? Una prueba de un
+    // módulo se muestra sin él en su suite, pero importada se llamaría `kit.a.scan.t_scan`: el
+    // filtro casa con ese nombre entero (`scan`, `scan.`, `kit.a.scan.t_scan`). En un archivo de
+    // `tests/`, que nadie importa, solo si el filtro va calificado: sigue siendo por nombre de
+    // prueba y no de archivo (M205).
+    let qualified_match = |f: &crate::ast::Function, display: &str, p: &str| {
+        if f.name.contains("::") {
+            return false;
+        }
+        let (names, is_module) = module_names(f.line);
+        (is_module || p.contains('.')) && names.iter().any(|m| format!("{m}.{display}").contains(p))
     };
     let is_foreign = |f: &crate::ast::Function| {
         module_path(f.line).is_some_and(|p| {
@@ -297,10 +311,9 @@ fn collect_tests(loaded: &Loaded, filter: Option<&str>, own_only: bool, foreign:
             let Some(p) = filter else { return true };
             // El separador interno `::` del loader vuelve al `.` que escribe el usuario.
             let display = f.name.replace("::", ".");
-            // Un filtro calificado (`scan.`, `lex.t_lex`, `kit.a.scan.t_scan`) casa también con una prueba de la propia
-            // suite, que se muestra sin módulo: en una biblioteca cada prueba corre en la suite de
-            // su archivo (rayhotel #501) y `ray test scan.` debe seguir encontrándola.
-            display.contains(p) || (p.contains('.') && !f.name.contains("::") && module_names(f.line).iter().any(|m| format!("{m}.{display}").contains(p)))
+            // En una biblioteca cada prueba corre en la suite de su archivo (rayhotel #501), donde
+            // se muestra sin módulo: `ray test scan` debe seguir encontrándola.
+            display.contains(p) || qualified_match(f, &display, p)
         })
         .map(|f| Test {
             global: f.name.clone(),

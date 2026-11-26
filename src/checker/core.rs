@@ -2286,14 +2286,14 @@ impl Checker {
 
     /// ¿Lleva `t` un `Show` que la forma por defecto de `print` no conoce? Un struct o enum con
     /// `impl Show` (en cualquier profundidad) o un parámetro de tipo (su bound decide en `dict_for`).
-    fn has_user_show(&self, t: &Type) -> bool {
+    fn has_user_show(&self, t: &Type, line: usize) -> bool {
         match t {
             Type::Var(_) => true,
-            Type::Array(e) => self.has_user_show(e),
+            Type::Array(e) => self.has_user_show(e, line),
             Type::Struct(_, args) | Type::Enum(_, args) => {
                 let own = !matches!(t, Type::Enum(n, _) if n == "Option" || n == "Result")
-                    && type_key_of(t).is_some_and(|k| self.methods.contains_key(&(k, "show".to_string())));
-                own || args.iter().any(|a| self.has_user_show(a))
+                    && type_key_of(t).is_some_and(|k| self.visible_method(&k, "show", line).is_some());
+                own || args.iter().any(|a| self.has_user_show(a, line))
             }
             _ => false,
         }
@@ -2711,7 +2711,7 @@ impl Checker {
             if b.name == "to_string"
                 && let [p] = params.as_slice()
                 && matches!(p, Type::Struct(_, _) | Type::Enum(_, _))
-                && type_key_of(p).is_some_and(|k| self.methods.contains_key(&(k, "show".to_string())))
+                && type_key_of(p).is_some_and(|k| self.visible_method(&k, "show", expr.line).is_some())
             {
                 return Err(self.err(expr.line, expr.col, format!(
                     "the builtin 'to_string' cannot be used as a value of type {expected}: {p} has its own 'show'; pass a function that calls it, e.g. 'fn(x: {p}) -> string {{ x.show() }}'"
@@ -3701,13 +3701,10 @@ impl Checker {
                 // rayhotel #481: un trait interno de una cápsula, que su fachada no exporta, no da
                 // métodos fuera de ella. Se descarta ANTES del respaldo de `to_string`: un
                 // `to_string` interno no debe tapar el `Show` del tipo.
-                let visible = |method: &str, key: &str| {
-                    self.methods.get(&(key.to_string(), method.to_string())).filter(|mangled| !self.trait_hidden_by_capsule(mangled, line)).cloned()
-                };
                 let trait_method = type_key_of(&recv_ty).and_then(|key| {
-                    visible(name, &key).or_else(|| {
+                    self.visible_method(&key, name, line).or_else(|| {
                         (name == "to_string" && args.is_empty() && matches!(recv_ty, Type::Struct(_, _) | Type::Enum(_, _)))
-                            .then(|| visible("show", &key))
+                            .then(|| self.visible_method(&key, "show", line))
                             .flatten()
                     })
                 });
@@ -4056,6 +4053,12 @@ impl Checker {
     /// exporta, y el sitio está fuera de ella? Manda la cápsula más externa que contiene al trait
     /// y no al sitio, como en `type_module_fn`. Un trait de fuera de toda cápsula (el prelude, el
     /// del propio llamador) implementado para un tipo de la cápsula no se toca.
+    /// El método de trait `method` del tipo `key` (su función manglada), si se alcanza desde el
+    /// sitio de `line`: el de un trait interno de una cápsula no se ve fuera de ella.
+    fn visible_method(&self, key: &str, method: &str, line: usize) -> Option<String> {
+        self.methods.get(&(key.to_string(), method.to_string())).filter(|mangled| !self.trait_hidden_by_capsule(mangled, line)).cloned()
+    }
+
     fn trait_hidden_by_capsule(&self, mangled: &str, line: usize) -> bool {
         if self.capsule_surfaces.is_empty() {
             return false;
@@ -4145,7 +4148,7 @@ impl Checker {
             let at = self.check_expr(&args[0])?;
             if matches!(at, Type::Struct(_, _) | Type::Enum(_, _))
                 && let Some(key) = type_key_of(&at)
-                && let Some(show) = self.methods.get(&(key, "show".to_string())).cloned()
+                && let Some(show) = self.visible_method(&key, "show", line)
             {
                 let ty = self.check_named_call_recv(&show, args, line, col, expected, &at)?;
                 self.ufcs_sites.insert((line, col, name.to_string(), super::lowering::rename_site_depth(args, name, line, col)), show);
@@ -4169,7 +4172,7 @@ impl Checker {
             let at = self.check_expr(&args[0])?;
             // #359: lo mismo si el tipo lleva un `Show` del usuario (o es un `P: Show`): `print`
             // mostraba la forma por defecto (`Plain { n: 1 }`) e ignoraba el `impl Show`.
-            if (type_contains_tuple(&at) || self.has_user_show(&at))
+            if (type_contains_tuple(&at) || self.has_user_show(&at, line))
                 && let Ok(dict) = self.dict_for(&at, "Show", "show", line, col)
             {
                 self.print_show_sites.insert((line, col), dict);

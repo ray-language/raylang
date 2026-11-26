@@ -103,6 +103,23 @@ pub fn inside(i: Invoice) -> string { i.to_string() }\n",
     let (out, err, code) = ray(&shown, &["run"]);
     assert_eq!((out.as_str(), code), ("INV-4\nraw\n", 0), "{err}");
     let _ = std::fs::remove_dir_all(shown);
+
+    // Ni un `show` de un trait interno pasa por `Show` fuera: las tres formas dan lo mismo.
+    let raw_show = tree("trait_raw_show", &[
+        ("ray.toml", APP_TOML),
+        ("src/main.ray", "import shop;\nfn main() {\n    let i = shop.make(4);\n    print(i.to_string());\n    print(to_string(i));\n    print(\"${i}\");\n    print(shop.inside(i));\n}\n"),
+        ("src/shop/mod.ray", "pub from shop/model import Invoice, make, inside;\n"),
+        (
+            "src/shop/model.ray",
+            "pub struct Invoice { id: int, }\npub fn make(id: int) -> Invoice { Invoice { id: id } }\n\
+pub trait Raw { fn show(self) -> string; }\nimpl Raw for Invoice { fn show(self) -> string { \"raw\" } }\n\
+pub fn inside(i: Invoice) -> string { to_string(i) }\n",
+        ),
+    ]);
+    let (out, err, code) = ray(&raw_show, &["run"]);
+    let plain = "shop::model::Invoice { id: 4 }";
+    assert_eq!((out.as_str(), code), (format!("{plain}\n{plain}\n{plain}\nraw\n").as_str(), 0), "{err}");
+    let _ = std::fs::remove_dir_all(raw_show);
 }
 
 /// Dentro de la cápsula nada cambia: un interno llama como método a lo `pub` de su hermano.
@@ -569,7 +586,7 @@ fn ray_test_runs_each_test_of_a_library_once() {
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(out.contains("running 3 test(s)") && out.contains("kit.a.scan.t_scan") && out.contains("kit.a.lex.t_lex"), "{out}");
     // El filtro calificado con el módulo sigue encontrando la prueba, que ahora corre en su suite.
-    for (filter, name) in [("scan.", "t_scan"), ("lex.t_lex", "t_lex"), ("a.scan.", "t_scan"), ("kit.a.scan.t_scan", "t_scan")] {
+    for (filter, name) in [("scan", "t_scan"), ("scan.", "t_scan"), ("lex.t_lex", "t_lex"), ("a.scan.", "t_scan"), ("kit.a.scan.t_scan", "t_scan")] {
         let (out, err, code) = ray(&d, &["test", filter]);
         assert_eq!(code, 0, "{out}\n{err}");
         assert!(out.contains("running 1 test(s)") && out.contains(name), "filtro {filter}:\n{out}");
@@ -624,5 +641,39 @@ pub fn bookings(limit: int) -> Result<[Booking], string> { Result.Ok([model.make
     let (out, err, code) = ray(&d, &["doc", "booking.make"]);
     assert_eq!(code, 0, "{err}");
     assert!(out.contains("with the given total.") && out.contains("total: int) -> Reservation"), "{out}");
+    let _ = std::fs::remove_dir_all(d);
+}
+
+/// Revisión de la 1.27.118: el nombre del contrato también para un tipo que llega por la fachada
+/// de una cápsula anidada, y para el trait de un bound.
+#[test]
+fn ray_doc_follows_nested_facades_and_renames_bounds() {
+    let d = tree(
+        "doc_nested",
+        &[
+            ("ray.toml", APP_TOML),
+            ("src/main.ray", "import booking;\nfn main() { print(1); }\n"),
+            ("src/booking/core/inner.ray", "pub struct Deep { id: int, }\npub trait Priced { fn price(self) -> int; }\n"),
+            ("src/booking/core/mod.ray", "pub from booking/core/inner import Deep, Priced;\n"),
+            (
+                "src/booking/service.ray",
+                "import booking/core;\nfrom booking/core import Deep, Priced;\n\n\
+pub fn first() -> Deep { Deep { id: 1 } }\npub fn second() -> core.Deep { Deep { id: 2 } }\n\
+pub fn cheapest<T: Priced>(xs: [T]) -> T { xs[0] }\npub fn cheapest_q<T: core.Priced>(xs: [T]) -> T { xs[0] }\n",
+            ),
+            (
+                "src/booking/mod.ray",
+                "pub from booking/core import Deep as Item, Priced as Costed;\npub from booking/service import first, second, cheapest, cheapest_q;\n",
+            ),
+        ],
+    );
+    let (out, err, code) = ray(&d, &["doc", "src/booking/mod.ray"]);
+    assert_eq!(code, 0, "{err}");
+    for sig in ["fn first() -> Item", "fn second() -> Item", "fn cheapest<T: Costed>(xs: [T]) -> T", "fn cheapest_q<T: Costed>(xs: [T]) -> T"] {
+        assert!(out.contains(&format!("### `{sig}`")), "falta {sig}:\n{out}");
+    }
+    let (out, err, code) = ray(&d, &["doc", "booking.first"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("first() -> Item"), "{out}");
     let _ = std::fs::remove_dir_all(d);
 }

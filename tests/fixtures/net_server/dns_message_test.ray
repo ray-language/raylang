@@ -238,6 +238,13 @@ fn a_dot_inside_a_label_survives_the_round_trip() {
     assert_eq(msg.split_name("Caf\\195\\169._ipp._tcp.local")[0], "Café");
     // A fully qualified name asks for the same thing as the relative one.
     assert_eq(dns.build_query(7, "example.com.", 1), dns.build_query(7, "example.com", 1));
+    assert_eq(dns.build_query(7, ".", 2), dns.build_query(7, "", 2));
+    let absolute = msg.write_response(q_of("example.com", msg.NS), answer([rr("example.com.", msg.NS, msg.Data.Name("ns1.example.com."))]), 0)
+        .unwrap();
+    assert_eq(
+        msg.parse_response(absolute).unwrap().answers[0].data,
+        msg.Data.Name("ns1.example.com")
+    );
     assert_eq(msg.split_name("abc\\"), ["abc\\"]);
     assert_eq(msg.escape_label("4.2\\x"), "4\\.2\\\\x");
     let name = "HP LaserJet 4\\.2._ipp._tcp.local";

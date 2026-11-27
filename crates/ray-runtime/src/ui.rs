@@ -10909,6 +10909,9 @@ mod win {
         on_main_sync(move || {
             // Los ids se leen AQUÍ, en el hilo 1: una reconstrucción de barras los renumera.
             let live = items_by_tag().lock().unwrap().get(&tag).cloned().unwrap_or_default();
+            // La marca solo se toca en un item que puede llevarla (no la cabecera de un submenú).
+            let mark = checked && can_gain_check;
+            let mut column_restored: Vec<usize> = Vec::new();
             // SAFETY: handles de ventanas propias; IsWindow descarta las ya destruidas.
             unsafe {
                 for (hwnd, id) in live {
@@ -10921,7 +10924,8 @@ mod win {
                         continue;
                     }
                     let _ = EnableMenuItem(menu, id as u32, MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED });
-                    if checked && can_gain_check {
+                    if mark && !column_restored.contains(&(hwnd.0 as usize)) {
+                        column_restored.push(hwnd.0 as usize);
                         // ray-sublime #509: una barra sin ningún item marcado nace sin columna
                         // de marcas (`MNS_NOCHECK`); el primero que se marca la repone.
                         let info = MENUINFO {
@@ -10931,7 +10935,7 @@ mod win {
                         };
                         let _ = SetMenuInfo(menu, &info);
                     }
-                    let _ = CheckMenuItem(menu, id as u32, (MF_BYCOMMAND | if checked { MF_CHECKED } else { MF_UNCHECKED }).0);
+                    let _ = CheckMenuItem(menu, id as u32, (MF_BYCOMMAND | if mark { MF_CHECKED } else { MF_UNCHECKED }).0);
                     let _ = DrawMenuBar(hwnd);
                 }
             }

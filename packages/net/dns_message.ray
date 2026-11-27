@@ -202,7 +202,8 @@ fn decimal_escape(raw: bytes, at: int) -> Option<int> {
 /// The labels of `name`, unescaped: it splits on the dots that have no backslash in front.
 /// `\\DDD` (three decimal digits, up to 255) is the octet with that value, as `dig` and `dns-sd`
 /// print a space (`Office\\032Printer`) or the octets of a non-ASCII letter (`Caf\\195\\169`);
-/// any other `\\X` is `X`.
+/// any other `\\X` is `X`. A label is text: octets that are not UTF-8 (`Caf\\233`, Latin-1) read
+/// as the label `?`, as they do when they come from the wire.
 /// `split_name("HP LaserJet 4\\.2._ipp._tcp.local")` is `["HP LaserJet 4.2", "_ipp", "_tcp",
 /// "local"]`; the empty name has no labels.
 pub fn split_name(name: string) -> [string] {
@@ -514,7 +515,11 @@ fn put32(o: Out, n: int) {
 // Escribe un nombre con compresión: cada sufijo ya visto (sin distinguir mayúsculas) se sustituye por
 // un puntero; los offsets por encima de 0x3FFF no se registran (no caben en 14 bits).
 fn put_name(o: Out, name: string) -> Result<int, string> {
-    let labels = split_name(name);
+    var labels = split_name(name);
+    // El punto final de un nombre absoluto (`example.com.`) no es una etiqueta más.
+    if (labels.len() > 0 && labels[labels.len() - 1] == "") {
+        labels = labels.slice(0, labels.len() - 1);
+    }
     // Las etiquetas como se escriben en un nombre: la clave de la tabla de compresión.
     var written: [string] = [];
     for l in labels {

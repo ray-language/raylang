@@ -22783,11 +22783,13 @@ como texto separado por tabuladores: un tabulador en `title` desplazaba los camp
 **Decisión.** (1) `gtk::leave_before_webkit`, un manejador `on_exit` (glibc: recibe el código de
 salida) que vacía stdio y llama a `_exit` con ese código, antes de que corran los de WebKit.
 Los manejadores corren del último registrado al primero, y WebKit registra los suyos después de
-`gtk_init` (al crear un webview y al destruir el último): por eso el nuestro se vuelve a
-registrar tras abrir cada ventana y tras cada `destroy` (`arm_exit`). Se probó antes dejar
+`gtk_init`: por eso el nuestro se registra al destruirse cada ventana, y otra vez con el loop
+ocioso (`arm_exit`). Un programa que sale con todas sus ventanas abiertas no lo registra nunca
+y corre sus `atexit` como siempre. Se probó antes dejar
 aparcado el loop de GTK durante la salida: no evita el aborto. Lo que la salida anticipada se
-salta son los `atexit` registrados antes del último rearme; el único nuestro es la restauración
-del terminal del modo crudo, que se apunta también en `ui::before_exit` y corre igual. (2)
+salta son los `atexit` registrados antes del último rearme; los nuestros son la restauración
+del terminal del modo crudo y la espera de la traza de audio, que se apuntan también en
+`ui::before_exit` y corren igual. (2)
 `std/ui` cambia tabuladores y saltos de línea por un espacio en `tag`, `title`, `shortcut` e
 `icon` antes de codificar.
 
@@ -22797,9 +22799,9 @@ la ventana abierta. Todas dan su código al instante; con la 1.27.118 las cuatro
 Test de `ui_cli` para el tabulador.
 
 **Límites.** Solo glibc (`on_exit` no existe en musl). Cada rearme deja una entrada en la lista
-de `exit` (una por ventana abierta y dos por ventana cerrada). Si WebKit registrara un manejador
+de `exit` (dos por ventana cerrada). Si WebKit registrara un manejador
 en otro momento (no se ha visto), el aborto volvería en ese caso. En un binario nativo, el modo
-crudo del terminal activado ANTES de abrir la UI no se restaura al salir (el código emitido no
+crudo del terminal activado ANTES de cerrar la última ventana no se restaura al salir (el código emitido no
 conoce `ui::before_exit`); en la VM sí.
 
 ## 493. `MenuItem.shortcut_label`: un atajo que se muestra y no enlaza (ray-sublime #511, nov 2026)

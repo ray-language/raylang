@@ -5493,9 +5493,6 @@ mod mac {
         (key, mask)
     }
 
-    /// M236: construye un NSMenuItem a partir del spec (separador, atajo, icono, estado) y lo
-    /// registra por tag. `action`: el selector del click (rayMenuAction: para los custom).
-    /// SAFETY: en el hilo principal, con la app lista.
     /// ray-sublime #511: dibuja el `shortcut_label` de los items de `menu` (su
     /// `representedObject`) donde AppKit pone los atajos: el título pasa a ser «título ⇥ texto»
     /// con una tabulación alineada a la derecha, común a todo el menú (más allá del título más
@@ -5511,8 +5508,9 @@ mod mac {
         // NSTextAlignmentRight: 1 en x86_64, 2 donde AppKit usa los valores de iOS (arm64).
         const ALIGN_RIGHT: i64 = if cfg!(target_arch = "x86_64") { 1 } else { 2 };
         const GAP: f64 = 32.0;
-        // SAFETY: mensajes estándar de AppKit/Foundation en el hilo principal; todos los
-        // objetos creados quedan retenidos por el item (o son autoliberados).
+        // SAFETY: mensajes estándar de AppKit/Foundation en el hilo principal. Lo creado con
+        // `alloc`/`new` (tabulación, estilo, títulos) se libera aquí tras entregarlo; el resto
+        // es autoliberado.
         unsafe {
             let get: MsgId = std::mem::transmute(msg_send());
             let count: MsgI64 = std::mem::transmute(msg_send());
@@ -5524,6 +5522,7 @@ mod mac {
             let font_of: MsgIdF64 = std::mem::transmute(msg_send());
             let size_of: MsgSizeId = std::mem::transmute(msg_send());
             let init_tab: MsgInitTab = std::mem::transmute(msg_send());
+            let release: MsgVoid = std::mem::transmute(msg_send());
             let items = get(menu, sel(b"itemArray\0"));
             let n = count(items, sel(b"count\0"));
             let labelled: Vec<Id> = (0..n)
@@ -5567,10 +5566,17 @@ mod mac {
                     attrs,
                 );
                 set_id(it, sel(b"setAttributedTitle:\0"), attributed);
+                release(attributed, sel(b"release\0"));
             }
+            // El estilo retiene su tabulación y cada título atribuido su estilo.
+            release(tab, sel(b"release\0"));
+            release(style, sel(b"release\0"));
         }
     }
 
+    /// M236: construye un NSMenuItem a partir del spec (separador, atajo, icono, estado) y lo
+    /// registra por tag. `action`: el selector del click (rayMenuAction: para los custom).
+    /// SAFETY: en el hilo principal, con la app lista.
     unsafe fn make_item(target: Id, spec: &super::MenuItemSpec, action: Sel) -> Id {
         unsafe {
             let alloc: MsgId = std::mem::transmute(msg_send());
@@ -5714,10 +5720,9 @@ mod mac {
                 let get: MsgId = std::mem::transmute(msg_send());
                 for it in items {
                     set_id(it as Id, sel(b"setTitle:\0"), nsstring(&title));
-                    // #511: con texto de atajo, lo que se ve es el título atribuido.
-                    if !get(it as Id, sel(b"representedObject\0")).is_null() {
-                        align_shortcut_labels(get(it as Id, sel(b"menu\0")));
-                    }
+                    // #511: la tabulación de los textos de atajo depende del título más ancho
+                    // del menú, sea o no el de un item con texto.
+                    align_shortcut_labels(get(it as Id, sel(b"menu\0")));
                 }
             }
             Ok(())
@@ -7530,15 +7535,15 @@ mod gtk {
         if ok == 0 {
             return Err("ui: could not initialize GTK (no DISPLAY/WAYLAND_DISPLAY?)".to_string());
         }
-        arm_exit();
         Ok(())
     }
 
     /// ray-sublime #512: (re)registra `leave_before_webkit` como el ÚLTIMO manejador de salida,
-    /// que es el primero en correr. WebKitGTK registra los suyos más tarde que `gtk_init`
-    /// (al crear un webview, al destruir el último), así que se llama tras cada uno de esos
-    /// momentos. Cada registro cuesta una entrada en la lista de `exit`; el primero que corre
-    /// termina el proceso.
+    /// que es el primero en correr. Se llama al destruirse una ventana (y otra vez con el loop
+    /// ocioso): el aborto solo ocurre con alguna ventana ya cerrada, y el manejador de WebKit que
+    /// lo provoca se registra más tarde que `gtk_init`. Un programa que sale con todas sus
+    /// ventanas abiertas no pasa por aquí y corre sus `atexit` como siempre. Cada registro
+    /// cuesta una entrada en la lista de `exit`; el primero que corre termina el proceso.
     fn arm_exit() {
         #[cfg(target_env = "gnu")]
         {
@@ -7770,15 +7775,19 @@ mod gtk {
         separator_new: Option<FnWidgetNew0>,
         check_new: Option<FnItemNewLabel>,
         check_set_active: Option<unsafe extern "C" fn(Widget, i32)>,
-        /// ray-sublime #509: `gtk_check_menu_item_get_type` y `g_type_check_instance_is_a`,
-        /// para saber si un item vivo tiene marca antes de tocársela.
-        /// ray-sublime #511: para cambiar la etiqueta de un item por una caja «título … atajo».
+        /// ray-sublime #511: para cambiar la etiqueta de un item por una caja «título … atajo»,
+        /// y para retitularla después (el item guarda su etiqueta de título en `ray-title`).
         bin_get_child: Option<unsafe extern "C" fn(Widget) -> Widget>,
         container_remove: Option<FnWidgetPair>,
         label_new: Option<FnItemNewLabel>,
         label_set_xalign: Option<unsafe extern "C" fn(Widget, f32)>,
+        label_set_text: Option<unsafe extern "C" fn(Widget, *const std::ffi::c_char)>,
+        object_set_data: Option<unsafe extern "C" fn(Widget, *const std::ffi::c_char, *mut c_void)>,
+        object_get_data: Option<unsafe extern "C" fn(Widget, *const std::ffi::c_char) -> *mut c_void>,
         get_style_context: Option<unsafe extern "C" fn(Widget) -> *mut c_void>,
         style_add_class: Option<unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char)>,
+        /// ray-sublime #509: `gtk_check_menu_item_get_type` y `g_type_check_instance_is_a`,
+        /// para saber si un item vivo tiene marca antes de tocársela.
         check_type: Option<unsafe extern "C" fn() -> usize>,
         instance_is_a: Option<unsafe extern "C" fn(Widget, usize) -> i32>,
         set_sensitive: Option<unsafe extern "C" fn(Widget, i32)>,
@@ -7830,6 +7839,9 @@ mod gtk {
                     container_remove: opt(c"gtk_container_remove").map(|p| std::mem::transmute::<*mut c_void, FnWidgetPair>(p)),
                     label_new: opt(c"gtk_label_new").map(|p| std::mem::transmute::<*mut c_void, FnItemNewLabel>(p)),
                     label_set_xalign: opt(c"gtk_label_set_xalign").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, f32)>(p)),
+                    label_set_text: opt(c"gtk_label_set_text").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *const std::ffi::c_char)>(p)),
+                    object_set_data: opt(c"g_object_set_data").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *const std::ffi::c_char, *mut c_void)>(p)),
+                    object_get_data: opt(c"g_object_get_data").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *const std::ffi::c_char) -> *mut c_void>(p)),
                     get_style_context: opt(c"gtk_widget_get_style_context").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget) -> *mut c_void>(p)),
                     style_add_class: opt(c"gtk_style_context_add_class").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char)>(p)),
                     check_type: opt(c"gtk_check_menu_item_get_type").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> usize>(p)),
@@ -7854,13 +7866,11 @@ mod gtk {
     /// en los items vivos, sin rehacer el menú: estado y atajos se conservan.
     pub(super) fn set_menu_title(tag: &str, title: &str) -> Result<(), String> {
         let mut found = false;
-        let mut boxed = false;
         for (_, items) in menu_specs().lock().unwrap().iter_mut() {
             super::MenuItemSpec::each_mut(items, &mut |it| {
                 if it.tag == tag {
                     it.label = title.to_string();
                     found = true;
-                    boxed |= !it.shortcut_label.is_empty();
                 }
             });
         }
@@ -7868,9 +7878,8 @@ mod gtk {
             return Err(format!("ui: no menu item with tag '{tag}'"));
         }
         // Con `gtk_menu_item_set_label` se reetiqueta el widget vivo (conserva estado, icono
-        // y atajo, y no cierra un menú abierto); sin él, o si el item lleva su caja «título …
-        // atajo» (#511: `set_label` no encuentra en ella una etiqueta), se rehacen las barras.
-        let Some(set_label) = item_api().set_label.filter(|_| !boxed) else {
+        // y atajo, y no cierra un menú abierto); sin él, se reconstruyen las barras.
+        let Some(set_label) = item_api().set_label else {
             return rebuild_bars();
         };
         if !items_by_tag().lock().unwrap().contains_key(tag) {
@@ -7883,10 +7892,18 @@ mod gtk {
             // nombrar widgets que una reconstrucción de barras ya destruyó.
             let live = items_by_tag().lock().unwrap().get(&tag).cloned().unwrap_or_default();
             // SAFETY: widgets del loop; los de ventanas cerradas se saltan por su bandera.
+            let ia = item_api();
             unsafe {
                 for (w, alive) in live {
-                    if alive.load(Ordering::SeqCst) {
-                        set_label(w as Widget, title_c.as_ptr());
+                    if !alive.load(Ordering::SeqCst) {
+                        continue;
+                    }
+                    // #511: un item con texto de atajo lleva una caja, y `set_label` no encuentra
+                    // en ella una etiqueta; el título está en la que el item dejó apuntada.
+                    let own = ia.object_get_data.map(|get| get(w as Widget, TITLE_LABEL_KEY.as_ptr())).unwrap_or(std::ptr::null_mut());
+                    match ia.label_set_text {
+                        Some(set_text) if !own.is_null() => set_text(own as Widget, title_c.as_ptr()),
+                        _ => set_label(w as Widget, title_c.as_ptr()),
                     }
                 }
             }
@@ -8058,11 +8075,18 @@ mod gtk {
         }
     }
 
+    /// La clave con que un item con texto de atajo guarda su etiqueta de título.
+    const TITLE_LABEL_KEY: &std::ffi::CStr = c"ray-title";
+
     /// ray-sublime #511: cambia la etiqueta de `item` por una caja con el título a la izquierda
     /// y `shortcut` a la derecha, atenuado, como GTK dibuja un acelerador. GTK no deja poner un
     /// texto libre en su `GtkAccelLabel`. Sin los símbolos, el item se queda con su título.
     unsafe fn show_shortcut_label(api: &Api, ia: &ItemApi, item: Widget, title: &str, shortcut: &str) {
         let (Some(bin_get_child), Some(container_remove), Some(label_new), Some(set_xalign)) = (ia.bin_get_child, ia.container_remove, ia.label_new, ia.label_set_xalign) else {
+            return;
+        };
+        // Sin con qué retitularla después, el item se queda con su etiqueta de siempre.
+        let (Some(set_data), Some(_), Some(_)) = (ia.object_set_data, ia.object_get_data, ia.label_set_text) else {
             return;
         };
         let title_c = std::ffi::CString::new(title.replace('\0', "")).unwrap();
@@ -8086,6 +8110,8 @@ mod gtk {
             }
             (api.box_pack_start)(row, right, 0, 0, 0);
             (api.container_add)(item, row);
+            // `left` vive lo que el item (es descendiente suyo): `set_menu_title` lo busca aquí.
+            set_data(item, TITLE_LABEL_KEY.as_ptr(), left as *mut c_void);
         }
     }
 
@@ -8704,7 +8730,6 @@ mod gtk {
                     0,
                 );
                 (api.show_all)(window);
-                arm_exit();
                 Ok((window as usize, webview as usize))
             }
         })?;

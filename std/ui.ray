@@ -455,8 +455,10 @@ pub fn menu(title: string, items: [MenuItem]) -> Result<int, string> {
 // La codificación del borde de builtins ([string], "tag\ttitle\tshortcut\ticon\ten\tch\tdepth\tsub\tshortcut_label"),
 // compartida por menu y app_menu. La lista es PLANA: cada item lleva su profundidad y si abre un
 // submenú, y el runtime rehace el árbol (#453).
-// Un campo de la codificación no puede llevar un tabulador ni un salto de línea: un `title`
-// con `\t` desplazaba los campos y lo de detrás se leía como atajo (ray-sublime #511).
+// Un texto que se MUESTRA (título, texto de atajo) no puede llevar un tabulador ni un salto de
+// línea, que separan los campos de la codificación: un `title` con `\t` los desplazaba y lo de
+// detrás se leía como atajo (ray-sublime #511). El `tag` no se toca: es la identidad del item, y
+// cambiarlo en silencio lo dejaría sin casar con `set_menu_item`.
 fn one_field(text: string) -> string {
     if (!text.contains("\t") && !text.contains("\n")) {
         return text;
@@ -476,13 +478,13 @@ fn encode_level(items: [MenuItem], depth: int, encoded: [string]) {
         let ch = if (it.checked) { "1" } else { "0" };
         let sub = if (it.opens_submenu) { "1" } else { "0" };
         encoded.push(
-            one_field(it.tag)
+            it.tag
                 + "\t"
                 + one_field(it.title)
                 + "\t"
-                + one_field(it.shortcut)
+                + it.shortcut
                 + "\t"
-                + one_field(it.icon)
+                + it.icon
                 + "\t"
                 + en
                 + "\t"
@@ -532,7 +534,7 @@ pub fn rename_menu(old: string, new: string) -> Result<int, string> {
 /// place ("Undo" → "Undo Move clip"): no need to rebuild the menu. Err if no item has that tag
 /// or `title` is empty.
 pub fn set_menu_title(tag: string, title: string) -> Result<int, string> {
-    let r = __ui_window(0, "set_menu_title", tag + "\n" + title);
+    let r = __ui_window(0, "set_menu_title", tag + "\n" + one_field(title));
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 

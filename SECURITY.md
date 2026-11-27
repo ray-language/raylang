@@ -468,6 +468,17 @@ documentada:
   (ruta NUL-terminada y datos vivos durante la sesión; un fallo descarta la sesión sin tocar el
   archivo). Los enteros de tipo/id son `MAKEINTRESOURCE` (el puntero ES el número, por contrato
   de la API). El resto (subsistema PE, PNG, VERSIONINFO) es Rust seguro sobre bytes.
+- **`crates/ray-runtime/src/ui.rs`, salida del proceso en Linux** (ray-sublime #512) — `on_exit`
+  de glibc registra `leave_before_webkit`, un `extern "C" fn` sin estado que corre las funciones
+  apuntadas con `ui::before_exit` (restaurar el terminal, la espera de la traza de audio),
+  llama a `fflush(NULL)` y termina con `_exit(código)`: los manejadores de salida registrados
+  antes (los de WebKitGTK, que abortaban) no corren. Solo se registra al destruirse una ventana.
+- **`crates/ray-runtime/src/ui.rs`, texto de atajo de un item** (ray-sublime #511) — GTK:
+  `gtk_bin_get_child`/`gtk_container_remove`/`gtk_label_new`/`gtk_label_set_text` y
+  `g_object_set_data`/`g_object_get_data` (símbolos opcionales, por `dlsym`) sobre widgets
+  recién creados en el hilo del loop; el puntero guardado es un descendiente del propio item.
+  AppKit: `NSTextTab`, `NSMutableParagraphStyle` y `NSAttributedString` por `objc_msgSend` en
+  el hilo principal, liberados tras entregarlos al item.
 - **`crates/ray-runtime/src/ui.rs`, sueltas de archivos** (macOS) — `RayWebView`, una subclase de
   WKWebView creada en caliente que sobrescribe `draggingEntered:`, `draggingUpdated:` y
   `performDragOperation:`; lo que no intercepta lo delega con `objc_msgSendSuper` (casteado por

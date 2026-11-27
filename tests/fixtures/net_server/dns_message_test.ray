@@ -183,3 +183,42 @@ fn addresses() {
     assert(msg.parse_ipv6("1::2::3").is_none());
     assert(msg.parse_ipv6("10.0.0.1").is_none());
 }
+
+// ray-remote #493: a PTR is a name, compressed like NS and CNAME (mDNS always compresses it).
+@test
+fn a_ptr_record_is_read_and_written_as_a_name() {
+    let h: [int] = [0, 1, 132, 0, 0, 1, 0, 1, 0, 0, 0, 0];
+    let q: [int] = [
+        4,
+        95,
+        114,
+        102,
+        98,
+        4,
+        95,
+        116,
+        99,
+        112,
+        5,
+        108,
+        111,
+        99,
+        97,
+        108,
+        0,
+        0,
+        12,
+        0,
+        1
+    ];
+    let a: [int] = [192, 12, 0, 12, 0, 1, 0, 0, 0, 10, 0, 6, 3, 77, 97, 99, 192, 12];
+    let got = msg.parse_response(bytes_of(h + q + a)).unwrap();
+    assert_eq(got.answers[0].rtype, msg.PTR);
+    assert_eq(got.answers[0].data, msg.Data.Name("Mac._rfb._tcp.local"));
+    assert_eq(msg.type_name(msg.PTR), "PTR");
+    // And back: a server answers a reverse lookup with it.
+    let query = q_of("5.0.0.10.in-addr.arpa", msg.PTR);
+    let wire = msg.write_response(query, answer([rr("5.0.0.10.in-addr.arpa", msg.PTR, msg.Data.Name("api.ray.internal"))]), 0)
+        .unwrap();
+    assert_eq(msg.parse_response(wire).unwrap().answers[0].data, msg.Data.Name("api.ray.internal"));
+}

@@ -141,7 +141,12 @@ pub fn open(title: string, url: string, width: int, height: int) -> Result<int, 
 /// `"compact"` (≈ 40 pt) or `"tall"` (≈ 52 pt) — `window.ray.titlebar_height` gives the real
 /// height; in full screen the bar hides and comes back with the menu bar when the pointer
 /// reaches the top (a compact/tall bar may stay if the system keeps the menu bar always visible),
-/// and `titlebar_height` does not change; Linux/Windows ignore it. Build it with `ui.options(width, height)` and tweak the fields you need.
+/// and `titlebar_height` does not change; Linux/Windows ignore it. `menu_bar` (ray-sublime #508)
+/// matters where the menu bar belongs to each window (Linux and Windows; on macOS the bar is the
+/// app's and nothing changes): `""` (the default) gives the window the menus declared with
+/// `ui.menu` unless it is a `"panel"` or has a `parent` — an About box, a preferences window or a
+/// palette carry no menu bar —, `"show"` always attaches it and `"hide"` never does. A window
+/// without the bar does not fire the menus' shortcuts while it has the focus (Windows). Build it with `ui.options(width, height)` and tweak the fields you need.
 pub struct WindowOptions {
     width: int,
     height: int,
@@ -160,6 +165,7 @@ pub struct WindowOptions {
     x: int,
     y: int,
     titlebar: string,
+    menu_bar: string,
 }
 
 /// The defaults of `ui.open` as a `WindowOptions`: no minimum, resizable, centered, no autosave,
@@ -182,7 +188,8 @@ pub fn options(width: int, height: int) -> WindowOptions {
         place: "",
         x: 0,
         y: 0,
-        titlebar: ""
+        titlebar: "",
+        menu_bar: ""
     }
 }
 
@@ -206,7 +213,16 @@ pub fn cascade(o: WindowOptions) -> WindowOptions {
 // Las opciones nuevas viajan al runtime como un solo texto `clave=valor;…` (#245, #270): una
 // opción más no cambia la aridad del primitivo en los tres motores.
 fn extra_text(o: WindowOptions) -> string {
-    "place=" + o.place + ";x=" + to_string(o.x) + ";y=" + to_string(o.y) + ";titlebar=" + o.titlebar
+    "place="
+        + o.place
+        + ";x="
+        + to_string(o.x)
+        + ";y="
+        + to_string(o.y)
+        + ";titlebar="
+        + o.titlebar
+        + ";menu_bar="
+        + o.menu_bar
 }
 
 /// Like `open`, with `WindowOptions`: `ui.open_with("App", url, ui.options(1024, 720))` after
@@ -418,8 +434,10 @@ pub fn submenu(title: string, items: [MenuItem]) -> MenuItem {
 /// Adds one top-level menu with custom items. Clicking an item emits a `"menu"` event whose
 /// `tag` is the item's tag (window 0 — menus belong to the app). On macOS the menu bar is
 /// global and gains the menu immediately; on Linux the bar is per-window and the menu applies
-/// to windows opened AFTER this call. The standard App/Edit menus (quit, clipboard, undo)
-/// install themselves — you only declare your own. Headless: a no-op `Ok`.
+/// to windows opened AFTER this call (not to a `"panel"` or a window with a `parent`, see
+/// `WindowOptions.menu_bar`). The standard App/Edit menus (quit, clipboard, undo)
+/// install themselves — you only declare your own. Headless: a no-op `Ok`. Desktop only: on
+/// iOS and Android there is no menu bar and every menu function returns `Err`.
 pub fn menu(title: string, items: [MenuItem]) -> Result<int, string> {
     let r = __ui_menu(title, encode_items(items));
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
@@ -543,8 +561,8 @@ pub fn popup_menu(h: int, items: [MenuItem]) -> Result<int, string> {
 
 /// Changes the state of an already declared item, by tag (M236): `enabled` (greyed out or
 /// not) and `checked` (the check mark). Works for custom and application-menu items, and for
-/// the windows opened afterwards on Linux and Windows (their bar is per window). `Err` for an
-/// unknown tag.
+/// the windows opened afterwards on Linux and Windows (their bar is per window). Any item can
+/// gain the check mark, also one declared without it. `Err` for an unknown tag.
 pub fn set_menu_item(tag: string, enabled: bool, checked: bool) -> Result<int, string> {
     let r = __ui_set_menu_item(tag, enabled, checked);
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
@@ -720,6 +738,9 @@ pub fn save_file_with(o: FileDialogOptions) -> Result<Option<string>, string> {
 /// 3 `buttons` with your labels, in order. Returns the INDEX of the button pressed; dismissing
 /// the dialog (Esc, the close box) counts as the LAST button — put "Cancel" last. Informational
 /// style; see `message_styled` for warnings and errors. Headless: `RAY_UI_ANSWER` (default 0).
+/// Desktop only (macOS, Linux, Windows): on iOS and Android there are no native message dialogs
+/// yet and `message`, `message_styled`, `alert` and `confirm` return `Err` at once, without
+/// showing anything — ask in the page there.
 ///
 /// ```raylang
 /// match (ui.message("Save changes?", "Your edits to main.ray will be lost.", ["Save", "Don't Save", "Cancel"])) {
@@ -732,7 +753,7 @@ pub fn message(title: string, text: string, buttons: [string]) -> Result<int, st
 }
 
 /// `message` with a `style`: `"info"`, `"warning"` or `"error"` (the system icon; on macOS the
-/// alert style). Any other style is an `Err`.
+/// alert style). Any other style is an `Err`. Desktop only: `Err` on iOS and Android.
 pub fn message_styled(
     title: string,
     text: string,
@@ -750,13 +771,15 @@ pub fn message_styled(
     }
 }
 
-/// A one-button informational message (M258): `alert("Done", "Exported 12 files.")`.
+/// A one-button informational message (M258): `alert("Done", "Exported 12 files.")`. Desktop
+/// only: `Err` on iOS and Android.
 pub fn alert(title: string, text: string) -> Result<int, string> {
     message(title, text, ["OK"])
 }
 
 /// A two-button question (M258): `true` if the user chose the first button (`ok_label`),
-/// `false` for `cancel_label` or dismissing the dialog.
+/// `false` for `cancel_label` or dismissing the dialog. Desktop only: `Err` on iOS and Android
+/// (no dialog is shown), so a mobile app asks in the page.
 pub fn confirm(
     title: string,
     text: string,

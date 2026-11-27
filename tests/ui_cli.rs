@@ -89,6 +89,15 @@ fn main() {
         Result.Ok(_) => print("bg: a non-#rrggbb background accepted"),
         Result.Err(e) => print("background rejected: " + to_string(e.contains("unsupported background color 'dark'"))),
     }
+    // ray-sublime #508: `menu_bar` acepta "", "show" y "hide".
+    var about = ui.options(400, 300);
+    about.menu_bar = "hide";
+    print("menu_bar hide: " + to_string(ui.open_with("About", "http://127.0.0.1:1/", about).is_ok()));
+    about.menu_bar = "none";
+    match (ui.open_with("About", "http://127.0.0.1:1/", about)) {
+        Result.Ok(_) => print("menu_bar: an unknown value accepted"),
+        Result.Err(e) => print("menu_bar rejected: " + to_string(e.contains("unsupported menu_bar 'none'"))),
+    }
 }
 "##;
 
@@ -103,7 +112,7 @@ fn open_with_validates_its_options_on_both_engines() {
         }
         let (out, code) = run_headless(cmd.arg(&path));
         assert_eq!(code, 0, "{out}");
-        assert_eq!(out, "opened: true\nfocus: true\nfocus closed: true\nmin rejected: true\ncolor rejected: true\nbackground rejected: true\n", "interp={interp}\n{out}");
+        assert_eq!(out, "opened: true\nfocus: true\nfocus closed: true\nmin rejected: true\ncolor rejected: true\nbackground rejected: true\nmenu_bar hide: true\nmenu_bar rejected: true\n", "interp={interp}\n{out}");
     }
 }
 

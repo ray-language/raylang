@@ -80,6 +80,9 @@ fn main() -> int {
   degradación. Sobre `std/net` + `net/mail`.
 - **`net/webserver`** devuelve **413** a un cuerpo mayor que `max_body_bytes`, **431** a unas cabeceras
   mayores que `max_header_bytes` y **408** al vencer el plazo de lectura (antes todo era 400; M354).
+  **0.18.2** — `net/dns_message` lee y escribe los registros PTR como `Data.Name` (constante `PTR`,
+  `type_name(12)` = `"PTR"`): antes llegaban como `Data.Other`, con un puntero de compresión
+  inservible fuera del mensaje (ray-remote #493).
   **0.18.0** — encuadre HTTP/1.1 según RFC 9112, contra una tabla de conformidad
   (`tests/http_conformance_cli.rs`). El servidor responde **400** y cierra ante: una línea de
   petición que no es `método SP destino SP versión` (ya no vale `GET /` sin versión, ni dos

@@ -6,6 +6,20 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **`std/ui` — `WindowOptions.menu_bar`** (ray-sublime #508). En Linux y Windows la barra de
+  menús es de cada ventana, y un About o una paleta salían con File, Edit, View… encima. Ahora
+  un `"panel"` y una ventana con `parent` no la llevan; `menu_bar = "show"` la fuerza y `"hide"`
+  la quita de cualquier ventana. **Cambia** lo que ven esas dos clases de ventana; en macOS,
+  nada. En Windows, una ventana sin barra tampoco dispara los atajos de los menús.
+- **`ui.set_menu_item` marca cualquier item en Linux** (ray-sublime #509). Sobre un item
+  declarado sin marca imprimía un `Gtk-CRITICAL` en cada llamada y nunca mostraba la marca.
+- **Documentado: diálogos de mensaje y menús son de escritorio** (ray-remote #507). En iOS y
+  Android `ui.message`, `message_styled`, `alert` y `confirm` devuelven `Err` sin mostrar nada, y
+  las funciones de menús también; lo dicen `ray doc`, REFERENCE y `llms.txt`.
+- **Paquete `net` 0.18.2 — `dns_message` lee y escribe PTR** (ray-remote #493). Un PTR llegaba
+  como `Data.Other` con un puntero de compresión que ya no se podía resolver; ahora es
+  `Data.Name`, hay constante `PTR` y `type_name(12)` da `"PTR"`.
+
 ## 1.27.118 — 2026-11-26
 
 - **`std/fs` — `data_dir(app)` y `cache_dir(app)`** (ray-remote #506). La carpeta de datos de la

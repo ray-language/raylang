@@ -28,6 +28,10 @@ pub const CNAME: int = 5;
 /// Record type SOA (start of authority).
 pub const SOA: int = 6;
 
+/// Record type PTR (a pointer to a name: reverse lookups under `in-addr.arpa`, and the service
+/// instances of DNS-SD/mDNS).
+pub const PTR: int = 12;
+
 /// Record type MX (mail exchange).
 pub const MX: int = 15;
 
@@ -101,7 +105,7 @@ pub enum Data {
     Addr4([int]),
     /// AAAA: the sixteen octets.
     Addr6([int]),
-    /// NS / CNAME / PTR…: a domain name.
+    /// NS / CNAME / PTR: a domain name.
     Name(string),
     /// MX: preference, exchange.
     Mx(int, string),
@@ -111,7 +115,9 @@ pub enum Data {
     Srv(int, int, int, string),
     /// SOA: mname, rname, serial, refresh, retry, expire, minimum.
     Soa(string, string, int, int, int, int, int),
-    /// Any other type: its raw RDATA octets.
+    /// Any other type: its raw RDATA octets, as they came. A type that carries a name may end in
+    /// a compression pointer (`192, n`) into the message it came from: those octets cannot be
+    /// resolved without that message.
     Other([int]),
 }
 
@@ -286,7 +292,7 @@ fn read_data(b: bytes, rtype: int, at: int, rdlength: int) -> Result<Data, strin
         }
         return Result.Ok(Data.Addr6(xs));
     }
-    if (rtype == NS || rtype == CNAME) {
+    if (rtype == NS || rtype == CNAME || rtype == PTR) {
         let (n, _) = read_name(b, at)?;
         return Result.Ok(Data.Name(n));
     }
@@ -471,7 +477,7 @@ fn put_name(o: Out, name: string) -> Result<int, string> {
     Result.Ok(0)
 }
 
-// El RDATA de un registro, con su longitud delante. Los nombres dentro de NS/CNAME/MX/SOA pueden
+// El RDATA de un registro, con su longitud delante. Los nombres dentro de NS/CNAME/PTR/MX/SOA pueden
 // comprimirse (RFC 3597 §4); el target de SRV no (RFC 2782).
 fn put_data(o: Out, d: Data) -> Result<int, string> {
     let at = o.buf.len();
@@ -705,6 +711,7 @@ pub fn type_name(t: int) -> string {
         2 => "NS",
         5 => "CNAME",
         6 => "SOA",
+        12 => "PTR",
         15 => "MX",
         16 => "TXT",
         28 => "AAAA",

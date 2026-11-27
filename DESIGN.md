@@ -22784,8 +22784,9 @@ como texto separado por tabuladores: un tabulador en `title` desplazaba los camp
 salida) que vacía stdio y llama a `_exit` con ese código, antes de que corran los de WebKit.
 Los manejadores corren del último registrado al primero, y WebKit registra los suyos después de
 `gtk_init`: por eso el nuestro se registra al cerrarse cada ventana —en `close(h)` y en el
-`destroy` de GTK, antes de publicar el evento `closed`, que es cuando el programa suele salir— y
-otra vez con el loop ocioso (`arm_exit`). Un programa que sale con todas sus ventanas abiertas no lo registra nunca
+`destroy` de GTK, antes de publicar el evento `closed`, que es cuando el programa suele salir—
+(`arm_exit`). Medido: armar solo en `close(h)`, antes de que empiece la destrucción, basta; el
+manejador de WebKit ya estaba registrado, así que no hace falta volver a armar después. Un programa que sale con todas sus ventanas abiertas no lo registra nunca
 y corre sus `atexit` como siempre. Se probó antes dejar
 aparcado el loop de GTK durante la salida: no evita el aborto. Lo que la salida anticipada se
 salta son los `atexit` registrados antes del último rearme; los nuestros son la restauración
@@ -22802,7 +22803,9 @@ la ventana abierta. Todas dan su código al instante; con la 1.27.118 las cuatro
 Test de `ui_cli` para el tabulador.
 
 **Límites.** Solo glibc (`on_exit` no existe en musl). Cada rearme deja una entrada en la lista
-de `exit` (dos por ventana cerrada). Si WebKit registrara un manejador
+de `exit` (una o dos por ventana cerrada), y desde el primer cierre la salida anticipada vale
+para el resto del proceso. Una ventana cerrada antes de que WebKit registre su manejador (abrir
+y cerrar en el acto) quedaría sin cubrir. Si WebKit registrara un manejador
 en otro momento (no se ha visto), el aborto volvería en ese caso. El `atexit` de una librería C cargada por FFI y
 registrado antes del último cierre de ventana no corre. `fflush(NULL)` toma el cerrojo de cada
 `FILE`: un hilo bloqueado dentro de stdio de C colgaría la salida.

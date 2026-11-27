@@ -148,7 +148,7 @@ fn main() {
         }
         let out = cmd.arg(&path).env("RAY_UI_BACKEND", "headless").env("RAY_UI_TRACE", "1").stdin(std::process::Stdio::null()).output().expect("corre");
         let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-        assert_eq!(stdout, "ok\nui: a menu item's tag, shortcut or icon cannot contain a tab\ntrue\n", "interp={interp}\n{stderr}");
+        assert_eq!(stdout, "ok\nui: a menu item's tag, shortcut or icon cannot contain a tab or a line break\ntrue\n", "interp={interp}\n{stderr}");
         assert!(stderr.contains("[ui] shortcut labels Probe: Side Bar=Ctrl+K, Ctrl+B\n"), "interp={interp}\n{stderr}");
     }
 }

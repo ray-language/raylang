@@ -3129,6 +3129,9 @@ pub fn popup_menu(id: i64, items: &[String]) -> Result<(), String> {
             tags.extend(MenuItemSpec::tags(&decoded));
             if ui_trace() {
                 eprintln!("[ui] popup {id} items {}", decoded.len());
+                if let Some(labels) = MenuItemSpec::shortcut_labels(&decoded) {
+                    eprintln!("[ui] shortcut labels popup {id}: {labels}");
+                }
             }
             Ok(())
         }
@@ -3285,6 +3288,17 @@ pub struct MenuItemSpec {
 impl MenuItemSpec {
     pub fn is_separator(&self) -> bool {
         self.tag.is_empty() && self.label == "-" && !self.submenu
+    }
+
+    /// Los textos de atajo de `items` para la traza (`título=texto | …`), si hay alguno (#511).
+    pub fn shortcut_labels(items: &[MenuItemSpec]) -> Option<String> {
+        let mut labels: Vec<String> = Vec::new();
+        Self::each(items, &mut |it| {
+            if !it.shortcut_label.is_empty() {
+                labels.push(format!("{}={}", it.label, it.shortcut_label));
+            }
+        });
+        (!labels.is_empty()).then(|| labels.join(" | "))
     }
 
     /// Recorre `items` y todo lo que cuelga de sus submenús, en orden (el padre antes).
@@ -3715,8 +3729,8 @@ fn decode_items(items: &[String]) -> Result<Vec<MenuItemSpec>, String> {
     for it in items {
         // Los textos que se muestran llegan ya sin tabuladores; uno en `tag`, `shortcut` o
         // `icon` desplazaría los campos (un título leído como atajo, un item marcado de más).
-        if it.split('\t').count() > 9 {
-            return Err("ui: a menu item's tag, shortcut or icon cannot contain a tab".to_string());
+        if it.split('\t').count() > 9 || it.contains('\n') {
+            return Err("ui: a menu item's tag, shortcut or icon cannot contain a tab or a line break".to_string());
         }
         let mut p = it.split('\t');
         let mut spec = MenuItemSpec {
@@ -3874,14 +3888,8 @@ pub fn replace_menu(title: &str, items: &[String]) -> Result<(), String> {
             if decoded.iter().any(|it| it.submenu) {
                 eprintln!("[ui] submenus {title}: {}", MenuItemSpec::tree(&decoded));
             }
-            let mut labels: Vec<String> = Vec::new();
-            MenuItemSpec::each(&decoded, &mut |it| {
-                if !it.shortcut_label.is_empty() {
-                    labels.push(format!("{}={}", it.label, it.shortcut_label));
-                }
-            });
-            if !labels.is_empty() {
-                eprintln!("[ui] shortcut labels {title}: {}", labels.join(" | "));
+            if let Some(labels) = MenuItemSpec::shortcut_labels(&decoded) {
+                eprintln!("[ui] shortcut labels {title}: {labels}");
             }
         }
         return Ok(());
@@ -3922,14 +3930,8 @@ pub fn menu_at(position: i64, title: &str, items: &[String]) -> Result<(), Strin
             if decoded.iter().any(|it| it.submenu) {
                 eprintln!("[ui] submenus {title}: {}", MenuItemSpec::tree(&decoded));
             }
-            let mut labels: Vec<String> = Vec::new();
-            MenuItemSpec::each(&decoded, &mut |it| {
-                if !it.shortcut_label.is_empty() {
-                    labels.push(format!("{}={}", it.label, it.shortcut_label));
-                }
-            });
-            if !labels.is_empty() {
-                eprintln!("[ui] shortcut labels {title}: {}", labels.join(" | "));
+            if let Some(labels) = MenuItemSpec::shortcut_labels(&decoded) {
+                eprintln!("[ui] shortcut labels {title}: {labels}");
             }
         }
         return Ok(());
@@ -5518,6 +5520,9 @@ mod mac {
         (key, mask)
     }
 
+    /// El `identifier` de un NSMenuItem cuyo `representedObject` es su texto de atajo (#511).
+    const SHORTCUT_LABEL_ID: &str = "ray.shortcut-label";
+
     /// ray-sublime #511: dibuja el `shortcut_label` de los items de `menu` (su
     /// `representedObject`) donde AppKit pone los atajos: el título pasa a ser «título ⇥ texto»
     /// con una tabulación alineada a la derecha, común a todo el menú (más allá del título más
@@ -5550,10 +5555,16 @@ mod mac {
             let release: MsgVoid = std::mem::transmute(msg_send());
             let items = get(menu, sel(b"itemArray\0"));
             let n = count(items, sel(b"count\0"));
+            let same: MsgBoolId = std::mem::transmute(msg_send());
+            let mark = nsstring(SHORTCUT_LABEL_ID);
             let labelled: Vec<Id> = (0..n)
                 .map(|i| at(items, sel(b"objectAtIndex:\0"), i))
-                .filter(|it| !get(*it, sel(b"representedObject\0")).is_null())
+                .filter(|it| {
+                    let id = get(*it, sel(b"identifier\0"));
+                    !id.is_null() && same(id, sel(b"isEqualToString:\0"), mark) != 0
+                })
                 .collect();
+            release(mark, sel(b"release\0"));
             if labelled.is_empty() {
                 return;
             }
@@ -5689,7 +5700,14 @@ mod mac {
             }
             if !spec.shortcut_label.is_empty() {
                 // ray-sublime #511: lo dibuja `align_shortcut_labels` cuando el menú está entero.
-                set_id(item, sel(b"setRepresentedObject:\0"), nsstring(&spec.shortcut_label));
+                // El identificador dice que el `representedObject` es NUESTRO texto: un menú
+                // puede llevar items que pone AppKit con el suyo.
+                let release: MsgVoid = std::mem::transmute(msg_send());
+                let (label, mark) = (nsstring(&spec.shortcut_label), nsstring(SHORTCUT_LABEL_ID));
+                set_id(item, sel(b"setRepresentedObject:\0"), label);
+                set_id(item, sel(b"setIdentifier:\0"), mark);
+                release(label, sel(b"release\0"));
+                release(mark, sel(b"release\0"));
             }
             if !spec.enabled {
                 set_bool(item, sel(b"setEnabled:\0"), 0);
@@ -7573,14 +7591,17 @@ mod gtk {
     static EXIT_ARMABLE: AtomicBool = AtomicBool::new(false);
 
     /// ray-sublime #512: (re)registra `leave_before_webkit` como el ÚLTIMO manejador de salida,
-    /// que es el primero en correr. Se llama al destruirse una ventana (y otra vez con el loop
-    /// ocioso): el aborto solo ocurre con alguna ventana ya cerrada, y el manejador de WebKit que
-    /// lo provoca se registra más tarde que `gtk_init`. Un programa que sale con todas sus
-    /// ventanas abiertas no pasa por aquí y corre sus `atexit` como siempre. Cada registro
-    /// cuesta una entrada en la lista de `exit`; el primero que corre termina el proceso.
+    /// que es el primero en correr. Se llama al cerrarse una ventana, desde `close(h)` y desde
+    /// el `destroy` de GTK, antes de publicar `closed`: el aborto solo ocurre con alguna ventana
+    /// ya cerrada, y el manejador de WebKit que lo provoca se registra después de `gtk_init`
+    /// (con el webview ya abierto) y antes del cierre — medido: armar solo en `close(h)`, antes
+    /// de que empiece la destrucción, basta. Un programa que sale con todas sus ventanas
+    /// abiertas no pasa por aquí y corre sus `atexit` como siempre. Cada registro cuesta una
+    /// entrada en la lista de `exit`; el primero que corre termina el proceso.
     pub(super) fn arm_exit() {
-        // Sin GTK iniciado no hay WebKit que adelantar (ventanas headless).
-        if !matches!(api(), Ok(_)) || !EXIT_ARMABLE.load(Ordering::SeqCst) {
+        // Sin GTK iniciado no hay WebKit que adelantar (ventanas headless); la bandera se mira
+        // sin tocar `api()`, que cargaría GTK y WebKitGTK.
+        if !EXIT_ARMABLE.load(Ordering::SeqCst) {
             return;
         }
         #[cfg(target_env = "gnu")]
@@ -8527,21 +8548,11 @@ mod gtk {
         // SAFETY: `data` es el DestroyCtx de open_window; vive hasta el GClosureNotify.
         let ctx = unsafe { &*(data as *const DestroyCtx) };
         ctx.alive.store(false, Ordering::SeqCst);
-        // WebKit acaba de soltar el webview en otro handler de `destroy`, o lo hará enseguida:
-        // se arma ahora (antes de publicar `closed`, que es cuando el programa suele salir) y
-        // otra vez cuando el loop quede ocioso.
+        // El cierre pedido por el usuario llega aquí sin pasar por `close_window`: la salida se
+        // arma antes de publicar `closed`, que es cuando el programa suele salir.
         arm_exit();
-        if !REARM_PENDING.swap(true, Ordering::SeqCst) {
-            on_main(|| {
-                REARM_PENDING.store(false, Ordering::SeqCst);
-                arm_exit();
-            });
-        }
         super::mark_closed(ctx.id);
     }
-
-    /// Hay un rearme de la salida encolado para cuando el loop quede ocioso.
-    static REARM_PENDING: AtomicBool = AtomicBool::new(false);
 
     /// M257: `delete-event` — el cierre pedido por el usuario (botón del WM, Alt+F4). Con
     /// `intercept_close` emite `close_requested` y devuelve TRUE (GTK no destruye); `close(h)`
@@ -11339,17 +11350,11 @@ mod win {
                 // acelerador — la tecla debe seguir llegando al webview, que ya la atiende
                 // de forma nativa (interceptarla rompería el Ctrl+C real).
                 let is_role = spec.edit_role().is_some();
-                let label = match accel_for(&spec.shortcut, *next_id) {
-                    Some((_, accel)) => {
-                        if !is_role {
-                            keys.push((accel.key, (accel.fVirt & FCONTROL).0 != 0, (accel.fVirt & FALT).0 != 0, (accel.fVirt & FSHIFT).0 != 0, spec.tag.clone()));
-                            accels.push(accel);
-                        }
-                        item_text(&spec.label, &spec.shortcut, &spec.shortcut_label)
-                    }
-                    None if !spec.shortcut_label.is_empty() => item_text(&spec.label, &spec.shortcut, &spec.shortcut_label),
-                    None => spec.label.clone(),
-                };
+                if !is_role && let Some((_, accel)) = accel_for(&spec.shortcut, *next_id) {
+                    keys.push((accel.key, (accel.fVirt & FCONTROL).0 != 0, (accel.fVirt & FALT).0 != 0, (accel.fVirt & FSHIFT).0 != 0, spec.tag.clone()));
+                    accels.push(accel);
+                }
+                let label = item_text(&spec.label, &spec.shortcut, &spec.shortcut_label);
                 let mut flags = MF_STRING;
                 if !spec.enabled { flags |= MF_GRAYED; }
                 if spec.checked { flags |= MF_CHECKED; }

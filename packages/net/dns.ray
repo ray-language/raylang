@@ -9,6 +9,7 @@
 from net/udp import bind, send_to, recv_from, Packet;
 import std/crypto;
 import std/net;
+import net/dns_message as wire;
 
 // M121: plazo de la espera de respuesta. Antes `recv_from` esperaba PARA SIEMPRE: un datagrama
 // perdido (UDP no reenvía) colgaba la fibra de la consulta sin remedio — en un monitor, la
@@ -45,9 +46,16 @@ fn be32(data: bytes, i: int) -> Result<int, string> {
 // Codifica un nombre de dominio como labels: cada parte precedida por su longitud, terminado en 0.
 fn encode_name(name: string) -> [int] {
     var out: [int] = [];
-    let parts = name.split(".");
+    // Un punto con `\` delante es parte de la etiqueta (una instancia DNS-SD, `HP 4\.2`).
+    let parts = wire.split_name(name);
     var i = 0;
     while (i < parts.len()) {
+        // El punto final de un nombre absoluto (`example.com.`, o la raíz `.`) no es una
+        // etiqueta: una vacía escribiría el octeto 0 que termina el nombre antes de tiempo.
+        if (parts[i] == "") {
+            i = i + 1;
+            continue;
+        }
         let b = parts[i].to_bytes();
         out.push(b.len());
         var j = 0;
@@ -142,7 +150,7 @@ fn read_name(data: bytes, pos: int) -> Result<NameResult, string> {
                 Result.Ok(s) => s,
                 Result.Err(_) => "?",
             };
-            labels.push(label);
+            labels.push(wire.escape_label(label));
             p = p + 1 + lenb;
         }
     }

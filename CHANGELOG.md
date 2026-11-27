@@ -10,15 +10,21 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
   menús es de cada ventana, y un About o una paleta salían con File, Edit, View… encima. Ahora
   un `"panel"` y una ventana con `parent` no la llevan; `menu_bar = "show"` la fuerza y `"hide"`
   la quita de cualquier ventana. **Cambia** lo que ven esas dos clases de ventana; en macOS,
-  nada. En Windows, una ventana sin barra tampoco dispara los atajos de los menús.
-- **`ui.set_menu_item` marca cualquier item en Linux** (ray-sublime #509). Sobre un item
-  declarado sin marca imprimía un `Gtk-CRITICAL` en cada llamada y nunca mostraba la marca.
+  nada. En Windows, una ventana sin barra conserva los atajos de los menús.
+- **`ui.set_menu_item` marca cualquier item** (ray-sublime #509). En Linux, sobre un item
+  declarado sin marca imprimía un `Gtk-CRITICAL` en cada llamada y nunca mostraba la marca; en
+  Windows, una barra sin ningún item marcado de entrada no tenía columna de marcas. En Linux,
+  además, fijar la marca desde el programa ya no llega como un evento `"menu"`.
 - **Documentado: diálogos de mensaje y menús son de escritorio** (ray-remote #507). En iOS y
   Android `ui.message`, `message_styled`, `alert` y `confirm` devuelven `Err` sin mostrar nada, y
   las funciones de menús también; lo dicen `ray doc`, REFERENCE y `llms.txt`.
 - **Paquete `net` 0.18.2 — `dns_message` lee y escribe PTR** (ray-remote #493). Un PTR llegaba
   como `Data.Other` con un puntero de compresión que ya no se podía resolver; ahora es
-  `Data.Name`, hay constante `PTR` y `type_name(12)` da `"PTR"`.
+  `Data.Name`, hay constante `PTR` y `type_name(12)` da `"PTR"`. **Cambia** cómo se escribe un
+  nombre con un punto o una `\` dentro de una etiqueta (una instancia DNS-SD, `HP LaserJet 4.2`):
+  `read_name`, `parse_response` y `net/dns` lo devuelven escapado (`HP LaserJet 4\.2._ipp._tcp.local`)
+  y lo aceptan así al escribir; antes ese punto partía la etiqueta en dos. `escape_label` y
+  `split_name` son públicos.
 
 ## 1.27.118 — 2026-11-26
 

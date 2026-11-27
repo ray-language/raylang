@@ -82,7 +82,9 @@ fn main() -> int {
   mayores que `max_header_bytes` y **408** al vencer el plazo de lectura (antes todo era 400; M354).
   **0.18.2** — `net/dns_message` lee y escribe los registros PTR como `Data.Name` (constante `PTR`,
   `type_name(12)` = `"PTR"`): antes llegaban como `Data.Other`, con un puntero de compresión
-  inservible fuera del mensaje (ray-remote #493).
+  inservible fuera del mensaje (ray-remote #493). Un punto o una `\` DENTRO de una etiqueta (una
+  instancia DNS-SD, `HP LaserJet 4.2`) se lee y se escribe escapado, `HP LaserJet 4\.2._ipp._tcp.local`,
+  en `net/dns_message` y en `net/dns` (`escape_label`, `split_name`): antes partía la etiqueta.
   **0.18.0** — encuadre HTTP/1.1 según RFC 9112, contra una tabla de conformidad
   (`tests/http_conformance_cli.rs`). El servidor responde **400** y cierra ante: una línea de
   petición que no es `método SP destino SP versión` (ya no vale `GET /` sin versión, ni dos

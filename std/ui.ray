@@ -146,7 +146,8 @@ pub fn open(title: string, url: string, width: int, height: int) -> Result<int, 
 /// app's and nothing changes): `""` (the default) gives the window the menus declared with
 /// `ui.menu` unless it is a `"panel"` or has a `parent` — an About box, a preferences window or a
 /// palette carry no menu bar —, `"show"` always attaches it and `"hide"` never does. A window
-/// without the bar does not fire the menus' shortcuts while it has the focus (Windows). Build it with `ui.options(width, height)` and tweak the fields you need.
+/// without the bar still fires the menus' shortcuts (Windows), also the one of an item that is
+/// disabled. Build it with `ui.options(width, height)` and tweak the fields you need.
 pub struct WindowOptions {
     width: int,
     height: int,
@@ -562,7 +563,8 @@ pub fn popup_menu(h: int, items: [MenuItem]) -> Result<int, string> {
 /// Changes the state of an already declared item, by tag (M236): `enabled` (greyed out or
 /// not) and `checked` (the check mark). Works for custom and application-menu items, and for
 /// the windows opened afterwards on Linux and Windows (their bar is per window). Any item can
-/// gain the check mark, also one declared without it. `Err` for an unknown tag.
+/// gain the check mark, also one declared without it (not the header of a submenu). Setting the
+/// state never emits a `"menu"` event. `Err` for an unknown tag.
 pub fn set_menu_item(tag: string, enabled: bool, checked: bool) -> Result<int, string> {
     let r = __ui_set_menu_item(tag, enabled, checked);
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }

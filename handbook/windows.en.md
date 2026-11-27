@@ -417,7 +417,11 @@ fn open_find(parent: int) -> int {
 }
 ```
 
-`parent` keeps the window above its owner and makes it follow. On an open window:
+`parent` keeps the window above its owner and makes it follow. On Linux and Windows the menu
+bar belongs to each window, and a `panel` or a window with a `parent` carries none: the Find
+panel has no File, Edit, View above it, while the menus' shortcuts keep working there (Windows).
+`o.menu_bar = "show"` gives the bar to such a window and `"hide"` takes it from any other; on
+macOS the bar is the app's and nothing changes. On an open window:
 `set_fullscreen`, `set_always_on_top`, `set_size`, `set_position`, `center`, `minimize`,
 `maximize` and `focus`, which brings it to the front. `frame(h)` tells where it is and how big,
 and `screens()` gives the usable area of each screen (the main one first): with both, an app
@@ -483,4 +487,4 @@ subsystem out of a binary that opens no windows.
 
 The notes leave the device: a [**server-rendered site**](ssr.en.md).
 
-<!-- sync: sha256:a9faed379277 -->
+<!-- sync: sha256:489cc0d85739 -->

@@ -173,8 +173,81 @@ fn read_u32(b: bytes, i: int) -> int {
     (read_u16(b, i) << 16) | read_u16(b, i + 2)
 }
 
+/// A label as it is written inside a name: a `.` or a `\` that belongs to the label gets a
+/// backslash in front (the master-file escape of RFC 1035 §5.1). A DNS-SD instance such as
+/// `HP LaserJet 4.2` is ONE label and reads `HP LaserJet 4\.2`.
+pub fn escape_label(label: string) -> string {
+    if (!label.contains(".") && !label.contains("\\")) {
+        return label;
+    }
+    label.replace("\\", "\\\\").replace(".", "\\.")
+}
+
+// El valor de los tres dígitos decimales de un `\\DDD` en `at` (0..255), si los hay.
+fn decimal_escape(raw: bytes, at: int) -> Option<int> {
+    if (at + 2 >= raw.len()) {
+        return Option.None;
+    }
+    var n = 0;
+    for k in 0..3 {
+        let d = raw[at + k] - 48;
+        if (d < 0 || d > 9) {
+            return Option.None;
+        }
+        n = n * 10 + d;
+    }
+    if (n > 255) { Option.None } else { Option.Some(n) }
+}
+
+/// The labels of `name`, unescaped: it splits on the dots that have no backslash in front.
+/// `\\DDD` (three decimal digits, up to 255) is the octet with that value, as `dig` and `dns-sd`
+/// print a space (`Office\\032Printer`) or the octets of a non-ASCII letter (`Caf\\195\\169`);
+/// any other `\\X` is `X`. A label is text: octets that are not UTF-8 (`Caf\\233`, Latin-1) read
+/// as the label `?`, as they do when they come from the wire.
+/// `split_name("HP LaserJet 4\\.2._ipp._tcp.local")` is `["HP LaserJet 4.2", "_ipp", "_tcp",
+/// "local"]`; the empty name has no labels.
+pub fn split_name(name: string) -> [string] {
+    var labels: [string] = [];
+    if (name == "") {
+        return labels;
+    }
+    if (!name.contains("\\")) {
+        return name.split(".");
+    }
+    // Sobre los octetos: un `\\DDD` puede ser un octeto suelto de una letra UTF-8.
+    let raw = name.to_bytes();
+    var current: [int] = [];
+    var i = 0;
+    while (i < raw.len()) {
+        let b = raw[i];
+        if (b == 92 && i + 1 < raw.len()) {
+            match (decimal_escape(raw, i + 1)) {
+                Option.Some(n) => {
+                    current.push(n);
+                    i = i + 4;
+                },
+                Option.None => {
+                    current.push(raw[i + 1]);
+                    i = i + 2;
+                },
+            }
+        } else if (b == 46) {
+            labels.push(from_utf8(bytes_of(current)).unwrap_or("?"));
+            current = [];
+            i = i + 1;
+        } else {
+            current.push(b);
+            i = i + 1;
+        }
+    }
+    labels.push(from_utf8(bytes_of(current)).unwrap_or("?"));
+    labels
+}
+
 /// Reads a name at `pos`, following compression pointers (never more than the message length,
 /// so a loop of pointers cannot spin). Returns the name and the offset where the field ends.
+/// A dot or a backslash inside a label comes escaped (`escape_label`), so the name splits back
+/// into the same labels with `split_name`.
 pub fn read_name(b: bytes, pos: int) -> Result<(string, int), string> {
     var labels: [string] = [];
     var p = pos;
@@ -216,7 +289,7 @@ pub fn read_name(b: bytes, pos: int) -> Result<(string, int), string> {
         if (total > 255) {
             return Result.Err("name longer than 255 octets");
         }
-        labels.push(from_utf8(b.sub_bytes(p + 1, p + 1 + len)).unwrap_or("?"));
+        labels.push(escape_label(from_utf8(b.sub_bytes(p + 1, p + 1 + len)).unwrap_or("?")));
         p = p + 1 + len;
     }
     Result.Ok((join(labels, "."), end))
@@ -442,7 +515,16 @@ fn put32(o: Out, n: int) {
 // Escribe un nombre con compresión: cada sufijo ya visto (sin distinguir mayúsculas) se sustituye por
 // un puntero; los offsets por encima de 0x3FFF no se registran (no caben en 14 bits).
 fn put_name(o: Out, name: string) -> Result<int, string> {
-    let labels = if (name == "") { [] } else { name.split(".") };
+    var labels = split_name(name);
+    // El punto final de un nombre absoluto (`example.com.`) no es una etiqueta más.
+    if (labels.len() > 0 && labels[labels.len() - 1] == "") {
+        labels = labels.slice(0, labels.len() - 1);
+    }
+    // Las etiquetas como se escriben en un nombre: la clave de la tabla de compresión.
+    var written: [string] = [];
+    for l in labels {
+        written.push(escape_label(l));
+    }
     var total: int = 0;
     for i in 0..labels.len() {
         let raw = labels[i].to_bytes();
@@ -457,7 +539,7 @@ fn put_name(o: Out, name: string) -> Result<int, string> {
         if (total > 255) {
             return Result.Err("name longer than 255 octets: '" + name + "'");
         }
-        let suffix = join(labels.slice(i, labels.len()), ".").to_lower();
+        let suffix = join(written.slice(i, written.len()), ".").to_lower();
         match (o.seen.get(suffix)) {
             Option.Some(off) => {
                 put16(o, 0xC000 | off);

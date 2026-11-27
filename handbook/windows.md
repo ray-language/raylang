@@ -417,7 +417,11 @@ fn open_find(parent: int) -> int {
 }
 ```
 
-`parent` hace que la ventana quede encima de su dueña y la siga. Sobre una ventana abierta:
+`parent` hace que la ventana quede encima de su dueña y la siga. En Linux y Windows la barra
+de menús es de cada ventana, y un `panel` o una ventana con `parent` no la llevan: el panel de
+búsqueda no tiene File, Edit, View encima, y los atajos de los menús siguen funcionando en él
+(Windows). `o.menu_bar = "show"` le da la barra a una ventana así y `"hide"` se la quita a
+cualquier otra; en macOS la barra es de la app y nada cambia. Sobre una ventana abierta:
 `set_fullscreen`, `set_always_on_top`, `set_size`, `set_position`, `center`, `minimize`,
 `maximize` y `focus`, que la trae al frente. `frame(h)` dice dónde está y qué tamaño tiene, y
 `screens()` da el área útil de cada pantalla (la principal primero): con las dos, una app

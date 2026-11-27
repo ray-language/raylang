@@ -1451,6 +1451,20 @@ impl WindowOptions {
     }
 }
 
+/// ray-sublime #512: lo que debe correr antes de una salida que se salta los `atexit`
+/// registrados antes de abrir la UI (en Linux, ver `gtk::leave_before_webkit`): restaurar el
+/// terminal del modo crudo. Cada función debe poder correr más de una vez.
+pub fn before_exit(f: extern "C" fn()) {
+    if let Ok(mut hooks) = exit_hooks().lock() {
+        hooks.push(f);
+    }
+}
+
+fn exit_hooks() -> &'static std::sync::Mutex<Vec<extern "C" fn()>> {
+    static HOOKS: std::sync::OnceLock<std::sync::Mutex<Vec<extern "C" fn()>>> = std::sync::OnceLock::new();
+    HOOKS.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
 /// #245/#270: las opciones de ventana que viajan desde `std/ui` como un solo texto
 /// `clave=valor;…` (`place`, `x`, `y`, `titlebar`) — así una opción nueva no cambia la aridad de
 /// `__ui_open_with` en los tres motores. Una sola tabla para la VM, el intérprete y el nativo.
@@ -7400,7 +7414,44 @@ mod gtk {
         if ok == 0 {
             return Err("ui: could not initialize GTK (no DISPLAY/WAYLAND_DISPLAY?)".to_string());
         }
+        arm_exit();
         Ok(())
+    }
+
+    /// ray-sublime #512: (re)registra `leave_before_webkit` como el ÚLTIMO manejador de salida,
+    /// que es el primero en correr. WebKitGTK registra los suyos más tarde que `gtk_init`
+    /// (al crear un webview, al destruir el último), así que se llama tras cada uno de esos
+    /// momentos. Cada registro cuesta una entrada en la lista de `exit`; el primero que corre
+    /// termina el proceso.
+    fn arm_exit() {
+        #[cfg(target_env = "gnu")]
+        {
+            unsafe extern "C" {
+                fn on_exit(f: extern "C" fn(i32, *mut c_void), arg: *mut c_void) -> i32;
+            }
+            // SAFETY: `on_exit` de glibc con una función `extern "C"` sin estado.
+            unsafe { on_exit(leave_before_webkit, std::ptr::null_mut()) };
+        }
+    }
+
+    /// ray-sublime #512: el programa termina con `exit()` desde el hilo del worker mientras el
+    /// hilo 1 sigue dentro de `gtk_main()`. Con la última ventana ya cerrada, los destructores
+    /// estáticos de WebKitGTK esperaban unos segundos y abortaban (SIGABRT, 134 en vez del
+    /// código del programa). El proceso termina aquí, antes de que corran, con su código.
+    #[cfg(target_env = "gnu")]
+    extern "C" fn leave_before_webkit(status: i32, _arg: *mut c_void) {
+        unsafe extern "C" {
+            fn fflush(stream: *mut c_void) -> i32;
+            fn _exit(status: i32) -> !;
+        }
+        for hook in super::exit_hooks().lock().map(|h| h.clone()).unwrap_or_default() {
+            hook();
+        }
+        // SAFETY: `fflush(NULL)` vacía todo stdio de C; `_exit` no retorna.
+        unsafe {
+            fflush(std::ptr::null_mut());
+            _exit(status);
+        }
     }
 
     /// `gtk_main()` — no retorna.
@@ -8247,6 +8298,10 @@ mod gtk {
         let ctx = unsafe { &*(data as *const DestroyCtx) };
         ctx.alive.store(false, Ordering::SeqCst);
         super::mark_closed(ctx.id);
+        // WebKit acaba de soltar el webview en otro handler de `destroy`, o lo hará enseguida:
+        // se rearma ahora y otra vez cuando el loop quede ocioso.
+        arm_exit();
+        on_main(arm_exit);
     }
 
     /// M257: `delete-event` — el cierre pedido por el usuario (botón del WM, Alt+F4). Con
@@ -8483,6 +8538,7 @@ mod gtk {
                     0,
                 );
                 (api.show_all)(window);
+                arm_exit();
                 Ok((window as usize, webview as usize))
             }
         })?;

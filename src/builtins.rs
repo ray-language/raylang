@@ -7295,6 +7295,10 @@ mod term_host {
             }
             if !ATEXIT_ARMED.swap(true, Ordering::AcqRel) {
                 atexit(restore);
+                // ray-sublime #512: en Linux una app con ventanas sale sin correr los `atexit`
+                // registrados antes de su último evento de ventana; el terminal se restaura igual.
+                #[cfg(all(feature = "ui", target_os = "linux"))]
+                ray_runtime::ui::before_exit(restore);
             }
             cfmakeraw(cur.as_mut_ptr());
             if tcsetattr(0, TCSAFLUSH, cur.as_ptr()) != 0 {

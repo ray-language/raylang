@@ -6,6 +6,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+- **Linux: una app de escritorio termina limpia tras cerrar su última ventana** (ray-sublime
+  #512). El proceso esperaba de 2 a 7 s y moría con SIGABRT dentro de WebKitGTK, con código 134
+  en vez del suyo; ahora sale al instante con su código, con `exit` o volviendo de `main`.
+- **Un tabulador en el título de un item ya no tumba el menú** (ray-sublime #511). Lo que iba
+  detrás se leía como atajo y `ui.menu` devolvía `Err`; ahora se muestra como un espacio.
 - **`std/ui` — `WindowOptions.menu_bar`** (ray-sublime #508). En Linux y Windows la barra de
   menús es de cada ventana, y un About o una paleta salían con File, Edit, View… encima. Ahora
   un `"panel"` y una ventana con `parent` no la llevan; `menu_bar = "show"` la fuerza y `"hide"`

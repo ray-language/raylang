@@ -22770,3 +22770,33 @@ dice quién lleva barra; ningún `Gtk-CRITICAL`, y una sola reconstrucción al m
 los compila el CI y nadie los ha visto con una ventana. Un RDATA de PTR mal formado hace fallar
 `parse_response` entero, como ya pasaba con NS, CNAME, MX y SRV.
 
+## 492. Salir en Linux con la última ventana cerrada, y el tabulador en un título (ray-sublime #512/#511, nov 2026)
+
+**Qué pasaba.** (1) En Linux el programa termina con `exit()` desde el hilo del worker mientras
+el hilo 1 sigue en `gtk_main()`. Si la última ventana ya se había cerrado, un manejador de salida
+de WebKitGTK esperaba varios segundos y abortaba: código 134 y volcado de núcleo en cada cierre
+normal de una app. Con una ventana abierta no pasaba. (2) Los items de un menú viajan al runtime
+como texto separado por tabuladores: un tabulador en `title` desplazaba los campos.
+
+**Decisión.** (1) `gtk::leave_before_webkit`, un manejador `on_exit` (glibc: recibe el código de
+salida) que vacía stdio y llama a `_exit` con ese código, antes de que corran los de WebKit.
+Los manejadores corren del último registrado al primero, y WebKit registra los suyos después de
+`gtk_init` (al crear un webview y al destruir el último): por eso el nuestro se vuelve a
+registrar tras abrir cada ventana y tras cada `destroy` (`arm_exit`). Se probó antes dejar
+aparcado el loop de GTK durante la salida: no evita el aborto. Lo que la salida anticipada se
+salta son los `atexit` registrados antes del último rearme; el único nuestro es la restauración
+del terminal del modo crudo, que se apunta también en `ui::before_exit` y corre igual. (2)
+`std/ui` cambia tabuladores y saltos de línea por un espacio en `tag`, `title`, `shortcut` e
+`icon` antes de codificar.
+
+**Comprobado.** VM de Linux (WebKitGTK 4.1, Wayland), cinco variantes: cerrar y salir, esperar
+6 s tras cerrar, volver de `main`, tres ventanas abiertas y cerradas en dos tandas, y salir con
+la ventana abierta. Todas dan su código al instante; con la 1.27.118 las cuatro primeras dan 134.
+Test de `ui_cli` para el tabulador.
+
+**Límites.** Solo glibc (`on_exit` no existe en musl). Cada rearme deja una entrada en la lista
+de `exit` (una por ventana abierta y dos por ventana cerrada). Si WebKit registrara un manejador
+en otro momento (no se ha visto), el aborto volvería en ese caso. En un binario nativo, el modo
+crudo del terminal activado ANTES de abrir la UI no se restaura al salir (el código emitido no
+conoce `ui::before_exit`); en la VM sí.
+

@@ -364,7 +364,8 @@ pub fn reply_json(window: int, id: int, json: string) -> Result<int, string> {
 /// `menu`. GTK menus stay click-only. `icon` (M236) is an image file path, or `"sf:<name>"`
 /// for an SF Symbol on macOS (ignored elsewhere; Windows takes `.bmp` files only). `enabled`
 /// and `checked` are the initial state — change them later with `set_menu_item`. `children` are
-/// the items of a submenu (see `submenu`); empty for an ordinary item. Build items with
+/// the items of a submenu (see `submenu`); empty for an ordinary item. A tab or a line break in
+/// `title` shows as a space. Build items with
 /// `item(...)`/`separator()`/`submenu(...)` to get the defaults.
 pub struct MenuItem {
     tag: string,
@@ -447,6 +448,15 @@ pub fn menu(title: string, items: [MenuItem]) -> Result<int, string> {
 // La codificación del borde de builtins ([string], "tag\ttitle\tshortcut\ticon\ten\tch\tdepth\tsub"),
 // compartida por menu y app_menu. La lista es PLANA: cada item lleva su profundidad y si abre un
 // submenú, y el runtime rehace el árbol (#453).
+// Un campo de la codificación no puede llevar un tabulador ni un salto de línea: un `title`
+// con `\t` desplazaba los campos y lo de detrás se leía como atajo (ray-sublime #511).
+fn one_field(text: string) -> string {
+    if (!text.contains("\t") && !text.contains("\n")) {
+        return text;
+    }
+    text.replace("\t", " ").replace("\n", " ")
+}
+
 fn encode_items(items: [MenuItem]) -> [string] {
     var encoded: [string] = [];
     encode_level(items, 0, encoded);
@@ -459,13 +469,13 @@ fn encode_level(items: [MenuItem], depth: int, encoded: [string]) {
         let ch = if (it.checked) { "1" } else { "0" };
         let sub = if (it.opens_submenu) { "1" } else { "0" };
         encoded.push(
-            it.tag
+            one_field(it.tag)
                 + "\t"
-                + it.title
+                + one_field(it.title)
                 + "\t"
-                + it.shortcut
+                + one_field(it.shortcut)
                 + "\t"
-                + it.icon
+                + one_field(it.icon)
                 + "\t"
                 + en
                 + "\t"

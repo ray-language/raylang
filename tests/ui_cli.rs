@@ -116,6 +116,26 @@ fn open_with_validates_its_options_on_both_engines() {
     }
 }
 
+/// ray-sublime #511: un tabulador en el título de un item desplazaba los campos de la
+/// codificación (lo de detrás se leía como atajo) y el menú entero fallaba.
+#[test]
+fn a_tab_in_a_menu_title_does_not_break_the_menu() {
+    let path = tmp("menu_tab").join("main.ray");
+    std::fs::write(
+        &path,
+        "import std/ui;\nfn main() {\n    match (ui.menu(\"Probe\", [ui.item(\"a\", \"Upper Case\\tCtrl+K, Ctrl+U\", \"\")])) {\n        Result.Ok(_) => print(\"ok\"),\n        Result.Err(e) => print(e),\n    }\n}\n",
+    )
+    .unwrap();
+    for interp in [false, true] {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
+        if interp {
+            cmd.arg("--interp");
+        }
+        let (out, code) = run_headless(cmd.arg(&path));
+        assert_eq!((out.as_str(), code), ("ok\n", 0), "interp={interp}");
+    }
+}
+
 /// M217 (ray-sublime #8, #9): con `RAY_UI_TRACE=1` el headless escribe en stderr cada open y eval_js
 /// (y por tanto cada `ui.reply`), y con `RAY_UI_EXIT_AFTER_MS=N` el proceso termina solo (salida 0)
 /// tras N ms sin eventos — sin `perl -e alarm` en CI. La fibra estaba aparcada en `next_event()`.

@@ -123,7 +123,7 @@ fn a_tab_in_a_menu_title_does_not_break_the_menu() {
     let path = tmp("menu_tab").join("main.ray");
     std::fs::write(
         &path,
-        "import std/ui;\nfn main() {\n    match (ui.menu(\"Probe\", [ui.item(\"a\", \"Upper Case\\tCtrl+K, Ctrl+U\", \"\")])) {\n        Result.Ok(_) => print(\"ok\"),\n        Result.Err(e) => print(e),\n    }\n}\n",
+        "import std/ui;\nfn main() {\n    var seq = ui.item(\"b\", \"Side Bar\", \"\");\n    seq.shortcut_label = \"Ctrl+K, Ctrl+B\";\n    match (ui.menu(\"Probe\", [ui.item(\"a\", \"Upper Case\\tCtrl+K, Ctrl+U\", \"\"), seq])) {\n        Result.Ok(_) => print(\"ok\"),\n        Result.Err(e) => print(e),\n    }\n}\n",
     )
     .unwrap();
     for interp in [false, true] {

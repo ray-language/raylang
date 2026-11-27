@@ -227,7 +227,9 @@ pub fn install() -> Result<int, string> {
   empty title and shortcut it takes the standard ones. On macOS, without the Edit menu neither ⌘C
   nor ⌘V work in the page's fields: that is why the roles are kept when adding your own items.
 - **Shortcuts.** `cmd+s`, `cmd+shift+s`, `ctrl+alt+p`, `f5`. `cmd` is Command on macOS and Ctrl on
-  Windows.
+  Windows. A command the app binds in its own keyboard layer, such as a two-chord sequence, shows
+  its keys with `shortcut_label`, a text that binds nothing: `var it = ui.item("upper", "Upper
+  Case", ""); it.shortcut_label = "Ctrl+K, Ctrl+U";`.
 - **The application menu.** `ui.app_menu` adds items to the first menu on macOS, and `role:about`
   shows the native About panel, whose content `ui.set_about` sets.
 
@@ -487,4 +489,4 @@ subsystem out of a binary that opens no windows.
 
 The notes leave the device: a [**server-rendered site**](ssr.en.md).
 
-<!-- sync: sha256:489cc0d85739 -->
+<!-- sync: sha256:f79ef7e4a1f8 -->

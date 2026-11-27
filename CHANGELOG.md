@@ -9,6 +9,11 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 - **Linux: una app de escritorio termina limpia tras cerrar su última ventana** (ray-sublime
   #512). El proceso esperaba de 2 a 7 s y moría con SIGABRT dentro de WebKitGTK, con código 134
   en vez del suyo; ahora sale al instante con su código, con `exit` o volviendo de `main`.
+- **`std/ui` — `MenuItem.shortcut_label`** (ray-sublime #511). Un texto que se muestra donde va
+  el atajo, alineado a la derecha, y que no enlaza nada: para una orden que la app atiende en su
+  propia capa de teclado, como una secuencia de dos acordes (`⌘K ⌘U`, `Ctrl+K, Ctrl+U`). En
+  macOS, Linux y Windows. Se ignora si el item tiene `shortcut`. **Cambia:** `MenuItem` tiene
+  un campo más; quien lo construya con un literal en vez de `ui.item` debe añadirlo.
 - **Un tabulador en el título de un item ya no tumba el menú** (ray-sublime #511). Lo que iba
   detrás se leía como atajo y `ui.menu` devolvía `Err`; ahora se muestra como un espacio.
 - **`std/ui` — `WindowOptions.menu_bar`** (ray-sublime #508). En Linux y Windows la barra de

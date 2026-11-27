@@ -3274,6 +3274,9 @@ pub struct MenuItemSpec {
     /// ir vacío. `children` son sus items (puede no tener ninguno: «Open Recent» sin recientes).
     pub submenu: bool,
     pub children: Vec<MenuItemSpec>,
+    /// ray-sublime #511: texto que se muestra donde va el atajo y no enlaza nada (una secuencia
+    /// de dos acordes que la app atiende ella misma). Vacío si el item tiene `shortcut`.
+    pub shortcut_label: String,
 }
 
 impl MenuItemSpec {
@@ -3587,6 +3590,23 @@ mod menu_tree_tests {
         format!("{tag}\t{title}\t\t\t1\t0\t{depth}\t{}", if sub { "1" } else { "0" })
     }
 
+    /// ray-sublime #511: el texto de atajo que no enlaza nada viaja en el noveno campo; con un
+    /// atajo real o en un submenú no se guarda, y un valor libre no pasa por `parse_chord`.
+    #[test]
+    fn a_shortcut_label_is_free_text_and_yields_to_a_real_shortcut() {
+        let items = decode_items(&[
+            "upper\tUpper Case\t\t\t1\t0\t0\t0\tCtrl+K, Ctrl+U".to_string(),
+            "save\tSave\tcmd+s\t\t1\t0\t0\t0\tignored".to_string(),
+            "\tRecent\t\t\t1\t0\t0\t1\tignored".to_string(),
+            "old\tOld client\t\t\t1\t0\t0\t0".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(items[0].shortcut_label, "Ctrl+K, Ctrl+U");
+        assert_eq!((items[1].shortcut.as_str(), items[1].shortcut_label.as_str()), ("cmd+s", ""));
+        assert_eq!(items[2].shortcut_label, "");
+        assert_eq!(items[3].shortcut_label, "");
+    }
+
     /// ray-daw #453: la lista plana con profundidades vuelve a ser un árbol.
     #[test]
     fn a_flat_list_with_depths_becomes_a_tree() {
@@ -3700,9 +3720,11 @@ fn decode_items(items: &[String]) -> Result<Vec<MenuItemSpec>, String> {
             checked: p.next().map(|s| s == "1").unwrap_or(false),
             submenu: false,
             children: Vec::new(),
+            shortcut_label: String::new(),
         };
         let depth: usize = p.next().and_then(|s| s.parse().ok()).unwrap_or(0);
         spec.submenu = p.next() == Some("1");
+        spec.shortcut_label = p.next().unwrap_or("").to_string();
         // M255: un item con rol estándar toma título y atajo del sistema si vienen vacíos (aquí,
         // en el borde, para que los tres backends y la traza headless vean el mismo item).
         if let Some(role) = spec.edit_role() {
@@ -3719,12 +3741,17 @@ fn decode_items(items: &[String]) -> Result<Vec<MenuItemSpec>, String> {
             }
             // Un submenú no tiene atajo ni marca: se abre, no se elige.
             spec.shortcut.clear();
+            spec.shortcut_label.clear();
             spec.checked = false;
         } else if !spec.is_separator() && spec.tag.is_empty() {
             return Err("ui: a menu item needs a non-empty tag".to_string());
         }
         if !spec.shortcut.is_empty() && parse_chord(&spec.shortcut).is_none() {
             return Err(format!("ui: unsupported menu shortcut '{}'", spec.shortcut));
+        }
+        // Con atajo real, el texto que se muestra es el suyo.
+        if !spec.shortcut.is_empty() {
+            spec.shortcut_label.clear();
         }
         flat.push((depth, spec));
     }
@@ -5469,6 +5496,81 @@ mod mac {
     /// M236: construye un NSMenuItem a partir del spec (separador, atajo, icono, estado) y lo
     /// registra por tag. `action`: el selector del click (rayMenuAction: para los custom).
     /// SAFETY: en el hilo principal, con la app lista.
+    /// ray-sublime #511: dibuja el `shortcut_label` de los items de `menu` (su
+    /// `representedObject`) donde AppKit pone los atajos: el título pasa a ser «título ⇥ texto»
+    /// con una tabulación alineada a la derecha, común a todo el menú (más allá del título más
+    /// ancho), que es lo que hace una app con secuencias de dos acordes. AppKit no tiene un
+    /// atajo de solo texto: `keyEquivalent` enlaza la tecla.
+    unsafe fn align_shortcut_labels(menu: Id) {
+        if menu.is_null() {
+            return;
+        }
+        type MsgIdF64 = unsafe extern "C" fn(Id, Sel, f64) -> Id;
+        type MsgSizeId = unsafe extern "C" fn(Id, Sel, Id) -> CGSize;
+        type MsgInitTab = unsafe extern "C" fn(Id, Sel, i64, f64, Id) -> Id;
+        // NSTextAlignmentRight: 1 en x86_64, 2 donde AppKit usa los valores de iOS (arm64).
+        const ALIGN_RIGHT: i64 = if cfg!(target_arch = "x86_64") { 1 } else { 2 };
+        const GAP: f64 = 32.0;
+        // SAFETY: mensajes estándar de AppKit/Foundation en el hilo principal; todos los
+        // objetos creados quedan retenidos por el item (o son autoliberados).
+        unsafe {
+            let get: MsgId = std::mem::transmute(msg_send());
+            let count: MsgI64 = std::mem::transmute(msg_send());
+            let at: MsgIdI64 = std::mem::transmute(msg_send());
+            let set_id: MsgVoidId = std::mem::transmute(msg_send());
+            let set_pair: MsgVoidIdId = std::mem::transmute(msg_send());
+            let one: MsgIdId = std::mem::transmute(msg_send());
+            let two: MsgIdIdIdRet = std::mem::transmute(msg_send());
+            let font_of: MsgIdF64 = std::mem::transmute(msg_send());
+            let size_of: MsgSizeId = std::mem::transmute(msg_send());
+            let init_tab: MsgInitTab = std::mem::transmute(msg_send());
+            let items = get(menu, sel(b"itemArray\0"));
+            let n = count(items, sel(b"count\0"));
+            let labelled: Vec<Id> = (0..n)
+                .map(|i| at(items, sel(b"objectAtIndex:\0"), i))
+                .filter(|it| !get(*it, sel(b"representedObject\0")).is_null())
+                .collect();
+            if labelled.is_empty() {
+                return;
+            }
+            let font = font_of(cls(b"NSFont\0"), sel(b"menuFontOfSize:\0"), 0.0);
+            // `NSFontAttributeName` y `NSParagraphStyleAttributeName` valen estas cadenas.
+            let font_attrs = two(cls(b"NSDictionary\0"), sel(b"dictionaryWithObject:forKey:\0"), font, nsstring("NSFont"));
+            let width = |text: Id| size_of(text, sel(b"sizeWithAttributes:\0"), font_attrs).w;
+            let mut title_width: f64 = 0.0;
+            for i in 0..n {
+                title_width = title_width.max(width(get(at(items, sel(b"objectAtIndex:\0"), i), sel(b"title\0"))));
+            }
+            let mut label_width: f64 = 0.0;
+            for it in &labelled {
+                label_width = label_width.max(width(get(*it, sel(b"representedObject\0"))));
+            }
+            let tab = init_tab(
+                get(cls(b"NSTextTab\0"), sel(b"alloc\0")),
+                sel(b"initWithTextAlignment:location:options:\0"),
+                ALIGN_RIGHT,
+                (title_width + GAP + label_width).ceil(),
+                get(cls(b"NSDictionary\0"), sel(b"dictionary\0")),
+            );
+            let style = get(cls(b"NSMutableParagraphStyle\0"), sel(b"new\0"));
+            set_id(style, sel(b"setTabStops:\0"), one(cls(b"NSArray\0"), sel(b"arrayWithObject:\0"), tab));
+            let attrs = get(cls(b"NSMutableDictionary\0"), sel(b"dictionary\0"));
+            set_pair(attrs, sel(b"setObject:forKey:\0"), font, nsstring("NSFont"));
+            set_pair(attrs, sel(b"setObject:forKey:\0"), style, nsstring("NSParagraphStyle"));
+            for it in labelled {
+                let joined = one(get(it, sel(b"title\0")), sel(b"stringByAppendingString:\0"), nsstring("\t"));
+                let joined = one(joined, sel(b"stringByAppendingString:\0"), get(it, sel(b"representedObject\0")));
+                let attributed = two(
+                    get(cls(b"NSAttributedString\0"), sel(b"alloc\0")),
+                    sel(b"initWithString:attributes:\0"),
+                    joined,
+                    attrs,
+                );
+                set_id(it, sel(b"setAttributedTitle:\0"), attributed);
+            }
+        }
+    }
+
     unsafe fn make_item(target: Id, spec: &super::MenuItemSpec, action: Sel) -> Id {
         unsafe {
             let alloc: MsgId = std::mem::transmute(msg_send());
@@ -5500,6 +5602,7 @@ mod mac {
                 for child in &spec.children {
                     add(menu, sel(b"addItem:\0"), make_item(target, child, action));
                 }
+                align_shortcut_labels(menu);
                 set_id(item, sel(b"setSubmenu:\0"), menu);
                 if !spec.enabled {
                     set_bool(item, sel(b"setEnabled:\0"), 0);
@@ -5547,6 +5650,10 @@ mod mac {
                     n
                 };
                 set_i64(item, sel(b"setTag:\0"), n);
+            }
+            if !spec.shortcut_label.is_empty() {
+                // ray-sublime #511: lo dibuja `align_shortcut_labels` cuando el menú está entero.
+                set_id(item, sel(b"setRepresentedObject:\0"), nsstring(&spec.shortcut_label));
             }
             if !spec.enabled {
                 set_bool(item, sel(b"setEnabled:\0"), 0);
@@ -5604,8 +5711,13 @@ mod mac {
             // SAFETY: NSMenuItems vivos del registro por tag, en el hilo principal.
             unsafe {
                 let set_id: MsgVoidId = std::mem::transmute(msg_send());
+                let get: MsgId = std::mem::transmute(msg_send());
                 for it in items {
                     set_id(it as Id, sel(b"setTitle:\0"), nsstring(&title));
+                    // #511: con texto de atajo, lo que se ve es el título atribuido.
+                    if !get(it as Id, sel(b"representedObject\0")).is_null() {
+                        align_shortcut_labels(get(it as Id, sel(b"menu\0")));
+                    }
                 }
             }
             Ok(())
@@ -5887,6 +5999,7 @@ mod mac {
                     let item = make_item(target, spec, sel(b"rayMenuAction:\0"));
                     add(menu, sel(b"addItem:\0"), item);
                 }
+                align_shortcut_labels(menu);
             }
             Ok(())
         })
@@ -5917,6 +6030,7 @@ mod mac {
                     let item = make_item(target, spec, sel(b"rayMenuAction:\0"));
                     add(menu, sel(b"addItem:\0"), item);
                 }
+                align_shortcut_labels(menu);
                 let mut made: Vec<usize> = Vec::new();
                 collect_items(menu, &mut made);
                 let at = mouse(cls(b"NSEvent\0"), sel(b"mouseLocation\0"));
@@ -5969,6 +6083,7 @@ mod mac {
                     let item = make_item(target, spec, sel(b"rayMenuAction:\0"));
                     add(menu, sel(b"addItem:\0"), item);
                 }
+                align_shortcut_labels(menu);
                 set_submenu(bar_item, sel(b"setSubmenu:\0"), menu);
                 if position < 0 {
                     add(main_menu as Id, sel(b"addItem:\0"), bar_item);
@@ -6047,6 +6162,7 @@ mod mac {
                     insert_at(app_menu, sel(b"insertItem:atIndex:\0"), item, idx);
                     idx += 1;
                 }
+                align_shortcut_labels(app_menu);
                 if idx > 0 {
                     let separator = class_item(cls(b"NSMenuItem\0"), sel(b"separatorItem\0"));
                     insert_at(app_menu, sel(b"insertItem:atIndex:\0"), separator, idx);
@@ -7656,6 +7772,13 @@ mod gtk {
         check_set_active: Option<unsafe extern "C" fn(Widget, i32)>,
         /// ray-sublime #509: `gtk_check_menu_item_get_type` y `g_type_check_instance_is_a`,
         /// para saber si un item vivo tiene marca antes de tocársela.
+        /// ray-sublime #511: para cambiar la etiqueta de un item por una caja «título … atajo».
+        bin_get_child: Option<unsafe extern "C" fn(Widget) -> Widget>,
+        container_remove: Option<FnWidgetPair>,
+        label_new: Option<FnItemNewLabel>,
+        label_set_xalign: Option<unsafe extern "C" fn(Widget, f32)>,
+        get_style_context: Option<unsafe extern "C" fn(Widget) -> *mut c_void>,
+        style_add_class: Option<unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char)>,
         check_type: Option<unsafe extern "C" fn() -> usize>,
         instance_is_a: Option<unsafe extern "C" fn(Widget, usize) -> i32>,
         set_sensitive: Option<unsafe extern "C" fn(Widget, i32)>,
@@ -7703,6 +7826,12 @@ mod gtk {
                     separator_new: opt(c"gtk_separator_menu_item_new").map(|p| std::mem::transmute::<*mut c_void, FnWidgetNew0>(p)),
                     check_new: opt(c"gtk_check_menu_item_new_with_label").map(|p| std::mem::transmute::<*mut c_void, FnItemNewLabel>(p)),
                     check_set_active: opt(c"gtk_check_menu_item_set_active").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
+                    bin_get_child: opt(c"gtk_bin_get_child").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget) -> Widget>(p)),
+                    container_remove: opt(c"gtk_container_remove").map(|p| std::mem::transmute::<*mut c_void, FnWidgetPair>(p)),
+                    label_new: opt(c"gtk_label_new").map(|p| std::mem::transmute::<*mut c_void, FnItemNewLabel>(p)),
+                    label_set_xalign: opt(c"gtk_label_set_xalign").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, f32)>(p)),
+                    get_style_context: opt(c"gtk_widget_get_style_context").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget) -> *mut c_void>(p)),
+                    style_add_class: opt(c"gtk_style_context_add_class").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void, *const std::ffi::c_char)>(p)),
                     check_type: opt(c"gtk_check_menu_item_get_type").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> usize>(p)),
                     instance_is_a: opt(c"g_type_check_instance_is_a").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, usize) -> i32>(p)),
                     set_sensitive: opt(c"gtk_widget_set_sensitive").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
@@ -7725,11 +7854,13 @@ mod gtk {
     /// en los items vivos, sin rehacer el menú: estado y atajos se conservan.
     pub(super) fn set_menu_title(tag: &str, title: &str) -> Result<(), String> {
         let mut found = false;
+        let mut boxed = false;
         for (_, items) in menu_specs().lock().unwrap().iter_mut() {
             super::MenuItemSpec::each_mut(items, &mut |it| {
                 if it.tag == tag {
                     it.label = title.to_string();
                     found = true;
+                    boxed |= !it.shortcut_label.is_empty();
                 }
             });
         }
@@ -7737,8 +7868,9 @@ mod gtk {
             return Err(format!("ui: no menu item with tag '{tag}'"));
         }
         // Con `gtk_menu_item_set_label` se reetiqueta el widget vivo (conserva estado, icono
-        // y atajo, y no cierra un menú abierto); sin él, se reconstruyen las barras.
-        let Some(set_label) = item_api().set_label else {
+        // y atajo, y no cierra un menú abierto); sin él, o si el item lleva su caja «título …
+        // atajo» (#511: `set_label` no encuentra en ella una etiqueta), se rehacen las barras.
+        let Some(set_label) = item_api().set_label.filter(|_| !boxed) else {
             return rebuild_bars();
         };
         if !items_by_tag().lock().unwrap().contains_key(tag) {
@@ -7926,6 +8058,37 @@ mod gtk {
         }
     }
 
+    /// ray-sublime #511: cambia la etiqueta de `item` por una caja con el título a la izquierda
+    /// y `shortcut` a la derecha, atenuado, como GTK dibuja un acelerador. GTK no deja poner un
+    /// texto libre en su `GtkAccelLabel`. Sin los símbolos, el item se queda con su título.
+    unsafe fn show_shortcut_label(api: &Api, ia: &ItemApi, item: Widget, title: &str, shortcut: &str) {
+        let (Some(bin_get_child), Some(container_remove), Some(label_new), Some(set_xalign)) = (ia.bin_get_child, ia.container_remove, ia.label_new, ia.label_set_xalign) else {
+            return;
+        };
+        let title_c = std::ffi::CString::new(title.replace('\0', "")).unwrap();
+        let shortcut_c = std::ffi::CString::new(shortcut.replace('\0', "")).unwrap();
+        // SAFETY: `item` es un GtkMenuItem recién creado en el hilo del loop; su hijo es la
+        // etiqueta que GTK le puso, y la caja nueva pasa a ser suya.
+        unsafe {
+            let old = bin_get_child(item);
+            if !old.is_null() {
+                container_remove(item, old);
+            }
+            const ORIENTATION_HORIZONTAL: i32 = 0;
+            let row = (api.box_new)(ORIENTATION_HORIZONTAL, 24);
+            let left = label_new(title_c.as_ptr());
+            set_xalign(left, 0.0);
+            (api.box_pack_start)(row, left, 1, 1, 0);
+            let right = label_new(shortcut_c.as_ptr());
+            set_xalign(right, 1.0);
+            if let (Some(context), Some(add_class)) = (ia.get_style_context, ia.style_add_class) {
+                add_class(context(right), c"dim-label".as_ptr());
+            }
+            (api.box_pack_start)(row, right, 0, 0, 0);
+            (api.container_add)(item, row);
+        }
+    }
+
     /// Construye los items de `specs` dentro de `menu` (barra o contextual, M259) y los registra
     /// por tag; devuelve los widgets creados (para purgarlos si el menú es efímero).
     unsafe fn append_items(api: &Api, menu: Widget, specs: &[super::MenuItemSpec], alive: &Arc<AtomicBool>, window: i64) -> Vec<usize> {
@@ -7973,6 +8136,9 @@ mod gtk {
                 } else {
                     (api.menu_item_new_with_label)(label_c.as_ptr())
                 };
+                if !spec.shortcut_label.is_empty() {
+                    show_shortcut_label(api, ia, item, &spec.label, &spec.shortcut_label);
+                }
                 if !spec.enabled && let Some(f) = ia.set_sensitive {
                     f(item, 0);
                 }
@@ -10889,10 +11055,14 @@ mod win {
     pub(super) fn set_menu_title(tag: &str, title: &str) -> Result<(), String> {
         // El texto vivo lleva el atajo detrás de un tabulador, como al construir el menú.
         let mut shortcut: Option<String> = None;
+        let mut shown = String::new();
         for (_, items) in menu_specs().lock().unwrap().iter_mut() {
             super::MenuItemSpec::each_mut(items, &mut |it| {
                 if it.tag == tag {
                     it.label = title.to_string();
+                    if shortcut.is_none() {
+                        shown = it.shortcut_label.clone();
+                    }
                     shortcut.get_or_insert_with(|| it.shortcut.clone());
                 }
             });
@@ -10906,6 +11076,7 @@ mod win {
         let tag = tag.to_string();
         let label = match accel_for(&shortcut, 0) {
             Some((text, _)) => format!("{title}\t{text}"),
+            None if !shown.is_empty() => format!("{title}\t{shown}"),
             None => title.to_string(),
         };
         on_main_sync(move || {
@@ -11098,6 +11269,7 @@ mod win {
                         }
                         format!("{}\t{text}", spec.label)
                     }
+                    None if !spec.shortcut_label.is_empty() => format!("{}\t{}", spec.label, spec.shortcut_label),
                     None => spec.label.clone(),
                 };
                 let mut flags = MF_STRING;

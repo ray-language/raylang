@@ -22767,7 +22767,9 @@ que su menú se rehaga. Los diálogos de mensaje siguen sin existir en iOS (`UIA
 Android. Los cambios de GTK y Win32 de (1) y (2) no los cubre un test automático (el CI no tiene
 display): los de GTK se comprobaron en la VM de Linux con ventanas reales (la altura de la página
 dice quién lleva barra; ningún `Gtk-CRITICAL`, y una sola reconstrucción al marcar); los de Win32
-los compila el CI y nadie los ha visto con una ventana. Un RDATA de PTR mal formado hace fallar
+se vieron después en la VM de Windows, lanzando la sonda en la sesión de escritorio con una tarea
+programada y NirCmd: barra solo en la ventana documento, `Ctrl+S` con el foco en el panel sin
+barra entrega su evento `menu`, y un item declarado sin marca la muestra al marcarlo. Un RDATA de PTR mal formado hace fallar
 `parse_response` entero, como ya pasaba con NS, CNAME, MX y SRV.
 
 ## 492. Salir en Linux con la última ventana cerrada, y el tabulador en un título (ray-sublime #512/#511, nov 2026)
@@ -22799,4 +22801,32 @@ de `exit` (una por ventana abierta y dos por ventana cerrada). Si WebKit registr
 en otro momento (no se ha visto), el aborto volvería en ese caso. En un binario nativo, el modo
 crudo del terminal activado ANTES de abrir la UI no se restaura al salir (el código emitido no
 conoce `ui::before_exit`); en la VM sí.
+
+## 493. `MenuItem.shortcut_label`: un atajo que se muestra y no enlaza (ray-sublime #511, nov 2026)
+
+**Qué faltaba.** Un editor enlaza órdenes a secuencias de dos acordes (⌘K ⌘U) en su propia capa
+de teclado y quiere mostrarlas en el menú, donde van los atajos. `shortcut` solo acepta un acorde
+(y lo enlaza), así que la secuencia acababa pegada al título.
+
+**Decisión.** Un campo `shortcut_label: string` en `MenuItem`: texto libre, sin validar, que se
+dibuja en la columna de atajos y no registra nada. No se sobrecarga `shortcut` con secuencias:
+su contrato es «esto se enlaza», y un valor que se muestra pero no dispara rompería ese contrato
+en silencio. Con `shortcut` puesto, gana el atajo real. Viaja como noveno campo de la
+codificación de items (un runtime que no lo conoce lo ignora). Por plataforma: Win32, el texto
+tras el tabulador del item, sin `ACCEL`; GTK, que no deja poner texto libre en su
+`GtkAccelLabel`, cambia el hijo del item por una caja «título … texto» con el texto atenuado
+(`dim-label`); AppKit no tiene atajo de solo texto, así que el título pasa a ser atribuido,
+«título ⇥ texto», con una tabulación a la derecha común a todo el menú
+(`align_shortcut_labels`, tras llenar cada menú y al retitular).
+
+**Comprobado.** A la vista en los tres sistemas con una misma sonda: captura del menú en GTK
+(VM de Linux, `xdotool`), en macOS (menú contextual, captura de la ventana del menú) y en Win32
+(VM de Windows, NirCmd en la sesión de escritorio), también tras `set_menu_title` y junto a un
+item con marca. Unitario de `decode_items` y `ui_cli` para el campo.
+
+**Límites.** En macOS el texto no queda a ras de la columna de atajos nativos (AppKit la pone
+después del título más ancho, que ahora incluye el nuestro) ni se atenúa como ellos: un color
+propio en un título atribuido no se invierte al resaltar el item. En GTK los atajos reales
+siguen sin mostrarse (los menús son solo de click), así que allí solo aparece este texto.
+Añadir el campo rompe a quien construya `MenuItem` con un literal.
 

@@ -365,7 +365,10 @@ pub fn reply_json(window: int, id: int, json: string) -> Result<int, string> {
 /// for an SF Symbol on macOS (ignored elsewhere; Windows takes `.bmp` files only). `enabled`
 /// and `checked` are the initial state — change them later with `set_menu_item`. `children` are
 /// the items of a submenu (see `submenu`); empty for an ordinary item. A tab or a line break in
-/// `title` shows as a space. Build items with
+/// `title` shows as a space. `shortcut_label` (ray-sublime #511) is a text shown where the
+/// shortcut goes, aligned to the right, that binds NOTHING: for a command the app handles in its
+/// own keyboard layer, such as a two-chord sequence (`"⌘K ⌘U"`, `"Ctrl+K, Ctrl+U"` — write it
+/// as each platform does). It is ignored when `shortcut` is set, and on a submenu. Build items with
 /// `item(...)`/`separator()`/`submenu(...)` to get the defaults.
 pub struct MenuItem {
     tag: string,
@@ -376,6 +379,7 @@ pub struct MenuItem {
     checked: bool,
     children: [MenuItem],
     opens_submenu: bool,
+    shortcut_label: string,
 }
 
 /// A menu item with the defaults: no icon, enabled, unchecked (M236).
@@ -396,7 +400,8 @@ pub fn item(tag: string, title: string, shortcut: string) -> MenuItem {
         enabled: true,
         checked: false,
         children: [],
-        opens_submenu: false
+        opens_submenu: false,
+        shortcut_label: ""
     }
 }
 
@@ -410,7 +415,8 @@ pub fn separator() -> MenuItem {
         enabled: true,
         checked: false,
         children: [],
-        opens_submenu: false
+        opens_submenu: false,
+        shortcut_label: ""
     }
 }
 
@@ -429,7 +435,8 @@ pub fn submenu(title: string, items: [MenuItem]) -> MenuItem {
         enabled: true,
         checked: false,
         children: items,
-        opens_submenu: true
+        opens_submenu: true,
+        shortcut_label: ""
     }
 }
 
@@ -445,7 +452,7 @@ pub fn menu(title: string, items: [MenuItem]) -> Result<int, string> {
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 
-// La codificación del borde de builtins ([string], "tag\ttitle\tshortcut\ticon\ten\tch\tdepth\tsub"),
+// La codificación del borde de builtins ([string], "tag\ttitle\tshortcut\ticon\ten\tch\tdepth\tsub\tshortcut_label"),
 // compartida por menu y app_menu. La lista es PLANA: cada item lleva su profundidad y si abre un
 // submenú, y el runtime rehace el árbol (#453).
 // Un campo de la codificación no puede llevar un tabulador ni un salto de línea: un `title`
@@ -484,6 +491,8 @@ fn encode_level(items: [MenuItem], depth: int, encoded: [string]) {
                 + to_string(depth)
                 + "\t"
                 + sub
+                + "\t"
+                + one_field(it.shortcut_label)
         );
         if (it.opens_submenu) {
             encode_level(it.children, depth + 1, encoded);

@@ -146,7 +146,8 @@ pub fn open(title: string, url: string, width: int, height: int) -> Result<int, 
 /// app's and nothing changes): `""` (the default) gives the window the menus declared with
 /// `ui.menu` unless it is a `"panel"` or has a `parent` — an About box, a preferences window or a
 /// palette carry no menu bar —, `"show"` always attaches it and `"hide"` never does. A window
-/// without the bar still fires the menus' shortcuts (Windows). Build it with `ui.options(width, height)` and tweak the fields you need.
+/// without the bar still fires the menus' shortcuts (Windows), also the one of an item that is
+/// disabled. Build it with `ui.options(width, height)` and tweak the fields you need.
 pub struct WindowOptions {
     width: int,
     height: int,

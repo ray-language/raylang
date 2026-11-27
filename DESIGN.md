@@ -22735,7 +22735,16 @@ DNS (una instancia DNS-SD, `HP LaserJet 4.2`) partía la etiqueta al volver a es
 los puntos sin escapar. Era un límite anterior de todos los nombres, pero el PTR de mDNS es
 justo donde aparece.
 
-**Límites.** En una ventana sin barra de Win32 un atajo dispara aunque su item esté desactivado
+Segunda tanda: la lista de widgets de un tag se lee dentro del hilo del loop (tomada fuera,
+una reconstrucción concurrente podía dejarla apuntando a widgets destruidos); `rename_menu` y
+`set_menu_title` tampoco reescriben ya una copia de los specs; `split_name` entiende `\DDD`
+(`Office\032Printer`, como lo imprimen `dig` y `dns-sd`) y los nombres sin `\` siguen por el
+camino de antes (`split(".")`); en Win32 la columna de marcas solo se repone por un item que
+puede llevarla, y una ventana sin barra no carga los iconos de un menú que no muestra.
+
+**Límites.** `dns.build_query` sigue sin validar la longitud de una etiqueta (no devuelve
+`Result`). En GTK, si el tag vive a la vez en una barra y en un menú contextual abierto,
+marcarlo rehace las barras en cada llamada mientras el contextual siga abierto. En una ventana sin barra de Win32 un atajo dispara aunque su item esté desactivado
 (tampoco lo comprueba el camino del webview en las demás). Marcar
 por primera vez un item simple en GTK rehace la barra de cada ventana viva y cierra un menú
 abierto. Un item que nació con marca y se desmarca sigue siendo un check (casilla vacía) hasta

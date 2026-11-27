@@ -177,10 +177,30 @@ fn read_u32(b: bytes, i: int) -> int {
 /// backslash in front (the master-file escape of RFC 1035 §5.1). A DNS-SD instance such as
 /// `HP LaserJet 4.2` is ONE label and reads `HP LaserJet 4\.2`.
 pub fn escape_label(label: string) -> string {
+    if (!label.contains(".") && !label.contains("\\")) {
+        return label;
+    }
     label.replace("\\", "\\\\").replace(".", "\\.")
 }
 
+// Los tres dígitos decimales de un `\\DDD` en `at`, como el carácter de ese valor (< 128).
+fn decimal_escape(cs: [char], at: int) -> Option<char> {
+    if (at + 2 >= cs.len()) {
+        return Option.None;
+    }
+    var n = 0;
+    for k in 0..3 {
+        n = n * 10 + "0123456789".index_of(to_string(cs[at + k]))?;
+    }
+    if (n >= 128) {
+        return Option.None;
+    }
+    char_from_code(n)
+}
+
 /// The labels of `name`, unescaped: it splits on the dots that have no backslash in front.
+/// `\DDD` (three decimal digits, below 128) is the octet with that value, as `dig` and `dns-sd`
+/// print a space (`Office\032Printer`); any other `\X` is `X`.
 /// `split_name("HP LaserJet 4\\.2._ipp._tcp.local")` is `["HP LaserJet 4.2", "_ipp", "_tcp",
 /// "local"]`; the empty name has no labels.
 pub fn split_name(name: string) -> [string] {
@@ -188,21 +208,35 @@ pub fn split_name(name: string) -> [string] {
     if (name == "") {
         return labels;
     }
+    if (!name.contains("\\")) {
+        return name.split(".");
+    }
+    let cs = name.chars();
     var current = "";
-    var escaped = false;
-    for ch in name.chars() {
-        let c = to_string(ch);
-        if (escaped) {
-            current = current + c;
-            escaped = false;
-        } else if (c == "\\") {
-            escaped = true;
-        } else if (c == ".") {
+    var i = 0;
+    while (i < cs.len()) {
+        let c = to_string(cs[i]);
+        if (c == "\\" && i + 1 < cs.len()) {
+            // `\DDD`: the octet with that decimal value (`\032` is a space); else `\X` is X.
+            match (decimal_escape(cs, i + 1)) {
+                Option.Some(ch) => {
+                    current = current + to_string(ch);
+                    i = i + 4;
+                    continue;
+                },
+                Option.None => { },
+            }
+            current = current + to_string(cs[i + 1]);
+            i = i + 2;
+            continue;
+        }
+        if (c == ".") {
             labels.push(current);
             current = "";
         } else {
             current = current + c;
         }
+        i = i + 1;
     }
     labels.push(current);
     labels
@@ -480,6 +514,11 @@ fn put32(o: Out, n: int) {
 // un puntero; los offsets por encima de 0x3FFF no se registran (no caben en 14 bits).
 fn put_name(o: Out, name: string) -> Result<int, string> {
     let labels = split_name(name);
+    // Las etiquetas como se escriben en un nombre: la clave de la tabla de compresión.
+    var written: [string] = [];
+    for l in labels {
+        written.push(escape_label(l));
+    }
     var total: int = 0;
     for i in 0..labels.len() {
         let raw = labels[i].to_bytes();
@@ -494,11 +533,7 @@ fn put_name(o: Out, name: string) -> Result<int, string> {
         if (total > 255) {
             return Result.Err("name longer than 255 octets: '" + name + "'");
         }
-        var rest: [string] = [];
-        for j in i..labels.len() {
-            rest.push(escape_label(labels[j]));
-        }
-        let suffix = join(rest, ".").to_lower();
+        let suffix = join(written.slice(i, written.len()), ".").to_lower();
         match (o.seen.get(suffix)) {
             Option.Some(off) => {
                 put16(o, 0xC000 | off);

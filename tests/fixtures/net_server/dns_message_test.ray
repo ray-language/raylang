@@ -232,6 +232,10 @@ fn a_dot_inside_a_label_survives_the_round_trip() {
     );
     assert_eq(msg.split_name("a\\\\b.c"), ["a\\b", "c"]);
     assert_eq(msg.split_name("").len(), 0);
+    // The presentation form that dig and dns-sd print: \DDD is the octet with that value.
+    assert_eq(msg.split_name("Office\\032Printer._ipp._tcp.local")[0], "Office Printer");
+    assert_eq(msg.split_name("a\\9b.c"), ["a9b", "c"]);
+    assert_eq(msg.split_name("abc\\"), ["abc\\"]);
     assert_eq(msg.escape_label("4.2\\x"), "4\\.2\\\\x");
     let name = "HP LaserJet 4\\.2._ipp._tcp.local";
     let query = q_of("_ipp._tcp.local", msg.PTR);

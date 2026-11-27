@@ -7535,7 +7535,7 @@ mod gtk {
     /// empaqueta arriba del todo.
     /// #252: el título en la tabla de menús y las barras reconstruidas (como `replace_menu`).
     pub(super) fn rename_menu(old: &str, new: &str) -> Result<(), String> {
-        let items = {
+        {
             let mut specs = menu_specs().lock().unwrap();
             if specs.iter().any(|(t, _)| t == new) {
                 return Err(format!("ui: there is already a menu titled '{new}'"));
@@ -7544,9 +7544,8 @@ mod gtk {
                 return Err(format!("ui: no menu titled '{old}'"));
             };
             entry.0 = new.to_string();
-            entry.1.clone()
-        };
-        replace_menu(new, &items)
+        }
+        rebuild_bars()
     }
 
     pub(super) fn replace_menu(title: &str, items: &[super::MenuItemSpec]) -> Result<(), String> {
@@ -7674,36 +7673,29 @@ mod gtk {
     /// ray-daw #434: el texto de un item por tag — se cambia en los specs (ventanas futuras) y
     /// en los items vivos, sin rehacer el menú: estado y atajos se conservan.
     pub(super) fn set_menu_title(tag: &str, title: &str) -> Result<(), String> {
-        let mut touched: Vec<(String, Vec<super::MenuItemSpec>)> = Vec::new();
-        for (menu, items) in menu_specs().lock().unwrap().iter_mut() {
-            let mut found = false;
+        let mut found = false;
+        for (_, items) in menu_specs().lock().unwrap().iter_mut() {
             super::MenuItemSpec::each_mut(items, &mut |it| {
                 if it.tag == tag {
                     it.label = title.to_string();
                     found = true;
                 }
             });
-            if found {
-                touched.push((menu.clone(), items.clone()));
-            }
         }
-        if touched.is_empty() {
+        if !found {
             return Err(format!("ui: no menu item with tag '{tag}'"));
         }
         // Con `gtk_menu_item_set_label` se reetiqueta el widget vivo (conserva estado, icono
-        // y atajo, y no cierra un menú abierto); sin él, se reconstruyen los menús afectados.
+        // y atajo, y no cierra un menú abierto); sin él, se reconstruyen las barras.
         let Some(set_label) = item_api().set_label else {
-            for (menu, items) in touched {
-                replace_menu(&menu, &items)?;
-            }
-            return Ok(());
+            return rebuild_bars();
         };
-        let live = items_by_tag().lock().unwrap().get(tag).cloned().unwrap_or_default();
-        if live.is_empty() {
-            return Ok(());
-        }
+        let tag = tag.to_string();
         let title_c = std::ffi::CString::new(title.replace('\0', "")).unwrap();
         on_main_sync(move || {
+            // Los widgets se leen AQUÍ, en el hilo del loop: una lista tomada fuera puede
+            // nombrar widgets que una reconstrucción de barras ya destruyó.
+            let live = items_by_tag().lock().unwrap().get(&tag).cloned().unwrap_or_default();
             // SAFETY: widgets del loop; los de ventanas cerradas se saltan por su bandera.
             unsafe {
                 for (w, alive) in live {
@@ -7733,12 +7725,8 @@ mod gtk {
                 }
             });
         }
-        let live = items_by_tag().lock().unwrap().get(&tag).cloned().unwrap_or_default();
-        if !known && live.is_empty() {
+        if !known && !items_by_tag().lock().unwrap().contains_key(&tag) {
             return Err(format!("ui: no menu item with tag '{tag}'"));
-        }
-        if live.is_empty() {
-            return Ok(());
         }
         // ray-sublime #509: un item declarado sin marca nació como `GtkMenuItem` simple, y
         // `gtk_check_menu_item_set_active` sobre él solo imprime un Gtk-CRITICAL. La marca se
@@ -7746,8 +7734,12 @@ mod gtk {
         // (el spec ya dice `checked`, así que renace como `GtkCheckMenuItem`).
         let rebuild = Arc::new(AtomicBool::new(false));
         let needs_rebuild = rebuild.clone();
+        let live_tag = tag.clone();
         on_main_sync(move || {
             let ia = item_api();
+            // Los widgets se leen AQUÍ, en el hilo del loop: una lista tomada fuera puede
+            // nombrar widgets que una reconstrucción de barras ya destruyó.
+            let live = items_by_tag().lock().unwrap().get(&live_tag).cloned().unwrap_or_default();
             // SAFETY: widgets del loop; los de ventanas cerradas se saltan por su bandera.
             unsafe {
                 for (w, alive) in live {
@@ -10881,12 +10873,16 @@ mod win {
     pub(super) fn set_menu_item(tag: &str, enabled: bool, checked: bool) -> Result<(), String> {
         let tag = tag.to_string();
         let mut known = false;
+        // ¿Hay en una barra un item con este tag que pueda llevar marca? (No la cabecera de un
+        // submenú, ni un item que solo vive en un menú contextual.)
+        let mut can_gain_check = false;
         for (_, items) in menu_specs().lock().unwrap().iter_mut() {
             super::MenuItemSpec::each_mut(items, &mut |it| {
                 if it.tag == tag {
                     it.enabled = enabled;
                     it.checked = checked;
                     known = true;
+                    can_gain_check |= !it.submenu && !it.is_separator();
                 }
             });
         }
@@ -10910,7 +10906,7 @@ mod win {
                         continue;
                     }
                     let _ = EnableMenuItem(menu, id as u32, MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED });
-                    if checked {
+                    if checked && can_gain_check {
                         // ray-sublime #509: una barra sin ningún item marcado nace sin columna
                         // de marcas (`MNS_NOCHECK`); el primero que se marca la repone.
                         let info = MENUINFO {
@@ -11035,6 +11031,7 @@ mod win {
                 let _ = AppendMenuW(popup, flags, *next_id as usize, PCWSTR(wide(&label).as_ptr()));
                 // M236: icono — solo .bmp por LoadImageW (otros formatos se ignoran, documentado).
                 if spec.icon.to_ascii_lowercase().ends_with(".bmp")
+                    && !barless().lock().unwrap().contains(&(hwnd.0 as usize))
                     && let Ok(h) = LoadImageW(None, PCWSTR(wide(&spec.icon).as_ptr()), IMAGE_BITMAP, 16, 16, LR_LOADFROMFILE)
                 {
                     let mut info = MENUITEMINFOW { cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32, fMask: MIIM_BITMAP, ..Default::default() };

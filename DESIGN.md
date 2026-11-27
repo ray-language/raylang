@@ -22805,7 +22805,7 @@ la ventana abierta. Todas dan su código al instante; con la 1.27.118 las cuatro
 Test de `ui_cli` para el tabulador.
 
 **Límites.** Solo glibc (`on_exit` no existe en musl). Cada rearme deja una entrada en la lista
-de `exit` (una por ventana cerrada). La salida anticipada solo actúa si al salir no queda
+de `exit` (una cada vez que el programa se queda sin ventanas). La salida anticipada solo actúa si al salir no queda
 ninguna ventana abierta: con alguna abierta nunca hubo aborto, y entonces corren todos los
 `atexit` como siempre. Una ventana cerrada antes de que WebKit registre su manejador (abrir
 y cerrar en el acto) quedaría sin cubrir. Si WebKit registrara un manejador

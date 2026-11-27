@@ -472,7 +472,8 @@ documentada:
   de glibc registra `leave_before_webkit`, un `extern "C" fn` sin estado que corre las funciones
   apuntadas con `ui::before_exit` (restaurar el terminal, la espera de la traza de audio),
   llama a `fflush(NULL)` y termina con `_exit(código)`: los manejadores de salida registrados
-  antes (los de WebKitGTK, que abortaban) no corren. Solo se registra al destruirse una ventana.
+  antes (los de WebKitGTK, que abortaban) no corren. Solo se registra cuando un cierre deja el
+  programa sin ventanas, y solo actúa si al salir no hay ninguna abierta.
 - **`crates/ray-runtime/src/ui.rs`, texto de atajo de un item** (ray-sublime #511) — GTK:
   `gtk_bin_get_child`/`gtk_container_remove`/`gtk_label_new`/`gtk_label_set_text` y
   `g_object_set_data`/`g_object_get_data` (símbolos opcionales, por `dlsym`) sobre widgets

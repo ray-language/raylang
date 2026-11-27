@@ -2930,7 +2930,8 @@ pub fn window_op(id: i64, op: &str, arg: &str) -> Result<(), String> {
         return rename_menu(old, new);
     }
     if op == "set_menu_title" {
-        let (tag, title) = arg.split_once('\n').ok_or_else(|| "ui: set_menu_title expects 'tag\\ntitle'".to_string())?;
+        // El título va delante: `std/ui` le quita los saltos de línea, y el tag puede llevarlos.
+        let (title, tag) = arg.split_once('\n').ok_or_else(|| "ui: set_menu_title expects 'title\\ntag'".to_string())?;
         return set_menu_title(tag, title);
     }
     if op == "intercept_quit" {
@@ -3240,7 +3241,7 @@ pub fn reset_for_restart() {
 pub fn close_window(id: i64) {
     // ray-sublime #512: antes de publicar `closed`, que es cuando el programa suele salir.
     #[cfg(target_os = "linux")]
-    gtk::arm_exit();
+    gtk::arm_exit_closing(id);
     mark_closed(id);
     let removed = windows().lock().unwrap().remove(&id);
     match removed {
@@ -3281,7 +3282,8 @@ pub struct MenuItemSpec {
     pub submenu: bool,
     pub children: Vec<MenuItemSpec>,
     /// ray-sublime #511: texto que se muestra donde va el atajo y no enlaza nada (una secuencia
-    /// de dos acordes que la app atiende ella misma). Vacío si el item tiene `shortcut`.
+    /// de dos acordes que la app atiende ella misma). Con `shortcut` puesto, se dibuja el
+    /// atajo real donde lo hay (AppKit; Win32 si lo enlaza) y este texto donde no (GTK).
     pub shortcut_label: String,
 }
 
@@ -5601,9 +5603,13 @@ mod mac {
             let (font_key, style_key, tab_text) = (nsstring("NSFont"), nsstring("NSParagraphStyle"), nsstring("\t"));
             let font_attrs = two(cls(b"NSDictionary\0"), sel(b"dictionaryWithObject:forKey:\0"), font, font_key);
             let width = |text: Id| size_of(text, sel(b"sizeWithAttributes:\0"), font_attrs).w;
+            // `setAttributedTitle:` deja `title` en «título ⇥ texto»: el título de verdad es lo
+            // que va antes del tabulador (un título nunca lleva uno propio). Sin esto, cada
+            // alineación volvía a añadir el texto.
+            let plain = |item: Id| at(one(get(item, sel(b"title\0")), sel(b"componentsSeparatedByString:\0"), tab_text), sel(b"objectAtIndex:\0"), 0);
             let mut title_width: f64 = 0.0;
             for i in 0..n {
-                title_width = title_width.max(width(get(at(items, sel(b"objectAtIndex:\0"), i), sel(b"title\0"))));
+                title_width = title_width.max(width(plain(at(items, sel(b"objectAtIndex:\0"), i))));
             }
             let mut label_width: f64 = 0.0;
             for it in &labelled {
@@ -5622,7 +5628,7 @@ mod mac {
             set_pair(attrs, sel(b"setObject:forKey:\0"), font, font_key);
             set_pair(attrs, sel(b"setObject:forKey:\0"), style, style_key);
             for it in labelled {
-                let joined = one(get(it, sel(b"title\0")), sel(b"stringByAppendingString:\0"), tab_text);
+                let joined = one(plain(it), sel(b"stringByAppendingString:\0"), tab_text);
                 let joined = one(joined, sel(b"stringByAppendingString:\0"), get(it, sel(b"representedObject\0")));
                 let attributed = two(
                     get(cls(b"NSAttributedString\0"), sel(b"alloc\0")),
@@ -7628,8 +7634,23 @@ mod gtk {
     /// de que empiece la destrucción, basta. Un programa que sale con todas sus ventanas
     /// abiertas no pasa por aquí y corre sus `atexit` como siempre, y también uno que sale con
     /// alguna ventana abierta aunque antes cerrara otras (`leave_before_webkit` lo comprueba).
-    /// Cada cierre cuesta una entrada en la lista de `exit`.
-    pub(super) fn arm_exit() {
+    /// Cuesta una entrada en la lista de `exit` cada vez que el programa se queda sin ventanas.
+    /// Las ventanas GTK abiertas, sin contar `except`. El hilo que sale nunca tiene este
+    /// candado; si otro lo envenenó, el mapa se lee igual.
+    fn open_windows(except: i64) -> usize {
+        let map = super::windows().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        map.iter().filter(|(id, w)| **id != except && !w.closed && matches!(w.win, super::Win::Gtk { .. })).count()
+    }
+
+    /// `arm_exit` si cerrar la ventana `id` deja el programa sin ventanas: solo entonces actúa
+    /// la salida anticipada, así que los demás cierres no añaden nada a la lista de `exit`.
+    pub(super) fn arm_exit_closing(id: i64) {
+        if open_windows(id) == 0 {
+            arm_exit();
+        }
+    }
+
+    fn arm_exit() {
         // Sin GTK iniciado no hay WebKit que adelantar (ventanas headless); la bandera se mira
         // sin tocar `api()`, que cargaría GTK y WebKitGTK.
         if !EXIT_ARMABLE.load(Ordering::SeqCst) {
@@ -7656,10 +7677,8 @@ mod gtk {
             fn _exit(status: i32) -> !;
         }
         // Con alguna ventana todavía abierta nunca hubo aborto: la salida sigue su camino y
-        // corre todos los `atexit`. (Si el mapa está tomado, se sale por aquí: es lo seguro.)
-        if let Ok(map) = super::windows().try_lock()
-            && map.values().any(|w| !w.closed && matches!(w.win, super::Win::Gtk { .. }))
-        {
+        // corre todos los `atexit`.
+        if open_windows(0) > 0 {
             return;
         }
         for hook in super::exit_hooks().lock().map(|h| h.clone()).unwrap_or_default() {
@@ -8589,8 +8608,8 @@ mod gtk {
         // El cierre pedido por el usuario llega aquí sin pasar por `close_window` (que ya armó
         // la salida y quitó la ventana del mapa): se arma antes de publicar `closed`, que es
         // cuando el programa suele salir.
-        if super::windows().lock().unwrap().contains_key(&ctx.id) {
-            arm_exit();
+        if super::windows().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains_key(&ctx.id) {
+            arm_exit_closing(ctx.id);
         }
         super::mark_closed(ctx.id);
     }

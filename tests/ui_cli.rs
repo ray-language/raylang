@@ -137,7 +137,7 @@ fn main() {
         Result.Ok(_) => print(to_string(ui.set_menu_item("C:\\tmp\\a\tb", true, false).is_ok())),
         Result.Err(e) => print(e),
     }
-    print(to_string(ui.set_menu_title("a", "Lower\tCase").is_ok()));
+    print(to_string(ui.set_menu_title("a", "Lower\tCase").is_ok() && ui.set_menu_title("C:\\tmp\\a\tb", "Line\nbreak").is_ok()));
 }
 "#;
     let path = tmp("menu_tab").join("main.ray");

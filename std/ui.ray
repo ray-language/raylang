@@ -546,7 +546,7 @@ pub fn rename_menu(old: string, new: string) -> Result<int, string> {
 /// place ("Undo" → "Undo Move clip"): no need to rebuild the menu. Err if no item has that tag
 /// or `title` is empty.
 pub fn set_menu_title(tag: string, title: string) -> Result<int, string> {
-    let r = __ui_window(0, "set_menu_title", tag + "\n" + one_field(title));
+    let r = __ui_window(0, "set_menu_title", one_field(title) + "\n" + tag);
     if (r[0] == "ok") { Result.Ok(0) } else { Result.Err(r[1]) }
 }
 

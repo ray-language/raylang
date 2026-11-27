@@ -365,11 +365,13 @@ pub fn reply_json(window: int, id: int, json: string) -> Result<int, string> {
 /// for an SF Symbol on macOS (ignored elsewhere; Windows takes `.bmp` files only). `enabled`
 /// and `checked` are the initial state — change them later with `set_menu_item`. `children` are
 /// the items of a submenu (see `submenu`); empty for an ordinary item. A tab or a line break in
-/// `title` shows as a space; one in `tag`, `shortcut` or `icon` is an `Err` from `menu`.
+/// `title` shows as a space; a `tag` keeps it (a file path can be a tag).
 /// `shortcut_label` (ray-sublime #511) is a text shown where the
 /// shortcut goes, aligned to the right, that binds NOTHING: for a command the app handles in its
 /// own keyboard layer, such as a two-chord sequence (`"⌘K ⌘U"`, `"Ctrl+K, Ctrl+U"` — write it
-/// as each platform does). It is ignored when `shortcut` is set, and on a submenu. Build items with
+/// as each platform does). Where the real `shortcut` is drawn (macOS; Windows when it binds it)
+/// that one wins; on Linux, whose menus show no shortcuts, the label shows. Ignored on a submenu.
+/// Build items with
 /// `item(...)`/`separator()`/`submenu(...)` to get the defaults.
 pub struct MenuItem {
     tag: string,
@@ -460,6 +462,15 @@ pub fn menu(title: string, items: [MenuItem]) -> Result<int, string> {
 // línea, que separan los campos de la codificación: un `title` con `\t` los desplazaba y lo de
 // detrás se leía como atajo (ray-sublime #511). El `tag` no se toca: es la identidad del item, y
 // cambiarlo en silencio lo dejaría sin casar con `set_menu_item`.
+// `tag`, `shortcut` e `icon` son identidad (una ruta como tag de «Open Recent»): viajan enteros,
+// con `\\` por una barra y `\t` por un tabulador; el runtime los deshace (`unescape_field`).
+fn escaped(text: string) -> string {
+    if (!text.contains("\t") && !text.contains("\\")) {
+        return text;
+    }
+    text.replace("\\", "\\\\").replace("\t", "\\t")
+}
+
 fn one_field(text: string) -> string {
     if (!text.contains("\t") && !text.contains("\n")) {
         return text;
@@ -479,13 +490,13 @@ fn encode_level(items: [MenuItem], depth: int, encoded: [string]) {
         let ch = if (it.checked) { "1" } else { "0" };
         let sub = if (it.opens_submenu) { "1" } else { "0" };
         encoded.push(
-            it.tag
+            escaped(it.tag)
                 + "\t"
                 + one_field(it.title)
                 + "\t"
-                + it.shortcut
+                + escaped(it.shortcut)
                 + "\t"
-                + it.icon
+                + escaped(it.icon)
                 + "\t"
                 + en
                 + "\t"

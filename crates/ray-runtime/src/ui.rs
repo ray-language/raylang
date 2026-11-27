@@ -3607,21 +3607,25 @@ mod menu_tree_tests {
         format!("{tag}\t{title}\t\t\t1\t0\t{depth}\t{}", if sub { "1" } else { "0" })
     }
 
-    /// ray-sublime #511: el texto de atajo que no enlaza nada viaja en el noveno campo; con un
-    /// atajo real o en un submenú no se guarda, y un valor libre no pasa por `parse_chord`.
+    /// ray-sublime #511: el texto de atajo que no enlaza nada viaja en el noveno campo; en un
+    /// submenú no se guarda, y un valor libre no pasa por `parse_chord`. Con un atajo real se
+    /// conserva: cada backend decide cuál dibuja. `tag` e `icon` llegan escapados.
     #[test]
     fn a_shortcut_label_is_free_text_and_yields_to_a_real_shortcut() {
         let items = decode_items(&[
             "upper\tUpper Case\t\t\t1\t0\t0\t0\tCtrl+K, Ctrl+U".to_string(),
-            "save\tSave\tcmd+s\t\t1\t0\t0\t0\tignored".to_string(),
+            "save\tSave\tcmd+s\t\t1\t0\t0\t0\tCtrl+S".to_string(),
             "\tRecent\t\t\t1\t0\t0\t1\tignored".to_string(),
             "old\tOld client\t\t\t1\t0\t0\t0".to_string(),
         ])
         .unwrap();
         assert_eq!(items[0].shortcut_label, "Ctrl+K, Ctrl+U");
-        assert_eq!((items[1].shortcut.as_str(), items[1].shortcut_label.as_str()), ("cmd+s", ""));
+        assert_eq!((items[1].shortcut.as_str(), items[1].shortcut_label.as_str()), ("cmd+s", "Ctrl+S"));
         assert_eq!(items[2].shortcut_label, "");
         assert_eq!(items[3].shortcut_label, "");
+        let paths = decode_items(&["C:\\\\tmp\\\\a\\tb.txt\tOpen\t\t/icons/a\\tb.png\t1\t0\t0\t0\t".to_string()]).unwrap();
+        assert_eq!((paths[0].tag.as_str(), paths[0].icon.as_str()), ("C:\\tmp\\a\tb.txt", "/icons/a\tb.png"));
+        assert_eq!(unescape_field("plain"), "plain");
     }
 
     /// ray-daw #453: la lista plana con profundidades vuelve a ser un árbol.
@@ -3722,22 +3726,41 @@ mod chord_tests {
     }
 }
 
+/// Un campo de identidad de un item (`tag`, `shortcut`, `icon`) como lo escribió la app:
+/// `std/ui` manda `\\` por una barra y `\t` por un tabulador, que separaría los campos (#511).
+fn unescape_field(field: &str) -> String {
+    if !field.contains('\\') {
+        return field.to_string();
+    }
+    let mut out = String::with_capacity(field.len());
+    let mut chars = field.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.next() {
+            Some('t') => out.push('\t'),
+            Some(other) => out.push(other),
+            None => out.push('\\'),
+        }
+    }
+    out
+}
+
 fn decode_items(items: &[String]) -> Result<Vec<MenuItemSpec>, String> {
     // ray-daw #453: el borde sigue siendo una lista plana; cada item lleva su PROFUNDIDAD y si
     // abre un submenú, y aquí se rehace el árbol.
     let mut flat: Vec<(usize, MenuItemSpec)> = Vec::with_capacity(items.len());
     for it in items {
-        // Los textos que se muestran llegan ya sin tabuladores; uno en `tag`, `shortcut` o
-        // `icon` desplazaría los campos (un título leído como atajo, un item marcado de más).
-        if it.split('\t').count() > 9 || it.contains('\n') {
-            return Err("ui: a menu item's tag, shortcut or icon cannot contain a tab or a line break".to_string());
-        }
+        // Los textos que se muestran llegan sin tabuladores; `tag`, `shortcut` e `icon` son
+        // identidad (una ruta como tag de «Open Recent») y llegan escapados (`unescape_field`).
         let mut p = it.split('\t');
         let mut spec = MenuItemSpec {
-            tag: p.next().unwrap_or("").to_string(),
+            tag: unescape_field(p.next().unwrap_or("")),
             label: p.next().unwrap_or("").to_string(),
-            shortcut: p.next().unwrap_or("").to_string(),
-            icon: p.next().unwrap_or("").to_string(),
+            shortcut: unescape_field(p.next().unwrap_or("")),
+            icon: unescape_field(p.next().unwrap_or("")),
             enabled: p.next().map(|s| s != "0").unwrap_or(true),
             checked: p.next().map(|s| s == "1").unwrap_or(false),
             submenu: false,
@@ -3770,8 +3793,9 @@ fn decode_items(items: &[String]) -> Result<Vec<MenuItemSpec>, String> {
         if !spec.shortcut.is_empty() && parse_chord(&spec.shortcut).is_none() {
             return Err(format!("ui: unsupported menu shortcut '{}'", spec.shortcut));
         }
-        // Con atajo real, el texto que se muestra es el suyo; un submenú no lleva ninguno.
-        if spec.submenu || !spec.shortcut.is_empty() {
+        // Un submenú no lleva texto de atajo. Con atajo real, cada backend muestra el suyo si
+        // lo dibuja (AppKit; Win32 cuando lo enlaza) y, si no (GTK), el texto.
+        if spec.submenu {
             spec.shortcut_label.clear();
         }
         flat.push((depth, spec));
@@ -4110,6 +4134,9 @@ pub fn app_menu(name: &str, items: &[String]) -> Result<(), String> {
     if headless() {
         let mut tags = headless_menu_tags().lock().unwrap();
         tags.extend(MenuItemSpec::tags(&decoded));
+        if ui_trace() && let Some(labels) = MenuItemSpec::shortcut_labels(&decoded) {
+            eprintln!("[ui] shortcut labels app menu: {labels}");
+        }
         return Ok(());
     }
     #[cfg(target_os = "macos")]
@@ -5698,7 +5725,7 @@ mod mac {
                 };
                 set_i64(item, sel(b"setTag:\0"), n);
             }
-            if !spec.shortcut_label.is_empty() {
+            if !spec.shortcut_label.is_empty() && chord.is_none() {
                 // ray-sublime #511: lo dibuja `align_shortcut_labels` cuando el menú está entero.
                 // El identificador dice que el `representedObject` es NUESTRO texto: un menú
                 // puede llevar items que pone AppKit con el suyo.
@@ -5766,12 +5793,15 @@ mod mac {
             unsafe {
                 let set_id: MsgVoidId = std::mem::transmute(msg_send());
                 let get: MsgId = std::mem::transmute(msg_send());
+                let release: MsgVoid = std::mem::transmute(msg_send());
+                let text = nsstring(&title);
                 for it in items {
-                    set_id(it as Id, sel(b"setTitle:\0"), nsstring(&title));
+                    set_id(it as Id, sel(b"setTitle:\0"), text);
                     // #511: la tabulación de los textos de atajo depende del título más ancho
                     // del menú, sea o no el de un item con texto.
                     align_shortcut_labels(get(it as Id, sel(b"menu\0")));
                 }
+                release(text, sel(b"release\0"));
             }
             Ok(())
         })
@@ -7596,8 +7626,9 @@ mod gtk {
     /// ya cerrada, y el manejador de WebKit que lo provoca se registra después de `gtk_init`
     /// (con el webview ya abierto) y antes del cierre — medido: armar solo en `close(h)`, antes
     /// de que empiece la destrucción, basta. Un programa que sale con todas sus ventanas
-    /// abiertas no pasa por aquí y corre sus `atexit` como siempre. Cada registro cuesta una
-    /// entrada en la lista de `exit`; el primero que corre termina el proceso.
+    /// abiertas no pasa por aquí y corre sus `atexit` como siempre, y también uno que sale con
+    /// alguna ventana abierta aunque antes cerrara otras (`leave_before_webkit` lo comprueba).
+    /// Cada cierre cuesta una entrada en la lista de `exit`.
     pub(super) fn arm_exit() {
         // Sin GTK iniciado no hay WebKit que adelantar (ventanas headless); la bandera se mira
         // sin tocar `api()`, que cargaría GTK y WebKitGTK.
@@ -7623,6 +7654,13 @@ mod gtk {
         unsafe extern "C" {
             fn fflush(stream: *mut c_void) -> i32;
             fn _exit(status: i32) -> !;
+        }
+        // Con alguna ventana todavía abierta nunca hubo aborto: la salida sigue su camino y
+        // corre todos los `atexit`. (Si el mapa está tomado, se sale por aquí: es lo seguro.)
+        if let Ok(map) = super::windows().try_lock()
+            && map.values().any(|w| !w.closed && matches!(w.win, super::Win::Gtk { .. }))
+        {
+            return;
         }
         for hook in super::exit_hooks().lock().map(|h| h.clone()).unwrap_or_default() {
             hook();
@@ -8548,9 +8586,12 @@ mod gtk {
         // SAFETY: `data` es el DestroyCtx de open_window; vive hasta el GClosureNotify.
         let ctx = unsafe { &*(data as *const DestroyCtx) };
         ctx.alive.store(false, Ordering::SeqCst);
-        // El cierre pedido por el usuario llega aquí sin pasar por `close_window`: la salida se
-        // arma antes de publicar `closed`, que es cuando el programa suele salir.
-        arm_exit();
+        // El cierre pedido por el usuario llega aquí sin pasar por `close_window` (que ya armó
+        // la salida y quitó la ventana del mapa): se arma antes de publicar `closed`, que es
+        // cuando el programa suele salir.
+        if super::windows().lock().unwrap().contains_key(&ctx.id) {
+            arm_exit();
+        }
         super::mark_closed(ctx.id);
     }
 

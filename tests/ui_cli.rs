@@ -119,7 +119,7 @@ fn open_with_validates_its_options_on_both_engines() {
 /// ray-sublime #511: un tabulador en el título de un item desplazaba los campos de la
 /// codificación (lo de detrás se leía como atajo) y el menú entero fallaba. El texto de atajo
 /// que no enlaza nada llega al runtime en su campo (lo dice la traza), y un tabulador en el
-/// `tag`, que no se puede reescribir, es un `Err` claro.
+/// `tag`, que no se puede reescribir, viaja escapado y llega entero.
 #[test]
 fn a_tab_in_a_menu_title_does_not_break_the_menu_and_the_shortcut_label_arrives() {
     const PROGRAM: &str = r#"import std/ui;
@@ -127,13 +127,14 @@ fn main() {
     var seq = ui.item("b", "Side Bar", "");
     seq.shortcut_label = "Ctrl+K,\tCtrl+B";
     var bound = ui.item("s", "Save", "cmd+s");
-    bound.shortcut_label = "ignored";
+    bound.shortcut_label = "Ctrl+S";
     match (ui.menu("Probe", [ui.item("a", "Upper Case\tCtrl+K, Ctrl+U", ""), seq, bound])) {
         Result.Ok(_) => print("ok"),
         Result.Err(e) => print(e),
     }
-    match (ui.menu("Bad", [ui.item("x\ty", "T", "")])) {
-        Result.Ok(_) => print("a tab in a tag accepted"),
+    // Un tabulador o una barra en el `tag` (una ruta) no desplaza nada: el tag llega entero.
+    match (ui.menu("Paths", [ui.item("C:\\tmp\\a\tb", "T", "")])) {
+        Result.Ok(_) => print(to_string(ui.set_menu_item("C:\\tmp\\a\tb", true, false).is_ok())),
         Result.Err(e) => print(e),
     }
     print(to_string(ui.set_menu_title("a", "Lower\tCase").is_ok()));
@@ -148,8 +149,8 @@ fn main() {
         }
         let out = cmd.arg(&path).env("RAY_UI_BACKEND", "headless").env("RAY_UI_TRACE", "1").stdin(std::process::Stdio::null()).output().expect("corre");
         let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
-        assert_eq!(stdout, "ok\nui: a menu item's tag, shortcut or icon cannot contain a tab or a line break\ntrue\n", "interp={interp}\n{stderr}");
-        assert!(stderr.contains("[ui] shortcut labels Probe: Side Bar=Ctrl+K, Ctrl+B\n"), "interp={interp}\n{stderr}");
+        assert_eq!(stdout, "ok\ntrue\ntrue\n", "interp={interp}\n{stderr}");
+        assert!(stderr.contains("[ui] shortcut labels Probe: Side Bar=Ctrl+K, Ctrl+B | Save=Ctrl+S\n"), "interp={interp}\n{stderr}");
     }
 }
 

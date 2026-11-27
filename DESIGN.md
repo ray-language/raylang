@@ -22794,8 +22794,10 @@ del terminal del modo crudo y la espera de la traza de audio, que se apuntan tam
 `ui::before_exit` y corren igual. (2)
 `std/ui` cambia tabuladores y saltos de línea por un espacio en lo que se MUESTRA (`title`, el
 texto de atajo, el título de `set_menu_title`). El `tag` no se reescribe —es la identidad del
-item, y cambiado en silencio dejaría de casar con `set_menu_item`—: un tabulador en `tag`,
-`shortcut` o `icon` deja campos de más y `decode_items` lo rechaza con un `Err` claro.
+item (una ruta en un «Open Recent»), y cambiado en silencio dejaría de casar con
+`set_menu_item`—: `tag`, `shortcut` e `icon` viajan escapados (`\\` y `\t`) y el runtime los
+deshace. Rechazarlos con un `Err` (se probó) tumbaba el menú entero por una ruta rara, y contar
+campos habría roto la regla de que un runtime ignora los campos que no conoce.
 
 **Comprobado.** VM de Linux (WebKitGTK 4.1, Wayland), cinco variantes: cerrar y salir, esperar
 6 s tras cerrar, volver de `main`, tres ventanas abiertas y cerradas en dos tandas, y salir con
@@ -22803,8 +22805,9 @@ la ventana abierta. Todas dan su código al instante; con la 1.27.118 las cuatro
 Test de `ui_cli` para el tabulador.
 
 **Límites.** Solo glibc (`on_exit` no existe en musl). Cada rearme deja una entrada en la lista
-de `exit` (una o dos por ventana cerrada), y desde el primer cierre la salida anticipada vale
-para el resto del proceso. Una ventana cerrada antes de que WebKit registre su manejador (abrir
+de `exit` (una por ventana cerrada). La salida anticipada solo actúa si al salir no queda
+ninguna ventana abierta: con alguna abierta nunca hubo aborto, y entonces corren todos los
+`atexit` como siempre. Una ventana cerrada antes de que WebKit registre su manejador (abrir
 y cerrar en el acto) quedaría sin cubrir. Si WebKit registrara un manejador
 en otro momento (no se ha visto), el aborto volvería en ese caso. El `atexit` de una librería C cargada por FFI y
 registrado antes del último cierre de ventana no corre. `fflush(NULL)` toma el cerrojo de cada
@@ -22819,7 +22822,8 @@ de teclado y quiere mostrarlas en el menú, donde van los atajos. `shortcut` sol
 **Decisión.** Un campo `shortcut_label: string` en `MenuItem`: texto libre, sin validar, que se
 dibuja en la columna de atajos y no registra nada. No se sobrecarga `shortcut` con secuencias:
 su contrato es «esto se enlaza», y un valor que se muestra pero no dispara rompería ese contrato
-en silencio. Con `shortcut` puesto, gana el atajo real. Viaja como noveno campo de la
+en silencio. Con `shortcut` puesto gana el atajo real allí donde se dibuja (AppKit; Win32 cuando
+lo enlaza); en GTK, que no muestra atajos, se ve el texto. Viaja como noveno campo de la
 codificación de items (un runtime que no lo conoce lo ignora). Por plataforma: Win32, el texto
 tras el tabulador del item, sin `ACCEL`; GTK, que no deja poner texto libre en su
 `GtkAccelLabel`, cambia el hijo del item por una caja «título … texto» con el texto atenuado

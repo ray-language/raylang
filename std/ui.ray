@@ -365,7 +365,8 @@ pub fn reply_json(window: int, id: int, json: string) -> Result<int, string> {
 /// for an SF Symbol on macOS (ignored elsewhere; Windows takes `.bmp` files only). `enabled`
 /// and `checked` are the initial state — change them later with `set_menu_item`. `children` are
 /// the items of a submenu (see `submenu`); empty for an ordinary item. A tab or a line break in
-/// `title` shows as a space. `shortcut_label` (ray-sublime #511) is a text shown where the
+/// `title` shows as a space; one in `tag`, `shortcut` or `icon` is an `Err` from `menu`.
+/// `shortcut_label` (ray-sublime #511) is a text shown where the
 /// shortcut goes, aligned to the right, that binds NOTHING: for a command the app handles in its
 /// own keyboard layer, such as a two-chord sequence (`"⌘K ⌘U"`, `"Ctrl+K, Ctrl+U"` — write it
 /// as each platform does). It is ignored when `shortcut` is set, and on a submenu. Build items with

@@ -117,22 +117,39 @@ fn open_with_validates_its_options_on_both_engines() {
 }
 
 /// ray-sublime #511: un tabulador en el título de un item desplazaba los campos de la
-/// codificación (lo de detrás se leía como atajo) y el menú entero fallaba.
+/// codificación (lo de detrás se leía como atajo) y el menú entero fallaba. El texto de atajo
+/// que no enlaza nada llega al runtime en su campo (lo dice la traza), y un tabulador en el
+/// `tag`, que no se puede reescribir, es un `Err` claro.
 #[test]
-fn a_tab_in_a_menu_title_does_not_break_the_menu() {
+fn a_tab_in_a_menu_title_does_not_break_the_menu_and_the_shortcut_label_arrives() {
+    const PROGRAM: &str = r#"import std/ui;
+fn main() {
+    var seq = ui.item("b", "Side Bar", "");
+    seq.shortcut_label = "Ctrl+K,\tCtrl+B";
+    var bound = ui.item("s", "Save", "cmd+s");
+    bound.shortcut_label = "ignored";
+    match (ui.menu("Probe", [ui.item("a", "Upper Case\tCtrl+K, Ctrl+U", ""), seq, bound])) {
+        Result.Ok(_) => print("ok"),
+        Result.Err(e) => print(e),
+    }
+    match (ui.menu("Bad", [ui.item("x\ty", "T", "")])) {
+        Result.Ok(_) => print("a tab in a tag accepted"),
+        Result.Err(e) => print(e),
+    }
+    print(to_string(ui.set_menu_title("a", "Lower\tCase").is_ok()));
+}
+"#;
     let path = tmp("menu_tab").join("main.ray");
-    std::fs::write(
-        &path,
-        "import std/ui;\nfn main() {\n    var seq = ui.item(\"b\", \"Side Bar\", \"\");\n    seq.shortcut_label = \"Ctrl+K, Ctrl+B\";\n    match (ui.menu(\"Probe\", [ui.item(\"a\", \"Upper Case\\tCtrl+K, Ctrl+U\", \"\"), seq])) {\n        Result.Ok(_) => print(\"ok\"),\n        Result.Err(e) => print(e),\n    }\n}\n",
-    )
-    .unwrap();
+    std::fs::write(&path, PROGRAM).unwrap();
     for interp in [false, true] {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_raylang"));
         if interp {
             cmd.arg("--interp");
         }
-        let (out, code) = run_headless(cmd.arg(&path));
-        assert_eq!((out.as_str(), code), ("ok\n", 0), "interp={interp}");
+        let out = cmd.arg(&path).env("RAY_UI_BACKEND", "headless").env("RAY_UI_TRACE", "1").stdin(std::process::Stdio::null()).output().expect("corre");
+        let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert_eq!(stdout, "ok\nui: a menu item's tag, shortcut or icon cannot contain a tab\ntrue\n", "interp={interp}\n{stderr}");
+        assert!(stderr.contains("[ui] shortcut labels Probe: Side Bar=Ctrl+K, Ctrl+B\n"), "interp={interp}\n{stderr}");
     }
 }
 

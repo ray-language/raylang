@@ -22783,15 +22783,18 @@ como texto separado por tabuladores: un tabulador en `title` desplazaba los camp
 **Decisión.** (1) `gtk::leave_before_webkit`, un manejador `on_exit` (glibc: recibe el código de
 salida) que vacía stdio y llama a `_exit` con ese código, antes de que corran los de WebKit.
 Los manejadores corren del último registrado al primero, y WebKit registra los suyos después de
-`gtk_init`: por eso el nuestro se registra al destruirse cada ventana, y otra vez con el loop
-ocioso (`arm_exit`). Un programa que sale con todas sus ventanas abiertas no lo registra nunca
+`gtk_init`: por eso el nuestro se registra al cerrarse cada ventana —en `close(h)` y en el
+`destroy` de GTK, antes de publicar el evento `closed`, que es cuando el programa suele salir— y
+otra vez con el loop ocioso (`arm_exit`). Un programa que sale con todas sus ventanas abiertas no lo registra nunca
 y corre sus `atexit` como siempre. Se probó antes dejar
 aparcado el loop de GTK durante la salida: no evita el aborto. Lo que la salida anticipada se
 salta son los `atexit` registrados antes del último rearme; los nuestros son la restauración
 del terminal del modo crudo y la espera de la traza de audio, que se apuntan también en
 `ui::before_exit` y corren igual. (2)
-`std/ui` cambia tabuladores y saltos de línea por un espacio en `tag`, `title`, `shortcut` e
-`icon` antes de codificar.
+`std/ui` cambia tabuladores y saltos de línea por un espacio en lo que se MUESTRA (`title`, el
+texto de atajo, el título de `set_menu_title`). El `tag` no se reescribe —es la identidad del
+item, y cambiado en silencio dejaría de casar con `set_menu_item`—: un tabulador en `tag`,
+`shortcut` o `icon` deja campos de más y `decode_items` lo rechaza con un `Err` claro.
 
 **Comprobado.** VM de Linux (WebKitGTK 4.1, Wayland), cinco variantes: cerrar y salir, esperar
 6 s tras cerrar, volver de `main`, tres ventanas abiertas y cerradas en dos tandas, y salir con
@@ -22800,9 +22803,9 @@ Test de `ui_cli` para el tabulador.
 
 **Límites.** Solo glibc (`on_exit` no existe en musl). Cada rearme deja una entrada en la lista
 de `exit` (dos por ventana cerrada). Si WebKit registrara un manejador
-en otro momento (no se ha visto), el aborto volvería en ese caso. En un binario nativo, el modo
-crudo del terminal activado ANTES de cerrar la última ventana no se restaura al salir (el código emitido no
-conoce `ui::before_exit`); en la VM sí.
+en otro momento (no se ha visto), el aborto volvería en ese caso. El `atexit` de una librería C cargada por FFI y
+registrado antes del último cierre de ventana no corre. `fflush(NULL)` toma el cerrojo de cada
+`FILE`: un hilo bloqueado dentro de stdio de C colgaría la salida.
 
 ## 493. `MenuItem.shortcut_label`: un atajo que se muestra y no enlaza (ray-sublime #511, nov 2026)
 

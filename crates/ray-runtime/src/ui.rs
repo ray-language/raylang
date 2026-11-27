@@ -3235,6 +3235,9 @@ pub fn reset_for_restart() {
 }
 
 pub fn close_window(id: i64) {
+    // ray-sublime #512: antes de publicar `closed`, que es cuando el programa suele salir.
+    #[cfg(target_os = "linux")]
+    gtk::arm_exit();
     mark_closed(id);
     let removed = windows().lock().unwrap().remove(&id);
     match removed {
@@ -3710,6 +3713,11 @@ fn decode_items(items: &[String]) -> Result<Vec<MenuItemSpec>, String> {
     // abre un submenú, y aquí se rehace el árbol.
     let mut flat: Vec<(usize, MenuItemSpec)> = Vec::with_capacity(items.len());
     for it in items {
+        // Los textos que se muestran llegan ya sin tabuladores; uno en `tag`, `shortcut` o
+        // `icon` desplazaría los campos (un título leído como atajo, un item marcado de más).
+        if it.split('\t').count() > 9 {
+            return Err("ui: a menu item's tag, shortcut or icon cannot contain a tab".to_string());
+        }
         let mut p = it.split('\t');
         let mut spec = MenuItemSpec {
             tag: p.next().unwrap_or("").to_string(),
@@ -3741,7 +3749,6 @@ fn decode_items(items: &[String]) -> Result<Vec<MenuItemSpec>, String> {
             }
             // Un submenú no tiene atajo ni marca: se abre, no se elige.
             spec.shortcut.clear();
-            spec.shortcut_label.clear();
             spec.checked = false;
         } else if !spec.is_separator() && spec.tag.is_empty() {
             return Err("ui: a menu item needs a non-empty tag".to_string());
@@ -3749,8 +3756,8 @@ fn decode_items(items: &[String]) -> Result<Vec<MenuItemSpec>, String> {
         if !spec.shortcut.is_empty() && parse_chord(&spec.shortcut).is_none() {
             return Err(format!("ui: unsupported menu shortcut '{}'", spec.shortcut));
         }
-        // Con atajo real, el texto que se muestra es el suyo.
-        if !spec.shortcut.is_empty() {
+        // Con atajo real, el texto que se muestra es el suyo; un submenú no lleva ninguno.
+        if spec.submenu || !spec.shortcut.is_empty() {
             spec.shortcut_label.clear();
         }
         flat.push((depth, spec));
@@ -3867,6 +3874,15 @@ pub fn replace_menu(title: &str, items: &[String]) -> Result<(), String> {
             if decoded.iter().any(|it| it.submenu) {
                 eprintln!("[ui] submenus {title}: {}", MenuItemSpec::tree(&decoded));
             }
+            let mut labels: Vec<String> = Vec::new();
+            MenuItemSpec::each(&decoded, &mut |it| {
+                if !it.shortcut_label.is_empty() {
+                    labels.push(format!("{}={}", it.label, it.shortcut_label));
+                }
+            });
+            if !labels.is_empty() {
+                eprintln!("[ui] shortcut labels {title}: {}", labels.join(" | "));
+            }
         }
         return Ok(());
     }
@@ -3905,6 +3921,15 @@ pub fn menu_at(position: i64, title: &str, items: &[String]) -> Result<(), Strin
             eprintln!("[ui] menu {title} at {position} items {}", decoded.len());
             if decoded.iter().any(|it| it.submenu) {
                 eprintln!("[ui] submenus {title}: {}", MenuItemSpec::tree(&decoded));
+            }
+            let mut labels: Vec<String> = Vec::new();
+            MenuItemSpec::each(&decoded, &mut |it| {
+                if !it.shortcut_label.is_empty() {
+                    labels.push(format!("{}={}", it.label, it.shortcut_label));
+                }
+            });
+            if !labels.is_empty() {
+                eprintln!("[ui] shortcut labels {title}: {}", labels.join(" | "));
             }
         }
         return Ok(());
@@ -5509,8 +5534,8 @@ mod mac {
         const ALIGN_RIGHT: i64 = if cfg!(target_arch = "x86_64") { 1 } else { 2 };
         const GAP: f64 = 32.0;
         // SAFETY: mensajes estándar de AppKit/Foundation en el hilo principal. Lo creado con
-        // `alloc`/`new` (tabulación, estilo, títulos) se libera aquí tras entregarlo; el resto
-        // es autoliberado.
+        // `alloc`/`new` o `nsstring` (tabulación, estilo, títulos, claves) se libera aquí tras
+        // entregarlo; el resto es autoliberado.
         unsafe {
             let get: MsgId = std::mem::transmute(msg_send());
             let count: MsgI64 = std::mem::transmute(msg_send());
@@ -5534,7 +5559,9 @@ mod mac {
             }
             let font = font_of(cls(b"NSFont\0"), sel(b"menuFontOfSize:\0"), 0.0);
             // `NSFontAttributeName` y `NSParagraphStyleAttributeName` valen estas cadenas.
-            let font_attrs = two(cls(b"NSDictionary\0"), sel(b"dictionaryWithObject:forKey:\0"), font, nsstring("NSFont"));
+            // `nsstring` devuelve una cadena propia (+1): se liberan al final.
+            let (font_key, style_key, tab_text) = (nsstring("NSFont"), nsstring("NSParagraphStyle"), nsstring("\t"));
+            let font_attrs = two(cls(b"NSDictionary\0"), sel(b"dictionaryWithObject:forKey:\0"), font, font_key);
             let width = |text: Id| size_of(text, sel(b"sizeWithAttributes:\0"), font_attrs).w;
             let mut title_width: f64 = 0.0;
             for i in 0..n {
@@ -5554,10 +5581,10 @@ mod mac {
             let style = get(cls(b"NSMutableParagraphStyle\0"), sel(b"new\0"));
             set_id(style, sel(b"setTabStops:\0"), one(cls(b"NSArray\0"), sel(b"arrayWithObject:\0"), tab));
             let attrs = get(cls(b"NSMutableDictionary\0"), sel(b"dictionary\0"));
-            set_pair(attrs, sel(b"setObject:forKey:\0"), font, nsstring("NSFont"));
-            set_pair(attrs, sel(b"setObject:forKey:\0"), style, nsstring("NSParagraphStyle"));
+            set_pair(attrs, sel(b"setObject:forKey:\0"), font, font_key);
+            set_pair(attrs, sel(b"setObject:forKey:\0"), style, style_key);
             for it in labelled {
-                let joined = one(get(it, sel(b"title\0")), sel(b"stringByAppendingString:\0"), nsstring("\t"));
+                let joined = one(get(it, sel(b"title\0")), sel(b"stringByAppendingString:\0"), tab_text);
                 let joined = one(joined, sel(b"stringByAppendingString:\0"), get(it, sel(b"representedObject\0")));
                 let attributed = two(
                     get(cls(b"NSAttributedString\0"), sel(b"alloc\0")),
@@ -5571,6 +5598,9 @@ mod mac {
             // El estilo retiene su tabulación y cada título atribuido su estilo.
             release(tab, sel(b"release\0"));
             release(style, sel(b"release\0"));
+            for own in [font_key, style_key, tab_text] {
+                release(own, sel(b"release\0"));
+            }
         }
     }
 
@@ -7535,8 +7565,12 @@ mod gtk {
         if ok == 0 {
             return Err("ui: could not initialize GTK (no DISPLAY/WAYLAND_DISPLAY?)".to_string());
         }
+        EXIT_ARMABLE.store(true, Ordering::SeqCst);
         Ok(())
     }
+
+    /// GTK está iniciado: `arm_exit` tiene algo que adelantar.
+    static EXIT_ARMABLE: AtomicBool = AtomicBool::new(false);
 
     /// ray-sublime #512: (re)registra `leave_before_webkit` como el ÚLTIMO manejador de salida,
     /// que es el primero en correr. Se llama al destruirse una ventana (y otra vez con el loop
@@ -7544,7 +7578,11 @@ mod gtk {
     /// lo provoca se registra más tarde que `gtk_init`. Un programa que sale con todas sus
     /// ventanas abiertas no pasa por aquí y corre sus `atexit` como siempre. Cada registro
     /// cuesta una entrada en la lista de `exit`; el primero que corre termina el proceso.
-    fn arm_exit() {
+    pub(super) fn arm_exit() {
+        // Sin GTK iniciado no hay WebKit que adelantar (ventanas headless).
+        if !matches!(api(), Ok(_)) || !EXIT_ARMABLE.load(Ordering::SeqCst) {
+            return;
+        }
         #[cfg(target_env = "gnu")]
         {
             unsafe extern "C" {
@@ -8489,12 +8527,21 @@ mod gtk {
         // SAFETY: `data` es el DestroyCtx de open_window; vive hasta el GClosureNotify.
         let ctx = unsafe { &*(data as *const DestroyCtx) };
         ctx.alive.store(false, Ordering::SeqCst);
-        super::mark_closed(ctx.id);
         // WebKit acaba de soltar el webview en otro handler de `destroy`, o lo hará enseguida:
-        // se rearma ahora y otra vez cuando el loop quede ocioso.
+        // se arma ahora (antes de publicar `closed`, que es cuando el programa suele salir) y
+        // otra vez cuando el loop quede ocioso.
         arm_exit();
-        on_main(arm_exit);
+        if !REARM_PENDING.swap(true, Ordering::SeqCst) {
+            on_main(|| {
+                REARM_PENDING.store(false, Ordering::SeqCst);
+                arm_exit();
+            });
+        }
+        super::mark_closed(ctx.id);
     }
+
+    /// Hay un rearme de la salida encolado para cuando el loop quede ocioso.
+    static REARM_PENDING: AtomicBool = AtomicBool::new(false);
 
     /// M257: `delete-event` — el cierre pedido por el usuario (botón del WM, Alt+F4). Con
     /// `intercept_close` emite `close_requested` y devuelve TRUE (GTK no destruye); `close(h)`
@@ -11099,11 +11146,7 @@ mod win {
             return Ok(());
         }
         let tag = tag.to_string();
-        let label = match accel_for(&shortcut, 0) {
-            Some((text, _)) => format!("{title}\t{text}"),
-            None if !shown.is_empty() => format!("{title}\t{shown}"),
-            None => title.to_string(),
-        };
+        let label = item_text(title, &shortcut, &shown);
         on_main_sync(move || {
             let text = wide(&label);
             // Los ids se leen AQUÍ, en el hilo 1: una reconstrucción de barras los renumera.
@@ -11193,6 +11236,16 @@ mod win {
             }
             Ok(())
         })
+    }
+
+    /// El texto de un item como lo pinta Win32: el título y, tras un tabulador, el atajo real
+    /// o, si no lo hay, el texto de atajo que no enlaza nada (#511).
+    fn item_text(title: &str, shortcut: &str, shortcut_label: &str) -> String {
+        match accel_for(shortcut, 0) {
+            Some((text, _)) => format!("{title}\t{text}"),
+            None if !shortcut_label.is_empty() => format!("{title}\t{shortcut_label}"),
+            None => title.to_string(),
+        }
     }
 
     /// El atajo de un item (`shortcut` de un carácter) como (texto para el menú, ACCEL). Minúscula
@@ -11287,14 +11340,14 @@ mod win {
                 // de forma nativa (interceptarla rompería el Ctrl+C real).
                 let is_role = spec.edit_role().is_some();
                 let label = match accel_for(&spec.shortcut, *next_id) {
-                    Some((text, accel)) => {
+                    Some((_, accel)) => {
                         if !is_role {
                             keys.push((accel.key, (accel.fVirt & FCONTROL).0 != 0, (accel.fVirt & FALT).0 != 0, (accel.fVirt & FSHIFT).0 != 0, spec.tag.clone()));
                             accels.push(accel);
                         }
-                        format!("{}\t{text}", spec.label)
+                        item_text(&spec.label, &spec.shortcut, &spec.shortcut_label)
                     }
-                    None if !spec.shortcut_label.is_empty() => format!("{}\t{}", spec.label, spec.shortcut_label),
+                    None if !spec.shortcut_label.is_empty() => item_text(&spec.label, &spec.shortcut, &spec.shortcut_label),
                     None => spec.label.clone(),
                 };
                 let mut flags = MF_STRING;

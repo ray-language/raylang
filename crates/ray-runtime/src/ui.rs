@@ -7557,6 +7557,11 @@ mod gtk {
             };
             entry.1 = items.to_vec();
         }
+        rebuild_bars()
+    }
+
+    /// Rehace, de los specs vigentes, la barra de cada ventana viva que la lleva.
+    fn rebuild_bars() -> Result<(), String> {
         on_main_sync(move || {
             let api = api().as_ref().map_err(|e| e.clone())?;
             let bars = live_bars().lock().unwrap().clone();
@@ -7715,21 +7720,18 @@ mod gtk {
     pub(super) fn set_menu_item(tag: &str, enabled: bool, checked: bool) -> Result<(), String> {
         let tag = tag.to_string();
         let mut known = false;
-        // Los menús de barra que llevan el tag, ya con el estado nuevo (ver más abajo).
-        let mut touched: Vec<MenuSpec> = Vec::new();
-        for (menu, items) in menu_specs().lock().unwrap().iter_mut() {
-            let mut found = false;
+        // ¿Hay en una barra un item con este tag que pueda llevar marca? (La cabecera de un
+        // submenú no puede, y un item que solo vive en un menú contextual no está en los specs.)
+        let mut can_gain_check = false;
+        for (_, items) in menu_specs().lock().unwrap().iter_mut() {
             super::MenuItemSpec::each_mut(items, &mut |it| {
                 if it.tag == tag {
                     it.enabled = enabled;
                     it.checked = checked;
-                    found = true;
+                    known = true;
+                    can_gain_check |= !it.submenu && !it.is_separator();
                 }
             });
-            if found {
-                known = true;
-                touched.push((menu.clone(), items.clone()));
-            }
         }
         let live = items_by_tag().lock().unwrap().get(&tag).cloned().unwrap_or_default();
         if !known && live.is_empty() {
@@ -7740,8 +7742,8 @@ mod gtk {
         }
         // ray-sublime #509: un item declarado sin marca nació como `GtkMenuItem` simple, y
         // `gtk_check_menu_item_set_active` sobre él solo imprime un Gtk-CRITICAL. La marca se
-        // toca solo en los que la tienen; si se pide marcar uno simple, se rehace su menú (el
-        // spec ya dice `checked`, así que renace como `GtkCheckMenuItem`).
+        // toca solo en los que la tienen; si se pide marcar uno simple, se rehacen las barras
+        // (el spec ya dice `checked`, así que renace como `GtkCheckMenuItem`).
         let rebuild = Arc::new(AtomicBool::new(false));
         let needs_rebuild = rebuild.clone();
         on_main_sync(move || {
@@ -7762,9 +7764,13 @@ mod gtk {
                     };
                     if has_check {
                         if let Some(f) = ia.check_set_active {
+                            // `set_active` emite `activate` cuando el estado cambia: sin esta
+                            // bandera, fijar la marca desde el programa llegaba como un click.
+                            SETTING_CHECK.store(true, Ordering::SeqCst);
                             f(w as Widget, checked as i32);
+                            SETTING_CHECK.store(false, Ordering::SeqCst);
                         }
-                    } else if checked && ia.check_new.is_some() {
+                    } else if checked && can_gain_check && ia.check_new.is_some() {
                         needs_rebuild.store(true, Ordering::SeqCst);
                     }
                 }
@@ -7775,12 +7781,14 @@ mod gtk {
             if super::ui_trace() {
                 eprintln!("[ui] menu item {tag} gains its check mark: menus rebuilt");
             }
-            for (menu, items) in touched {
-                replace_menu(&menu, &items)?;
-            }
+            rebuild_bars()?;
         }
         Ok(())
     }
+
+    /// `set_menu_item` está fijando una marca (hilo del loop): el `activate` que GTK emite por
+    /// ello no es un click.
+    static SETTING_CHECK: AtomicBool = AtomicBool::new(false);
 
     /// El contexto del handler `activate` de un item: su tag (liberado por el GClosureNotify).
     struct MenuCtx {
@@ -7790,6 +7798,9 @@ mod gtk {
     }
 
     extern "C" fn on_menu_activate(_w: Widget, data: *mut c_void) {
+        if SETTING_CHECK.load(Ordering::SeqCst) {
+            return;
+        }
         // SAFETY: `data` es el MenuCtx de build_menubar; vive hasta el GClosureNotify.
         let ctx = unsafe { &*(data as *const MenuCtx) };
         // M255: un rol estándar actúa sobre la ventana dueña de esta barra (los menús son por
@@ -10568,6 +10579,7 @@ mod win {
                         }
                     }
                 }
+                barless().lock().unwrap().remove(&(hwnd.0 as usize));
                 if let Some(table) = accel_tables().lock().unwrap().remove(&(hwnd.0 as usize)) {
                     // SAFETY: tabla propia creada en build_menubar; nadie la usa tras quitarla del mapa.
                     unsafe {
@@ -10771,6 +10783,8 @@ mod win {
         }
         on_main_sync(move || {
             let mut hwnds: Vec<usize> = items_by_tag().lock().unwrap().values().flatten().map(|(h, _)| *h).collect();
+            // Las ventanas sin barra también renuevan sus atajos.
+            hwnds.extend(barless().lock().unwrap().iter().copied());
             hwnds.sort_unstable();
             hwnds.dedup();
             for h in hwnds {
@@ -10896,6 +10910,16 @@ mod win {
                         continue;
                     }
                     let _ = EnableMenuItem(menu, id as u32, MF_BYCOMMAND | if enabled { MF_ENABLED } else { MF_GRAYED });
+                    if checked {
+                        // ray-sublime #509: una barra sin ningún item marcado nace sin columna
+                        // de marcas (`MNS_NOCHECK`); el primero que se marca la repone.
+                        let info = MENUINFO {
+                            cbSize: std::mem::size_of::<MENUINFO>() as u32,
+                            fMask: MIM_STYLE | MIM_APPLYTOSUBMENUS,
+                            ..Default::default()
+                        };
+                        let _ = SetMenuInfo(menu, &info);
+                    }
                     let _ = CheckMenuItem(menu, id as u32, (MF_BYCOMMAND | if checked { MF_CHECKED } else { MF_UNCHECKED }).0);
                     let _ = DrawMenuBar(hwnd);
                 }
@@ -11088,7 +11112,17 @@ mod win {
         });
     }
 
+    /// ray-sublime #508: las ventanas sin barra de menús (un panel, una con dueña, `menu_bar =
+    /// "hide"`). Conservan los atajos: la tabla de tags y la de aceleradores se construyen igual.
+    fn barless() -> &'static std::sync::Mutex<std::collections::HashSet<usize>> {
+        static B: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<usize>>> = std::sync::OnceLock::new();
+        B.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+    }
+
+    /// Construye la barra de los specs vigentes con sus tags y aceleradores. Una ventana de
+    /// `barless()` no la muestra: el menú se destruye tras sacar de él los atajos.
     unsafe fn build_menubar(hwnd: HWND) -> (HashMap<u16, String>, Accels) {
+        let attach = !barless().lock().unwrap().contains(&(hwnd.0 as usize));
         let mut tags = HashMap::new();
         let mut keys: Accels = Vec::new();
         let specs = menu_specs().lock().unwrap().clone();
@@ -11118,7 +11152,17 @@ mod win {
                 };
                 let _ = SetMenuInfo(bar, &info);
             }
-            let _ = SetMenu(hwnd, Some(bar));
+            if attach {
+                let _ = SetMenu(hwnd, Some(bar));
+            } else {
+                let _ = DestroyMenu(bar);
+                let h = hwnd.0 as usize;
+                let mut reg = items_by_tag().lock().unwrap();
+                for v in reg.values_mut() {
+                    v.retain(|(hh, _)| *hh != h);
+                }
+                reg.retain(|_, v| !v.is_empty());
+            }
             if !accels.is_empty() {
                 if let Ok(table) = CreateAcceleratorTableW(&accels) {
                     accel_tables().lock().unwrap().insert(hwnd.0 as usize, table.0 as isize);
@@ -11439,9 +11483,12 @@ mod win {
                 if let Some(rgb) = super::parse_rgb(&opts.titlebar_color) {
                     apply_titlebar(hwnd, Some(rgb));
                 }
-                // ray-sublime #508: un panel o una ventana con dueña no llevan la barra (ni,
-                // por tanto, la tabla de aceleradores, que nace de ella).
-                let (menu_tags, accels) = if opts.has_menu_bar() { build_menubar(hwnd) } else { (HashMap::new(), Vec::new()) };
+                // ray-sublime #508: un panel o una ventana con dueña no llevan la barra, pero sí
+                // los atajos de los menús.
+                if !opts.has_menu_bar() {
+                    barless().lock().unwrap().insert(hwnd.0 as usize);
+                }
+                let (menu_tags, accels) = build_menubar(hwnd);
                 // M327: el fondo hasta que la página pinte — el HWND lo borra de ese color y
                 // WebView2 lo usa como fondo por defecto.
                 let background = super::effective_background(&opts);

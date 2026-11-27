@@ -22717,13 +22717,32 @@ item simple, se rehace su menú con `replace_menu`, y como el spec ya dice `chec
 marca. No se crean todos como check de entrada: GTK dibuja la casilla vacía de un check sin
 marcar. (3) Solo documentación. (4) PTR como `Data.Name`, igual que NS y CNAME.
 
-**Límites.** En Windows la tabla de aceleradores nace de la barra: una ventana sin barra no
-dispara los atajos de los menús mientras tiene el foco (en macOS sí, la barra es global). Marcar
+**Revisión (tras fusionar la #709).** Seis correcciones. (1) En GTK `set_active` emite
+`activate` cuando el estado cambia, así que fijar una marca desde el programa llegaba como un
+click: con dos ventanas, o con estado por pestaña, el manejador de la app y `set_menu_item` se
+realimentaban sin fin. Una bandera (`SETTING_CHECK`) calla el `activate` durante la llamada.
+(2) En Win32 una ventana sin barra perdía también los atajos: `build_menubar` construye siempre
+el menú para sacar de él tags y aceleradores, y en una ventana de `barless()` lo destruye en vez
+de asignarlo; `replace_menu` renueva también los atajos de esas ventanas, y no les pone barra.
+(3) En Win32 una barra sin items marcados nace con `MNS_NOCHECK`: `set_menu_item` lo quita al
+marcar el primero. (4) Marcar la cabecera de un submenú, o un item que solo vive en un menú
+contextual, rehacía las barras en cada llamada sin resultado: solo se rehacen si en una barra
+hay un item con ese tag que pueda llevar marca. (5) La reconstrucción clonaba los specs antes
+de soltar el candado y los reescribía después (podía pisar un `replace_menu` concurrente):
+ahora `rebuild_bars` rehace de los specs vigentes, una vez. (6) Un punto dentro de una etiqueta
+DNS (una instancia DNS-SD, `HP LaserJet 4.2`) partía la etiqueta al volver a escribir el nombre:
+`read_name` escapa `.` y `\` con una barra (RFC 1035 §5.1) y `put_name` y `net/dns` parten por
+los puntos sin escapar. Era un límite anterior de todos los nombres, pero el PTR de mDNS es
+justo donde aparece.
+
+**Límites.** En una ventana sin barra de Win32 un atajo dispara aunque su item esté desactivado
+(tampoco lo comprueba el camino del webview en las demás). Marcar
 por primera vez un item simple en GTK rehace la barra de cada ventana viva y cierra un menú
 abierto. Un item que nació con marca y se desmarca sigue siendo un check (casilla vacía) hasta
 que su menú se rehaga. Los diálogos de mensaje siguen sin existir en iOS (`UIAlertController`) y
 Android. Los cambios de GTK y Win32 de (1) y (2) no los cubre un test automático (el CI no tiene
 display): los de GTK se comprobaron en la VM de Linux con ventanas reales (la altura de la página
-dice quién lleva barra; ningún `Gtk-CRITICAL`, y una sola reconstrucción al marcar); el de Win32
-son dos líneas que el CI compila y nadie ha visto con una ventana.
+dice quién lleva barra; ningún `Gtk-CRITICAL`, y una sola reconstrucción al marcar); los de Win32
+los compila el CI y nadie los ha visto con una ventana. Un RDATA de PTR mal formado hace fallar
+`parse_response` entero, como ya pasaba con NS, CNAME, MX y SRV.
 

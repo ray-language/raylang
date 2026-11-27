@@ -222,3 +222,23 @@ fn a_ptr_record_is_read_and_written_as_a_name() {
         .unwrap();
     assert_eq(msg.parse_response(wire).unwrap().answers[0].data, msg.Data.Name("api.ray.internal"));
 }
+
+// A DNS-SD instance is one label of free text: its dots are not label separators.
+@test
+fn a_dot_inside_a_label_survives_the_round_trip() {
+    assert_eq(
+        msg.split_name("HP LaserJet 4\\.2._ipp._tcp.local"),
+        ["HP LaserJet 4.2", "_ipp", "_tcp", "local"]
+    );
+    assert_eq(msg.split_name("a\\\\b.c"), ["a\\b", "c"]);
+    assert_eq(msg.split_name("").len(), 0);
+    assert_eq(msg.escape_label("4.2\\x"), "4\\.2\\\\x");
+    let name = "HP LaserJet 4\\.2._ipp._tcp.local";
+    let query = q_of("_ipp._tcp.local", msg.PTR);
+    let wire = msg.write_response(query, answer([rr("_ipp._tcp.local", msg.PTR, msg.Data.Name(name))]), 0)
+        .unwrap();
+    let back = msg.parse_response(wire).unwrap();
+    assert_eq(back.answers[0].data, msg.Data.Name(name));
+    // The client module agrees: the instance asks for its SRV with the same name.
+    assert_eq(msg.parse_query(dns.build_query(7, name, 33)).unwrap().question.name, name);
+}

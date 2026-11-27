@@ -183,24 +183,26 @@ pub fn escape_label(label: string) -> string {
     label.replace("\\", "\\\\").replace(".", "\\.")
 }
 
-// Los tres dígitos decimales de un `\\DDD` en `at`, como el carácter de ese valor (< 128).
-fn decimal_escape(cs: [char], at: int) -> Option<char> {
-    if (at + 2 >= cs.len()) {
+// El valor de los tres dígitos decimales de un `\\DDD` en `at` (0..255), si los hay.
+fn decimal_escape(raw: bytes, at: int) -> Option<int> {
+    if (at + 2 >= raw.len()) {
         return Option.None;
     }
     var n = 0;
     for k in 0..3 {
-        n = n * 10 + "0123456789".index_of(to_string(cs[at + k]))?;
+        let d = raw[at + k] - 48;
+        if (d < 0 || d > 9) {
+            return Option.None;
+        }
+        n = n * 10 + d;
     }
-    if (n >= 128) {
-        return Option.None;
-    }
-    char_from_code(n)
+    if (n > 255) { Option.None } else { Option.Some(n) }
 }
 
 /// The labels of `name`, unescaped: it splits on the dots that have no backslash in front.
-/// `\DDD` (three decimal digits, below 128) is the octet with that value, as `dig` and `dns-sd`
-/// print a space (`Office\032Printer`); any other `\X` is `X`.
+/// `\\DDD` (three decimal digits, up to 255) is the octet with that value, as `dig` and `dns-sd`
+/// print a space (`Office\\032Printer`) or the octets of a non-ASCII letter (`Caf\\195\\169`);
+/// any other `\\X` is `X`.
 /// `split_name("HP LaserJet 4\\.2._ipp._tcp.local")` is `["HP LaserJet 4.2", "_ipp", "_tcp",
 /// "local"]`; the empty name has no labels.
 pub fn split_name(name: string) -> [string] {
@@ -211,34 +213,33 @@ pub fn split_name(name: string) -> [string] {
     if (!name.contains("\\")) {
         return name.split(".");
     }
-    let cs = name.chars();
-    var current = "";
+    // Sobre los octetos: un `\\DDD` puede ser un octeto suelto de una letra UTF-8.
+    let raw = name.to_bytes();
+    var current: [int] = [];
     var i = 0;
-    while (i < cs.len()) {
-        let c = to_string(cs[i]);
-        if (c == "\\" && i + 1 < cs.len()) {
-            // `\DDD`: the octet with that decimal value (`\032` is a space); else `\X` is X.
-            match (decimal_escape(cs, i + 1)) {
-                Option.Some(ch) => {
-                    current = current + to_string(ch);
+    while (i < raw.len()) {
+        let b = raw[i];
+        if (b == 92 && i + 1 < raw.len()) {
+            match (decimal_escape(raw, i + 1)) {
+                Option.Some(n) => {
+                    current.push(n);
                     i = i + 4;
-                    continue;
                 },
-                Option.None => { },
+                Option.None => {
+                    current.push(raw[i + 1]);
+                    i = i + 2;
+                },
             }
-            current = current + to_string(cs[i + 1]);
-            i = i + 2;
-            continue;
-        }
-        if (c == ".") {
-            labels.push(current);
-            current = "";
+        } else if (b == 46) {
+            labels.push(from_utf8(bytes_of(current)).unwrap_or("?"));
+            current = [];
+            i = i + 1;
         } else {
-            current = current + c;
+            current.push(b);
+            i = i + 1;
         }
-        i = i + 1;
     }
-    labels.push(current);
+    labels.push(from_utf8(bytes_of(current)).unwrap_or("?"));
     labels
 }
 

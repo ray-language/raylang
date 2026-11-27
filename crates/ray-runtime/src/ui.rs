@@ -7690,6 +7690,9 @@ mod gtk {
         let Some(set_label) = item_api().set_label else {
             return rebuild_bars();
         };
+        if !items_by_tag().lock().unwrap().contains_key(tag) {
+            return Ok(());
+        }
         let tag = tag.to_string();
         let title_c = std::ffi::CString::new(title.replace('\0', "")).unwrap();
         on_main_sync(move || {
@@ -7719,14 +7722,18 @@ mod gtk {
             super::MenuItemSpec::each_mut(items, &mut |it| {
                 if it.tag == tag {
                     it.enabled = enabled;
-                    it.checked = checked;
+                    it.checked = checked && !it.submenu;
                     known = true;
-                    can_gain_check |= !it.submenu && !it.is_separator();
+                    can_gain_check |= !it.submenu;
                 }
             });
         }
-        if !known && !items_by_tag().lock().unwrap().contains_key(&tag) {
+        let any_live = items_by_tag().lock().unwrap().contains_key(&tag);
+        if !known && !any_live {
             return Err(format!("ui: no menu item with tag '{tag}'"));
+        }
+        if !any_live {
+            return Ok(());
         }
         // ray-sublime #509: un item declarado sin marca nació como `GtkMenuItem` simple, y
         // `gtk_check_menu_item_set_active` sobre él solo imprime un Gtk-CRITICAL. La marca se
@@ -10751,7 +10758,7 @@ mod win {
     /// (tags y atajos) y la barra vieja destruida.
     /// #252: el título en la tabla de menús y las barras reconstruidas (como `replace_menu`).
     pub(super) fn rename_menu(old: &str, new: &str) -> Result<(), String> {
-        let items = {
+        {
             let mut specs = menu_specs().lock().unwrap();
             if specs.iter().any(|(t, _)| t == new) {
                 return Err(format!("ui: there is already a menu titled '{new}'"));
@@ -10760,9 +10767,8 @@ mod win {
                 return Err(format!("ui: no menu titled '{old}'"));
             };
             entry.0 = new.to_string();
-            entry.1.clone()
-        };
-        replace_menu(new, &items)
+        }
+        rebuild_bars()
     }
 
     pub(super) fn replace_menu(title: &str, items: &[super::MenuItemSpec]) -> Result<(), String> {
@@ -10773,6 +10779,11 @@ mod win {
             };
             entry.1 = items.to_vec();
         }
+        rebuild_bars()
+    }
+
+    /// Rehace, de los specs vigentes, la barra (o solo los atajos) de cada ventana viva.
+    fn rebuild_bars() -> Result<(), String> {
         on_main_sync(move || {
             let mut hwnds: Vec<usize> = items_by_tag().lock().unwrap().values().flatten().map(|(h, _)| *h).collect();
             // Las ventanas sin barra también renuevan sus atajos.
@@ -10830,19 +10841,21 @@ mod win {
                 }
             });
         }
-        let live = items_by_tag().lock().unwrap().get(tag).cloned().unwrap_or_default();
         let Some(shortcut) = shortcut else {
             return Err(format!("ui: no menu item with tag '{tag}'"));
         };
-        if live.is_empty() {
+        if !items_by_tag().lock().unwrap().contains_key(tag) {
             return Ok(());
         }
+        let tag = tag.to_string();
         let label = match accel_for(&shortcut, 0) {
             Some((text, _)) => format!("{title}\t{text}"),
             None => title.to_string(),
         };
         on_main_sync(move || {
             let text = wide(&label);
+            // Los ids se leen AQUÍ, en el hilo 1: una reconstrucción de barras los renumera.
+            let live = items_by_tag().lock().unwrap().get(&tag).cloned().unwrap_or_default();
             // SAFETY: handles de ventanas propias; IsWindow descarta las ya destruidas. Solo se
             // cambia la cadena del item (MIIM_STRING): estado, icono y acelerador se conservan.
             unsafe {
@@ -10880,20 +10893,22 @@ mod win {
             super::MenuItemSpec::each_mut(items, &mut |it| {
                 if it.tag == tag {
                     it.enabled = enabled;
-                    it.checked = checked;
+                    it.checked = checked && !it.submenu;
                     known = true;
-                    can_gain_check |= !it.submenu && !it.is_separator();
+                    can_gain_check |= !it.submenu;
                 }
             });
         }
-        let live = items_by_tag().lock().unwrap().get(&tag).cloned().unwrap_or_default();
-        if !known && live.is_empty() {
+        let any_live = items_by_tag().lock().unwrap().contains_key(&tag);
+        if !known && !any_live {
             return Err(format!("ui: no menu item with tag '{tag}'"));
         }
-        if live.is_empty() {
+        if !any_live {
             return Ok(());
         }
         on_main_sync(move || {
+            // Los ids se leen AQUÍ, en el hilo 1: una reconstrucción de barras los renumera.
+            let live = items_by_tag().lock().unwrap().get(&tag).cloned().unwrap_or_default();
             // SAFETY: handles de ventanas propias; IsWindow descarta las ya destruidas.
             unsafe {
                 for (hwnd, id) in live {
@@ -11031,7 +11046,7 @@ mod win {
                 let _ = AppendMenuW(popup, flags, *next_id as usize, PCWSTR(wide(&label).as_ptr()));
                 // M236: icono — solo .bmp por LoadImageW (otros formatos se ignoran, documentado).
                 if spec.icon.to_ascii_lowercase().ends_with(".bmp")
-                    && !barless().lock().unwrap().contains(&(hwnd.0 as usize))
+                    && !BUILDING_HIDDEN_BAR.load(Ordering::SeqCst)
                     && let Ok(h) = LoadImageW(None, PCWSTR(wide(&spec.icon).as_ptr()), IMAGE_BITMAP, 16, 16, LR_LOADFROMFILE)
                 {
                     let mut info = MENUITEMINFOW { cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32, fMask: MIIM_BITMAP, ..Default::default() };
@@ -11116,6 +11131,9 @@ mod win {
         B.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
     }
 
+    /// `build_menubar` está construyendo (hilo 1) un menú que no se va a mostrar.
+    static BUILDING_HIDDEN_BAR: AtomicBool = AtomicBool::new(false);
+
     /// Construye la barra de los specs vigentes con sus tags y aceleradores. Una ventana de
     /// `barless()` no la muestra: el menú se destruye tras sacar de él los atajos.
     unsafe fn build_menubar(hwnd: HWND) -> (HashMap<u16, String>, Accels) {
@@ -11135,6 +11153,8 @@ mod win {
             for (_, items) in &specs {
                 super::MenuItemSpec::each(items, &mut |it| any_check |= it.checked || !it.icon.is_empty());
             }
+            // El menú de una ventana sin barra se destruye al final: sus iconos no se cargan.
+            BUILDING_HIDDEN_BAR.store(!attach, Ordering::SeqCst);
             for (title, items) in specs {
                 let Ok(popup) = CreatePopupMenu() else { continue };
                 append_items(popup, &items, hwnd, &mut tags, &mut keys, &mut accels, &mut next_id);
@@ -11149,6 +11169,7 @@ mod win {
                 };
                 let _ = SetMenuInfo(bar, &info);
             }
+            BUILDING_HIDDEN_BAR.store(false, Ordering::SeqCst);
             if attach {
                 let _ = SetMenu(hwnd, Some(bar));
             } else {

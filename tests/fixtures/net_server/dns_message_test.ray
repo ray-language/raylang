@@ -235,6 +235,9 @@ fn a_dot_inside_a_label_survives_the_round_trip() {
     // The presentation form that dig and dns-sd print: \DDD is the octet with that value.
     assert_eq(msg.split_name("Office\\032Printer._ipp._tcp.local")[0], "Office Printer");
     assert_eq(msg.split_name("a\\9b.c"), ["a9b", "c"]);
+    assert_eq(msg.split_name("Caf\\195\\169._ipp._tcp.local")[0], "Café");
+    // A fully qualified name asks for the same thing as the relative one.
+    assert_eq(dns.build_query(7, "example.com.", 1), dns.build_query(7, "example.com", 1));
     assert_eq(msg.split_name("abc\\"), ["abc\\"]);
     assert_eq(msg.escape_label("4.2\\x"), "4\\.2\\\\x");
     let name = "HP LaserJet 4\\.2._ipp._tcp.local";

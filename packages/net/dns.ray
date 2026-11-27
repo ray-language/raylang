@@ -50,6 +50,10 @@ fn encode_name(name: string) -> [int] {
     let parts = wire.split_name(name);
     var i = 0;
     while (i < parts.len()) {
+        // El punto final de un nombre absoluto (`example.com.`) no es una etiqueta más.
+        if (parts[i] == "" && i == parts.len() - 1) {
+            break;
+        }
         let b = parts[i].to_bytes();
         out.push(b.len());
         var j = 0;

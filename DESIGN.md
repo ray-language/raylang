@@ -22742,7 +22742,16 @@ una reconstrucción concurrente podía dejarla apuntando a widgets destruidos); 
 camino de antes (`split(".")`); en Win32 la columna de marcas solo se repone por un item que
 puede llevarla, y una ventana sin barra no carga los iconos de un menú que no muestra.
 
-**Límites.** `dns.build_query` sigue sin validar la longitud de una etiqueta (no devuelve
+Tercera tanda: lo de la segunda en GTK faltaba en Win32 (`rename_menu` rehace de los specs
+vigentes, y los ids de un tag se leen en el hilo 1, que una reconstrucción renumera); la cabecera
+de un submenú nunca queda `checked` en los specs; un menú contextual de una ventana sin barra
+conserva sus iconos (solo se saltan al construir el menú que no se muestra); `\DDD` vale hasta
+255 y `split_name` trabaja sobre octetos (`Caf\195\169` es `Café`); `build_query` acepta el
+punto final de un nombre absoluto; y sin widgets vivos `set_menu_item` no viaja al hilo del loop.
+
+**Límites.** `net/dns` y `net/dns_message` siguen teniendo cada uno su lector y su escritor de
+nombres. En Win32 las ventanas sin barra se llevan en un conjunto global y sus atajos salen de
+construir y destruir el menú entero. `dns.build_query` sigue sin validar la longitud de una etiqueta (no devuelve
 `Result`). En GTK, si el tag vive a la vez en una barra y en un menú contextual abierto,
 marcarlo rehace las barras en cada llamada mientras el contextual siga abierto. En una ventana sin barra de Win32 un atajo dispara aunque su item esté desactivado
 (tampoco lo comprueba el camino del webview en las demás). Marcar

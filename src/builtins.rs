@@ -1794,7 +1794,7 @@ pub fn ui_open_with_args(title: &str, url: &str, w: i64, h: i64, min_w: i64, min
             _ => return Err("ui: the parent is not an open window".to_string()),
         }
     };
-    let mut opts = ray_runtime::ui::WindowOptions { width: w, height: h, min_width: min_w, min_height: min_h, resizable, center, autosave: autosave.to_string(), titlebar_color: titlebar_color.to_string(), background: background.to_string(), minimizable, kind: kind.to_string(), always_on_top, parent, place: String::new(), x: 0, y: 0, titlebar: String::new() };
+    let mut opts = ray_runtime::ui::WindowOptions { width: w, height: h, min_width: min_w, min_height: min_h, resizable, center, autosave: autosave.to_string(), titlebar_color: titlebar_color.to_string(), background: background.to_string(), minimizable, kind: kind.to_string(), always_on_top, parent, place: String::new(), x: 0, y: 0, titlebar: String::new(), menu_bar: String::new() };
     ray_runtime::ui::apply_extra(&mut opts, extra)?; // #245/#270
     ui_open_with(title, url, opts)
 }

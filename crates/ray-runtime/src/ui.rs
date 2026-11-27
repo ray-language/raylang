@@ -1409,9 +1409,23 @@ pub struct WindowOptions {
     /// unified compacto o normal, como Finder/Safari: los semáforos se centran en esa altura y
     /// `window.ray.titlebar_height` la refleja. Linux/Windows lo ignoran (no hay `full_content`).
     pub titlebar: String,
+    /// ray-sublime #508: la barra de menús de ESTA ventana donde la barra es por ventana (GTK y
+    /// Windows; en macOS es de la app y esto no cambia nada): `""` = la lleva salvo que sea un
+    /// `panel` o tenga `parent` (un About, unas preferencias, una paleta), `"show"` = siempre,
+    /// `"hide"` = nunca.
+    pub menu_bar: String,
 }
 
 impl WindowOptions {
+    /// ¿Esta ventana lleva la barra de menús (donde es por ventana)?
+    pub fn has_menu_bar(&self) -> bool {
+        match self.menu_bar.as_str() {
+            "show" => true,
+            "hide" => false,
+            _ => self.kind != "panel" && self.parent == 0,
+        }
+    }
+
     /// Las opciones de `ui.open`: solo tamaño, redimensionable y centrada, sin mínimo ni memoria.
     pub fn simple(width: i64, height: i64) -> Self {
         WindowOptions {
@@ -1432,6 +1446,7 @@ impl WindowOptions {
             x: 0,
             y: 0,
             titlebar: String::new(),
+            menu_bar: String::new(),
         }
     }
 }
@@ -1448,11 +1463,15 @@ pub fn apply_extra(opts: &mut WindowOptions, text: &str) -> Result<(), String> {
             "x" => opts.x = int()?,
             "y" => opts.y = int()?,
             "titlebar" => opts.titlebar = v.to_string(),
+            "menu_bar" => opts.menu_bar = v.to_string(),
             _ => return Err(format!("ui: unknown window option '{k}'")),
         }
     }
     if !matches!(opts.titlebar.as_str(), "" | "compact" | "tall") {
         return Err(format!("ui: unsupported titlebar '{}' (\"\", compact, tall)", opts.titlebar));
+    }
+    if !matches!(opts.menu_bar.as_str(), "" | "show" | "hide") {
+        return Err(format!("ui: unsupported menu_bar '{}' (\"\", show, hide)", opts.menu_bar));
     }
     Ok(())
 }
@@ -3529,6 +3548,26 @@ pub fn chord_label(ch: &Chord, primary: &str) -> String {
 #[cfg(test)]
 mod menu_tree_tests {
     use super::*;
+
+    /// ray-sublime #508: qué ventanas llevan la barra de menús donde es por ventana.
+    #[test]
+    fn a_panel_or_an_owned_window_carries_no_menu_bar_unless_asked() {
+        let mut o = WindowOptions::simple(400, 300);
+        assert!(o.has_menu_bar());
+        o.kind = "borderless".to_string();
+        assert!(o.has_menu_bar());
+        o.kind = "panel".to_string();
+        assert!(!o.has_menu_bar());
+        apply_extra(&mut o, "menu_bar=show").unwrap();
+        assert!(o.has_menu_bar());
+        let mut owned = WindowOptions::simple(400, 300);
+        owned.parent = 7;
+        assert!(!owned.has_menu_bar());
+        let mut plain = WindowOptions::simple(400, 300);
+        apply_extra(&mut plain, "place=;x=0;y=0;titlebar=;menu_bar=hide").unwrap();
+        assert!(!plain.has_menu_bar());
+        assert!(apply_extra(&mut plain, "menu_bar=none").unwrap_err().contains("unsupported menu_bar 'none'"));
+    }
 
     fn line(tag: &str, title: &str, depth: usize, sub: bool) -> String {
         format!("{tag}\t{title}\t\t\t1\t0\t{depth}\t{}", if sub { "1" } else { "0" })
@@ -7560,6 +7599,10 @@ mod gtk {
         separator_new: Option<FnWidgetNew0>,
         check_new: Option<FnItemNewLabel>,
         check_set_active: Option<unsafe extern "C" fn(Widget, i32)>,
+        /// ray-sublime #509: `gtk_check_menu_item_get_type` y `g_type_check_instance_is_a`,
+        /// para saber si un item vivo tiene marca antes de tocársela.
+        check_type: Option<unsafe extern "C" fn() -> usize>,
+        instance_is_a: Option<unsafe extern "C" fn(Widget, usize) -> i32>,
         set_sensitive: Option<unsafe extern "C" fn(Widget, i32)>,
         /// ray-daw #434: `gtk_menu_item_set_label`, para reetiquetar un item vivo.
         set_label: Option<unsafe extern "C" fn(Widget, *const std::ffi::c_char)>,
@@ -7605,6 +7648,8 @@ mod gtk {
                     separator_new: opt(c"gtk_separator_menu_item_new").map(|p| std::mem::transmute::<*mut c_void, FnWidgetNew0>(p)),
                     check_new: opt(c"gtk_check_menu_item_new_with_label").map(|p| std::mem::transmute::<*mut c_void, FnItemNewLabel>(p)),
                     check_set_active: opt(c"gtk_check_menu_item_set_active").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
+                    check_type: opt(c"gtk_check_menu_item_get_type").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn() -> usize>(p)),
+                    instance_is_a: opt(c"g_type_check_instance_is_a").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, usize) -> i32>(p)),
                     set_sensitive: opt(c"gtk_widget_set_sensitive").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, i32)>(p)),
                     set_label: opt(c"gtk_menu_item_set_label").map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(Widget, *const std::ffi::c_char)>(p)),
                     image_item_new: opt(c"gtk_image_menu_item_new_with_label").map(|p| std::mem::transmute::<*mut c_void, FnItemNewLabel>(p)),
@@ -7670,14 +7715,21 @@ mod gtk {
     pub(super) fn set_menu_item(tag: &str, enabled: bool, checked: bool) -> Result<(), String> {
         let tag = tag.to_string();
         let mut known = false;
-        for (_, items) in menu_specs().lock().unwrap().iter_mut() {
+        // Los menús de barra que llevan el tag, ya con el estado nuevo (ver más abajo).
+        let mut touched: Vec<MenuSpec> = Vec::new();
+        for (menu, items) in menu_specs().lock().unwrap().iter_mut() {
+            let mut found = false;
             super::MenuItemSpec::each_mut(items, &mut |it| {
                 if it.tag == tag {
                     it.enabled = enabled;
                     it.checked = checked;
-                    known = true;
+                    found = true;
                 }
             });
+            if found {
+                known = true;
+                touched.push((menu.clone(), items.clone()));
+            }
         }
         let live = items_by_tag().lock().unwrap().get(&tag).cloned().unwrap_or_default();
         if !known && live.is_empty() {
@@ -7686,6 +7738,12 @@ mod gtk {
         if live.is_empty() {
             return Ok(());
         }
+        // ray-sublime #509: un item declarado sin marca nació como `GtkMenuItem` simple, y
+        // `gtk_check_menu_item_set_active` sobre él solo imprime un Gtk-CRITICAL. La marca se
+        // toca solo en los que la tienen; si se pide marcar uno simple, se rehace su menú (el
+        // spec ya dice `checked`, así que renace como `GtkCheckMenuItem`).
+        let rebuild = Arc::new(AtomicBool::new(false));
+        let needs_rebuild = rebuild.clone();
         on_main_sync(move || {
             let ia = item_api();
             // SAFETY: widgets del loop; los de ventanas cerradas se saltan por su bandera.
@@ -7697,13 +7755,31 @@ mod gtk {
                     if let Some(f) = ia.set_sensitive {
                         f(w as Widget, enabled as i32);
                     }
-                    if let Some(f) = ia.check_set_active {
-                        f(w as Widget, checked as i32);
+                    // Sin los símbolos de tipo no se puede saber: se trata como con marca.
+                    let has_check = match (ia.check_type, ia.instance_is_a) {
+                        (Some(check_type), Some(is_a)) => is_a(w as Widget, check_type()) != 0,
+                        _ => true,
+                    };
+                    if has_check {
+                        if let Some(f) = ia.check_set_active {
+                            f(w as Widget, checked as i32);
+                        }
+                    } else if checked && ia.check_new.is_some() {
+                        needs_rebuild.store(true, Ordering::SeqCst);
                     }
                 }
             }
             Ok(())
-        })
+        })?;
+        if rebuild.load(Ordering::SeqCst) {
+            if super::ui_trace() {
+                eprintln!("[ui] menu item {tag} gains its check mark: menus rebuilt");
+            }
+            for (menu, items) in touched {
+                replace_menu(&menu, &items)?;
+            }
+        }
+        Ok(())
     }
 
     /// El contexto del handler `activate` de un item: su tag (liberado por el GClosureNotify).
@@ -8349,7 +8425,8 @@ mod gtk {
                 // declarados) arriba, webview expandido debajo. GTK posee todo el árbol.
                 const ORIENTATION_VERTICAL: i32 = 1;
                 let content = (api.box_new)(ORIENTATION_VERTICAL, 0);
-                if let Some(bar) = build_menubar(api, alive_for_menu.clone(), id) {
+                // ray-sublime #508: un panel o una ventana con dueña no llevan la barra.
+                if opts.has_menu_bar() && let Some(bar) = build_menubar(api, alive_for_menu.clone(), id) {
                     (api.box_pack_start)(content, bar, 0, 0, 0);
                     live_bars().lock().unwrap().push((content as usize, bar as usize, alive_for_menu.clone(), id));
                 }
@@ -11323,7 +11400,7 @@ mod win {
                     (if is_panel { WS_EX_TOOLWINDOW.0 } else { 0 }) | (if is_panel || opts.always_on_top { WS_EX_TOPMOST.0 } else { 0 }),
                 );
                 let owner = super::parent_native(opts.parent).map(|h| HWND(h as *mut _));
-                let has_menu = !menu_specs().lock().unwrap().is_empty();
+                let has_menu = opts.has_menu_bar() && !menu_specs().lock().unwrap().is_empty();
                 let _ = AdjustWindowRectEx(&mut rc, style, has_menu, ex_style);
                 let (win_w, win_h) = (rc.right - rc.left, rc.bottom - rc.top);
                 // M210: mínimo de la ventana = mínimo del área cliente + el marco que acabamos de medir.
@@ -11362,7 +11439,9 @@ mod win {
                 if let Some(rgb) = super::parse_rgb(&opts.titlebar_color) {
                     apply_titlebar(hwnd, Some(rgb));
                 }
-                let (menu_tags, accels) = build_menubar(hwnd);
+                // ray-sublime #508: un panel o una ventana con dueña no llevan la barra (ni,
+                // por tanto, la tabla de aceleradores, que nace de ella).
+                let (menu_tags, accels) = if opts.has_menu_bar() { build_menubar(hwnd) } else { (HashMap::new(), Vec::new()) };
                 // M327: el fondo hasta que la página pinte — el HWND lo borra de ese color y
                 // WebView2 lo usa como fondo por defecto.
                 let background = super::effective_background(&opts);

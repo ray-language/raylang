@@ -22695,3 +22695,35 @@ nombre los auxiliares privados de `std/fs` cuyo cuerpo emite: uno nuevo que no s
 `fs_wrapper_emitted` solo falla en `ray build --native` (lo vigila el test nativo, en Unix). En Android fuera del shell
 de `ray bundle` nadie fija `HOME`, y las funciones dan `Err`.
 
+## 491. La barra de menús por ventana, la marca en GTK y el PTR de DNS (ray-sublime #508/#509, ray-remote #507/#493, nov 2026)
+
+**Qué faltaba.** Cuatro hallazgos sueltos de dos apps. (1) En GTK y Win32 la barra de menús es de
+cada ventana y se le ponía a toda ventana abierta después de `ui.menu`: el About de ray-sublime
+(un `panel` de 420×340) salía con la barra entera, cosa que ninguna app hace. (2) En GTK
+`set_menu_item` llamaba a `gtk_check_menu_item_set_active` sobre cualquier item, y uno declarado
+sin marca es un `GtkMenuItem` simple: un `Gtk-CRITICAL` por llamada y la marca no aparecía nunca.
+(3) Los diálogos de mensaje y los menús devuelven `Err` en iOS y Android y la documentación solo
+lo dejaba deducir. (4) `net/dns_message` no decodificaba el PTR.
+
+**Decisión.** (1) `WindowOptions.menu_bar`: `""` (por defecto) = la ventana lleva la barra salvo
+que sea `panel` o tenga `parent`; `"show"` y `"hide"` lo fuerzan. Es un texto y no un `bool`
+porque el valor por defecto depende de `kind` y `parent`, que se fijan después de `ui.options`:
+un `bool` en `true` no distinguiría «no dije nada» de «la quiero». Viaja por el texto `extra`
+(#245), sin tocar la aridad del primitivo. Cambia el comportamiento de `panel` y de las ventanas
+con dueña: es lo que hace macOS de siempre (la barra es de la app) y lo que el hallazgo pide.
+`borderless` no cambia: puede ser la ventana principal de una app que dibuja su marco. (2) La
+marca se toca solo en un `GtkCheckMenuItem` (`g_type_check_instance_is_a`); si se pide marcar un
+item simple, se rehace su menú con `replace_menu`, y como el spec ya dice `checked` renace con
+marca. No se crean todos como check de entrada: GTK dibuja la casilla vacía de un check sin
+marcar. (3) Solo documentación. (4) PTR como `Data.Name`, igual que NS y CNAME.
+
+**Límites.** En Windows la tabla de aceleradores nace de la barra: una ventana sin barra no
+dispara los atajos de los menús mientras tiene el foco (en macOS sí, la barra es global). Marcar
+por primera vez un item simple en GTK rehace la barra de cada ventana viva y cierra un menú
+abierto. Un item que nació con marca y se desmarca sigue siendo un check (casilla vacía) hasta
+que su menú se rehaga. Los diálogos de mensaje siguen sin existir en iOS (`UIAlertController`) y
+Android. Los cambios de GTK y Win32 de (1) y (2) no los cubre un test automático (el CI no tiene
+display): los de GTK se comprobaron en la VM de Linux con ventanas reales (la altura de la página
+dice quién lleva barra; ningún `Gtk-CRITICAL`, y una sola reconstrucción al marcar); el de Win32
+son dos líneas que el CI compila y nadie ha visto con una ventana.
+

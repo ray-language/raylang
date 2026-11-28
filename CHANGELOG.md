@@ -6,6 +6,8 @@ Todas las versiones notables de raylang. El formato sigue el espíritu de
 
 ## Sin publicar
 
+## 1.27.119 — 2026-11-28
+
 - **Linux: una app de escritorio termina limpia tras cerrar su última ventana** (ray-sublime
   #512). El proceso esperaba de 2 a 7 s y moría con SIGABRT dentro de WebKitGTK, con código 134
   en vez del suyo; ahora sale al instante con su código, con `exit` o volviendo de `main`.

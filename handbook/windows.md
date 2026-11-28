@@ -228,7 +228,9 @@ pub fn install() -> Result<int, string> {
   título y el atajo vacíos toma los estándar. En macOS, sin el menú Edición no funcionan ni
   ⌘C ni ⌘V en los campos de la página: por eso se conservan los roles al añadir elementos propios.
 - **Atajos.** `cmd+s`, `cmd+shift+s`, `ctrl+alt+p`, `f5`. `cmd` es Comando en macOS y Ctrl en
-  Windows.
+  Windows. Una orden que la app enlaza en su propia capa de teclado, como una secuencia de dos
+  acordes, muestra sus teclas con `shortcut_label`, un texto que no enlaza nada: `var it =
+  ui.item("upper", "Upper Case", ""); it.shortcut_label = "Ctrl+K, Ctrl+U";`.
 - **El menú de la aplicación.** `ui.app_menu` añade elementos al primer menú de macOS, y
   `role:about` muestra el panel «Acerca de» nativo, cuyo contenido fija `ui.set_about`.
 

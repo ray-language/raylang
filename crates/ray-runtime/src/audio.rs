@@ -617,6 +617,9 @@ fn trace_at_exit() {
         // SAFETY: `wait_for_trace` es una función estática sin estado propio.
         ONCE.call_once(|| unsafe {
             atexit(wait_for_trace);
+            // ray-sublime #512: en Linux una app con ventanas puede salir sin correr los `atexit`.
+            #[cfg(all(feature = "ui", target_os = "linux"))]
+            crate::ui::before_exit(wait_for_trace);
         });
     }
 }

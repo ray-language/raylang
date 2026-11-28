@@ -22767,6 +22767,84 @@ que su menú se rehaga. Los diálogos de mensaje siguen sin existir en iOS (`UIA
 Android. Los cambios de GTK y Win32 de (1) y (2) no los cubre un test automático (el CI no tiene
 display): los de GTK se comprobaron en la VM de Linux con ventanas reales (la altura de la página
 dice quién lleva barra; ningún `Gtk-CRITICAL`, y una sola reconstrucción al marcar); los de Win32
-los compila el CI y nadie los ha visto con una ventana. Un RDATA de PTR mal formado hace fallar
+se vieron después en la VM de Windows, lanzando la sonda en la sesión de escritorio con una tarea
+programada y NirCmd: barra solo en la ventana documento, `Ctrl+S` con el foco en el panel sin
+barra entrega su evento `menu`, y un item declarado sin marca la muestra al marcarlo. Un RDATA de PTR mal formado hace fallar
 `parse_response` entero, como ya pasaba con NS, CNAME, MX y SRV.
+
+## 492. Salir en Linux con la última ventana cerrada, y el tabulador en un título (ray-sublime #512/#511, nov 2026)
+
+**Qué pasaba.** (1) En Linux el programa termina con `exit()` desde el hilo del worker mientras
+el hilo 1 sigue en `gtk_main()`. Si la última ventana ya se había cerrado, un manejador de salida
+de WebKitGTK esperaba varios segundos y abortaba: código 134 y volcado de núcleo en cada cierre
+normal de una app. Con una ventana abierta no pasaba. (2) Los items de un menú viajan al runtime
+como texto separado por tabuladores: un tabulador en `title` desplazaba los campos.
+
+**Decisión.** (1) `gtk::leave_before_webkit`, un manejador `on_exit` (glibc: recibe el código de
+salida) que vacía stdio y llama a `_exit` con ese código, antes de que corran los de WebKit.
+Los manejadores corren del último registrado al primero, y WebKit registra los suyos después de
+`gtk_init`: por eso el nuestro se registra cuando un cierre deja el programa sin ventanas —en
+`close(h)` y en el `destroy` de GTK, antes de publicar el evento `closed`, que es cuando el
+programa suele salir—
+(`arm_exit`). Medido: armar solo en `close(h)`, antes de que empiece la destrucción, basta; el
+manejador de WebKit ya estaba registrado, así que no hace falta volver a armar después. Un programa que sale con todas sus ventanas abiertas no lo registra nunca
+y corre sus `atexit` como siempre. Se probó antes dejar
+aparcado el loop de GTK durante la salida: no evita el aborto. Lo que la salida anticipada se
+salta son los `atexit` registrados antes del último rearme; los nuestros son la restauración
+del terminal del modo crudo y la espera de la traza de audio, que se apuntan también en
+`ui::before_exit` y corren igual. (2)
+`std/ui` cambia tabuladores y saltos de línea por un espacio en lo que se MUESTRA (`title`, el
+texto de atajo, el título de `set_menu_title`). El `tag` no se reescribe —es la identidad del
+item (una ruta en un «Open Recent»), y cambiado en silencio dejaría de casar con
+`set_menu_item`—: `tag`, `shortcut` e `icon` viajan escapados (`\\` y `\t`) y el runtime los
+deshace. Rechazarlos con un `Err` (se probó) tumbaba el menú entero por una ruta rara, y contar
+campos habría roto la regla de que un runtime ignora los campos que no conoce.
+
+**Comprobado.** VM de Linux (WebKitGTK 4.1, Wayland), seis variantes: cerrar y salir, esperar
+6 s tras cerrar, volver de `main`, tres ventanas abiertas y cerradas en dos tandas, salir con
+la ventana abierta, y cerrar una ventana y salir con otra abierta (esta va por la salida normal,
+y sale limpia). Todas dan su código al instante; con la 1.27.118 las cuatro primeras dan 134.
+El modo crudo del terminal queda restaurado con la VM y con un binario nativo.
+Test de `ui_cli` para el tabulador.
+
+**Límites.** Solo glibc (`on_exit` no existe en musl). No se probó la otra forma de arreglarlo,
+un único embudo de salida que entregue `exit(código)` al hilo de GTK: quitaría la dependencia
+del orden de los manejadores, a cambio de tocar cada sitio que hoy llama a `process::exit`. Cada rearme deja una entrada en la lista
+de `exit` (una cada vez que el programa se queda sin ventanas). La salida anticipada solo actúa si al salir no queda
+ninguna ventana abierta: con alguna abierta nunca hubo aborto, y entonces corren todos los
+`atexit` como siempre. Una ventana cerrada antes de que WebKit registre su manejador (abrir
+y cerrar en el acto) quedaría sin cubrir. Si WebKit registrara un manejador
+en otro momento (no se ha visto), el aborto volvería en ese caso. El `atexit` de una librería C cargada por FFI y
+registrado antes del último cierre de ventana no corre. `fflush(NULL)` toma el cerrojo de cada
+`FILE`: un hilo bloqueado dentro de stdio de C colgaría la salida.
+
+## 493. `MenuItem.shortcut_label`: un atajo que se muestra y no enlaza (ray-sublime #511, nov 2026)
+
+**Qué faltaba.** Un editor enlaza órdenes a secuencias de dos acordes (⌘K ⌘U) en su propia capa
+de teclado y quiere mostrarlas en el menú, donde van los atajos. `shortcut` solo acepta un acorde
+(y lo enlaza), así que la secuencia acababa pegada al título.
+
+**Decisión.** Un campo `shortcut_label: string` en `MenuItem`: texto libre, sin validar, que se
+dibuja en la columna de atajos y no registra nada. No se sobrecarga `shortcut` con secuencias:
+su contrato es «esto se enlaza», y un valor que se muestra pero no dispara rompería ese contrato
+en silencio. Con `shortcut` puesto gana el atajo real allí donde se dibuja (AppKit; Win32 cuando
+lo enlaza); en GTK, que no muestra atajos, se ve el texto. Viaja como noveno campo de la
+codificación de items (un runtime que no lo conoce lo ignora). Por plataforma: Win32, el texto
+tras el tabulador del item, sin `ACCEL`; GTK, que no deja poner texto libre en su
+`GtkAccelLabel`, cambia el hijo del item por una caja «título … texto» con el texto atenuado
+(`dim-label`); AppKit no tiene atajo de solo texto, así que el título pasa a ser atribuido,
+«título ⇥ texto», con una tabulación a la derecha común a todo el menú
+(`align_shortcut_labels`, tras llenar cada menú y al retitular).
+
+**Comprobado.** A la vista en los tres sistemas con una misma sonda: captura del menú en GTK
+(VM de Linux, `xdotool`), en macOS (menú contextual, captura de la ventana del menú) y en Win32
+(VM de Windows, NirCmd en la sesión de escritorio), también tras `set_menu_title` y junto a un
+item con marca. Unitario de `decode_items` y `ui_cli` para el campo.
+
+**Límites.** En macOS `setAttributedTitle:` deja el `title` del item en «título ⇥ texto»: lo
+ven VoiceOver, la búsqueda del menú Ayuda y un script que busque el item por su título. En macOS el texto no queda a ras de la columna de atajos nativos (AppKit la pone
+después del título más ancho, que ahora incluye el nuestro) ni se atenúa como ellos: un color
+propio en un título atribuido no se invierte al resaltar el item. En GTK los atajos reales
+siguen sin mostrarse (los menús son solo de click), así que allí solo aparece este texto.
+Añadir el campo rompe a quien construya `MenuItem` con un literal.
 

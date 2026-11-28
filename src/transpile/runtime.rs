@@ -3014,6 +3014,10 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
     // deja de importar), `cfmakeraw(3)` rellena los flags, y `atexit(3)` garantiza la
     // restauración en la salida normal y en `std::process::exit`. Unix; en otras plataformas
     // is_tty=false / size=[] / raw=err.
+    // ray-sublime #512: en Linux una app con ventanas sale sin correr los `atexit` registrados
+    // antes de cerrar su última ventana; con `std/ui` enlazado, la restauración se apunta también
+    // en `ui::before_exit`.
+    let before_exit = if t.needs_rt_ui { "#[cfg(target_os = \"linux\")] ray_runtime::ui::before_exit(restore);" } else { "" };
     if t.needs_term {
         out.push_str(RT_WIN_TERM);
         out.push_str(concat!(
@@ -3082,7 +3086,11 @@ pub(super) fn emit_runtime_features(out: &mut String, t: &mut Transpiler) {
             "        unsafe {\n",
             "            if tcgetattr(0, cur.as_mut_ptr()) != 0 { return Err(format!(\"stdin is not a terminal: {}\", std::io::Error::last_os_error())); }\n",
             "            if !SAVED.load(Ordering::Acquire) { std::ptr::copy_nonoverlapping(cur.as_ptr(), std::ptr::addr_of_mut!(ORIGINAL) as *mut u8, 128); SAVED.store(true, Ordering::Release); }\n",
-            "            if !ARMED.swap(true, Ordering::AcqRel) { atexit(restore); }\n",
+            "            if !ARMED.swap(true, Ordering::AcqRel) { atexit(restore); ",
+        ));
+        out.push_str(before_exit);
+        out.push_str(concat!(
+            " }\n",
             "            cfmakeraw(cur.as_mut_ptr());\n",
             "            if tcsetattr(0, 2, cur.as_ptr()) != 0 { return Err(format!(\"could not enter raw mode: {}\", std::io::Error::last_os_error())); }\n",
             "        }\n",

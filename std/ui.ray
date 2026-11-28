@@ -472,10 +472,10 @@ fn escaped(text: string) -> string {
 }
 
 fn one_field(text: string) -> string {
-    if (!text.contains("\t") && !text.contains("\n")) {
+    if (!text.contains("\t") && !text.contains("\n") && !text.contains("\r")) {
         return text;
     }
-    text.replace("\t", " ").replace("\n", " ")
+    text.replace("\r\n", " ").replace("\t", " ").replace("\n", " ").replace("\r", " ")
 }
 
 fn encode_items(items: [MenuItem]) -> [string] {

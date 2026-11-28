@@ -7626,15 +7626,6 @@ mod gtk {
     /// GTK está iniciado: `arm_exit` tiene algo que adelantar.
     static EXIT_ARMABLE: AtomicBool = AtomicBool::new(false);
 
-    /// ray-sublime #512: (re)registra `leave_before_webkit` como el ÚLTIMO manejador de salida,
-    /// que es el primero en correr. Se llama al cerrarse una ventana, desde `close(h)` y desde
-    /// el `destroy` de GTK, antes de publicar `closed`: el aborto solo ocurre con alguna ventana
-    /// ya cerrada, y el manejador de WebKit que lo provoca se registra después de `gtk_init`
-    /// (con el webview ya abierto) y antes del cierre — medido: armar solo en `close(h)`, antes
-    /// de que empiece la destrucción, basta. Un programa que sale con todas sus ventanas
-    /// abiertas no pasa por aquí y corre sus `atexit` como siempre, y también uno que sale con
-    /// alguna ventana abierta aunque antes cerrara otras (`leave_before_webkit` lo comprueba).
-    /// Cuesta una entrada en la lista de `exit` cada vez que el programa se queda sin ventanas.
     /// Las ventanas GTK abiertas, sin contar `except`. El hilo que sale nunca tiene este
     /// candado; si otro lo envenenó, el mapa se lee igual.
     fn open_windows(except: i64) -> usize {
@@ -7645,11 +7636,26 @@ mod gtk {
     /// `arm_exit` si cerrar la ventana `id` deja el programa sin ventanas: solo entonces actúa
     /// la salida anticipada, así que los demás cierres no añaden nada a la lista de `exit`.
     pub(super) fn arm_exit_closing(id: i64) {
-        if open_windows(id) == 0 {
+        // Solo por una ventana GTK todavía abierta: el `close(h)` con que el programa responde
+        // a un `closed` (o uno sobre un id cualquiera) no vuelve a registrar nada.
+        let closing = {
+            let map = super::windows().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            map.get(&id).is_some_and(|w| !w.closed && matches!(w.win, super::Win::Gtk { .. }))
+        };
+        if closing && open_windows(id) == 0 {
             arm_exit();
         }
     }
 
+    /// ray-sublime #512: (re)registra `leave_before_webkit` como el ÚLTIMO manejador de salida,
+    /// que es el primero en correr. Se llama al cerrarse una ventana, desde `close(h)` y desde
+    /// el `destroy` de GTK, antes de publicar `closed`: el aborto solo ocurre con alguna ventana
+    /// ya cerrada, y el manejador de WebKit que lo provoca se registra después de `gtk_init`
+    /// (con el webview ya abierto) y antes del cierre — medido: armar solo en `close(h)`, antes
+    /// de que empiece la destrucción, basta. Un programa que sale con todas sus ventanas
+    /// abiertas no pasa por aquí y corre sus `atexit` como siempre, y también uno que sale con
+    /// alguna ventana abierta aunque antes cerrara otras (`leave_before_webkit` lo comprueba).
+    /// Cuesta una entrada en la lista de `exit` cada vez que el programa se queda sin ventanas.
     fn arm_exit() {
         // Sin GTK iniciado no hay WebKit que adelantar (ventanas headless); la bandera se mira
         // sin tocar `api()`, que cargaría GTK y WebKitGTK.
@@ -8608,9 +8614,7 @@ mod gtk {
         // El cierre pedido por el usuario llega aquí sin pasar por `close_window` (que ya armó
         // la salida y quitó la ventana del mapa): se arma antes de publicar `closed`, que es
         // cuando el programa suele salir.
-        if super::windows().lock().unwrap_or_else(|poisoned| poisoned.into_inner()).contains_key(&ctx.id) {
-            arm_exit_closing(ctx.id);
-        }
+        arm_exit_closing(ctx.id);
         super::mark_closed(ctx.id);
     }
 

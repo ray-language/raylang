@@ -22783,8 +22783,9 @@ como texto separado por tabuladores: un tabulador en `title` desplazaba los camp
 **Decisión.** (1) `gtk::leave_before_webkit`, un manejador `on_exit` (glibc: recibe el código de
 salida) que vacía stdio y llama a `_exit` con ese código, antes de que corran los de WebKit.
 Los manejadores corren del último registrado al primero, y WebKit registra los suyos después de
-`gtk_init`: por eso el nuestro se registra al cerrarse cada ventana —en `close(h)` y en el
-`destroy` de GTK, antes de publicar el evento `closed`, que es cuando el programa suele salir—
+`gtk_init`: por eso el nuestro se registra cuando un cierre deja el programa sin ventanas —en
+`close(h)` y en el `destroy` de GTK, antes de publicar el evento `closed`, que es cuando el
+programa suele salir—
 (`arm_exit`). Medido: armar solo en `close(h)`, antes de que empiece la destrucción, basta; el
 manejador de WebKit ya estaba registrado, así que no hace falta volver a armar después. Un programa que sale con todas sus ventanas abiertas no lo registra nunca
 y corre sus `atexit` como siempre. Se probó antes dejar
@@ -22799,12 +22800,16 @@ item (una ruta en un «Open Recent»), y cambiado en silencio dejaría de casar 
 deshace. Rechazarlos con un `Err` (se probó) tumbaba el menú entero por una ruta rara, y contar
 campos habría roto la regla de que un runtime ignora los campos que no conoce.
 
-**Comprobado.** VM de Linux (WebKitGTK 4.1, Wayland), cinco variantes: cerrar y salir, esperar
-6 s tras cerrar, volver de `main`, tres ventanas abiertas y cerradas en dos tandas, y salir con
-la ventana abierta. Todas dan su código al instante; con la 1.27.118 las cuatro primeras dan 134.
+**Comprobado.** VM de Linux (WebKitGTK 4.1, Wayland), seis variantes: cerrar y salir, esperar
+6 s tras cerrar, volver de `main`, tres ventanas abiertas y cerradas en dos tandas, salir con
+la ventana abierta, y cerrar una ventana y salir con otra abierta (esta va por la salida normal,
+y sale limpia). Todas dan su código al instante; con la 1.27.118 las cuatro primeras dan 134.
+El modo crudo del terminal queda restaurado con la VM y con un binario nativo.
 Test de `ui_cli` para el tabulador.
 
-**Límites.** Solo glibc (`on_exit` no existe en musl). Cada rearme deja una entrada en la lista
+**Límites.** Solo glibc (`on_exit` no existe en musl). No se probó la otra forma de arreglarlo,
+un único embudo de salida que entregue `exit(código)` al hilo de GTK: quitaría la dependencia
+del orden de los manejadores, a cambio de tocar cada sitio que hoy llama a `process::exit`. Cada rearme deja una entrada en la lista
 de `exit` (una cada vez que el programa se queda sin ventanas). La salida anticipada solo actúa si al salir no queda
 ninguna ventana abierta: con alguna abierta nunca hubo aborto, y entonces corren todos los
 `atexit` como siempre. Una ventana cerrada antes de que WebKit registre su manejador (abrir
@@ -22836,7 +22841,8 @@ tras el tabulador del item, sin `ACCEL`; GTK, que no deja poner texto libre en s
 (VM de Windows, NirCmd en la sesión de escritorio), también tras `set_menu_title` y junto a un
 item con marca. Unitario de `decode_items` y `ui_cli` para el campo.
 
-**Límites.** En macOS el texto no queda a ras de la columna de atajos nativos (AppKit la pone
+**Límites.** En macOS `setAttributedTitle:` deja el `title` del item en «título ⇥ texto»: lo
+ven VoiceOver, la búsqueda del menú Ayuda y un script que busque el item por su título. En macOS el texto no queda a ras de la columna de atajos nativos (AppKit la pone
 después del título más ancho, que ahora incluye el nuestro) ni se atenúa como ellos: un color
 propio en un título atribuido no se invierte al resaltar el item. En GTK los atajos reales
 siguen sin mostrarse (los menús son solo de click), así que allí solo aparece este texto.
